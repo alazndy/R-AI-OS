@@ -124,14 +124,19 @@
 - [x] Real-time Port Monitor (Header ticker)
 - [x] v0.2.5: CLI Versioning & MASTER.md reorganization
 
+- [x] **v0.2.9:** `memory.md.lock` (File Mutex) mekanizması. Race condition önlendi.
+- [x] **Altyapı:** `notify` crate entegrasyonu. Polling yerine event-driven file watcher yapısı kuruldu.
+- [x] **v0.3.0:** MCP Stdio Server (`raios mcp-server`).
+- [x] **v0.4.0:** Agent Execution Proxy (`raios run <agent>`). Environment izolasyonu ve Death Timer eklendi.
+- [x] **v0.5.0:** Bouncing Limit TUI uyarısı (3 handover limiti) ve Git Diff Onay Ekranı (`D` tuşu ile).
+- [x] Fuzzy Search UI Entegrasyonu (Ctrl+P)
+- [x] **Compliance Refinement:** app.rs içinde FileChanged event'ini sadece hedeflenen dosya için compliance tetikleyecek şekilde optimize etme.
+
 ### Devam Edenler
-- [ ] Fuzzy Search UI Entegrasyonu (Ctrl+P — Antigravity tamamlıyor)
+- [ ] —
 
 ### Sıradakiler
-- [ ] **v0.2.9 (Acil):** `memory.md.lock` (File Mutex) mekanizması. Race condition önleme.
-- [ ] **v0.3.0 (Mimari):** **aiosd** (Tokio-based Daemon) geçişi. State yönetimini arka plana taşıma.
-- [ ] **Altyapı:** `notify` crate entegrasyonu. Polling yerine event-driven compliance scan.
-- [ ] **Git:** "Review-then-Push" flow (Onaysız otomatik push yasaklandı).
+- [ ] **v0.6.0 (Mimari):** **aiosd** (Tokio-based Daemon) geçişi. State yönetimini arka plana taşıma.
 
 ## Karar Günlüğü
 | Tarih | Agent | Karar | Neden |
@@ -151,4 +156,8 @@
 | 2026-05-05 | Antigravity | v0.2.5 Bump | CLI versioning ve stabilite iyileştirmeleri sonrası versiyon yükseltme |
 | 2026-05-06 | Antigravity | Mouse Support İPTAL | Vim-like hız odağı ve farenin konsept dışı kalması |
 | 2026-05-06 | Antigravity | aiosd Önceliklendirme | TUI/State ayrımı ve güvenilir arka plan yönetimi ihtiyacı |
+| 2026-05-06 | Antigravity | v0.4 Agent Proxy | Ajanları child process olarak Env izoleli başlatma (api key güvenliği için) |
+| 2026-05-06 | Antigravity | v0.5 Bouncing Limit & Diff | Ajanların sonsuz döngüsünü kırma (limit=3) ve İnsan onaylı Git akışı (D tuşu) |
 | 2026-05-06 | Antigravity | memory.md.lock | Multi-agent race condition riskini minimize etmek |
+| 2026-05-06 | Antigravity | Compliance Refinement | FileChanged event'inde aktif dosya için otomatik compliance reload eklendi |
+| 2026-05-06 | Antigravity | Fuzzy Search UI | Ctrl+P Fuzzy Search popup'ının UI entegrasyonu tamamlandığı doğrulandı |

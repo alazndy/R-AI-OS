@@ -20,8 +20,8 @@ use crate::filebrowser::{
     load_file_content, load_recent_projects, save_file_content,
 };
 use crate::sync::sync_universe;
-use crate::safe_io;
-use notify::{Watcher, RecursiveMode, Config as WatchConfig};
+#[allow(unused_imports)] use crate::safe_io;
+#[allow(unused_imports)] use notify::{Watcher, RecursiveMode, Config as WatchConfig};
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -37,6 +37,7 @@ pub enum AppState {
     Search,
     MemPalaceView,
     GraphReport,
+    GitDiffView,
     HelpView,
 }
 
@@ -464,6 +465,14 @@ pub struct App {
     // Graph Report
     pub graph_report_lines: Vec<String>,
     pub graph_report_scroll: u16,
+
+    // Bouncing Limit
+    pub handover_count: usize,
+    pub bouncing_alert: bool,
+
+    // Git Diff View
+    pub git_diff_lines: Vec<String>,
+    pub git_diff_scroll: u16,
 }
 
 impl App {
@@ -596,6 +605,10 @@ impl App {
             active_ports: Vec::new(),
             system_report: None,
             is_scanning_system: false,
+            handover_count: 0,
+            bouncing_alert: false,
+            git_diff_lines: Vec::new(),
+            git_diff_scroll: 0,
         }
     }
 
@@ -701,6 +714,27 @@ impl App {
             self.state = AppState::GraphReport;
         } else {
             self.sync_status = Some("Graph report not found. Run Graphify first.".into());
+        }
+    }
+
+    pub fn open_git_diff(&mut self, project_path: &Path) {
+        let output = std::process::Command::new("git")
+            .current_dir(project_path)
+            .args(&["diff"])
+            .output();
+
+        if let Ok(out) = output {
+            let diff = String::from_utf8_lossy(&out.stdout).to_string();
+            if diff.trim().is_empty() {
+                self.git_diff_lines = vec!["No unstaged changes.".to_string()];
+            } else {
+                self.git_diff_lines = diff.lines().map(|s| s.to_string()).collect();
+            }
+            self.git_diff_scroll = 0;
+            self.state = AppState::GitDiffView;
+        } else {
+            self.git_diff_lines = vec!["Failed to run git diff.".to_string()];
+            self.state = AppState::GitDiffView;
         }
     }
 
@@ -826,6 +860,11 @@ impl App {
                     self.open_graph_report(&proj.local_path);
                 }
             }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                if let Some(ref proj) = self.active_project.clone() {
+                    self.open_git_diff(&proj.local_path);
+                }
+            }
             _ => {}
         }
     }
@@ -852,6 +891,59 @@ impl App {
             KeyCode::PageDown => {
                 let max = (self.graph_report_lines.len() as u16).saturating_sub(self.height - 6);
                 self.graph_report_scroll = (self.graph_report_scroll + self.height / 2).min(max);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_git_diff_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Backspace => {
+                if self.active_project.is_some() {
+                    self.state = AppState::ProjectDetail;
+                } else {
+                    self.state = AppState::Dashboard;
+                }
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(ref proj) = self.active_project {
+                    let _ = std::process::Command::new("git")
+                        .current_dir(&proj.local_path)
+                        .args(&["add", "."])
+                        .output();
+                    let _ = std::process::Command::new("git")
+                        .current_dir(&proj.local_path)
+                        .args(&["commit", "-m", "Human approved Agent changes via R-AI-OS"])
+                        .output();
+                    self.add_activity("System", "Agent changes approved and committed.", "Info");
+                }
+                self.state = AppState::ProjectDetail;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                if let Some(ref proj) = self.active_project {
+                    let _ = std::process::Command::new("git")
+                        .current_dir(&proj.local_path)
+                        .args(&["restore", "."])
+                        .output();
+                    self.add_activity("System", "Agent changes REJECTED and discarded.", "Warning");
+                }
+                self.state = AppState::ProjectDetail;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.git_diff_scroll = self.git_diff_scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let max = (self.git_diff_lines.len() as u16).saturating_sub(self.height - 6);
+                if self.git_diff_scroll < max {
+                    self.git_diff_scroll += 1;
+                }
+            }
+            KeyCode::PageUp => {
+                self.git_diff_scroll = self.git_diff_scroll.saturating_sub(self.height / 2);
+            }
+            KeyCode::PageDown => {
+                let max = (self.git_diff_lines.len() as u16).saturating_sub(self.height - 6);
+                self.git_diff_scroll = (self.git_diff_scroll + self.height / 2).min(max);
             }
             _ => {}
         }
@@ -1090,8 +1182,38 @@ impl App {
                 self.mp_proj_cursor = None;
                 self.mp_is_building = false;
             }
-            BgMsg::FileChanged(_path) => {
-                // Future: Trigger smart re-scan of specific file
+            BgMsg::FileChanged(path) => {
+                // Bouncing Limit takibi: _session_notes.md değiştiğinde ardışık HANDOVER kontrolü yap
+                if path.file_name().and_then(|n| n.to_str()) == Some("_session_notes.md") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+                        let mut count = 0;
+                        for line in lines.iter().rev() {
+                            if line.contains("HANDOVER →") {
+                                count += 1;
+                            } else if !line.trim().starts_with("Context:") {
+                                break;
+                            }
+                        }
+                        self.handover_count = count;
+                        if count >= 3 {
+                            self.bouncing_alert = true;
+                        } else {
+                            self.bouncing_alert = false;
+                        }
+                    }
+                }
+                
+                // Eğer değişen dosya aktif açık olan dosya ise otomatik reload ve compliance tetikle
+                if let Some(ref active) = self.active_file {
+                    if active.path == path {
+                        let content = load_file_content(&path);
+                        self.compliance = Some(compliance::check_file(&path, &content));
+                        self.file_lines = content.lines().map(str::to_owned).collect();
+                        self.watched_file_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+                        self.file_changed_externally = false;
+                    }
+                }
             }
         }
     }
@@ -1178,6 +1300,7 @@ impl App {
             AppState::HealthView => { self.handle_health_view_key(key); Ok(()) }
             AppState::MemPalaceView => { self.handle_mempalace_key(key); Ok(()) }
             AppState::GraphReport => { self.handle_graph_report_key(key); Ok(()) }
+            AppState::GitDiffView => { self.handle_git_diff_key(key); Ok(()) }
             AppState::HelpView => {
                 // Any key closes help
                 self.state = AppState::Dashboard;

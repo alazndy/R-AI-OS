@@ -49,6 +49,20 @@ pub enum Commands {
     },
     /// Print current version
     Version,
+    /// Run as MCP server (stdio transport — for Claude Code / Gemini integration)
+    #[command(name = "mcp-server")]
+    McpServer,
+    /// Run an agent as a child process with execution proxy (env isolation, timeout)
+    Run {
+        /// The agent to run (claude, gemini, cursor)
+        agent: String,
+        /// Project directory to run the agent in
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Time limit in seconds for the agent execution
+        #[arg(short, long)]
+        timeout: Option<u64>,
+    },
 }
 
 /// Load config or fall back to auto-detected dev_ops and a dummy master path.
@@ -80,6 +94,18 @@ pub fn run(cli: Cli) {
         Commands::Discover             => cmd_discover(&cfg.dev_ops_path, cli.json),
         Commands::Health { project }   => cmd_health(project, &cfg.dev_ops_path, cli.json),
         Commands::Version              => println!("raios v{}", env!("CARGO_PKG_VERSION")),
+        Commands::McpServer            => {
+            if let Err(e) = crate::mcp_server::run_stdio() {
+                eprintln!("MCP server error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Run { agent, project, timeout } => {
+            if let Err(e) = crate::agent_runner::run_agent(&agent, project, timeout) {
+                eprintln!("Agent Runner Error: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 }
 

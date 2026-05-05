@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::path::Path;
-use std::io::{Write, Read};
+use std::io::Write;
 use std::thread;
 use std::time::Duration;
 use fd_lock::RwLock;
@@ -39,6 +39,7 @@ pub fn safe_write(path: &Path, content: &str) -> Result<()> {
 }
 
 /// Dosyayı güvenli bir şekilde okur (Read Lock).
+#[allow(dead_code)]
 pub fn safe_read(path: &Path) -> Result<String> {
     if !path.exists() {
         return Ok(String::new());

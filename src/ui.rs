@@ -52,6 +52,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         AppState::HealthView     => render_health_view(frame, app),
         AppState::MemPalaceView  => render_mempalace_view(frame, app),
         AppState::GraphReport    => render_graph_report(frame, app),
+        AppState::GitDiffView    => render_git_diff_view(frame, app),
         AppState::HelpView       => render_dashboard(frame, app), // Just use dashboard for now as it's a menu item
     }
     // Overlays rendered after everything else
@@ -63,6 +64,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     if app.file_changed_externally {
         render_file_changed_badge(frame, app);
+    }
+    if app.bouncing_alert {
+        render_bouncing_alert(frame, app);
     }
 }
 
@@ -116,6 +120,35 @@ fn render_boot(frame: &mut Frame, app: &App) {
 
     let list = List::new(items);
     frame.render_widget(list, rows[3]);
+}
+
+fn render_bouncing_alert(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let width = 60;
+    let height = 6;
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = 1; // Top of the screen
+    let rect = Rect::new(x, y, width, height);
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled("🚨 HUMAN INTERVENTION REQUIRED 🚨", Style::new().fg(Color::White).bold())),
+        Line::from(Span::styled("BOUNCING LIMIT REACHED!", Style::new().fg(AMBER).bold())),
+        Line::from(Span::styled(format!("(Consecutive Handovers: {})", app.handover_count), Style::new().fg(Color::White))),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Thick)
+        .border_style(Style::new().fg(RED))
+        .bg(Color::Rgb(120, 0, 0));
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center);
+
+    frame.render_widget(ratatui::widgets::Clear, rect);
+    frame.render_widget(paragraph, rect);
 }
 
 // ─── Setup / First-run ───────────────────────────────────────────────────────
@@ -2306,6 +2339,50 @@ fn render_graph_report(frame: &mut Frame, app: &App) {
 
     let footer = Paragraph::new(" [ESC/Q] Back  [UP/DOWN/J/K] Scroll  [PAGEUP/PAGEDOWN] Fast Scroll ")
         .style(Style::new().fg(DIM).bg(HEADER_BG));
+    frame.render_widget(footer, rows[2]);
+}
+
+fn render_git_diff_view(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let rows = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(area);
+
+    let proj_name = app.active_project.as_ref().map(|p| p.name.as_str()).unwrap_or("Unknown");
+    let header = Block::bordered()
+        .title(format!(" Git Diff (Agent Changes): {} ", proj_name))
+        .border_style(Style::new().fg(CYAN))
+        .border_type(BorderType::Rounded);
+    frame.render_widget(header, rows[0]);
+
+    let display_h = rows[1].height as usize;
+    let lines: Vec<Line> = app.git_diff_lines
+        .iter()
+        .skip(app.git_diff_scroll as usize)
+        .take(display_h)
+        .map(|l| {
+            if l.starts_with('+') {
+                Line::from(Span::styled(l, Style::new().fg(GREEN)))
+            } else if l.starts_with('-') {
+                Line::from(Span::styled(l, Style::new().fg(RED)))
+            } else if l.starts_with("@@") {
+                Line::from(Span::styled(l, Style::new().fg(CYAN)))
+            } else {
+                Line::from(Span::styled(l, Style::new().fg(MID)))
+            }
+        })
+        .collect();
+
+    let content = Paragraph::new(lines)
+        .block(Block::new().bg(PANEL_BG))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(content, rows[1]);
+
+    let footer = Paragraph::new(" [Y] APPROVE (Commit)  [N] REJECT (Discard)  [ESC/Q] Back  [UP/DOWN] Scroll ")
+        .style(Style::new().fg(Color::Black).bg(AMBER).bold());
     frame.render_widget(footer, rows[2]);
 }
 

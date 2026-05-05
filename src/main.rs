@@ -1,3 +1,4 @@
+mod agent_runner;
 mod app;
 mod cli;
 mod compliance;
@@ -8,6 +9,7 @@ mod filebrowser;
 mod health;
 mod mempalace;
 mod indexer;
+mod mcp_server;
 mod requirements;
 mod sync;
 mod tasks;

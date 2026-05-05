@@ -15,7 +15,7 @@ pub enum ToolStatus {
     Running,
     Installed,
     Missing,
-    Error(String),
+    #[allow(dead_code)] Error(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
