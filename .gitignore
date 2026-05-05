@@ -1,0 +1,5 @@
+/target
+/scratch
+.DS_Store
+*.pdb
+*.exe
