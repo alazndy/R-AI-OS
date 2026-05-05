@@ -11,7 +11,8 @@ pub struct Config {
     pub master_md_path: PathBuf,
     /// Path to .agents/skills directory
     pub skills_path: PathBuf,
-    /// Path to Obsidian Vault Projects folder
+    /// Path to Obsidian Vault Projects folder (optional — can be empty)
+    #[serde(default)]
     pub vault_projects_path: PathBuf,
 }
 

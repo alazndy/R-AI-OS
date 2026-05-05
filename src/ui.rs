@@ -52,6 +52,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         AppState::HealthView     => render_health_view(frame, app),
         AppState::MemPalaceView  => render_mempalace_view(frame, app),
         AppState::GraphReport    => render_graph_report(frame, app),
+        AppState::HelpView       => render_dashboard(frame, app), // Just use dashboard for now as it's a menu item
     }
     // Overlays rendered after everything else
     if app.show_launcher {
@@ -87,8 +88,9 @@ fn render_boot(frame: &mut Frame, app: &App) {
 
     let spin = spinner_char(app.tick);
     let heading = Paragraph::new(format!(
-        " {}  Initializing R-AI-OS v0.2.4 Core...",
-        spin
+        " {}  Initializing R-AI-OS v{} Core...",
+        spin,
+        env!("CARGO_PKG_VERSION")
     ))
     .style(Style::new().fg(GREEN).add_modifier(Modifier::BOLD));
     frame.render_widget(heading, rows[0]);
@@ -325,7 +327,10 @@ fn render_dashboard(frame: &mut Frame, app: &App) {
 }
 
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let version_tag = Span::styled(" v0.2.4 (Stable) ", Style::new().fg(DIM));
+    let version_tag = Span::styled(
+        format!(" v{} (Stable) ", env!("CARGO_PKG_VERSION")), 
+        Style::new().fg(DIM)
+    );
     let title = Span::styled(
         "  R-AI-OS — CORE SYSTEM  ",
         Style::new()
@@ -468,6 +473,7 @@ fn render_content_body(frame: &mut Frame, area: Rect, app: &App) {
         8 => render_timeline(frame, inner, app),
         9 => render_logs(frame, inner, app),
         10 => render_help(frame, inner, app),
+        11 => render_system_audit(frame, inner, app),
         _ => {}
     }
 }
@@ -2301,4 +2307,68 @@ fn render_graph_report(frame: &mut Frame, app: &App) {
     let footer = Paragraph::new(" [ESC/Q] Back  [UP/DOWN/J/K] Scroll  [PAGEUP/PAGEDOWN] Fast Scroll ")
         .style(Style::new().fg(DIM).bg(HEADER_BG));
     frame.render_widget(footer, rows[2]);
+}
+
+fn render_system_audit(frame: &mut Frame, area: Rect, app: &App) {
+    let mut lines = vec![
+        Line::from(Span::styled(" AI SYSTEM AUDIT & INVENTORY", Style::new().fg(MID).bold())),
+        Line::from(""),
+    ];
+
+    if app.is_scanning_system {
+        lines.push(Line::from(Span::styled("  ⚡ Scanning entire system... This may take a moment.", Style::new().fg(AMBER).bold())));
+        frame.render_widget(Paragraph::new(Text::from(lines)), area);
+        return;
+    }
+
+    if let Some(ref report) = app.system_report {
+        lines.push(Line::from(Span::styled("  ◈ AI TOOLS & SERVICES", Style::new().fg(GREEN).bold())));
+        for tool in &report.tools {
+            let status_span = match tool.status {
+                crate::system_scan::ToolStatus::Running => Span::styled(" [RUNNING]", Style::new().fg(GREEN).bold()),
+                crate::system_scan::ToolStatus::Installed => Span::styled(" [INSTALLED]", Style::new().fg(CYAN)),
+                crate::system_scan::ToolStatus::Missing => Span::styled(" [MISSING]", Style::new().fg(DIM)),
+                crate::system_scan::ToolStatus::Error(ref e) => Span::styled(format!(" [ERROR: {}]", e), Style::new().fg(RED)),
+            };
+            
+            lines.push(Line::from(vec![
+                Span::styled(format!("    • {:<20}", tool.name), Style::new().fg(MID)),
+                status_span,
+            ]));
+            if let Some(ref path) = tool.path {
+                lines.push(Line::from(vec![
+                    Span::styled("      Path: ", Style::new().fg(DIM)),
+                    Span::styled(path.to_string_lossy(), Style::new().fg(DIM).italic()),
+                ]));
+            }
+        }
+        lines.push(Line::from(""));
+
+        lines.push(Line::from(Span::styled("  ◈ ACTIVE API KEYS (ENV)", Style::new().fg(GREEN).bold())));
+        if report.env_keys.is_empty() {
+            lines.push(Line::from(Span::styled("    No global API keys detected in environment variables.", Style::new().fg(DIM))));
+        } else {
+            for key in &report.env_keys {
+                lines.push(Line::from(vec![
+                    Span::styled("    ✓ ", Style::new().fg(GREEN)),
+                    Span::styled(key, Style::new().fg(MID)),
+                ]));
+            }
+        }
+        lines.push(Line::from(""));
+
+        lines.push(Line::from(Span::styled("  ◈ MODEL LOCATIONS & CACHE", Style::new().fg(GREEN).bold())));
+        for model in &report.local_models {
+            lines.push(Line::from(vec![
+                Span::styled("    📂 ", Style::new().fg(AMBER)),
+                Span::styled(model, Style::new().fg(MID)),
+            ]));
+        }
+    } else {
+        lines.push(Line::from(Span::styled("  No system scan performed yet.", Style::new().fg(DIM))));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("  Run /scan-system or /audit to start a deep scan.", Style::new().fg(CYAN).italic())));
+    }
+
+    frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }

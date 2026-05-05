@@ -35,6 +35,7 @@ pub enum AppState {
     Search,
     MemPalaceView,
     GraphReport,
+    HelpView,
 }
 
 // ─── Background messages ──────────────────────────────────────────────────────
@@ -64,6 +65,7 @@ pub enum BgMsg {
     Tasks(Vec<crate::tasks::Task>),
     VaultStatus(Vec<String>),
     ActivePorts(Vec<u16>),
+    AiAuditReport(crate::system_scan::AiAuditReport),
 }
 
 #[derive(Debug, Clone)]
@@ -318,6 +320,7 @@ pub const MENU_ITEMS: &[&str] = &[
     "Timeline",
     "Live Logs",
     "Help",
+    "AI System Audit",
 ];
 
 pub struct App {
@@ -437,6 +440,10 @@ pub struct App {
     pub mp_expanded: Vec<bool>,
     pub mp_filter: String,
     pub mp_is_building: bool,
+    
+    // System Scan
+    pub system_report: Option<crate::system_scan::AiAuditReport>,
+    pub is_scanning_system: bool,
     
     // Tasks
     pub tasks: Vec<crate::tasks::Task>,
@@ -563,6 +570,8 @@ impl App {
             task_cursor: 0,
             vault_projects: Vec::new(),
             active_ports: Vec::new(),
+            system_report: None,
+            is_scanning_system: false,
         }
     }
 
@@ -1006,6 +1015,11 @@ impl App {
             BgMsg::ActivePorts(p) => {
                 self.active_ports = p;
             }
+            BgMsg::AiAuditReport(report) => {
+                self.system_report = Some(report);
+                self.is_scanning_system = false;
+                self.menu_cursor = 11; // Open Diagnostics/System tab
+            }
             BgMsg::HealthReport(report) => {
                 self.health_report = report;
                 self.is_checking_health = false;
@@ -1137,6 +1151,11 @@ impl App {
             AppState::HealthView => { self.handle_health_view_key(key); Ok(()) }
             AppState::MemPalaceView => { self.handle_mempalace_key(key); Ok(()) }
             AppState::GraphReport => { self.handle_graph_report_key(key); Ok(()) }
+            AppState::HelpView => {
+                // Any key closes help
+                self.state = AppState::Dashboard;
+                Ok(())
+            }
 
             AppState::Dashboard => {
                 if self.command_mode {
@@ -1488,6 +1507,9 @@ impl App {
     fn handle_dashboard_key(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('?') => {
+                self.state = AppState::HelpView;
+            }
             KeyCode::Char('L') => {
                 // Uppercase L = launcher (lowercase l = vim right)
                 if self.menu_cursor == 7 && self.right_panel_focus {
@@ -1749,6 +1771,14 @@ impl App {
                     self.sync_status = Some(result);
                 }
             }
+            "/scan-system" | "/audit" => {
+                self.is_scanning_system = true;
+                let tx = self.tx.clone();
+                thread::spawn(move || {
+                    let report = crate::system_scan::scan_system();
+                    tx.send(BgMsg::AiAuditReport(report)).ok();
+                });
+            }
             "/open" | "/project" => {
                 if !arg.is_empty() {
                     let q = arg.to_lowercase();
@@ -1773,9 +1803,8 @@ impl App {
                 self.menu_cursor = 9;
                 self.right_panel_focus = false;
             }
-            "/help" => {
-                self.menu_cursor = 10;
-                self.right_panel_focus = false;
+            "/help" | "/?" => {
+                self.state = AppState::HelpView;
             }
             "/task" => {
                 // /task add <text> [@agent] [#project]

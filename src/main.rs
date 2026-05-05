@@ -11,6 +11,7 @@ mod indexer;
 mod requirements;
 mod sync;
 mod tasks;
+mod system_scan;
 mod ui;
 
 use std::io;
