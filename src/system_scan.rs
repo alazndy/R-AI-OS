@@ -43,6 +43,9 @@ pub fn scan_system() -> AiAuditReport {
     // 5. Check LM Studio (Common paths)
     tools.push(check_lm_studio());
 
+    // 6. Check Antigravity (Assistant)
+    tools.push(check_antigravity());
+
     AiAuditReport {
         tools,
         env_keys: scan_env_keys(),
@@ -144,6 +147,18 @@ fn scan_local_models() -> Vec<String> {
     let mut models = Vec::new();
     let home = dirs::home_dir().unwrap_or_default();
     
+    // Antigravity data
+    let ag_path = home.join(".gemini/antigravity");
+    if ag_path.exists() {
+        models.push(format!("Antigravity Home: {}", ag_path.display()));
+        
+        let skills_count = std::fs::read_dir(ag_path.join("skills")).map(|d| d.count()).unwrap_or(0);
+        models.push(format!("Antigravity Skills: {} deployed", skills_count));
+        
+        let brain_count = std::fs::read_dir(ag_path.join("brain")).map(|d| d.count()).unwrap_or(0);
+        models.push(format!("Antigravity Brain: {} sessions stored", brain_count));
+    }
+
     // Ollama models path
     let ollama_path = home.join(".ollama/models");
     if ollama_path.exists() {
@@ -157,4 +172,24 @@ fn scan_local_models() -> Vec<String> {
     }
 
     models
+}
+
+fn check_antigravity() -> SystemAiTool {
+    let home = dirs::home_dir().unwrap_or_default();
+    let p = home.join(".gemini/antigravity");
+    if p.exists() {
+        SystemAiTool {
+            name: "Antigravity Assistant".into(),
+            status: ToolStatus::Running, // If I'm here, I'm running
+            version: Some("Active (v4.0)".into()),
+            path: Some(p),
+        }
+    } else {
+        SystemAiTool {
+            name: "Antigravity Assistant".into(),
+            status: ToolStatus::Missing,
+            version: None,
+            path: None,
+        }
+    }
 }
