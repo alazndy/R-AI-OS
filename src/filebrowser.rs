@@ -495,9 +495,9 @@ pub fn load_file_content(path: &PathBuf) -> String {
         .unwrap_or_else(|e| format!("# Error\n\nCould not read:\n  {}\n\n{}", path.display(), e))
 }
 
-pub fn save_file_content(path: &PathBuf, content: &str) -> anyhow::Result<()> {
-    fs::write(path, content)?;
-    Ok(())
+pub fn save_file_content(path: &Path, content: &str) -> std::io::Result<()> {
+    crate::safe_io::safe_write(path, content)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
 
 pub fn find_file_by_name(query: &str, master_md: &Path) -> Option<FileEntry> {

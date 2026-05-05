@@ -12,6 +12,7 @@ mod requirements;
 mod sync;
 mod tasks;
 mod system_scan;
+mod safe_io;
 mod ui;
 
 use std::io;

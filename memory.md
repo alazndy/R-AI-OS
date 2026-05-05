@@ -128,11 +128,10 @@
 - [ ] Fuzzy Search UI Entegrasyonu (Ctrl+P — Antigravity tamamlıyor)
 
 ### Sıradakiler
-- [ ] Context Injection: Graphify raporlarını LLM context'ine otomatik basacak pipeline
-- [ ] WebSocket Daemon entegrasyonu (aiosd)
-- [ ] Unified Agent Shell
-- [ ] Mouse event desteği
-- [ ] GitHub push
+- [ ] **v0.2.9 (Acil):** `memory.md.lock` (File Mutex) mekanizması. Race condition önleme.
+- [ ] **v0.3.0 (Mimari):** **aiosd** (Tokio-based Daemon) geçişi. State yönetimini arka plana taşıma.
+- [ ] **Altyapı:** `notify` crate entegrasyonu. Polling yerine event-driven compliance scan.
+- [ ] **Git:** "Review-then-Push" flow (Onaysız otomatik push yasaklandı).
 
 ## Karar Günlüğü
 | Tarih | Agent | Karar | Neden |
@@ -150,3 +149,6 @@
 | 2026-05-05 | Antigravity | Port Monitor Ticker | Web geliştirme süreçleri için port doluluğunu TUI header'da anlık görme |
 | 2026-05-05 | Antigravity | Constitution (MASTER.md) | MASTER.md dosyasının daha görünür olması için Policies'den Rules sekmesine taşınması |
 | 2026-05-05 | Antigravity | v0.2.5 Bump | CLI versioning ve stabilite iyileştirmeleri sonrası versiyon yükseltme |
+| 2026-05-06 | Antigravity | Mouse Support İPTAL | Vim-like hız odağı ve farenin konsept dışı kalması |
+| 2026-05-06 | Antigravity | aiosd Önceliklendirme | TUI/State ayrımı ve güvenilir arka plan yönetimi ihtiyacı |
+| 2026-05-06 | Antigravity | memory.md.lock | Multi-agent race condition riskini minimize etmek |

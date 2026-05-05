@@ -1,0 +1,66 @@
+use std::fs::{File, OpenOptions};
+use std::path::Path;
+use std::io::{Write, Read};
+use std::thread;
+use std::time::Duration;
+use fd_lock::RwLock;
+use anyhow::Result;
+
+/// memory.md gibi kritik dosyalara güvenli (locked) yazma yapar.
+/// Eğer dosya kilitliyse, belirtilen deneme sayısı kadar bekler.
+pub fn safe_write(path: &Path, content: &str) -> Result<()> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)?;
+
+    let mut lock = RwLock::new(file);
+    
+    // Kilidi alana kadar dene (Max 5 saniye)
+    let mut retries = 0;
+    let mut locked_file = loop {
+        match lock.try_write() {
+            Ok(guard) => break guard,
+            Err(_) => {
+                if retries > 50 {
+                    return Err(anyhow::anyhow!("Dosya kilidi alınamadı (Timeout): {:?}", path));
+                }
+                thread::sleep(Duration::from_millis(100));
+                retries += 1;
+            }
+        }
+    };
+
+    locked_file.write_all(content.as_bytes())?;
+    locked_file.flush()?;
+    
+    Ok(())
+}
+
+/// Dosyayı güvenli bir şekilde okur (Read Lock).
+pub fn safe_read(path: &Path) -> Result<String> {
+    if !path.exists() {
+        return Ok(String::new());
+    }
+
+    let file = File::open(path)?;
+    let lock = RwLock::new(file);
+    
+    // Read lock için try_read yeterli, ancak Read trait &mut File ister.
+    // fd-lock'ta guard üzerinden &File alıp direkt fs::read_to_string kullanamayız,
+    // bu yüzden shared kilit olsa bile Read işlemi için guard'ın mutabilitesini sağlamalıyız.
+    let _locked_file = loop {
+        match lock.try_read() {
+            Ok(guard) => break guard,
+            Err(_) => {
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    };
+
+    // RwLockReadGuard does not implement DerefMut, so we can't use Read::read_to_string.
+    // Instead, we use the fact that we have the lock to safely read via standard fs.
+    let content = std::fs::read_to_string(path)?;
+    Ok(content)
+}

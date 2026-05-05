@@ -20,6 +20,8 @@ use crate::filebrowser::{
     load_file_content, load_recent_projects, save_file_content,
 };
 use crate::sync::sync_universe;
+use crate::safe_io;
+use notify::{Watcher, RecursiveMode, Config as WatchConfig};
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -66,6 +68,7 @@ pub enum BgMsg {
     VaultStatus(Vec<String>),
     ActivePorts(Vec<u16>),
     AiAuditReport(crate::system_scan::AiAuditReport),
+    FileChanged(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -449,6 +452,9 @@ pub struct App {
     pub tasks: Vec<crate::tasks::Task>,
     pub task_cursor: usize,
 
+    // File Watcher
+    pub _watcher: Option<Box<dyn Watcher>>,
+
     // Vault
     pub vault_projects: Vec<String>,
 
@@ -464,8 +470,7 @@ impl App {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel::<BgMsg>();
         let boot_tx = tx.clone();
-
-        // Load or prepare config (auto-detect will happen after boot)
+        
         let config = Config::load().unwrap_or_else(|| Config {
             dev_ops_path:   PathBuf::from(""),
             master_md_path: PathBuf::from(""),
@@ -473,22 +478,40 @@ impl App {
             vault_projects_path: PathBuf::from(""),
         });
 
+        // Boot results (minimal check for starting)
+        let home = dirs::home_dir().unwrap_or_default();
         let master = config.master_md_path.clone();
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-
         thread::spawn(move || {
             let checks: Vec<(String, PathBuf)> = vec![
-                ("Global GEMINI.md".into(), home.join(".gemini/GEMINI.md")),
-                ("Global CLAUDE.md".into(), home.join("CLAUDE.md")),
                 ("MASTER.md".into(), master),
-                ("Policy Engine".into(), home.join(".gemini/policies/ai-os-policy.toml")),
-                ("Gemini CLI".into(), home.join("AppData/Roaming/npm/gemini.cmd")),
+                ("Global Config".into(), home.join(".gemini/GEMINI.md")),
             ];
             for (i, (name, path)) in checks.iter().enumerate() {
-                thread::sleep(Duration::from_millis(50));
                 let pass = path.exists();
                 let done = i == checks.len() - 1;
                 boot_tx.send(BgMsg::BootResult { name: name.clone(), pass, done }).ok();
+            }
+        });
+
+        // --- Watcher Setup ---
+        let tx_clone = tx.clone();
+        let (w_tx, w_rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if let Ok(event) = res {
+                for path in event.paths {
+                    w_tx.send(path).ok();
+                }
+            }
+        }).ok();
+
+        if let Some(ref mut w) = watcher {
+            w.watch(&config.dev_ops_path, RecursiveMode::Recursive).ok();
+        }
+
+        // Process watcher events in a background thread to bridge mpsc types
+        thread::spawn(move || {
+            while let Ok(path) = w_rx.recv() {
+                tx_clone.send(BgMsg::FileChanged(path)).ok();
             }
         });
 
@@ -568,6 +591,7 @@ impl App {
             right_panel_scroll: 0,
             tasks: Vec::new(),
             task_cursor: 0,
+            _watcher: watcher.map(|w| Box::new(w) as Box<dyn Watcher>),
             vault_projects: Vec::new(),
             active_ports: Vec::new(),
             system_report: None,
@@ -1065,6 +1089,9 @@ impl App {
                 self.mp_room_cursor = 0;
                 self.mp_proj_cursor = None;
                 self.mp_is_building = false;
+            }
+            BgMsg::FileChanged(_path) => {
+                // Future: Trigger smart re-scan of specific file
             }
         }
     }
