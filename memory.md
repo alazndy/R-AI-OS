@@ -133,10 +133,17 @@
 - [x] **Compliance Refinement:** app.rs içinde FileChanged event'ini sadece hedeflenen dosya için compliance tetikleyecek şekilde optimize etme.
 
 ### Devam Edenler
-- [ ] —
+- [x] **v0.6.0 (Mimari):** **aiosd** (Tokio-based Daemon) geçişi. State yönetimini arka plana taşıma.
+    - [x] Bin split (raios, aiosd)
+    - [x] Shared library extraction (r-ai-os)
+    - [x] TCP/IPC Server (127.0.0.1:42069)
+    - [x] Background File Watcher migration to Daemon
+    - [x] Background BM25 Indexer migration to Daemon
+    - [x] Bidirectional Communication (Search commands over TCP)
+    - [ ] Health Scanner migration to Daemon
 
 ### Sıradakiler
-- [ ] **v0.6.0 (Mimari):** **aiosd** (Tokio-based Daemon) geçişi. State yönetimini arka plana taşıma.
+- [ ] Client/Daemon State Synchronization
 
 ## Karar Günlüğü
 | Tarih | Agent | Karar | Neden |
@@ -161,3 +168,7 @@
 | 2026-05-06 | Antigravity | memory.md.lock | Multi-agent race condition riskini minimize etmek |
 | 2026-05-06 | Antigravity | Compliance Refinement | FileChanged event'inde aktif dosya için otomatik compliance reload eklendi |
 | 2026-05-06 | Antigravity | Fuzzy Search UI | Ctrl+P Fuzzy Search popup'ının UI entegrasyonu tamamlandığı doğrulandı |
+| 2026-05-06 | Antigravity | aiosd Daemon Architecture | Background tasks (Indexer, Watcher) decoupled from TUI for stability |
+| 2026-05-06 | Antigravity | TCP-based IPC | JSON messages over 127.0.0.1:42069 for cross-process communication |
+| 2026-05-06 | Antigravity | Neural Index on Daemon | Index building moved to daemon to prevent TUI startup lag |
+| 2026-05-06 | Antigravity | Port Monitor and Health Scanner | Moved from TUI background thread to aiosd background tasks and implemented JSON payload responses |

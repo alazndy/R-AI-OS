@@ -2,16 +2,16 @@ use std::path::{Path, PathBuf};
 use crate::entities::EntityProject;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ProjectHealth {
     pub name: String,
     pub path: PathBuf,
     pub status: String,
     pub git_dirty: Option<bool>,
     pub compliance_score: Option<u8>,
-    pub compliance_grade: &'static str,
+    pub compliance_grade: String,
     pub has_memory: bool,
-    pub constitution_issues: Vec<&'static str>,
+    pub constitution_issues: Vec<String>,
     pub graphify_done: bool,
     pub graph_report: Option<PathBuf>,
 }
@@ -39,9 +39,9 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
         status: proj.status.clone(),
         git_dirty,
         compliance_score,
-        compliance_grade,
+        compliance_grade: compliance_grade.to_string(),
         has_memory,
-        constitution_issues,
+        constitution_issues: constitution_issues.into_iter().map(|s| s.to_string()).collect(),
         graphify_done,
         graph_report,
     }

@@ -1,21 +1,5 @@
-mod agent_runner;
-mod app;
-mod cli;
-mod compliance;
-mod config;
-mod discovery;
-mod entities;
-mod filebrowser;
-mod health;
-mod mempalace;
-mod indexer;
-mod mcp_server;
-mod requirements;
-mod sync;
-mod tasks;
-mod system_scan;
-mod safe_io;
-mod ui;
+// Import all library modules
+pub use r_ai_os::*;
 
 use std::io;
 use std::time::Duration;

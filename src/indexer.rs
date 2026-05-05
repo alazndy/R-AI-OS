@@ -11,7 +11,7 @@ const SKIP_DIRS: &[&str] = &[
     "node_modules", "target", ".git", "dist", "build", ".next", "__pycache__", ".turbo",
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
     pub path: PathBuf,
     pub project: String,
