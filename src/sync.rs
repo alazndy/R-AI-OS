@@ -1,20 +1,15 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 
-const MASTER_PATH: &str = r"C:\Users\turha\Desktop\Dev Ops\AI OS\System\MASTER.md";
-const DEV_OPS_PATH: &str = r"C:\Users\turha\Desktop\Dev Ops";
-
-pub fn sync_universe() -> Result<String> {
-    let master = PathBuf::from(MASTER_PATH);
+pub fn sync_universe(dev_ops: &Path, master: &Path) -> Result<String> {
     if !master.exists() {
-        return Err(anyhow!("MASTER.md not found at {}", MASTER_PATH));
+        return Err(anyhow!("MASTER.md not found at {}", master.display()));
     }
 
-    let base = PathBuf::from(DEV_OPS_PATH);
     let mut count = 0u32;
 
-    for cat_entry in fs::read_dir(&base)?.filter_map(|e| e.ok()) {
+    for cat_entry in fs::read_dir(dev_ops)?.filter_map(|e| e.ok()) {
         if !cat_entry.path().is_dir() {
             continue;
         }
@@ -34,8 +29,8 @@ pub fn sync_universe() -> Result<String> {
 
             let proj_path = proj_entry.path();
 
-            link_file(&master, &proj_path.join("CLAUDE.md"));
-            link_file(&master, &proj_path.join("GEMINI.md"));
+            link_file(master, &proj_path.join("CLAUDE.md"));
+            link_file(master, &proj_path.join("GEMINI.md"));
             ensure_memory(&proj_path.join("memory.md"), &proj_name);
 
             count += 1;
@@ -45,7 +40,7 @@ pub fn sync_universe() -> Result<String> {
     Ok(format!("Universe Synchronized: {} projects aligned with MASTER rules.", count))
 }
 
-fn link_file(src: &PathBuf, dst: &PathBuf) {
+fn link_file(src: &Path, dst: &PathBuf) {
     if dst.exists() {
         let _ = fs::remove_file(dst);
     }

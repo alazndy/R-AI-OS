@@ -1,7 +1,14 @@
 mod app;
 mod cli;
+mod compliance;
+mod config;
 mod discovery;
+mod entities;
 mod filebrowser;
+mod health;
+mod mempalace;
+mod indexer;
+mod requirements;
 mod sync;
 mod ui;
 
@@ -11,7 +18,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -23,8 +30,8 @@ use crate::cli::Cli;
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if let Some(command) = cli.command {
-        cli::run(command);
+    if cli.command.is_some() {
+        cli::run(cli);
         return Ok(());
     }
 
@@ -66,7 +73,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
 
         if event::poll(Duration::from_millis(40))? {
             match event::read()? {
-                Event::Key(key) => app.handle_key(key)?,
+                Event::Key(key) if key.kind == KeyEventKind::Press => app.handle_key(key)?,
                 Event::Resize(w, h) => {
                     app.width = w;
                     app.height = h;
