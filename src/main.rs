@@ -10,6 +10,7 @@ mod mempalace;
 mod indexer;
 mod requirements;
 mod sync;
+mod tasks;
 mod ui;
 
 use std::io;

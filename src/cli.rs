@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use crate::config::Config;
 use crate::filebrowser::{
     discover_memory_files, find_file_by_name, get_agent_config_files, get_master_rule_files,
@@ -47,6 +47,8 @@ pub enum Commands {
         /// Project name or path
         project: Option<String>,
     },
+    /// Print current version
+    Version,
 }
 
 /// Load config or fall back to auto-detected dev_ops and a dummy master path.
@@ -61,6 +63,7 @@ fn load_cfg() -> Config {
         }),
         master_md_path: detected.master_md.unwrap_or_else(|| PathBuf::from("MASTER.md")),
         skills_path:    detected.skills.unwrap_or_else(|| PathBuf::from(".agents/skills")),
+        vault_projects_path: detected.vault_projects.unwrap_or_else(|| PathBuf::from("Projeler")),
     }
 }
 
@@ -68,19 +71,20 @@ pub fn run(cli: Cli) {
     let cfg = load_cfg();
     let cmd = cli.command.unwrap(); // We know it exists
     match cmd {
-        Commands::Rules { name }       => cmd_rules(name, cli.json),
+        Commands::Rules { name }       => cmd_rules(name, &cfg.master_md_path, cli.json),
         Commands::Memory { project }   => cmd_memory(project, &cfg.dev_ops_path, cli.json),
         Commands::Mempalace            => cmd_mempalace(&cfg.dev_ops_path, cli.json),
         Commands::Projects             => cmd_projects(&cfg.dev_ops_path, cli.json),
         Commands::Agents               => cmd_agents(cli.json),
-        Commands::View { name }        => cmd_view(name, cli.json),
+        Commands::View { name }        => cmd_view(name, &cfg.master_md_path, cli.json),
         Commands::Discover             => cmd_discover(&cfg.dev_ops_path, cli.json),
         Commands::Health { project }   => cmd_health(project, &cfg.dev_ops_path, cli.json),
+        Commands::Version              => println!("raios v{}", env!("CARGO_PKG_VERSION")),
     }
 }
 
-fn cmd_rules(filter: Option<String>, json: bool) {
-    let files = get_master_rule_files();
+fn cmd_rules(filter: Option<String>, master_md: &Path, json: bool) {
+    let files = get_master_rule_files(master_md);
     let filter = filter.as_deref().map(str::to_lowercase);
     let mut results = Vec::new();
 
@@ -172,8 +176,8 @@ fn cmd_agents(json: bool) {
     }
 }
 
-fn cmd_view(name: String, json: bool) {
-    match find_file_by_name(&name) {
+fn cmd_view(name: String, master_md: &Path, json: bool) {
+    match find_file_by_name(&name, master_md) {
         Some(entry) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&entry).unwrap());

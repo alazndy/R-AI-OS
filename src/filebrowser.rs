@@ -321,9 +321,10 @@ fn collect_project_rules(
 
 // ── Static file lists (home-relative, no config needed) ──────────────────────
 
-pub fn get_master_rule_files() -> Vec<FileEntry> {
+pub fn get_master_rule_files(master_md: &Path) -> Vec<FileEntry> {
     let h = home();
     vec![
+        FileEntry::new("MASTER.md (Constitution)", master_md.to_path_buf()).readonly(),
         FileEntry::new("CLAUDE.md (Global)", h.join("CLAUDE.md")),
         FileEntry::new("hardware-rules.md", h.join(".claude/rules/hardware-rules.md")),
         FileEntry::new("ui-rules.md", h.join(".claude/rules/ui-rules.md")),
@@ -341,10 +342,9 @@ pub fn get_agent_config_files() -> Vec<FileEntry> {
 }
 
 /// Policy files — includes MASTER.md whose path comes from config.
-pub fn get_policy_files(master_md: &Path) -> Vec<FileEntry> {
+pub fn get_policy_files() -> Vec<FileEntry> {
     let h = home();
     vec![
-        FileEntry::new("MASTER.md (Constitution)", master_md.to_path_buf()).readonly(),
         FileEntry::new("AI OS Policy", h.join(".gemini/policies/ai-os-policy.toml")).readonly(),
         FileEntry::new("Claude settings.json", h.join(".claude/settings.json")).readonly(),
     ]
@@ -500,9 +500,9 @@ pub fn save_file_content(path: &PathBuf, content: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn find_file_by_name(query: &str) -> Option<FileEntry> {
+pub fn find_file_by_name(query: &str, master_md: &Path) -> Option<FileEntry> {
     let q = query.to_lowercase();
-    let lists = [get_master_rule_files(), get_agent_config_files()];
+    let lists = [get_master_rule_files(master_md), get_agent_config_files(), get_policy_files()];
     for list in &lists {
         for entry in list {
             if entry.name.to_lowercase().contains(&q)

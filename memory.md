@@ -1,10 +1,10 @@
 # R-AI-OS Memory
 
 ## R-AI-OS Memory
-- **Version:** v0.2.3 (Stable)
-- **Status:** Active Development
+- **Version:** v0.2.6 (Stable)
+- **Status:** **Task → Agent Dispatch** eklendi. Task panelinden [c]/[g]/[a] ile ajan yönlendirme aktif.
 - **Aktif agentlar:** Claude Code + Antigravity
-- **Durum:** Graphify Entegrasyonu ve Discovery Engine tamamlandı. Sistem PATH'e kaydedildi ('raios' command active). TUI full-featured.
+- **Durum:** `raios` CLI v0.2.6: task dispatch (@agent, #project tag sistemi), clipboard+terminal launch.
 
 ## Claude
 ### Yaptıkları
@@ -62,13 +62,29 @@
     - `/discover` komutu: Eksik projeleri bulur ve `entities.json` dosyasını kalıcı olarak günceller.
     - Startup Auto-Scan: Uygulama açılırken artık tüm projeleri (120+) otomatik olarak listeler.
     - **Refinement**: Root-level projeler (Crucix, Portfolio vb.) artık `min_depth(0)` ile doğru tespit ediliyor. Kriterler build dosyalarıyla (Cargo, Go, Python) rafine edildi.
+- **Unified Agent Shell:** MemPalace ve All Projects listelerinde `[C]`, `[G]`, `[A]` tuşlarıyla Claude, Gemini ve Antigravity ajanlarını doğrudan proje klasöründe başlatma yeteneği.
+- **Real-time Activity Ticker:** Dashboard'un altında sistem olaylarını (hata, uyarı, ajan başlatma) gösteren dinamik bir alt bar.
+- **Timeline & Live Logs:** Sistem genelindeki olayların tarihsel takibi için iki yeni Dashboard sekmesi.
 - **Scrolling Fix:** MemPalace ve All Projects listelerinde 120+ proje için kaydırma mantığı düzeltildi.
 - **Memory Detection:** `memory.md` tespiti için case-insensitivity ve `.agents/memory.md` desteği eklendi.
 - Flattened line calculation ile imleç takibi sağlandı.
+- **Task Management Integration:**
+    - `tasks.md` parser eklendi. Dashboard sağ panelinde görev listesi görüntülenebilir.
+    - `/task add <metin>` komutu ve Space/X ile tamamlama (auto-save) desteği.
+- **Vault ↔ R-AI-OS Bridge:**
+    - Obsidian `Vault101` entegrasyonu sağlandı.
+    - `/vault-create <proje>` komutu ile otomatik frontmatter'lı `.md` notu oluşturma.
+    - Proje listesinde Vault notu durumu (`[V]` / `[-]`) badge olarak eklendi.
+- **Real-time Port Monitor:**
+    - Header ticker'a aktif port takibi eklendi (3000, 5173, 8080, 4200).
+    - `TcpStream::connect_timeout` ile non-blocking port tarama.
+- **CLI & UX:**
+    - `raios --version` (clap default) ve `raios version` (custom subcommand) desteği.
+    - `MASTER.md` dosyası "Policies" sekmesinden "Constitution" sekmesine (Rules) taşındı.
+    - Config yolu `Vault101` olarak güncellendi.
 
-### Yapacakları
-- [ ] **Agent Handoff**: `raios` üzerinden Claude/Gemini'ye doğrudan görev paslama (Unified Shell)
-- [ ] Mouse desteği ekle.
+- [ ] Mouse desteği ekle (Wheel scroll & Click selection).
+- [ ] GitHub Sync: entities.json ile remote repo verilerini otomatik eşleme.
 
 ## Plan
 ### Tamamlananlar
@@ -98,8 +114,15 @@
 - [x] Graphify Health Dashboard (multi-project status)
 - [x] Graphify Markdown Previewer ([R] -> TUI viewer with scroll)
 - [x] Project Discovery Engine (120+ proje otomatik tespiti)
+- [x] Unified Agent Shell ([C], [G], [A] keys)
+- [x] Real-time Activity Ticker (Bottom bar)
+- [x] Timeline & Live Logs views
 - [x] /discover komutu ve entities.json kalıcı güncelleme
 - [x] v0.2.1 (Refined Discovery): Root-level projeler ve build-file tabanlı filtreleme.
+- [x] Task Management Integration (tasks.md parser & UI)
+- [x] Vault ↔ R-AI-OS Bridge (/vault-create)
+- [x] Real-time Port Monitor (Header ticker)
+- [x] v0.2.5: CLI Versioning & MASTER.md reorganization
 
 ### Devam Edenler
 - [ ] Fuzzy Search UI Entegrasyonu (Ctrl+P — Antigravity tamamlıyor)
@@ -123,3 +146,7 @@
 | 2026-05-05 | Antigravity | Graphify TUI Previewer | Raporlar için dış viewer yerine iç Markdown render tercih edildi |
 | 2026-05-05 | Antigravity | Discovery Engine | entities.json'daki eksik projelerin otomatik tespiti sağlandı |
 | 2026-05-05 | Antigravity | min_depth(0) & build-file markers | Root-level projelerin (Crucix vb.) tespiti ve 120+ gerçek proje doğrulaması |
+| 2026-05-05 | Antigravity | Task & Vault Bridge | Dev Ops/tasks.md ve Obsidian Vault entegrasyonu ile dokümantasyon odaklı gelişim |
+| 2026-05-05 | Antigravity | Port Monitor Ticker | Web geliştirme süreçleri için port doluluğunu TUI header'da anlık görme |
+| 2026-05-05 | Antigravity | Constitution (MASTER.md) | MASTER.md dosyasının daha görünür olması için Policies'den Rules sekmesine taşınması |
+| 2026-05-05 | Antigravity | v0.2.5 Bump | CLI versioning ve stabilite iyileştirmeleri sonrası versiyon yükseltme |

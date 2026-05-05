@@ -87,7 +87,7 @@ fn render_boot(frame: &mut Frame, app: &App) {
 
     let spin = spinner_char(app.tick);
     let heading = Paragraph::new(format!(
-        " {}  Initializing R-AI-OS v0.2.3 Core...",
+        " {}  Initializing R-AI-OS v0.2.4 Core...",
         spin
     ))
     .style(Style::new().fg(GREEN).add_modifier(Modifier::BOLD));
@@ -325,7 +325,7 @@ fn render_dashboard(frame: &mut Frame, app: &App) {
 }
 
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let version_tag = Span::styled(" v0.2.3 (Stable) ", Style::new().fg(DIM));
+    let version_tag = Span::styled(" v0.2.4 (Stable) ", Style::new().fg(DIM));
     let title = Span::styled(
         "  R-AI-OS — CORE SYSTEM  ",
         Style::new()
@@ -343,7 +343,20 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled("", Style::new())
     };
 
-    let header = Paragraph::new(Line::from(vec![title, version_tag, sync_tag]))
+    let mut port_spans = vec![];
+    for port in &app.active_ports {
+        port_spans.push(Span::styled(format!(" ●:{} ", port), Style::new().fg(GREEN)));
+    }
+
+    let mut header_spans = vec![
+        title,
+        version_tag,
+        Span::raw(" "),
+        sync_tag,
+    ];
+    header_spans.extend(port_spans);
+
+    let header = Paragraph::new(Line::from(header_spans))
         .block(
             Block::new()
                 .borders(Borders::BOTTOM)
@@ -562,6 +575,11 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &App) {
 }
 
 fn render_recent(frame: &mut Frame, area: Rect, app: &App) {
+    let [left, right] = Layout::horizontal([
+        Constraint::Percentage(60),
+        Constraint::Percentage(40),
+    ]).areas(area);
+
     let banner_lines: Vec<Line> = BANNER
         .lines()
         .map(|l| Line::from(Span::styled(l, Style::new().fg(GREEN))))
@@ -602,7 +620,98 @@ fn render_recent(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
     }
 
-    frame.render_widget(Paragraph::new(Text::from(lines)), area);
+    frame.render_widget(Paragraph::new(Text::from(lines)), left);
+    render_tasks_panel(frame, right, app);
+}
+
+fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let focused = app.right_panel_focus && app.menu_cursor == 0;
+    let border_color = if focused { GREEN } else { DIM };
+
+    let hint = if focused {
+        " [Space] done  [c] Claude  [g] Gemini  [a] Antigravity "
+    } else {
+        " [→] focus "
+    };
+
+    let block = Block::new()
+        .borders(Borders::LEFT)
+        .border_style(Style::new().fg(border_color))
+        .title(Span::styled(" TASKS ", Style::new().fg(GREEN).bold()))
+        .title_bottom(Span::styled(hint, Style::new().fg(DIM)));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = Vec::new();
+
+    if app.tasks.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No tasks — /task add <text> [@agent] [#project]",
+            Style::new().fg(DIM).italic(),
+        )));
+    } else {
+        let pending: Vec<_> = app.tasks.iter().enumerate().filter(|(_, t)| !t.completed).collect();
+        let done: Vec<_> = app.tasks.iter().enumerate().filter(|(_, t)| t.completed).collect();
+
+        for (i, task) in pending.iter().chain(done.iter()) {
+            let selected = *i == app.task_cursor && focused;
+
+            let (mark, text_style) = if task.completed {
+                ("✓", Style::new().fg(DIM))
+            } else {
+                ("☐", Style::new().fg(MID))
+            };
+
+            let cursor_span = if selected {
+                Span::styled(" ❯ ", Style::new().fg(GREEN).bold())
+            } else {
+                Span::styled("   ", Style::new())
+            };
+
+            let text_color = if selected { GREEN } else if task.completed { DIM } else { MID };
+
+            // Agent badge
+            let agent_span = task
+                .agent_label()
+                .map(|label| {
+                    let color = match task.agent.as_deref() {
+                        Some("claude")      => GREEN,
+                        Some("gemini")      => CYAN,
+                        Some("antigravity") => AMBER,
+                        _ => DIM,
+                    };
+                    Span::styled(format!(" {}", label), Style::new().fg(color).bold())
+                })
+                .unwrap_or_else(|| Span::styled("", Style::new()));
+
+            // Project badge
+            let proj_span = task
+                .project
+                .as_deref()
+                .map(|p| Span::styled(format!(" #{}", p), Style::new().fg(DIM)))
+                .unwrap_or_else(|| Span::styled("", Style::new()));
+
+            lines.push(Line::from(vec![
+                cursor_span,
+                Span::styled(format!("{} ", mark), text_style),
+                Span::styled(task.display().to_string(), Style::new().fg(text_color)),
+                agent_span,
+                proj_span,
+            ]));
+        }
+
+        // Summary footer
+        let total = app.tasks.len();
+        let done_count = app.tasks.iter().filter(|t| t.completed).count();
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {}/{} done", done_count, total),
+            Style::new().fg(DIM),
+        )));
+    }
+
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 fn render_rules(frame: &mut Frame, area: Rect, app: &App) {
@@ -969,10 +1078,18 @@ fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
             let sc = project_status_color(&proj.status);
             let cat = proj.category.replace('_', " ");
 
+            let has_vault = app.vault_projects.contains(&proj.name);
+            let vault_tag = if has_vault {
+                Span::styled(" [V]", Style::new().fg(AMBER).bold())
+            } else {
+                Span::styled(" [-]", Style::new().fg(DIM))
+            };
+
             if is_selected {
                 lines.push(Line::from(vec![
                     Span::styled("  ▶ ", Style::new().fg(GREEN).bold()),
                     Span::styled(proj.name.as_str(), Style::new().fg(GREEN).bold()),
+                    vault_tag,
                     Span::styled(format!("  [{}]", proj.status), Style::new().fg(sc).bold()),
                     Span::styled(format!("  {}", cat), Style::new().fg(DIM)),
                 ]));
@@ -980,6 +1097,7 @@ fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
                 lines.push(Line::from(vec![
                     Span::styled("    ", Style::new()),
                     Span::styled(proj.name.as_str(), Style::new().fg(MID)),
+                    vault_tag,
                     Span::styled(format!("  [{}]", proj.status), Style::new().fg(sc)),
                     Span::styled(format!("  {}", cat), Style::new().fg(DIM)),
                 ]));
@@ -1212,6 +1330,11 @@ fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
             " [↑↓] navigate  [Enter] view  [e] edit  [o] VS Code  [←] menu  [/] command",
             Style::new().fg(DIM),
         ))
+    } else if let Some(act) = app.activities.last() {
+        Line::from(vec![
+            Span::styled(format!(" [LOG] {} » ", act.timestamp), Style::new().fg(DIM)),
+            Span::styled(act.message.as_str(), Style::new().fg(CYAN).italic()),
+        ])
     } else {
         let hint = if !app.current_menu_files().is_empty() { "  [→] files" } else { "" };
         Line::from(Span::styled(

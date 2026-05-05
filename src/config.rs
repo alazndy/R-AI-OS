@@ -11,6 +11,8 @@ pub struct Config {
     pub master_md_path: PathBuf,
     /// Path to .agents/skills directory
     pub skills_path: PathBuf,
+    /// Path to Obsidian Vault Projects folder
+    pub vault_projects_path: PathBuf,
 }
 
 impl Config {
@@ -56,7 +58,10 @@ impl Config {
         // ── skills_path ───────────────────────────────────────────────────────
         let skills = find_skills(dev_ops.as_ref());
 
-        DetectResult { dev_ops, master_md, skills }
+        // ── vault_projects_path ──────────────────────────────────────────────
+        let vault_projects = find_vault_projects(&home, master_md.as_ref());
+
+        DetectResult { dev_ops, master_md, skills, vault_projects }
     }
 }
 
@@ -64,6 +69,7 @@ pub struct DetectResult {
     pub dev_ops:   Option<PathBuf>,
     pub master_md: Option<PathBuf>,
     pub skills:    Option<PathBuf>,
+    pub vault_projects: Option<PathBuf>,
 }
 
 
@@ -128,6 +134,31 @@ fn find_skills(dev_ops: Option<&PathBuf>) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let ag = home.join(".gemini").join("antigravity").join("skills");
     if ag.is_dir() { return Some(ag); }
+
+    None
+}
+
+fn find_vault_projects(home: &PathBuf, master_md: Option<&PathBuf>) -> Option<PathBuf> {
+    if let Some(master) = master_md {
+        if let Some(vault_root) = master.parent() {
+            let candidate = vault_root.join("Projeler");
+            if candidate.is_dir() { return Some(candidate); }
+            let candidate2 = vault_root.join("01_Projects");
+            if candidate2.is_dir() { return Some(candidate2); }
+            let candidate3 = vault_root.join("Dev Ops Projeleri");
+            if candidate3.is_dir() { return Some(candidate3); }
+        }
+    }
+
+    let obsidian_root = home.join("Documents").join("Obsidian Vaults");
+    if obsidian_root.is_dir() {
+        if let Ok(vaults) = std::fs::read_dir(&obsidian_root) {
+            for vault in vaults.filter_map(|e| e.ok()) {
+                let candidate = vault.path().join("Projeler");
+                if candidate.is_dir() { return Some(candidate); }
+            }
+        }
+    }
 
     None
 }

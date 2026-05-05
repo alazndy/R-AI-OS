@@ -1,6 +1,6 @@
 [package]
 name = "r-ai-os"
-version = "0.2.1"
+version = "0.2.6"
 edition = "2021"
 authors = ["alazndy <goktugturhan74@gmail.com>"]
 description = "AI OS Terminal Control Center — Rust Edition"

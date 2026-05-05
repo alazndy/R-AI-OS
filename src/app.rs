@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write as _;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -61,6 +61,9 @@ pub enum BgMsg {
     #[allow(dead_code)] ActivityUpdate(Vec<Activity>),
     #[allow(dead_code)] NewLog(LogEntry),
     MemPalaceBuilt(Vec<crate::mempalace::MemRoom>),
+    Tasks(Vec<crate::tasks::Task>),
+    VaultStatus(Vec<String>),
+    ActivePorts(Vec<u16>),
 }
 
 #[derive(Debug, Clone)]
@@ -434,6 +437,16 @@ pub struct App {
     pub mp_expanded: Vec<bool>,
     pub mp_filter: String,
     pub mp_is_building: bool,
+    
+    // Tasks
+    pub tasks: Vec<crate::tasks::Task>,
+    pub task_cursor: usize,
+
+    // Vault
+    pub vault_projects: Vec<String>,
+
+    // Ports
+    pub active_ports: Vec<u16>,
 
     // Graph Report
     pub graph_report_lines: Vec<String>,
@@ -450,6 +463,7 @@ impl App {
             dev_ops_path:   PathBuf::from(""),
             master_md_path: PathBuf::from(""),
             skills_path:    PathBuf::from(""),
+            vault_projects_path: PathBuf::from(""),
         });
 
         let master = config.master_md_path.clone();
@@ -545,6 +559,10 @@ impl App {
             graph_report_lines: Vec::new(),
             graph_report_scroll: 0,
             right_panel_scroll: 0,
+            tasks: Vec::new(),
+            task_cursor: 0,
+            vault_projects: Vec::new(),
+            active_ports: Vec::new(),
         }
     }
 
@@ -692,6 +710,31 @@ impl App {
         }
     }
 
+    fn find_project_path_by_name(&self, name: &str) -> Option<PathBuf> {
+        let q = name.to_lowercase();
+        self.projects
+            .iter()
+            .find(|p| p.name.to_lowercase() == q || p.name.to_lowercase().contains(&q))
+            .map(|p| p.local_path.clone())
+    }
+
+    pub fn dispatch_task(&mut self, agent: &str) {
+        let task = match self.tasks.get(self.task_cursor) {
+            Some(t) => t.clone(),
+            None => return,
+        };
+
+        let proj_path = task
+            .project
+            .as_deref()
+            .and_then(|name| self.find_project_path_by_name(name))
+            .or_else(|| self.active_project.as_ref().map(|p| p.local_path.clone()));
+
+        let result = crate::tasks::dispatch_to_agent(&task, agent, proj_path.as_ref());
+        self.sync_status = Some(result);
+        self.add_activity("Task", &format!("Dispatched to {}: {}", agent, task.text), "Info");
+    }
+
     pub fn open_project_detail(&mut self, project: crate::entities::EntityProject) {
         self.project_memory_scroll = 0;
         self.project_panel_focus = false;
@@ -829,6 +872,10 @@ impl App {
                         "Skills Path",
                         "Agent skills directory (.agents/skills)",
                     ).with_detected(detected.skills),
+                    SetupField::new(
+                        "Vault Projects Path",
+                        "Obsidian Vault Projects folder",
+                    ).with_detected(detected.vault_projects),
                 ];
                 self.setup_cursor = 0;
                 self.state = AppState::Setup;
@@ -844,9 +891,9 @@ impl App {
                     tx.send(BgMsg::Agents(crate::discovery::discover_agents())).ok();
                     tx.send(BgMsg::Skills(crate::discovery::discover_skills(&cfg.skills_path))).ok();
                     tx.send(BgMsg::MemPalaceFiles(get_mempalace_files(&cfg.dev_ops_path))).ok();
-                    tx.send(BgMsg::MasterFiles(get_master_rule_files())).ok();
+                    tx.send(BgMsg::MasterFiles(get_master_rule_files(&cfg.master_md_path))).ok();
                     tx.send(BgMsg::AgentFiles(get_agent_config_files())).ok();
-                    tx.send(BgMsg::PolicyFiles(get_policy_files(&cfg.master_md_path))).ok();
+                    tx.send(BgMsg::PolicyFiles(get_policy_files())).ok();
                     tx.send(BgMsg::AgentRuleGroups(discover_all_agent_rules(&cfg.dev_ops_path))).ok();
                     let discovered = crate::entities::discover_entities(&cfg.dev_ops_path);
                     let count = discovered.len();
@@ -858,6 +905,43 @@ impl App {
                     };
                     tx.send(BgMsg::NewLog(log)).ok();
                     tx.send(BgMsg::MemPalaceBuilt(crate::mempalace::build(&cfg.dev_ops_path))).ok();
+                    if let Ok(tasks) = crate::tasks::load_tasks(&cfg.dev_ops_path) {
+                        tx.send(BgMsg::Tasks(tasks)).ok();
+                    }
+                    
+                    let vault_path = cfg.vault_projects_path.clone();
+                    if vault_path.exists() {
+                        let mut vault_projs = Vec::new();
+                        if let Ok(entries) = std::fs::read_dir(vault_path) {
+                            for entry in entries.filter_map(|e| e.ok()) {
+                                if let Some(name) = entry.path().file_stem() {
+                                    vault_projs.push(name.to_string_lossy().into_owned());
+                                }
+                            }
+                        }
+                        tx.send(BgMsg::VaultStatus(vault_projs)).ok();
+                    }
+                    
+                    // Port Monitor
+                    let tx_port = tx.clone();
+                    thread::spawn(move || {
+                        let common_ports = [3000, 5173, 8080, 4200];
+                        loop {
+                            let mut active = Vec::new();
+                            for &port in &common_ports {
+                                let addr = format!("127.0.0.1:{}", port);
+                                if let Ok(stream) = std::net::TcpStream::connect_timeout(
+                                    &addr.parse().unwrap(),
+                                    std::time::Duration::from_millis(100)
+                                ) {
+                                    active.push(port);
+                                    drop(stream);
+                                }
+                            }
+                            tx_port.send(BgMsg::ActivePorts(active)).ok();
+                            thread::sleep(std::time::Duration::from_secs(10));
+                        }
+                    });
                 });
                 // Start indexing Dev Ops in background
                 if !self.is_indexing && self.config.dev_ops_path.exists() {
@@ -912,6 +996,15 @@ impl App {
             BgMsg::Projects(p) => {
                 self.projects = p;
                 self.project_cursor = 0;
+            }
+            BgMsg::Tasks(t) => {
+                self.tasks = t;
+            }
+            BgMsg::VaultStatus(v) => {
+                self.vault_projects = v;
+            }
+            BgMsg::ActivePorts(p) => {
+                self.active_ports = p;
             }
             BgMsg::HealthReport(report) => {
                 self.health_report = report;
@@ -1144,9 +1237,24 @@ impl App {
                     self.mp_proj_cursor = None;
                 }
             }
-
+            KeyCode::Char('C') | KeyCode::Char('G') | KeyCode::Char('A') => {
+                if let Some(proj) = self.get_selected_mempalace_project() {
+                    let agent = match key.code {
+                        KeyCode::Char('C') => "claude",
+                        KeyCode::Char('G') => "gemini",
+                        _ => "antigravity",
+                    };
+                    self.add_activity("Agent", &format!("Launching {} from MemPalace", agent), "Info");
+                    self.sync_status = Some(launch_agent(agent, &proj.path));
+                }
+            }
             _ => {}
         }
+    }
+
+    fn get_selected_mempalace_project(&self) -> Option<crate::mempalace::MemProject> {
+        let pi = self.mp_proj_cursor?;
+        self.mp_rooms.get(self.mp_room_cursor)?.projects.get(pi).cloned()
     }
 
     fn handle_key_search(&mut self, key: KeyEvent) -> Result<()> {
@@ -1355,6 +1463,7 @@ impl App {
                         dev_ops_path:   PathBuf::from(&self.setup_fields[0].value),
                         master_md_path: PathBuf::from(&self.setup_fields[1].value),
                         skills_path:    PathBuf::from(&self.setup_fields[2].value),
+                        vault_projects_path: PathBuf::from(&self.setup_fields[3].value),
                     };
                     match cfg.save() {
                         Ok(()) => {
@@ -1401,6 +1510,7 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.right_panel_focus {
                     match self.menu_cursor {
+                        0 => { if self.task_cursor > 0 { self.task_cursor -= 1; } }
                         6 => { if self.search_cursor > 0 { self.search_cursor -= 1; } }
                         7 => { if self.project_cursor > 0 { self.project_cursor -= 1; } }
                         _ => { if self.right_file_cursor > 0 { self.right_file_cursor -= 1; } }
@@ -1417,6 +1527,10 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.right_panel_focus {
                     match self.menu_cursor {
+                        0 => {
+                            let max = self.tasks.len().saturating_sub(1);
+                            if self.task_cursor < max { self.task_cursor += 1; }
+                        }
                         6 => {
                             let max = self.search_results.len().saturating_sub(1);
                             if self.search_cursor < max { self.search_cursor += 1; }
@@ -1441,6 +1555,7 @@ impl App {
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 let can_focus = !self.current_menu_files().is_empty()
+                    || (self.menu_cursor == 0 && !self.tasks.is_empty())
                     || (self.menu_cursor == 6 && !self.search_results.is_empty())
                     || (self.menu_cursor == 7 && !self.projects.is_empty());
                 if can_focus {
@@ -1451,6 +1566,31 @@ impl App {
             }
             KeyCode::Left | KeyCode::Char('h') => {
                 self.right_panel_focus = false;
+            }
+            KeyCode::Char(' ') | KeyCode::Char('x') | KeyCode::Char('X') => {
+                if self.menu_cursor == 0 && self.right_panel_focus {
+                    if let Some(task) = self.tasks.get_mut(self.task_cursor) {
+                        task.completed = !task.completed;
+                        let _ = crate::tasks::save_tasks(&self.config.dev_ops_path, &self.tasks);
+                    }
+                }
+            }
+
+            // Task → Agent dispatch  (only active when task panel is focused)
+            KeyCode::Char('c') => {
+                if self.menu_cursor == 0 && self.right_panel_focus {
+                    self.dispatch_task("claude");
+                }
+            }
+            KeyCode::Char('g') => {
+                if self.menu_cursor == 0 && self.right_panel_focus {
+                    self.dispatch_task("gemini");
+                }
+            }
+            KeyCode::Char('a') => {
+                if self.menu_cursor == 0 && self.right_panel_focus {
+                    self.dispatch_task("antigravity");
+                }
             }
             KeyCode::Enter => {
                 if self.right_panel_focus {
@@ -1491,6 +1631,24 @@ impl App {
                     let files = self.current_menu_files();
                     if let Some(entry) = files.into_iter().nth(self.right_file_cursor) {
                         let _ = crate::discovery::open_in_editor(&entry.path);
+                    }
+                }
+            }
+            KeyCode::Char('C') | KeyCode::Char('G') | KeyCode::Char('A') => {
+                if self.right_panel_focus {
+                    let project_path = match self.menu_cursor {
+                        7 => self.projects.get(self.project_cursor).map(|p| p.local_path.clone()),
+                        _ => None,
+                    };
+
+                    if let Some(path) = project_path {
+                        let agent = match key.code {
+                            KeyCode::Char('C') => "claude",
+                            KeyCode::Char('G') => "gemini",
+                            _ => "antigravity",
+                        };
+                        self.add_activity("Agent", &format!("Launching {} for project", agent), "Info");
+                        self.sync_status = Some(launch_agent(agent, &path));
                     }
                 }
             }
@@ -1555,14 +1713,14 @@ impl App {
             }
             "/view" => {
                 if !arg.is_empty() {
-                    if let Some(entry) = find_file_by_name(arg) {
+                    if let Some(entry) = find_file_by_name(arg, &self.config.master_md_path) {
                         self.open_file_view(entry);
                     }
                 }
             }
             "/edit" => {
                 if !arg.is_empty() {
-                    if let Some(entry) = find_file_by_name(arg) {
+                    if let Some(entry) = find_file_by_name(arg, &self.config.master_md_path) {
                         if !entry.read_only {
                             self.open_file_edit(entry);
                         }
@@ -1618,6 +1776,64 @@ impl App {
             "/help" => {
                 self.menu_cursor = 10;
                 self.right_panel_focus = false;
+            }
+            "/task" => {
+                // /task add <text> [@agent] [#project]
+                // /task send claude|gemini|antigravity
+                if arg.starts_with("add ") {
+                    let rest = arg.trim_start_matches("add ").trim();
+                    // Parse the line using the same parser (add checkbox prefix)
+                    let fake_line = format!("- [ ] {}", rest);
+                    // Re-use load logic: parse inline
+                    let new_task = crate::tasks::parse_task_line(&fake_line).unwrap_or_else(|| {
+                        crate::tasks::Task {
+                            text: rest.to_string(),
+                            completed: false,
+                            agent: None,
+                            project: None,
+                        }
+                    });
+                    let agent_hint = new_task.agent.as_deref().unwrap_or("-");
+                    let proj_hint = new_task.project.as_deref().unwrap_or("-");
+                    self.sync_status = Some(format!("Task added [{}→{}]", agent_hint, proj_hint));
+                    self.tasks.push(new_task);
+                    let _ = crate::tasks::save_tasks(&self.config.dev_ops_path, &self.tasks);
+                } else if let Some(agent) = arg.strip_prefix("send ") {
+                    self.dispatch_task(agent.trim());
+                } else if arg == "load" {
+                    if let Ok(tasks) = crate::tasks::load_tasks(&self.config.dev_ops_path) {
+                        self.tasks = tasks;
+                        self.sync_status = Some(format!("{} tasks loaded", self.tasks.len()));
+                    }
+                }
+            }
+            "/vault-create" => {
+                let name = arg.trim();
+                if name.is_empty() {
+                    self.sync_status = Some("Usage: /vault-create <project_name>".into());
+                } else {
+                    let proj = self.projects.iter().find(|p| p.name == name).cloned();
+                    if let Some(p) = proj {
+                        let vault_file = self.config.vault_projects_path.join(format!("{}.md", p.name));
+                        if vault_file.exists() {
+                            self.sync_status = Some("Vault note already exists".into());
+                        } else {
+                            let content = format!(
+                                "---\ncategory: {}\nstatus: {}\ntags: [project, raios]\ncreated: {}\n---\n# {}\n\n## Overview\n{} is a project managed by R-AI-OS.\n\n## Details\n- Path: {}\n",
+                                p.category, p.status, chrono::Local::now().format("%Y-%m-%d"), p.name, p.name, p.local_path.display()
+                            );
+                            if std::fs::write(&vault_file, content).is_ok() {
+                                self.vault_projects.push(p.name.clone());
+                                self.sync_status = Some(format!("Vault note created: {}", p.name));
+                                self.add_activity("System", &format!("Created vault note for {}", p.name), "Info");
+                            } else {
+                                self.sync_status = Some("Failed to write vault note".into());
+                            }
+                        }
+                    } else {
+                        self.sync_status = Some(format!("Project not found: {}", name));
+                    }
+                }
             }
             "/health" => {
                 if !self.projects.is_empty() && !self.is_checking_health {
