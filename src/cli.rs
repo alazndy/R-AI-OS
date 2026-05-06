@@ -63,6 +63,37 @@ pub enum Commands {
         #[arg(short, long)]
         timeout: Option<u64>,
     },
+    /// Commit dirty projects in bulk (optionally push)
+    Commit {
+        /// Filter to a single project by name
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Custom commit message (default: "chore: raios auto-sync")
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Push after committing
+        #[arg(long)]
+        push: bool,
+        /// Dry-run: show which projects would be committed without doing it
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Show workspace portfolio statistics
+    Stats,
+    /// Scaffold a new project following MASTER.md rules
+    New {
+        /// Project name
+        name: String,
+        /// Category folder (e.g. "07_DevTools_&_Productivity")
+        #[arg(short, long, default_value = "")]
+        category: String,
+        /// Create a private GitHub repo and push
+        #[arg(long)]
+        github: bool,
+        /// Skip updating Vault Proje Atlası.md
+        #[arg(long)]
+        no_vault: bool,
+    },
 }
 
 /// Load config or fall back to auto-detected dev_ops and a dummy master path.
@@ -105,6 +136,15 @@ pub fn run(cli: Cli) {
                 eprintln!("Agent Runner Error: {}", e);
                 std::process::exit(1);
             }
+        }
+        Commands::Commit { project, message, push, dry_run } => {
+            cmd_commit(project, message, push, dry_run, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::Stats => {
+            cmd_stats(&cfg.dev_ops_path, cli.json);
+        }
+        Commands::New { name, category, github, no_vault } => {
+            cmd_new(&name, &category, github, no_vault, &cfg.dev_ops_path, cli.json);
         }
     }
 }
@@ -263,5 +303,199 @@ fn cmd_health(project: Option<String>, dev_ops: &std::path::Path, json: bool) {
             let remote = r.remote_url.unwrap_or_else(|| "N/A".to_string());
             println!("Project: {:<20} | Status: {:<10} | Git: {:<5} | Grade: {} | URL: {}", r.name, r.status, dirty, r.compliance_grade, remote);
         }
+    }
+}
+
+fn cmd_commit(
+    project: Option<String>,
+    message: Option<String>,
+    push: bool,
+    dry_run: bool,
+    dev_ops: &std::path::Path,
+    json: bool,
+) {
+    use crate::filebrowser::{git_commit, git_is_dirty, git_push};
+
+    let projects = crate::entities::load_entities(dev_ops);
+    let commit_msg = message.as_deref().unwrap_or("chore: raios auto-sync");
+
+    let candidates: Vec<_> = if let Some(q) = project {
+        let q = q.to_lowercase();
+        projects.into_iter()
+            .filter(|p| p.name.to_lowercase().contains(&q))
+            .collect()
+    } else {
+        projects
+    };
+
+    #[derive(serde::Serialize)]
+    struct CommitEntry { name: String, committed: bool, pushed: bool, note: String }
+    let mut entries: Vec<CommitEntry> = Vec::new();
+    let mut committed_count = 0usize;
+    let mut skipped_count = 0usize;
+
+    for p in &candidates {
+        let dirty = git_is_dirty(&p.local_path).unwrap_or(false);
+        if !dirty {
+            skipped_count += 1;
+            if !json { println!("  skip  {}", p.name); }
+            continue;
+        }
+        if dry_run {
+            if !json { println!("  would commit  {}", p.name); }
+            entries.push(CommitEntry { name: p.name.clone(), committed: false, pushed: false, note: "dry-run".into() });
+            continue;
+        }
+        let result = git_commit(&p.local_path, commit_msg);
+        let mut pushed_ok = false;
+        let mut note = result.message.clone();
+        if result.committed && push {
+            match git_push(&p.local_path) {
+                Ok(()) => { pushed_ok = true; note = "committed + pushed".into(); }
+                Err(e) => { note = format!("committed, push failed: {}", e); }
+            }
+        } else if result.committed {
+            note = "committed".into();
+        }
+        if result.committed { committed_count += 1; } else { skipped_count += 1; }
+        if !json {
+            let status = if result.committed { if pushed_ok { "  ✓ push " } else { "  ✓ commit" } } else { "  - skip  " };
+            println!("{} {} — {}", status, p.name, note);
+        }
+        entries.push(CommitEntry { name: p.name.clone(), committed: result.committed, pushed: pushed_ok, note });
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&entries).unwrap_or_default());
+    } else {
+        println!("\nDone — {} committed, {} skipped.", committed_count, skipped_count);
+    }
+}
+
+fn cmd_stats(dev_ops: &std::path::Path, json: bool) {
+    use std::collections::HashMap;
+
+    let projects = crate::entities::load_entities(dev_ops);
+    let total = projects.len();
+
+    let mut active = 0usize;
+    let mut archived = 0usize;
+    let mut dirty = 0usize;
+    let mut no_memory = 0usize;
+    let mut local_only = 0usize;
+    let mut grade_a = 0usize;
+    let mut grade_b = 0usize;
+    let mut grade_c = 0usize;
+    let mut grade_d = 0usize;
+    let mut category_counts: HashMap<String, usize> = HashMap::new();
+
+    for p in &projects {
+        match p.status.as_str() {
+            "active" => active += 1,
+            "archived" | "legacy" => archived += 1,
+            _ => active += 1,
+        }
+        if p.github.is_none() { local_only += 1; }
+        if crate::filebrowser::git_is_dirty(&p.local_path) == Some(true) { dirty += 1; }
+        if !p.local_path.join("memory.md").exists() { no_memory += 1; }
+        let health = crate::health::check_project(p);
+        match health.compliance_grade.as_str() {
+            "A" => grade_a += 1,
+            "B" => grade_b += 1,
+            "C" => grade_c += 1,
+            _ => grade_d += 1,
+        }
+        *category_counts.entry(p.category.clone()).or_insert(0) += 1;
+    }
+
+    if json {
+        #[derive(serde::Serialize)]
+        struct Stats {
+            total: usize, active: usize, archived: usize,
+            dirty: usize, no_memory: usize, local_only: usize,
+            grade_a: usize, grade_b: usize, grade_c: usize, grade_d: usize,
+            categories: HashMap<String, usize>,
+        }
+        let s = Stats { total, active, archived, dirty, no_memory, local_only,
+            grade_a, grade_b, grade_c, grade_d, categories: category_counts };
+        println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+        return;
+    }
+
+    fn bar(n: usize, total: usize, width: usize) -> String {
+        if total == 0 { return String::new(); }
+        let filled = (n * width) / total;
+        "█".repeat(filled)
+    }
+
+    println!("Portfolio Statistics — R-AI-OS v{}", env!("CARGO_PKG_VERSION"));
+    println!("{}", "─".repeat(46));
+    println!("Total projects:      {:>5}", total);
+    println!("Active / Archived:   {:>5} / {}", active, archived);
+    println!("Dirty (uncommitted): {:>5}", dirty);
+    println!("No memory.md:        {:>5}", no_memory);
+    println!("Local only (no GH):  {:>5}", local_only);
+    println!();
+    println!("Grade Distribution:");
+    println!("  A (≥80): {:>4} projects  {} {}%",
+        grade_a, bar(grade_a, total, 24),
+        if total > 0 { grade_a * 100 / total } else { 0 });
+    println!("  B (≥60): {:>4} projects  {} {}%",
+        grade_b, bar(grade_b, total, 24),
+        if total > 0 { grade_b * 100 / total } else { 0 });
+    println!("  C (≥40): {:>4} projects  {} {}%",
+        grade_c, bar(grade_c, total, 24),
+        if total > 0 { grade_c * 100 / total } else { 0 });
+    println!("  D  (<40): {:>4} projects  {} {}%",
+        grade_d, bar(grade_d, total, 24),
+        if total > 0 { grade_d * 100 / total } else { 0 });
+    println!();
+    println!("Top Categories:");
+    let mut cats: Vec<_> = category_counts.iter().collect();
+    cats.sort_by(|a, b| b.1.cmp(a.1));
+    for (cat, count) in cats.iter().take(8) {
+        let display = cat.replace('_', " ");
+        println!("  {:<28} {}", display, count);
+    }
+}
+
+fn cmd_new(name: &str, category: &str, github: bool, no_vault: bool, dev_ops: &std::path::Path, json: bool) {
+    let effective_category = if category.is_empty() { "Uncategorized" } else { category };
+    let cfg = crate::new_project::NewProjectConfig {
+        name,
+        category: effective_category,
+        dev_ops,
+        github,
+        no_vault,
+    };
+    let result = crate::new_project::create(&cfg);
+
+    if json {
+        #[derive(serde::Serialize)]
+        struct Out { path: String, github_url: Option<String>, steps: Vec<(String, bool)> }
+        let out = Out {
+            path: result.path.display().to_string(),
+            github_url: result.github_url,
+            steps: result.steps,
+        };
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        return;
+    }
+
+    println!("Project: {}", name);
+    println!("Path:    {}", result.path.display());
+    if let Some(url) = &result.github_url {
+        println!("GitHub:  {}", url);
+    }
+    println!();
+    for (desc, ok) in &result.steps {
+        println!("  [{}] {}", if *ok { "✓" } else { "✗" }, desc);
+    }
+    println!();
+    let all_ok = result.steps.iter().all(|(_, ok)| *ok);
+    if all_ok {
+        println!("Done. Project ready at {}", result.path.display());
+    } else {
+        println!("Completed with some errors. Check the steps above.");
     }
 }

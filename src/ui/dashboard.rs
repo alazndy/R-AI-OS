@@ -371,7 +371,14 @@ pub fn render_recent(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     frame.render_widget(Paragraph::new(Text::from(lines)), left);
-    render_tasks_panel(frame, right, app);
+
+    let [tasks_area, stats_area] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(10),
+    ]).areas(right);
+
+    render_tasks_panel(frame, tasks_area, app);
+    render_quick_stats(frame, stats_area, app);
 }
 
 pub fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App) {
@@ -460,6 +467,47 @@ pub fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(DIM),
         )));
     }
+
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+}
+
+pub fn render_quick_stats(frame: &mut Frame, area: Rect, app: &App) {
+    let block = Block::new()
+        .borders(Borders::LEFT | Borders::TOP)
+        .border_style(Style::new().fg(DIM))
+        .title(Span::styled(" PORTFOLIO ", Style::new().fg(DIM)));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines = if app.is_computing_stats {
+        vec![Line::from(Span::styled("  computing...", Style::new().fg(DIM).italic()))]
+    } else if let Some(ref s) = app.stats_cache {
+        let total = s.total;
+        let grade_pct = |n: usize| if total > 0 { n * 100 / total } else { 0 };
+
+        vec![
+            Line::from(vec![
+                Span::styled(format!("  {:>3} projects", total), Style::new().fg(MID)),
+                Span::styled(
+                    format!("  {} dirty", s.dirty),
+                    if s.dirty > 0 { Style::new().fg(AMBER) } else { Style::new().fg(GREEN) },
+                ),
+                Span::styled(format!("  {} no-mem", s.no_memory), Style::new().fg(if s.no_memory > 0 { RED } else { DIM })),
+            ]),
+            Line::from(vec![
+                Span::styled(format!("  A:{:>3}% ", grade_pct(s.grade_a)), Style::new().fg(GREEN)),
+                Span::styled(format!("B:{:>3}% ", grade_pct(s.grade_b)), Style::new().fg(CYAN)),
+                Span::styled(format!("C:{:>3}% ", grade_pct(s.grade_c)), Style::new().fg(AMBER)),
+                Span::styled(format!("D:{:>3}%", grade_pct(s.grade_d)), Style::new().fg(RED)),
+            ]),
+            Line::from(vec![
+                Span::styled(format!("  local-only:{}", s.local_only), Style::new().fg(DIM)),
+            ]),
+        ]
+    } else {
+        vec![Line::from(Span::styled("  — no data —", Style::new().fg(DIM).italic()))]
+    };
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }

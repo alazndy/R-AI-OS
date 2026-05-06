@@ -5,14 +5,40 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
-use crate::app::App;
+use crate::app::{App, state::SortMode};
 use crate::ui::*;
 
 
 pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
-    let total = app.projects.len();
-    let visible_h = area.height.saturating_sub(2) as usize; // header + spacer
-    
+    use crate::filebrowser::git_is_dirty;
+
+    // Build sorted index list (avoids cloning all projects)
+    let mut indices: Vec<usize> = (0..app.projects.len()).collect();
+    match app.project_sort {
+        SortMode::Name => indices.sort_by(|&a, &b| {
+            app.projects[a].name.to_lowercase().cmp(&app.projects[b].name.to_lowercase())
+        }),
+        SortMode::Grade => indices.sort_by(|&a, &b| {
+            let h_a = crate::health::check_project(&app.projects[a]);
+            let h_b = crate::health::check_project(&app.projects[b]);
+            h_a.compliance_grade.cmp(&h_b.compliance_grade)
+        }),
+        SortMode::GitDirty => indices.sort_by(|&a, &b| {
+            let da = git_is_dirty(&app.projects[a].local_path).unwrap_or(false);
+            let db = git_is_dirty(&app.projects[b].local_path).unwrap_or(false);
+            db.cmp(&da) // dirty first
+        }),
+        SortMode::Category => indices.sort_by(|&a, &b| {
+            app.projects[a].category.cmp(&app.projects[b].category)
+        }),
+        SortMode::Status => indices.sort_by(|&a, &b| {
+            app.projects[a].status.cmp(&app.projects[b].status)
+        }),
+    }
+
+    let total = indices.len();
+    let visible_h = area.height.saturating_sub(3) as usize; // header + sort hint + spacer
+
     let scroll = if app.project_cursor >= visible_h {
         app.project_cursor - visible_h + 1
     } else {
@@ -32,10 +58,15 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
                 Style::new().fg(DIM),
             ),
         ]),
+        Line::from(vec![
+            Span::styled("  sort: ", Style::new().fg(DIM)),
+            Span::styled(app.project_sort.label(), Style::new().fg(AMBER).bold()),
+            Span::styled("  [s] cycle sort", Style::new().fg(DIM)),
+        ]),
         Line::from(""),
     ];
 
-    if app.projects.is_empty() {
+    if indices.is_empty() {
         lines.push(Line::from(Span::styled(
             "  entities.json not found or empty",
             Style::new().fg(DIM).italic(),
@@ -45,7 +76,8 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(DIM),
         )));
     } else {
-        for (i, proj) in app.projects.iter().enumerate().skip(scroll).take(visible_h) {
+        for (i, &orig_i) in indices.iter().enumerate().skip(scroll).take(visible_h) {
+            let proj = &app.projects[orig_i];
             let is_selected = app.right_panel_focus && i == app.project_cursor;
             let sc = project_status_color(&proj.status);
             let cat = proj.category.replace('_', " ");
@@ -151,7 +183,7 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     let git_color = if app.project_panel_focus { GREEN } else { DIM };
     let [git_area, stats_area] = Layout::vertical([
         Constraint::Min(0),
-        Constraint::Length(5),
+        Constraint::Length(6),
     ])
     .areas(right_area);
 
@@ -191,10 +223,17 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
         Span::styled("unknown", Style::new().fg(DIM))
     };
 
+    let mut version_text = proj.version.clone().unwrap_or_else(|| "0.0.0".to_string());
+    if let Some(ref nick) = proj.version_nickname {
+        version_text.push_str(&format!(" ({})", nick));
+    }
+
     let stats = vec![
         Line::from(vec![
             Span::styled(" Status  ", Style::new().fg(DIM)),
             Span::styled(proj.status.as_str(), Style::new().fg(sc).bold()),
+            Span::styled("  Ver ", Style::new().fg(DIM)),
+            Span::styled(version_text, Style::new().fg(CYAN).bold()),
         ]),
         Line::from(vec![
             Span::styled(" Cat     ", Style::new().fg(DIM)),

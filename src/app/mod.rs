@@ -157,6 +157,7 @@ pub struct App {
     // All Projects (entities.json)
     pub projects: Vec<crate::entities::EntityProject>,
     pub project_cursor: usize,
+    pub project_sort: SortMode,
 
     // Project Detail screen
     pub active_project: Option<crate::entities::EntityProject>,
@@ -234,6 +235,10 @@ pub struct App {
     // File Change Approvals (Inbox)
     pub pending_file_changes: Vec<crate::daemon::state::FileChangeApproval>,
     pub pending_change_cursor: usize,
+
+    // Portfolio stats cache (computed in background on dashboard load)
+    pub stats_cache: Option<PortfolioStats>,
+    pub is_computing_stats: bool,
 }
 
 impl App {
@@ -324,6 +329,7 @@ impl App {
             file_changed_externally: false,
             projects: Vec::new(),
             project_cursor: 0,
+            project_sort: SortMode::default(),
             active_project: None,
             project_memory_lines: Vec::new(),
             project_git_log: Vec::new(),
@@ -359,6 +365,8 @@ impl App {
             selected_agent_idx: 0,
             pending_file_changes: Vec::new(),
             pending_change_cursor: 0,
+            stats_cache: None,
+            is_computing_stats: false,
         }
     }
 
@@ -436,6 +444,38 @@ impl App {
 
 
 
+
+    pub fn sorted_project_indices(&self) -> Vec<usize> {
+        use crate::filebrowser::git_is_dirty;
+        let mut indices: Vec<usize> = (0..self.projects.len()).collect();
+        match self.project_sort {
+            SortMode::Name => indices.sort_by(|&a, &b| {
+                self.projects[a].name.to_lowercase().cmp(&self.projects[b].name.to_lowercase())
+            }),
+            SortMode::Grade => indices.sort_by(|&a, &b| {
+                let ha = crate::health::check_project(&self.projects[a]);
+                let hb = crate::health::check_project(&self.projects[b]);
+                ha.compliance_grade.cmp(&hb.compliance_grade)
+            }),
+            SortMode::GitDirty => indices.sort_by(|&a, &b| {
+                let da = git_is_dirty(&self.projects[a].local_path).unwrap_or(false);
+                let db = git_is_dirty(&self.projects[b].local_path).unwrap_or(false);
+                db.cmp(&da)
+            }),
+            SortMode::Category => indices.sort_by(|&a, &b| {
+                self.projects[a].category.cmp(&self.projects[b].category)
+            }),
+            SortMode::Status => indices.sort_by(|&a, &b| {
+                self.projects[a].status.cmp(&self.projects[b].status)
+            }),
+        }
+        indices
+    }
+
+    pub fn project_at_cursor(&self) -> Option<&crate::entities::EntityProject> {
+        let indices = self.sorted_project_indices();
+        indices.get(self.project_cursor).and_then(|&i| self.projects.get(i))
+    }
 
     fn find_project_path_by_name(&self, name: &str) -> Option<PathBuf> {
         let q = name.to_lowercase();

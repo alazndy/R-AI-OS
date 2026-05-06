@@ -576,3 +576,54 @@ pub fn get_git_log(dir: &Path) -> Vec<String> {
         _ => vec!["(not a git repo or no history)".into()],
     }
 }
+
+#[derive(Debug)]
+pub struct GitCommitResult {
+    pub committed: bool,
+    pub pushed: bool,
+    pub message: String,
+}
+
+pub fn git_commit(dir: &Path, msg: &str) -> GitCommitResult {
+    let add = Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(dir)
+        .output();
+
+    if add.map(|o| !o.status.success()).unwrap_or(true) {
+        return GitCommitResult { committed: false, pushed: false, message: "git add failed".into() };
+    }
+
+    let commit = Command::new("git")
+        .args(["commit", "-m", msg])
+        .current_dir(dir)
+        .output();
+
+    match commit {
+        Ok(o) if o.status.success() => GitCommitResult { committed: true, pushed: false, message: "ok".into() },
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            let nothing_to_commit = stderr.contains("nothing to commit") || stderr.contains("nothing added");
+            if nothing_to_commit {
+                GitCommitResult { committed: false, pushed: false, message: "nothing to commit".into() }
+            } else {
+                GitCommitResult { committed: false, pushed: false, message: stderr }
+            }
+        }
+        Err(e) => GitCommitResult { committed: false, pushed: false, message: e.to_string() },
+    }
+}
+
+pub fn git_push(dir: &Path) -> Result<(), String> {
+    let out = Command::new("git")
+        .args(["push", "origin", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}

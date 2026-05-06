@@ -66,6 +66,7 @@ pub enum BgMsg {
     FileChangeRequested {
         approval: crate::daemon::state::FileChangeApproval,
     },
+    StatsReady(PortfolioStats),
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +105,56 @@ impl SetupField {
         }
         self
     }
+}
+
+// ─── Project Sort Mode ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum SortMode {
+    #[default]
+    Name,
+    Grade,
+    GitDirty,
+    Category,
+    Status,
+}
+
+impl SortMode {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Name     => Self::Grade,
+            Self::Grade    => Self::GitDirty,
+            Self::GitDirty => Self::Category,
+            Self::Category => Self::Status,
+            Self::Status   => Self::Name,
+        }
+    }
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Name     => "Name",
+            Self::Grade    => "Grade",
+            Self::GitDirty => "Dirty",
+            Self::Category => "Category",
+            Self::Status   => "Status",
+        }
+    }
+}
+
+// ─── Portfolio stats cache ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default)]
+pub struct PortfolioStats {
+    pub total: usize,
+    pub active: usize,
+    pub archived: usize,
+    pub dirty: usize,
+    pub no_memory: usize,
+    pub local_only: usize,
+    pub grade_a: usize,
+    pub grade_b: usize,
+    pub grade_c: usize,
+    pub grade_d: usize,
+    pub top_dirty_category: String,
 }
 
 // ─── Rule categories (hardcoded constitution) ────────────────────────────────

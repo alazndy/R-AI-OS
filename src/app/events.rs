@@ -298,6 +298,36 @@ impl App {
                     }
                     
                     // Removed Port Monitor from TUI, it runs in aiosd.
+
+                    // Compute portfolio stats in background
+                    let projects = crate::entities::load_entities(&cfg.dev_ops_path);
+                    let mut stats = crate::app::state::PortfolioStats::default();
+                    stats.total = projects.len();
+                    let mut cat_dirty: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                    for p in &projects {
+                        match p.status.as_str() {
+                            "archived" | "legacy" => stats.archived += 1,
+                            _ => stats.active += 1,
+                        }
+                        if p.github.is_none() { stats.local_only += 1; }
+                        if !p.local_path.join("memory.md").exists() { stats.no_memory += 1; }
+                        if crate::filebrowser::git_is_dirty(&p.local_path) == Some(true) {
+                            stats.dirty += 1;
+                            *cat_dirty.entry(p.category.clone()).or_insert(0) += 1;
+                        }
+                        let health = crate::health::check_project(p);
+                        match health.compliance_grade.as_str() {
+                            "A" => stats.grade_a += 1,
+                            "B" => stats.grade_b += 1,
+                            "C" => stats.grade_c += 1,
+                            _ => stats.grade_d += 1,
+                        }
+                    }
+                    stats.top_dirty_category = cat_dirty.into_iter()
+                        .max_by_key(|(_, v)| *v)
+                        .map(|(k, _)| k)
+                        .unwrap_or_default();
+                    tx.send(BgMsg::StatsReady(stats)).ok();
                 });
             }
             BgMsg::SearchResults(results) => {
@@ -432,6 +462,10 @@ impl App {
                 self.mp_room_cursor = 0;
                 self.mp_proj_cursor = None;
                 self.mp_is_building = false;
+            }
+            BgMsg::StatsReady(stats) => {
+                self.stats_cache = Some(stats);
+                self.is_computing_stats = false;
             }
             BgMsg::FileChanged(path) => {
                 // Bouncing Limit takibi: _session_notes.md değiştiğinde ardışık HANDOVER kontrolü yap
@@ -740,14 +774,19 @@ impl App {
                     let proj = self.projects.iter()
                         .find(|p| p.local_path == proj_path)
                         .cloned()
-                        .unwrap_or_else(|| crate::entities::EntityProject {
-                            name: self.mp_rooms[self.mp_room_cursor].projects[pi].name.clone(),
-                            category: self.mp_rooms[self.mp_room_cursor].folder_name.clone(),
-                            local_path: proj_path,
-                            github: None,
-                            status: "unknown".into(),
-                            stars: None,
-                            last_commit: None,
+                        .unwrap_or_else(|| {
+                            let mp = &self.mp_rooms[self.mp_room_cursor].projects[pi];
+                            crate::entities::EntityProject {
+                                name: mp.name.clone(),
+                                category: self.mp_rooms[self.mp_room_cursor].folder_name.clone(),
+                                local_path: proj_path,
+                                github: None,
+                                status: mp.status.clone(),
+                                stars: None,
+                                last_commit: None,
+                                version: mp.version.clone(),
+                                version_nickname: mp.version_nickname.clone(),
+                            }
                         });
                     self.open_project_detail(proj);
                 } else {
@@ -1017,10 +1056,17 @@ impl App {
             KeyCode::Char('L') => {
                 // Uppercase L = launcher (lowercase l = vim right)
                 if self.menu_cursor == 7 && self.right_panel_focus {
-                    if let Some(proj) = self.projects.get(self.project_cursor).cloned() {
+                    if let Some(proj) = self.project_at_cursor().cloned() {
                         self.active_project = Some(proj);
                         self.show_launcher = true;
                     }
+                }
+            }
+            KeyCode::Char('s') => {
+                // Cycle sort mode on All Projects view
+                if self.menu_cursor == 7 {
+                    self.project_sort = self.project_sort.next();
+                    self.project_cursor = 0;
                 }
             }
             KeyCode::Char('/') | KeyCode::Tab => {
@@ -1129,7 +1175,7 @@ impl App {
                             }
                         }
                         7 => {
-                            if let Some(proj) = self.projects.get(self.project_cursor).cloned() {
+                            if let Some(proj) = self.project_at_cursor().cloned() {
                                 self.open_project_detail(proj);
                             }
                         }
@@ -1163,7 +1209,7 @@ impl App {
             KeyCode::Char('C') | KeyCode::Char('G') | KeyCode::Char('A') => {
                 if self.right_panel_focus {
                     let project_path = match self.menu_cursor {
-                        7 => self.projects.get(self.project_cursor).map(|p| p.local_path.clone()),
+                        7 => self.project_at_cursor().map(|p| p.local_path.clone()),
                         _ => None,
                     };
 
