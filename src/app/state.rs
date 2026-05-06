@@ -43,6 +43,14 @@ pub enum BgMsg {
     Projects(Vec<crate::entities::EntityProject>),
     ProjectOpened { memory: Vec<String>, git_log: Vec<String> },
     HealthReport(Vec<crate::health::ProjectHealth>),
+    StateSync {
+        projects: Vec<crate::entities::EntityProject>,
+        health_reports: Vec<crate::health::ProjectHealth>,
+        active_agents: Vec<crate::daemon::proxy::AgentProcess>,
+        index_ready: bool,
+        handover_count: u32,
+        pending_file_changes: Vec<crate::daemon::state::FileChangeApproval>,
+    },
     #[allow(dead_code)] ActivityUpdate(Vec<Activity>),
     #[allow(dead_code)] NewLog(LogEntry),
     MemPalaceBuilt(Vec<crate::mempalace::MemRoom>),
@@ -52,6 +60,12 @@ pub enum BgMsg {
     AiAuditReport(crate::system_scan::AiAuditReport),
     FileChanged(PathBuf),
     SearchResults(Vec<SearchResult>),
+    HandoverApproved { target: String, instruction: String, count: u32 },
+    HumanApprovalRequired { target: String, instruction: String, reason: String },
+    HumanApprovalResult { status: String },
+    FileChangeRequested {
+        approval: crate::daemon::state::FileChangeApproval,
+    },
 }
 
 #[derive(Debug, Clone)]

@@ -279,7 +279,7 @@ impl McpServer {
         let instruction = args["instruction"].as_str().unwrap_or("");
         let context     = args["context"].as_str().unwrap_or("(no context)");
 
-        // Log handover to _session_notes.md
+        // 1. Log handover to _session_notes.md
         let notes_path = self.config.dev_ops_path.join("_session_notes.md");
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
         let entry = format!(
@@ -290,11 +290,22 @@ impl McpServer {
         let existing = std::fs::read_to_string(&notes_path).unwrap_or_default();
         let _ = crate::safe_io::safe_write(&notes_path, &format!("{}{}", existing, entry));
 
+        // 2. Notify Daemon over TCP
+        if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:42069") {
+            let msg = json!({
+                "command": "Handover",
+                "target": target,
+                "instruction": instruction,
+                "project_path": self.config.dev_ops_path.to_str().unwrap_or("")
+            });
+            let _ = stream.write_all(format!("{}\n", msg).as_bytes());
+        }
+
         Ok(json!({
             "content": [{
                 "type": "text",
                 "text": format!(
-                    "Handover logged → {}.\nInstruction: {}\nContext saved to _session_notes.md",
+                    "Handover logged and sent to R-AI-OS Daemon → {}.\nInstruction: {}\nContext saved to _session_notes.md",
                     target, instruction
                 )
             }]

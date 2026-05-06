@@ -1,5 +1,37 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
+/// Generates a simple line-by-line diff for display.
+pub fn simple_diff(old: &str, new: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    let max = old_lines.len().max(new_lines.len());
+    for i in 0..max {
+        let o = old_lines.get(i);
+        let n = new_lines.get(i);
+        
+        match (o, n) {
+            (Some(o_val), Some(n_val)) => {
+                if o_val == n_val {
+                    lines.push(format!("  {}", o_val));
+                } else {
+                    lines.push(format!("- {}", o_val));
+                    lines.push(format!("+ {}", n_val));
+                }
+            }
+            (Some(o_val), None) => {
+                lines.push(format!("- {}", o_val));
+            }
+            (None, Some(n_val)) => {
+                lines.push(format!("+ {}", n_val));
+            }
+            (None, None) => {}
+        }
+    }
+    lines
+}
+
 // ─── Simple line editor ───────────────────────────────────────────────────────
 
 pub struct Editor {

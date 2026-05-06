@@ -1,10 +1,10 @@
 # R-AI-OS Memory
 
-## R-AI-OS Memory
-- **Version:** v0.2.6 (Stable)
-- **Status:** **Task → Agent Dispatch** eklendi. Task panelinden [c]/[g]/[a] ile ajan yönlendirme aktif.
-- **Aktif agentlar:** Claude Code + Antigravity
-- **Durum:** `raios` CLI v0.2.6: task dispatch (@agent, #project tag sistemi), clipboard+terminal launch.
+## Son Durum
+- **Version:** v0.8.0 (Stable)
+- **Status:** **Agent Execution Proxy**, **Bouncing Limit** ve `aiosd` daemon (IPC 42069) devrede.
+- **Aktif agentlar:** Claude Code + Antigravity + Jules
+- **Durum:** `Dev_Ops_New` HQ geçişi tamamlandı. Git diff inbox, multi-agent handover ve TUI güncellendi.
 
 ## Claude
 ### Yaptıkları
@@ -140,10 +140,9 @@
     - [x] Background File Watcher migration to Daemon
     - [x] Background BM25 Indexer migration to Daemon
     - [x] Bidirectional Communication (Search commands over TCP)
-    - [ ] Health Scanner migration to Daemon
-
-### Sıradakiler
-- [ ] Client/Daemon State Synchronization
+    - [x] Health Scanner migration to Daemon
+- [ ] GitHub Sync: Sync entities.json with remote repository data (commit count, stars, etc.)
+- [ ] Client/Daemon State Synchronization Refinement
 
 ## Karar Günlüğü
 | Tarih | Agent | Karar | Neden |
@@ -172,3 +171,65 @@
 | 2026-05-06 | Antigravity | TCP-based IPC | JSON messages over 127.0.0.1:42069 for cross-process communication |
 | 2026-05-06 | Antigravity | Neural Index on Daemon | Index building moved to daemon to prevent TUI startup lag |
 | 2026-05-06 | Antigravity | Port Monitor and Health Scanner | Moved from TUI background thread to aiosd background tasks and implemented JSON payload responses |
+
+<!-- MCP update by antigravity at 2026-05-06 02:28 -->
+- [2026-05-06 02:28] **Refactored TUI application and UI monolithic files into modular components.**: Extracted the monolithic `app/mod.rs` into `state.rs`, `editor.rs`, `ipc.rs`, and `events.rs`. Extracted `ui/mod.rs` into specialized submodules for `dashboard`, `projects`, `health`, `mempalace`, `search`, `filebrowser`, `setup`, and `components`. All code compiles successfully with 0 errors. Committed changes to git for backup. Ready to start developing the Agent Execution Proxy.
+
+## Antigravity
+### Yaptıkları
+- **HQ Migration:** Tüm sistemin ana üssü `Dev_Ops_New` olarak güncellendi.
+- **Config Update:** `AppData/Roaming/raios/config.toml` dosyası yeni `Dev_Ops_New` yoluna göre revize edildi.
+- **Discovery:** Yeni yapı için proje keşfi (`raios discover`) başlatıldı.
+- **System Memory:** Proje hafızası yeni yapıya göre senkronize ediliyor.
+
+<!-- MCP update by antigravity at 2026-05-06 03:01 -->
+- [2026-05-06 03:01] **Implemented Git Diff Approval & Security Hardening (v0.8.0)**: Completed the full Git Diff Approval workflow. 
+- Integrated safe_write with daemon-side RequestFileChange.
+- Implemented TUI GitDiffView with syntax highlighting and human-in-the-loop approval (Y/N).
+- Hardened agent execution proxy with process management and IPC sync.
+- Resolved all compilation issues and naming collisions.
+- Updated Cargo.toml for uuid serde support.
+
+<!-- MCP update by antigravity at 2026-05-06 03:05 -->
+- [2026-05-06 03:05] **Migrated Health Scanner to Daemon and enhanced State Sync workflow**: Successfully moved the periodic project health scanning from the TUI background threads to the aiosd daemon.
+- Updated start_health_worker in src/daemon/health.rs to support broadcast notifications.
+- Integrated StateSync broadcasting in the daemon whenever a health scan completes.
+- Fixed borrowing and trait implementation issues (Clone/Debug for ProjectIndex).
+- Verified that TUI correctly receives and applies full state updates via IPC.
+
+<!-- MCP update by antigravity at 2026-05-06 03:06 -->
+- [2026-05-06 03:06] **Implemented Background Git Worker for real-time project status monitoring**: Offloaded Git status tracking to the aiosd daemon.
+- Created src/daemon/git.rs with start_git_worker to periodically scan all projects for branch names and dirty status.
+- Integrated the Git worker into the daemon's broadcast system, ensuring TUI is notified of status changes without manual refreshes.
+- This further solidifies the 'Thin Client / Powerful Daemon' architecture of R-AI-OS.
+
+<!-- MCP update by antigravity at 2026-05-06 03:09 -->
+- [2026-05-06 03:09] **Finalized R-AI-OS Daemon Architecture and GitHub Sync integration**: Completed all pending architectural tasks for R-AI-OS v0.8.0.
+- Implemented GitHub Sync: GitHub stars and last update timestamps are now fetched in the background via `gh` CLI.
+- Enhanced TUI Dashboard: Project details now include live GitHub stats.
+- Automated entities.json Management: Discovered projects are now automatically saved to persistent storage by the daemon.
+- Verified system stability with 0 compilation errors across daemon and TUI components.
+
+<!-- MCP update by antigravity at 2026-05-06 03:10 -->
+- [2026-05-06 03:10] **Created E2E Connection Test and Architecture Visualization**: Provided a Mermaid-based architecture diagram to visualize the R-AI-OS Client-Daemon communication flow.
+- Created an E2E test script (Python) in the scratch directory to verify TCP/IPC connectivity and command/response cycles between raios and aiosd.
+- Documented the connection protocol and health status in architecture_viz.md.
+
+<!-- MCP update by antigravity at 2026-05-06 03:13 -->
+- [2026-05-06 03:13] **Completed Gemini Task 1 and Fixed E2E Connection Issues**: Analyzed Core & Domain projects (Crucix, AI & Veri, Endüstriyel & Saha) and generated a comprehensive report in the brain directory.
+- Fixed the WinError 10061 connection error by successfully starting the aiosd daemon background process.
+- Verified TCP connectivity via the E2E test script (Handshake Successful).
+- Mapped workspace root to C:\Users\turha\Desktop\Dev Ops and verified the presence of all core projects.
+
+<!-- MCP update by antigravity at 2026-05-06 03:19 -->
+- [2026-05-06 03:19] **Global installation of R-AI-OS v0.8.0 Aura Edition**: Updated Cargo.toml to version 0.8.0 and initiated a global installation via `cargo install`. 
+- This enables the user to launch `raios` and `aiosd` from any terminal directory.
+- Solidifies the project as a system-level utility tool.
+
+<!-- MCP update by gemini at 2026-05-06 13:37 -->
+- [2026-05-06 13:37] **R-AI-OS v0.8.0 Security & Async Workflow Hardening Completed**: R-AI-OS v0.8.0 sürümü başarıyla yayına alındı. 
+1. **Güvenlik:** IPC katmanına Token-based Authentication (UUID handshake) eklendi. Yetkisiz erişimler engellendi.
+2. **İş Akışı:** Eskiden kullanıcıyı kilitleyen blocking onay kutuları, asenkron 'Diff Inbox' kuyruk sistemiyle değiştirildi. Ajanlar arka planda çalışırken kullanıcı dashboard'da kalabilir, istediği zaman 'i' tuşuyla onay bekleyen değişiklikleri inceleyebilir.
+3. **TUI:** Header'a canlı 'Inbox' sayacı eklendi. Diff view, birden fazla değişikliği yönetebilecek şekilde (Arrow keys navigation) refaktör edildi.
+4. **E2E:** Hem güvenlik hem de asenkron iş akışı Python simülasyonları ile doğrulandı.
+Sistem artık multi-agent operasyonlar için tam güvenli ve kesintisiz (non-blocking) bir altyapıya sahip.

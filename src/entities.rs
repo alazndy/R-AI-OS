@@ -8,6 +8,8 @@ pub struct EntityProject {
     pub local_path: PathBuf,
     pub github: Option<String>,
     pub status: String,
+    pub stars: Option<u32>,
+    pub last_commit: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -42,6 +44,8 @@ pub fn discover_entities(dev_ops: &Path) -> Vec<EntityProject> {
                     local_path: proj.path,
                     github: None,
                     status: proj.status,
+                    stars: None,
+                    last_commit: None,
                 });
             }
         }

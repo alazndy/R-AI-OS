@@ -1,5 +1,4 @@
-#[path = "../daemon/mod.rs"]
-mod daemon;
+use r_ai_os::daemon;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -18,6 +17,7 @@ async fn main() -> anyhow::Result<()> {
         
         println!("Background: Discovering projects...");
         let projects = r_ai_os::entities::discover_entities(&config.dev_ops_path);
+        let _ = r_ai_os::entities::save_entities(&config.dev_ops_path, projects.clone());
         
         println!("Background: Building Neural Index...");
         if let Ok(idx) = ProjectIndex::build(&config.dev_ops_path) {

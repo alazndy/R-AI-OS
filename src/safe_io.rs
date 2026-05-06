@@ -9,6 +9,22 @@ use anyhow::Result;
 /// memory.md gibi kritik dosyalara güvenli (locked) yazma yapar.
 /// Eğer dosya kilitliyse, belirtilen deneme sayısı kadar bekler.
 pub fn safe_write(path: &Path, content: &str) -> Result<()> {
+    // 1. If Daemon is running, delegate to approval workflow
+    if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:42069") {
+        let original = std::fs::read_to_string(path).unwrap_or_default();
+        let msg = serde_json::json!({
+            "command": "RequestFileChange",
+            "path": path.to_string_lossy(),
+            "original": original,
+            "new": content,
+            "agent": "Agent (via SafeIO)"
+        });
+        let _ = stream.write_all(format!("{}\n", msg).as_bytes());
+        println!("[SafeIO] File change for {:?} sent to Daemon for approval.", path);
+        return Ok(());
+    }
+
+    // 2. Fallback to direct write if Daemon is not running
     let file = OpenOptions::new()
         .write(true)
         .create(true)

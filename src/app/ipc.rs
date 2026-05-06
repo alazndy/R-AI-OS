@@ -16,8 +16,20 @@ pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
         thread::sleep(Duration::from_millis(500));
 
         if let Ok(mut stream) = TcpStream::connect("127.0.0.1:42069") {
+            // Send token first for auth
+            if let Some(config_file) = crate::config::Config::config_file().parent() {
+                let token_path = config_file.join(".ipc_token");
+                if let Ok(token) = std::fs::read_to_string(token_path) {
+                    let auth_msg = format!("AUTH {}\n", token.trim());
+                    let _ = stream.write_all(auth_msg.as_bytes());
+                }
+            }
+
             let stream_clone = stream.try_clone().unwrap();
             let reader = BufReader::new(stream_clone);
+            
+            // Trigger initial sync
+            let _ = stream.write_all(b"{\"command\":\"GetState\"}\n");
             
             // Spawn a thread to read from daemon
             let tx_read = tx.clone();
@@ -39,6 +51,33 @@ pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
                         } else if v["event"] == "ActivePorts" {
                             if let Ok(ports) = serde_json::from_value::<Vec<u16>>(v["ports"].clone()) {
                                 tx_read.send(BgMsg::ActivePorts(ports)).ok();
+                            }
+                        } else if v["event"] == "StateSync" {
+                            if let (Ok(projects), Ok(health_reports), Ok(active_agents), Some(index_ready), Some(handover_count), Ok(pending_file_changes)) = (
+                                serde_json::from_value::<Vec<crate::entities::EntityProject>>(v["projects"].clone()),
+                                serde_json::from_value::<Vec<crate::health::ProjectHealth>>(v["health_reports"].clone()),
+                                serde_json::from_value::<Vec<crate::daemon::proxy::AgentProcess>>(v["active_agents"].clone()),
+                                v["index_ready"].as_bool(),
+                                v["handover_count"].as_u64(),
+                                serde_json::from_value::<Vec<crate::daemon::state::FileChangeApproval>>(v["pending_file_changes"].clone())
+                            ) {
+                                tx_read.send(BgMsg::StateSync { projects, health_reports, active_agents, index_ready, handover_count: handover_count as u32, pending_file_changes }).ok();
+                            }
+                        } else if v["event"] == "HumanApprovalRequired" {
+                            if let (Some(target), Some(instruction), Some(reason)) = (v["target"].as_str(), v["instruction"].as_str(), v["reason"].as_str()) {
+                                tx_read.send(BgMsg::HumanApprovalRequired { target: target.to_string(), instruction: instruction.to_string(), reason: reason.to_string() }).ok();
+                            }
+                        } else if v["event"] == "FileChangeRequested" {
+                            if let Ok(approval) = serde_json::from_value::<crate::daemon::state::FileChangeApproval>(v["approval"].clone()) {
+                                tx_read.send(BgMsg::FileChangeRequested { approval }).ok();
+                            }
+                        } else if v["event"] == "HandoverApproved" {
+                            if let (Some(target), Some(instruction), Some(count)) = (v["target"].as_str(), v["instruction"].as_str(), v["count"].as_u64()) {
+                                tx_read.send(BgMsg::HandoverApproved { target: target.to_string(), instruction: instruction.to_string(), count: count as u32 }).ok();
+                            }
+                        } else if v["event"] == "HumanApprovalResult" {
+                            if let Some(status) = v["status"].as_str() {
+                                tx_read.send(BgMsg::HumanApprovalResult { status: status.to_string() }).ok();
                             }
                         }
                     }

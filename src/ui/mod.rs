@@ -18,14 +18,11 @@ pub use dashboard::*;
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect, Alignment, Direction, Margin},
-    style::{Color, Modifier, Style, Stylize},
-    text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Wrap, Cell, Row, Table, Clear},
+    style::{Color, Style, Stylize},
+    text::{Line, Span},
 };
 
-use crate::app::{App, AppState, MENU_ITEMS, filtered_palette};
-use crate::filebrowser::FileEntry;
+use crate::app::{App, AppState};
 
 // ─── Colour palette ──────────────────────────────────────────────────────────
 
@@ -85,6 +82,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     if app.bouncing_alert {
         render_bouncing_alert(frame, app);
+    }
+    if app.handover_modal.is_some() {
+        render_handover_modal(frame, app);
     }
 }
 

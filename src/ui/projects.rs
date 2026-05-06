@@ -1,19 +1,11 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect, Alignment, Direction, Margin},
-    style::{Color, Modifier, Style, Stylize},
+    layout::{Constraint, Layout, Rect},
+    style::{Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Wrap, Cell, Row, Table, Clear},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
-use chrono::{DateTime, Utc, TimeZone, Local};
-use crate::app::{App, AppState, MENU_ITEMS, filtered_palette, Activity, LogEntry, SetupField, RuleCategory};
-use crate::filebrowser::{FileEntry, AgentRuleGroup, RecentProject};
-use crate::indexer::SearchResult;
-use crate::discovery::{AgentInfo, SkillInfo};
-use crate::health::ProjectHealth;
-use crate::entities::EntityProject;
-use crate::system_scan::AiAuditReport;
-use crate::tasks::Task;
+use crate::app::App;
 use crate::ui::*;
 
 
@@ -211,6 +203,11 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
         Line::from(vec![
             Span::styled(" Graph   ", Style::new().fg(DIM)),
             graph_status,
+        ]),
+        Line::from(vec![
+            Span::styled(" GitHub  ", Style::new().fg(DIM)),
+            Span::styled(format!("⭐ {}  ", proj.stars.unwrap_or(0)), Style::new().fg(AMBER)),
+            Span::styled(proj.last_commit.as_deref().unwrap_or("never"), Style::new().fg(DIM)),
         ]),
         Line::from(vec![
             Span::styled(" Path    ", Style::new().fg(DIM)),

@@ -1,19 +1,12 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect, Alignment, Direction, Margin},
-    style::{Color, Modifier, Style, Stylize},
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Wrap, Cell, Row, Table, Clear},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
-use chrono::{DateTime, Utc, TimeZone, Local};
-use crate::app::{App, AppState, MENU_ITEMS, filtered_palette, Activity, LogEntry, SetupField, RuleCategory};
-use crate::filebrowser::{FileEntry, AgentRuleGroup, RecentProject};
-use crate::indexer::SearchResult;
-use crate::discovery::{AgentInfo, SkillInfo};
-use crate::health::ProjectHealth;
-use crate::entities::EntityProject;
-use crate::system_scan::AiAuditReport;
-use crate::tasks::Task;
+use crate::app::App;
+use crate::filebrowser::FileEntry;
 use crate::ui::*;
 
 
@@ -286,48 +279,5 @@ pub fn render_file_edit(frame: &mut Frame, app: &App) {
     frame.render_widget(footer, footer_area);
 }
 
-pub fn render_git_diff_view(frame: &mut Frame, app: &App) {
-    let area = frame.area();
-    let rows = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .split(area);
-
-    let proj_name = app.active_project.as_ref().map(|p| p.name.as_str()).unwrap_or("Unknown");
-    let header = Block::bordered()
-        .title(format!(" Git Diff (Agent Changes): {} ", proj_name))
-        .border_style(Style::new().fg(CYAN))
-        .border_type(BorderType::Rounded);
-    frame.render_widget(header, rows[0]);
-
-    let display_h = rows[1].height as usize;
-    let lines: Vec<Line> = app.git_diff_lines
-        .iter()
-        .skip(app.git_diff_scroll as usize)
-        .take(display_h)
-        .map(|l| {
-            if l.starts_with('+') {
-                Line::from(Span::styled(l, Style::new().fg(GREEN)))
-            } else if l.starts_with('-') {
-                Line::from(Span::styled(l, Style::new().fg(RED)))
-            } else if l.starts_with("@@") {
-                Line::from(Span::styled(l, Style::new().fg(CYAN)))
-            } else {
-                Line::from(Span::styled(l, Style::new().fg(MID)))
-            }
-        })
-        .collect();
-
-    let content = Paragraph::new(lines)
-        .block(Block::new().bg(PANEL_BG))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(content, rows[1]);
-
-    let footer = Paragraph::new(" [Y] APPROVE (Commit)  [N] REJECT (Discard)  [ESC/Q] Back  [UP/DOWN] Scroll ")
-        .style(Style::new().fg(Color::Black).bg(AMBER).bold());
-    frame.render_widget(footer, rows[2]);
-}
 
 

@@ -11,15 +11,13 @@ use crate::requirements::check_requirements;
 use crate::filebrowser::{
     discover_all_agent_rules, find_file_by_name, get_agent_config_files,
     get_master_rule_files, get_mempalace_files, get_policy_files,
-    load_recent_projects, get_git_log
+    load_recent_projects
 };
 use crate::sync::sync_universe;
 
 use crate::app::{App, state::*};
 use crate::filebrowser::{FileEntry, load_file_content, save_file_content};
 use crate::compliance;
-use crate::discovery::{AgentInfo, SkillInfo};
-use crate::indexer::{ProjectIndex, SearchResult};
 
 impl App {
     pub fn open_file_view(&mut self, entry: FileEntry) {
@@ -212,58 +210,7 @@ impl App {
         }
     }
 
-    fn handle_git_diff_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Backspace => {
-                if self.active_project.is_some() {
-                    self.state = AppState::ProjectDetail;
-                } else {
-                    self.state = AppState::Dashboard;
-                }
-            }
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                if let Some(ref proj) = self.active_project {
-                    let _ = std::process::Command::new("git")
-                        .current_dir(&proj.local_path)
-                        .args(&["add", "."])
-                        .output();
-                    let _ = std::process::Command::new("git")
-                        .current_dir(&proj.local_path)
-                        .args(&["commit", "-m", "Human approved Agent changes via R-AI-OS"])
-                        .output();
-                    self.add_activity("System", "Agent changes approved and committed.", "Info");
-                }
-                self.state = AppState::ProjectDetail;
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') => {
-                if let Some(ref proj) = self.active_project {
-                    let _ = std::process::Command::new("git")
-                        .current_dir(&proj.local_path)
-                        .args(&["restore", "."])
-                        .output();
-                    self.add_activity("System", "Agent changes REJECTED and discarded.", "Warning");
-                }
-                self.state = AppState::ProjectDetail;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.git_diff_scroll = self.git_diff_scroll.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let max = (self.git_diff_lines.len() as u16).saturating_sub(self.height - 6);
-                if self.git_diff_scroll < max {
-                    self.git_diff_scroll += 1;
-                }
-            }
-            KeyCode::PageUp => {
-                self.git_diff_scroll = self.git_diff_scroll.saturating_sub(self.height / 2);
-            }
-            KeyCode::PageDown => {
-                let max = (self.git_diff_lines.len() as u16).saturating_sub(self.height - 6);
-                self.git_diff_scroll = (self.git_diff_scroll + self.height / 2).min(max);
-            }
-            _ => {}
-        }
-    }
+
 
     pub fn handle_bg_msg(&mut self, msg: BgMsg) {
         match msg {
@@ -403,8 +350,26 @@ impl App {
             BgMsg::VaultStatus(v) => {
                 self.vault_projects = v;
             }
-            BgMsg::ActivePorts(p) => {
-                self.active_ports = p;
+            BgMsg::ActivePorts(ports) => {
+                self.active_ports = ports;
+            }
+            BgMsg::HandoverApproved { target, instruction: _, count } => {
+                self.add_activity("System", &format!("Handover to {} approved. Count: {}", target, count), "Info");
+            }
+            BgMsg::HumanApprovalRequired { target, instruction, reason } => {
+                self.add_activity("System", &format!("Human Approval Required: {}", reason), "Warning");
+                self.handover_modal = Some((target, instruction));
+            }
+            BgMsg::FileChangeRequested { approval } => {
+                self.pending_file_changes.push(approval.clone());
+                self.pending_change_cursor = self.pending_file_changes.len().saturating_sub(1);
+                self.git_diff_lines = crate::app::editor::simple_diff(&approval.original_content, &approval.new_content);
+                self.state = AppState::GitDiffView;
+                self.add_activity("Agent", &format!("File Change Requested: {}", approval.path), "Warning");
+            }
+            BgMsg::HumanApprovalResult { status } => {
+                self.add_activity("System", &format!("Human Approval Result: {}", status), "Info");
+                self.handover_modal = None;
             }
             BgMsg::AiAuditReport(report) => {
                 self.system_report = Some(report);
@@ -415,6 +380,17 @@ impl App {
                 self.health_report = report;
                 self.is_checking_health = false;
                 self.health_cursor = 0;
+            }
+            BgMsg::StateSync { projects, health_reports, active_agents, index_ready, handover_count, pending_file_changes } => {
+                self.projects = projects;
+                self.health_report = health_reports;
+                self.active_agents = active_agents;
+                self.handover_count = handover_count as usize;
+                self.pending_file_changes = pending_file_changes;
+                if index_ready {
+                    self.index_status = Some("Index Ready (Synced)".into());
+                }
+                self.add_activity("System", "Full state synchronized with daemon", "Info");
             }
             BgMsg::ProjectOpened { memory, git_log } => {
                 self.project_memory_lines = memory;
@@ -506,6 +482,28 @@ impl App {
             return Ok(());
         }
 
+        // Handover modal takes absolute priority
+        if self.handover_modal.is_some() {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if let Some(ref tx) = self.tx_daemon {
+                        let msg = format!("{{\"command\":\"HumanApproval\",\"approved\":true}}");
+                        let _ = tx.send(msg);
+                    }
+                    self.handover_modal = None;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    if let Some(ref tx) = self.tx_daemon {
+                        let msg = format!("{{\"command\":\"HumanApproval\",\"approved\":false}}");
+                        let _ = tx.send(msg);
+                    }
+                    self.handover_modal = None;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
         // Launcher overlay takes priority over all other input
         if self.show_launcher {
             match key.code {
@@ -593,6 +591,90 @@ impl App {
         }
     }
 
+    fn handle_git_diff_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(pending) = self.pending_file_changes.get(self.pending_change_cursor).cloned() {
+                    if let Some(ref tx) = self.tx_daemon {
+                        let msg = serde_json::json!({
+                            "command": "ApproveFileChange",
+                            "id": pending.id.to_string(),
+                            "path": pending.path,
+                            "approved": true
+                        });
+                        let _ = tx.send(msg.to_string());
+                        self.add_activity("System", &format!("File change approved for {}", pending.path), "Info");
+                    }
+                    self.pending_file_changes.remove(self.pending_change_cursor);
+                    if self.pending_change_cursor >= self.pending_file_changes.len() && !self.pending_file_changes.is_empty() {
+                        self.pending_change_cursor = self.pending_file_changes.len() - 1;
+                    }
+                }
+                if self.pending_file_changes.is_empty() {
+                    self.state = AppState::Dashboard;
+                } else {
+                    // Load next diff
+                    let next = &self.pending_file_changes[self.pending_change_cursor];
+                    self.git_diff_lines = crate::app::editor::simple_diff(&next.original_content, &next.new_content);
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                if let Some(pending) = self.pending_file_changes.get(self.pending_change_cursor).cloned() {
+                    if let Some(ref tx) = self.tx_daemon {
+                        let msg = serde_json::json!({
+                            "command": "ApproveFileChange",
+                            "id": pending.id.to_string(),
+                            "path": pending.path,
+                            "approved": false
+                        });
+                        let _ = tx.send(msg.to_string());
+                        self.add_activity("System", &format!("File change rejected for {}", pending.path), "Warning");
+                    }
+                    self.pending_file_changes.remove(self.pending_change_cursor);
+                    if self.pending_change_cursor >= self.pending_file_changes.len() && !self.pending_file_changes.is_empty() {
+                        self.pending_change_cursor = self.pending_file_changes.len() - 1;
+                    }
+                }
+                if self.pending_file_changes.is_empty() {
+                    self.state = AppState::Dashboard;
+                } else {
+                    // Load next diff
+                    let next = &self.pending_file_changes[self.pending_change_cursor];
+                    self.git_diff_lines = crate::app::editor::simple_diff(&next.original_content, &next.new_content);
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.state = AppState::Dashboard;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.git_diff_scroll > 0 {
+                    self.git_diff_scroll -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let max = (self.git_diff_lines.len() as u16).saturating_sub(self.height - 6);
+                if self.git_diff_scroll < max {
+                    self.git_diff_scroll += 1;
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if self.pending_change_cursor > 0 {
+                    self.pending_change_cursor -= 1;
+                    let next = &self.pending_file_changes[self.pending_change_cursor];
+                    self.git_diff_lines = crate::app::editor::simple_diff(&next.original_content, &next.new_content);
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if self.pending_change_cursor + 1 < self.pending_file_changes.len() {
+                    self.pending_change_cursor += 1;
+                    let next = &self.pending_file_changes[self.pending_change_cursor];
+                    self.git_diff_lines = crate::app::editor::simple_diff(&next.original_content, &next.new_content);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn handle_mempalace_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -664,6 +746,8 @@ impl App {
                             local_path: proj_path,
                             github: None,
                             status: "unknown".into(),
+                            stars: None,
+                            last_commit: None,
                         });
                     self.open_project_detail(proj);
                 } else {
@@ -922,6 +1006,13 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('?') => {
                 self.state = AppState::HelpView;
+            }
+            KeyCode::Char('i') | KeyCode::Char('I') => {
+                if !self.pending_file_changes.is_empty() {
+                    let first = &self.pending_file_changes[self.pending_change_cursor];
+                    self.git_diff_lines = crate::app::editor::simple_diff(&first.original_content, &first.new_content);
+                    self.state = AppState::GitDiffView;
+                }
             }
             KeyCode::Char('L') => {
                 // Uppercase L = launcher (lowercase l = vim right)

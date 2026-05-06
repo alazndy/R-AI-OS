@@ -23,6 +23,7 @@ pub struct SearchResult {
 // (path_index, line_no, snippet)
 type Posting = (usize, usize, String);
 
+#[derive(Debug, Clone)]
 pub struct ProjectIndex {
     files: Vec<PathBuf>,
     doc_lengths: Vec<usize>,

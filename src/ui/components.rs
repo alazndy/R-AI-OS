@@ -1,19 +1,11 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect, Alignment, Direction, Margin},
+    layout::{Constraint, Layout, Rect, Alignment},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Wrap, Cell, Row, Table, Clear},
+    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Wrap, Clear},
 };
-use chrono::{DateTime, Utc, TimeZone, Local};
-use crate::app::{App, AppState, MENU_ITEMS, filtered_palette, Activity, LogEntry, SetupField, RuleCategory};
-use crate::filebrowser::{FileEntry, AgentRuleGroup, RecentProject};
-use crate::indexer::SearchResult;
-use crate::discovery::{AgentInfo, SkillInfo};
-use crate::health::ProjectHealth;
-use crate::entities::EntityProject;
-use crate::system_scan::AiAuditReport;
-use crate::tasks::Task;
+use crate::app::{App, filtered_palette};
 use crate::ui::*;
 
 
@@ -254,6 +246,62 @@ pub fn center_rect(width: u16, height: u16, parent: Rect) -> Rect {
         y,
         width: width.min(parent.width),
         height: height.min(parent.height),
+    }
+}
+
+pub fn render_handover_modal(frame: &mut Frame, app: &App) {
+    if let Some((target, instruction)) = &app.handover_modal {
+        let area = center_rect(60, 40, frame.area());
+        
+        frame.render_widget(Clear, area);
+        
+        let block = Block::default()
+            .title(" ⚠️ Human Approval Required: Bouncing Limit ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double)
+            .border_style(Style::default().fg(Color::Rgb(255, 170, 0))) // AMBER
+            .style(Style::default().bg(Color::Rgb(8, 12, 16)));
+            
+        let mut lines = Vec::new();
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" The agents are bouncing tasks too much.", Style::default().fg(Color::Rgb(255, 170, 0)).bold())
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" Target Agent: ", Style::default().fg(Color::Rgb(170, 170, 170))),
+            Span::styled(target.clone(), Style::default().fg(Color::Rgb(0, 255, 136)).bold()),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(" Instruction:", Style::default().fg(Color::Rgb(170, 170, 170)))));
+        
+        let instruction_words: Vec<&str> = instruction.split_whitespace().collect();
+        let mut current_line = String::from("   ");
+        for word in instruction_words {
+            if current_line.len() + word.len() > 50 {
+                lines.push(Line::from(Span::styled(current_line.clone(), Style::default().fg(Color::Rgb(170, 170, 170)))));
+                current_line = format!("   {}", word);
+            } else {
+                current_line.push_str(word);
+                current_line.push(' ');
+            }
+        }
+        if !current_line.trim().is_empty() {
+            lines.push(Line::from(Span::styled(current_line, Style::default().fg(Color::Rgb(170, 170, 170)))));
+        }
+        
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" [Y] Approve", Style::default().fg(Color::Rgb(0, 255, 136)).bold()),
+            Span::styled("    [N] Reject", Style::default().fg(Color::Rgb(255, 80, 80)).bold()),
+        ]));
+        
+        let p = Paragraph::new(lines)
+            .block(block)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true });
+            
+        frame.render_widget(p, area);
     }
 }
 

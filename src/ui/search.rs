@@ -1,19 +1,11 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect, Alignment, Direction, Margin},
+    layout::{Constraint, Layout, Rect, Direction},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Wrap, Cell, Row, Table, Clear},
+    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap},
 };
-use chrono::{DateTime, Utc, TimeZone, Local};
-use crate::app::{App, AppState, MENU_ITEMS, filtered_palette, Activity, LogEntry, SetupField, RuleCategory};
-use crate::filebrowser::{FileEntry, AgentRuleGroup, RecentProject};
-use crate::indexer::SearchResult;
-use crate::discovery::{AgentInfo, SkillInfo};
-use crate::health::ProjectHealth;
-use crate::entities::EntityProject;
-use crate::system_scan::AiAuditReport;
-use crate::tasks::Task;
+use crate::app::App;
 use crate::ui::*;
 
 

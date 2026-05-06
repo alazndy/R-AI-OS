@@ -1,19 +1,11 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect, Alignment, Direction, Margin},
+    layout::{Constraint, Direction, Layout, Rect, Alignment},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Wrap, Cell, Row, Table, Clear},
+    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap},
 };
-use chrono::{DateTime, Utc, TimeZone, Local};
-use crate::app::{App, AppState, MENU_ITEMS, filtered_palette, Activity, LogEntry, SetupField, RuleCategory};
-use crate::filebrowser::{FileEntry, AgentRuleGroup, RecentProject};
-use crate::indexer::SearchResult;
-use crate::discovery::{AgentInfo, SkillInfo};
-use crate::health::ProjectHealth;
-use crate::entities::EntityProject;
-use crate::system_scan::AiAuditReport;
-use crate::tasks::Task;
+use crate::app::{App, MENU_ITEMS};
 use crate::ui::*;
 
 
@@ -60,6 +52,11 @@ pub fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         Span::styled("", Style::new())
     };
+    let inbox_tag = if !app.pending_file_changes.is_empty() {
+        Span::styled(format!(" 📥 {} PENDING ", app.pending_file_changes.len()), Style::new().fg(AMBER).bold())
+    } else {
+        Span::raw("")
+    };
 
     let mut port_spans = vec![];
     for port in &app.active_ports {
@@ -71,6 +68,8 @@ pub fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         version_tag,
         Span::raw(" "),
         sync_tag,
+        Span::raw(" "),
+        inbox_tag,
     ];
     header_spans.extend(port_spans);
 
@@ -223,31 +222,63 @@ pub fn render_timeline(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 pub fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::new()
-        .borders(Borders::NONE)
-        .style(Style::new().bg(PANEL_BG));
-    
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let [left, right] = Layout::horizontal([
+        Constraint::Length(30),
+        Constraint::Min(0),
+    ]).areas(area);
 
-    let mut items = Vec::new();
-    for log in app.logs.iter().rev().take(50) {
-        items.push(ListItem::new(vec![
+    // Left Panel: Active Agents
+    let mut agent_items = Vec::new();
+    for (i, agent) in app.active_agents.iter().enumerate() {
+        let style = if i == app.selected_agent_idx {
+            Style::new().bg(Color::Rgb(0, 40, 20)).fg(GREEN).bold()
+        } else {
+            Style::new().fg(MID)
+        };
+        
+        let status_color = match agent.status.as_str() {
+            "Running" => GREEN,
+            s if s.contains("Completed") => CYAN,
+            _ => RED,
+        };
+
+        agent_items.push(ListItem::new(vec![
             Line::from(vec![
-                Span::styled(format!(" {} ", log.timestamp), Style::new().fg(DIM)),
-                Span::styled(format!(" {} ", log.sender), Style::new().fg(GREEN).bold()),
+                Span::styled(if i == app.selected_agent_idx { "▶ " } else { "  " }, Style::new().fg(GREEN)),
+                Span::styled(&agent.name, style),
             ]),
-            Line::from(Span::styled(format!("  {}", log.content), Style::new().fg(MID))),
-            Line::from(""),
+            Line::from(vec![
+                Span::styled("    ", Style::new()),
+                Span::styled(&agent.status, Style::new().fg(status_color).italic()),
+            ]),
         ]));
     }
 
-    if items.is_empty() {
-        items.push(ListItem::new(Line::from(Span::styled("  Waiting for logs...", Style::new().fg(DIM).italic()))));
+    if agent_items.is_empty() {
+        agent_items.push(ListItem::new(Line::from(Span::styled("  No active agents.", Style::new().fg(DIM).italic()))));
     }
 
-    let list = List::new(items).block(Block::new().title(" LIVE LOGS ").title_style(Style::new().fg(DIM)));
-    frame.render_widget(list, inner);
+    let agent_list = List::new(agent_items)
+        .block(Block::new().borders(Borders::RIGHT).border_style(Style::new().fg(DIM)).title(" AGENTS "));
+    frame.render_widget(agent_list, left);
+
+    // Right Panel: Agent Logs
+    let mut log_lines = Vec::new();
+    if let Some(agent) = app.active_agents.get(app.selected_agent_idx) {
+        for log in &agent.logs {
+            let style = if log.contains("[stderr]") { Style::new().fg(RED) } else { Style::new().fg(MID) };
+            log_lines.push(Line::from(Span::styled(log, style)));
+        }
+    }
+
+    if log_lines.is_empty() {
+        log_lines.push(Line::from(Span::styled("  No logs for selected agent.", Style::new().fg(DIM).italic())));
+    }
+
+    let log_para = Paragraph::new(log_lines)
+        .block(Block::new().title(" AGENT LOGS "))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(log_para, right);
 }
 
 pub fn render_help(frame: &mut Frame, area: Rect, _app: &App) {
@@ -584,6 +615,67 @@ pub fn render_policies(frame: &mut Frame, area: Rect, app: &App) {
         ]),
     ];
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
+}
+
+pub fn render_git_diff_view(frame: &mut Frame, app: &App) {
+    let size = frame.area();
+    
+    // Clear the whole screen
+    frame.render_widget(Block::new().bg(PANEL_BG), size);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header
+            Constraint::Min(10),   // Diff content
+            Constraint::Length(3), // Footer
+        ])
+        .split(size);
+
+    // Header
+    let current_idx = app.pending_change_cursor;
+    let total = app.pending_file_changes.len();
+    let path = app.pending_file_changes.get(current_idx).map(|p| p.path.clone()).unwrap_or_default();
+    
+    let header_text = format!(" FILE CHANGE APPROVAL [{}/{}] — {}", current_idx + 1, total, path);
+    let header = Paragraph::new(header_text)
+        .block(Block::default().borders(Borders::ALL).border_style(Style::new().fg(AMBER)))
+        .style(Style::new().fg(AMBER).bold())
+        .alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(header, chunks[0]);
+
+    // Diff Content
+    let mut lines = Vec::new();
+    for line in app.git_diff_lines.iter().skip(app.git_diff_scroll as usize) {
+        if line.starts_with('+') {
+            lines.push(Line::from(Span::styled(line, Style::new().fg(GREEN))));
+        } else if line.starts_with('-') {
+            lines.push(Line::from(Span::styled(line, Style::new().fg(RED))));
+        } else {
+            lines.push(Line::from(Span::styled(line, Style::new().fg(MID))));
+        }
+    }
+
+    let diff = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(diff, chunks[1]);
+
+    // Footer / Actions
+    let footer_text = vec![
+        Span::styled(" [Y] ", Style::new().fg(GREEN).bold()),
+        Span::styled("Approve  ", Style::new().fg(MID)),
+        Span::styled(" [N] ", Style::new().fg(RED).bold()),
+        Span::styled("Reject  ", Style::new().fg(MID)),
+        Span::styled(" [←/→] ", Style::new().fg(CYAN).bold()),
+        Span::styled("Cycle Items  ", Style::new().fg(MID)),
+        Span::styled(" [Esc] ", Style::new().fg(MID).bold()),
+        Span::styled("Dashboard", Style::new().fg(MID)),
+    ];
+    let footer = Paragraph::new(Line::from(footer_text))
+        .block(Block::default().borders(Borders::ALL).border_style(Style::new().fg(DIM)))
+        .alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(footer, chunks[2]);
 }
 
 

@@ -1,25 +1,19 @@
 use std::collections::HashMap;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
-use chrono::Local;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use anyhow::Result;
 
-use crate::compliance::{self, ComplianceReport};
+use crate::compliance::ComplianceReport;
 use crate::config::Config;
 use crate::discovery::{AgentInfo, SkillInfo};
 use crate::indexer::{ProjectIndex, SearchResult};
-use crate::requirements::{Requirement, check_requirements};
+use crate::requirements::Requirement;
 use crate::filebrowser::{
-    AgentRuleGroup, FileEntry, RecentProject, discover_all_agent_rules, find_file_by_name,
-    get_agent_config_files, get_master_rule_files, get_mempalace_files, get_policy_files,
-    load_file_content, load_recent_projects, save_file_content,
+    AgentRuleGroup, FileEntry, RecentProject,
+    load_file_content, load_recent_projects,
 };
-use crate::sync::sync_universe;
 #[allow(unused_imports)] use crate::safe_io;
 #[allow(unused_imports)] use notify::{Watcher, RecursiveMode, Config as WatchConfig};
 
@@ -33,7 +27,6 @@ pub mod ipc;
 pub use ipc::*;
 
 pub mod events;
-pub use events::*;
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
@@ -158,6 +151,8 @@ pub struct App {
 
     // Agent launcher overlay
     pub show_launcher: bool,
+    pub launcher_cursor: usize,
+    pub launcher_input: String,
 
     // All Projects (entities.json)
     pub projects: Vec<crate::entities::EntityProject>,
@@ -226,10 +221,19 @@ pub struct App {
     // Bouncing Limit
     pub handover_count: usize,
     pub bouncing_alert: bool,
+    pub handover_modal: Option<(String, String)>,
 
     // Git Diff View
     pub git_diff_lines: Vec<String>,
     pub git_diff_scroll: u16,
+
+    // Active Agents
+    pub active_agents: Vec<crate::daemon::proxy::AgentProcess>,
+    pub selected_agent_idx: usize,
+
+    // File Change Approvals (Inbox)
+    pub pending_file_changes: Vec<crate::daemon::state::FileChangeApproval>,
+    pub pending_change_cursor: usize,
 }
 
 impl App {
@@ -273,6 +277,13 @@ impl App {
             setup_input: String::new(),
             setup_status: None,
             requirements: Vec::new(),
+            show_launcher: false,
+            launcher_cursor: 0,
+            launcher_input: String::new(),
+            handover_modal: None,
+            handover_count: 0,
+            tx_daemon,
+            active_ports: Vec::new(),
             search_query: String::new(),
             search_results: Vec::new(),
             search_cursor: 0,
@@ -302,7 +313,6 @@ impl App {
             editor: Editor::from_content("", 20),
             tx,
             rx,
-            tx_daemon,
             width: 80,
             height: 24,
             agent_rule_groups: Vec::new(),
@@ -312,7 +322,6 @@ impl App {
             palette_cursor: 0,
             watched_file_mtime: None,
             file_changed_externally: false,
-            show_launcher: false,
             projects: Vec::new(),
             project_cursor: 0,
             active_project: None,
@@ -341,13 +350,15 @@ impl App {
             task_cursor: 0,
             _watcher: None,
             vault_projects: Vec::new(),
-            active_ports: Vec::new(),
             system_report: None,
             is_scanning_system: false,
-            handover_count: 0,
             bouncing_alert: false,
             git_diff_lines: Vec::new(),
             git_diff_scroll: 0,
+            active_agents: Vec::new(),
+            selected_agent_idx: 0,
+            pending_file_changes: Vec::new(),
+            pending_change_cursor: 0,
         }
     }
 
