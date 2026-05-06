@@ -8,6 +8,7 @@ pub struct ProjectHealth {
     pub path: PathBuf,
     pub status: String,
     pub git_dirty: Option<bool>,
+    pub remote_url: Option<String>,
     pub compliance_score: Option<u8>,
     pub compliance_grade: String,
     pub has_memory: bool,
@@ -28,6 +29,7 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
     let path = &proj.local_path;
 
     let git_dirty = crate::filebrowser::git_is_dirty(path);
+    let remote_url = crate::filebrowser::git_get_remote_url(path);
     let has_memory = path.join("memory.md").exists();
     let (compliance_score, compliance_grade) = compute_compliance(path);
     let constitution_issues = check_constitution(path);
@@ -38,6 +40,7 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
         path: path.clone(),
         status: proj.status.clone(),
         git_dirty,
+        remote_url,
         compliance_score,
         compliance_grade: compliance_grade.to_string(),
         has_memory,

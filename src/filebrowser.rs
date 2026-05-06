@@ -522,6 +522,20 @@ pub fn find_file_by_name(query: &str, master_md: &Path) -> Option<FileEntry> {
 
 // ── Git helpers ───────────────────────────────────────────────────────────────
 
+pub fn git_get_remote_url(dir: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if out.status.success() {
+        let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if url.is_empty() { None } else { Some(url) }
+    } else {
+        None
+    }
+}
+
 pub fn git_is_dirty(dir: &Path) -> Option<bool> {
     let out = Command::new("git")
         .args(["status", "--short"])

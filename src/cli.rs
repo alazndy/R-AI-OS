@@ -260,7 +260,8 @@ fn cmd_health(project: Option<String>, dev_ops: &std::path::Path, json: bool) {
                 Some(false) => "CLEAN",
                 None => "N/A",
             };
-            println!("Project: {:<20} | Status: {:<10} | Git: {:<5} | Grade: {}", r.name, r.status, dirty, r.compliance_grade);
+            let remote = r.remote_url.unwrap_or_else(|| "N/A".to_string());
+            println!("Project: {:<20} | Status: {:<10} | Git: {:<5} | Grade: {} | URL: {}", r.name, r.status, dirty, r.compliance_grade, remote);
         }
     }
 }
