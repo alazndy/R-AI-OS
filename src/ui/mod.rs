@@ -6,6 +6,7 @@ pub mod mempalace;
 pub mod projects;
 pub mod filebrowser;
 pub mod dashboard;
+pub mod sentinel;
 
 pub use setup::*;
 pub use components::*;
@@ -15,6 +16,7 @@ pub use mempalace::*;
 pub use projects::*;
 pub use filebrowser::*;
 pub use dashboard::*;
+pub use sentinel::*;
 
 use ratatui::{
     Frame,

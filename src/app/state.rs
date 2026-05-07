@@ -50,6 +50,12 @@ pub enum BgMsg {
         index_ready: bool,
         handover_count: u32,
         pending_file_changes: Vec<crate::daemon::state::FileChangeApproval>,
+        sentinel_files: Vec<crate::daemon::state::SentinelFileStatus>,
+    },
+    SentinelUpdate {
+        project: String,
+        status: String,
+        error_count: usize,
     },
     #[allow(dead_code)] ActivityUpdate(Vec<Activity>),
     #[allow(dead_code)] NewLog(LogEntry),

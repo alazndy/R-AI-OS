@@ -157,6 +157,7 @@ fn dispatch_event(tx: &Sender<BgMsg>, v: &serde_json::Value) {
             let index_ready = v["index_ready"].as_bool().unwrap_or(false);
             let handover_count = v["handover_count"].as_u64().unwrap_or(0) as u32;
             let pending_file_changes = serde_json::from_value::<Vec<crate::daemon::state::FileChangeApproval>>(v["pending_file_changes"].clone()).unwrap_or_default();
+            let sentinel_files = serde_json::from_value::<Vec<crate::daemon::state::SentinelFileStatus>>(v["sentinel_files"].clone()).unwrap_or_default();
 
             let report_count = health_reports.len();
             tx.send(BgMsg::StateSync {
@@ -166,6 +167,7 @@ fn dispatch_event(tx: &Sender<BgMsg>, v: &serde_json::Value) {
                 index_ready,
                 handover_count,
                 pending_file_changes,
+                sentinel_files,
             }).ok();
 
             tx.send(BgMsg::NewLog(crate::app::state::LogEntry {

@@ -8,6 +8,7 @@ pub mod setup_wizard;
 pub mod security;
 pub mod compliance;
 pub mod daemon;
+pub mod sentinel;
 pub mod config;
 pub mod discovery;
 pub mod entities;

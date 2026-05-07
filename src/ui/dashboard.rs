@@ -184,8 +184,9 @@ pub fn render_content_body(frame: &mut Frame, area: Rect, app: &App) {
         7 => render_projects(frame, inner, app),
         8 => render_timeline(frame, inner, app),
         9 => render_logs(frame, inner, app),
-        10 => render_help(frame, inner, app),
-        11 => render_system_audit(frame, inner, app),
+        10 => render_sentinel_hub(frame, inner, app),
+        11 => render_help(frame, inner, app),
+        12 => render_system_audit(frame, inner, app),
         _ => {}
     }
 }

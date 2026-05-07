@@ -49,6 +49,19 @@ impl Server {
             super::cortex::start_cortex_worker(cortex_state, cortex_tx_rx).await;
         });
 
+        let validation_tx_rx = tx.subscribe();
+        let validation_tx = tx.clone();
+        let validation_state = self.state.clone();
+        tokio::spawn(async move {
+            super::validation::start_validation_worker(validation_state, validation_tx_rx, validation_tx).await;
+        });
+
+        let sentinel_tx = tx.clone();
+        let sentinel_state = self.state.clone();
+        tokio::spawn(async move {
+            super::sentinel::start_sentinel_worker(sentinel_state, sentinel_tx).await;
+        });
+
         // Start file watcher
         let config = Config::load().unwrap_or_else(|| Config {
             dev_ops_path: PathBuf::from(""),

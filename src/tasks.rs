@@ -127,8 +127,9 @@ pub fn dispatch_to_agent(
     task: &Task,
     agent: &str,
     project_path: Option<&PathBuf>,
+    sentinel_errors: Option<Vec<String>>,
 ) -> String {
-    let task_msg = build_prompt(task, agent);
+    let task_msg = build_prompt(task, agent, sentinel_errors);
 
     // Copy to clipboard via clip.exe
     let clip_ok = copy_to_clipboard(&task_msg);
@@ -155,17 +156,29 @@ pub fn dispatch_to_agent(
     }
 }
 
-fn build_prompt(task: &Task, agent: &str) -> String {
+fn build_prompt(task: &Task, agent: &str, sentinel_errors: Option<Vec<String>>) -> String {
     let proj_ctx = task.project.as_deref()
         .map(|p| format!("Project: {}\n", p))
         .unwrap_or_default();
 
-    format!(
-        "=== TASK FROM R-AI-OS ===\n{}Agent: {}\nTask: {}\n========================",
+    let mut msg = format!(
+        "=== TASK FROM R-AI-OS ===\n{}Agent: {}\nTask: {}\n",
         proj_ctx,
         agent,
         task.text
-    )
+    );
+
+    if let Some(errors) = sentinel_errors {
+        if !errors.is_empty() {
+            msg.push_str("\n⚠️ SENTINEL ALERT: The following errors were detected in your project. PLEASE FIX THEM:\n");
+            for err in errors {
+                msg.push_str(&format!("  - {}\n", err));
+            }
+        }
+    }
+
+    msg.push_str("========================");
+    msg
 }
 
 fn copy_to_clipboard(text: &str) -> bool {

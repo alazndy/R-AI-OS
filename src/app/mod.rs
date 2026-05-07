@@ -49,6 +49,7 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     PaletteItem { cmd: "/rules",    desc: "Go to System Rules" },
     PaletteItem { cmd: "/memory",   desc: "Go to MemPalace" },
     PaletteItem { cmd: "/graphify", desc: "Run Graphify (Knowledge Graph) on project" },
+    PaletteItem { cmd: "/heal",     desc: "Trigger Sentinel Self-Correction for current project" },
     PaletteItem { cmd: "/reindex",  desc: "Rebuild Neural Search index" },
     PaletteItem { cmd: "/quit",     desc: "Exit R-AI-OS" },
 ];
@@ -72,6 +73,7 @@ pub const MENU_ITEMS: &[&str] = &[
     "All Projects",
     "Timeline",
     "Live Logs",
+    "Sentinel Hub",
     "Help",
     "AI System Audit",
 ];
@@ -232,6 +234,9 @@ pub struct App {
     pub active_agents: Vec<crate::daemon::proxy::AgentProcess>,
     pub selected_agent_idx: usize,
 
+    // Sentinel
+    pub sentinel_files: Vec<crate::daemon::state::SentinelFileStatus>,
+
     // File Change Approvals (Inbox)
     pub pending_file_changes: Vec<crate::daemon::state::FileChangeApproval>,
     pub pending_change_cursor: usize,
@@ -379,6 +384,7 @@ impl App {
             git_diff_scroll: 0,
             active_agents: Vec::new(),
             selected_agent_idx: 0,
+            sentinel_files: Vec::new(),
             pending_file_changes: Vec::new(),
             pending_change_cursor: 0,
             stats_cache: None,
@@ -527,7 +533,25 @@ impl App {
             .and_then(|name| self.find_project_path_by_name(name))
             .or_else(|| self.active_project.as_ref().map(|p| p.local_path.clone()));
 
-        let result = crate::tasks::dispatch_to_agent(&task, agent, proj_path.as_ref());
+        // Collect sentinel errors for this project
+        let mut sentinel_errors = Vec::new();
+        if let Some(ref path) = proj_path {
+            let path_str = path.to_string_lossy().to_string();
+            for file in &self.sentinel_files {
+                if file.path.contains(&path_str) && file.state == crate::sentinel::SentinelState::Failed {
+                    for err in &file.errors {
+                        sentinel_errors.push(format!("{}:{}: {}", err.file, err.line.unwrap_or(0), err.message));
+                    }
+                }
+            }
+        }
+
+        let result = crate::tasks::dispatch_to_agent(
+            &task, 
+            agent, 
+            proj_path.as_ref(),
+            if sentinel_errors.is_empty() { None } else { Some(sentinel_errors) }
+        );
         self.sync_status = Some(result);
         self.add_activity("Task", &format!("Dispatched to {}: {}", agent, task.text), "Info");
     }

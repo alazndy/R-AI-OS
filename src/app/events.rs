@@ -426,12 +426,17 @@ impl App {
                 self.is_checking_health = false;
                 self.health_cursor = 0;
             }
-            BgMsg::StateSync { projects, health_reports, active_agents, index_ready, handover_count, pending_file_changes } => {
+            BgMsg::SentinelUpdate { project, status, error_count } => {
+                let level = if status == "Failed" { "Warning" } else { "Info" };
+                self.add_activity("Sentinel", &format!("{}: {} ({} errors)", project, status, error_count), level);
+            }
+            BgMsg::StateSync { projects, health_reports, active_agents, index_ready, handover_count, pending_file_changes, sentinel_files } => {
                 self.projects = projects;
                 self.health_report = health_reports;
                 self.active_agents = active_agents;
                 self.handover_count = handover_count as usize;
                 self.pending_file_changes = pending_file_changes;
+                self.sentinel_files = sentinel_files;
                 if index_ready {
                     self.index_status = Some("Index Ready (Synced)".into());
                 }
@@ -1633,6 +1638,42 @@ impl App {
                     self.sync_status = Some(msg);
                 } else {
                     self.sync_status = Some("Open a project detail first to run graphify".into());
+                }
+            }
+            "/heal" => {
+                if let Some(ref proj) = self.active_project.clone() {
+                    let mut sentinel_errors = Vec::new();
+                    let path_str = proj.local_path.to_string_lossy().to_string();
+                    for file in &self.sentinel_files {
+                        if file.path.contains(&path_str) && file.state == crate::sentinel::SentinelState::Failed {
+                            for err in &file.errors {
+                                sentinel_errors.push(format!("{}:{}: {}", err.file, err.line.unwrap_or(0), err.message));
+                            }
+                        }
+                    }
+                    
+                    if sentinel_errors.is_empty() {
+                        self.sync_status = Some("No sentinel errors detected in current project.".into());
+                    } else {
+                        // Trigger correction task
+                        let task_text = format!("FIX SENTINEL ERRORS: {}", sentinel_errors[0]);
+                        let task = crate::tasks::Task {
+                            text: task_text,
+                            completed: false,
+                            agent: Some("claude".into()), // Default to claude for healing
+                            project: Some(proj.name.clone()),
+                        };
+                        let result = crate::tasks::dispatch_to_agent(
+                            &task, 
+                            "claude", 
+                            Some(&proj.local_path), 
+                            Some(sentinel_errors)
+                        );
+                        self.sync_status = Some(result);
+                        self.add_activity("Sentinel", "Self-Correction cycle triggered", "Warning");
+                    }
+                } else {
+                    self.sync_status = Some("Open a project detail first to run /heal".into());
                 }
             }
             _ => {}
