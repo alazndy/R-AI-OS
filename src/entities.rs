@@ -10,6 +10,8 @@ pub struct EntityProject {
     pub status: String,
     pub stars: Option<u32>,
     pub last_commit: Option<String>,
+    pub version: Option<String>,
+    pub version_nickname: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -31,26 +33,31 @@ pub fn load_entities(dev_ops: &Path) -> Vec<EntityProject> {
 }
 
 pub fn discover_entities(dev_ops: &Path) -> Vec<EntityProject> {
-    let mut known = load_entities(dev_ops);
+    let known = load_entities(dev_ops);
     let rooms = crate::mempalace::build(dev_ops);
-    
+
+    // Build fresh list from the current scan
+    let mut result: Vec<EntityProject> = Vec::new();
+
     for room in rooms {
         for proj in room.projects {
-            // Check if local_path matches (normalized-ish)
-            if !known.iter().any(|k| k.local_path == proj.path) {
-                known.push(EntityProject {
-                    name: proj.name,
-                    category: room.folder_name.clone(),
-                    local_path: proj.path,
-                    github: None,
-                    status: proj.status,
-                    stars: None,
-                    last_commit: None,
-                });
-            }
+            // Preserve GitHub URL, stars, last_commit from existing entry
+            let existing = known.iter().find(|k| k.local_path == proj.path);
+            result.push(EntityProject {
+                name: proj.name,
+                category: room.folder_name.clone(),
+                local_path: proj.path,
+                github: existing.and_then(|e| e.github.clone()),
+                status: proj.status,
+                stars: existing.and_then(|e| e.stars),
+                last_commit: existing.and_then(|e| e.last_commit.clone()),
+                version: proj.version.or_else(|| existing.and_then(|e| e.version.clone())),
+                version_nickname: proj.version_nickname.or_else(|| existing.and_then(|e| e.version_nickname.clone())),
+            });
         }
     }
-    known
+
+    result
 }
 
 pub fn save_entities(dev_ops: &Path, projects: Vec<EntityProject>) -> std::io::Result<()> {

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
 pub struct MemProject {
@@ -9,6 +8,8 @@ pub struct MemProject {
     pub status: String,
     pub date: String,
     pub has_memory: bool,
+    pub version: Option<String>,
+    pub version_nickname: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,67 +48,93 @@ pub fn build(dev_ops: &Path) -> Vec<MemRoom> {
 }
 
 fn scan_projects(room_path: &Path) -> Vec<MemProject> {
-    // Projects are immediate subdirectories of the room folder.
-    // Deeper nesting (like Sistem Araçları/R-AI-OS) is handled by checking
-    // both direct children and one level deeper.
+    // Two-pass scan: depth 1 then depth 2.
+    // If a depth-1 dir IS a project root, add it and do NOT recurse into it.
+    // If a depth-1 dir is NOT a project (i.e. it's a sub-category like "CLI_Tools"),
+    // scan its immediate children as potential projects.
+    // This prevents monorepos and project internals from being counted as separate projects.
     let mut projects: Vec<(MemProject, SystemTime)> = Vec::new();
 
-    let walker = WalkDir::new(room_path)
-        .max_depth(4)
-        .min_depth(0)
-        .into_iter()
-        .filter_entry(|e| {
-            let n = e.file_name().to_string_lossy();
-            !n.starts_with('.') && n != "node_modules" && n != "target"
-        })
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_dir());
+    let Ok(level1_iter) = std::fs::read_dir(room_path) else { return vec![] };
 
-    for entry in walker {
-        let proj_path = entry.path().to_path_buf();
-        // Improved memory detection: check common variations and locations
-        let memory_path = find_memory_file(&proj_path);
-        let has_memory = memory_path.is_some();
+    for entry1 in level1_iter.filter_map(|e| e.ok()) {
+        let Ok(ft) = entry1.file_type() else { continue };
+        if !ft.is_dir() { continue; }
 
-        let is_project = has_memory
-            || proj_path.join("Cargo.toml").exists()
-            || proj_path.join("package.json").exists()
-            || proj_path.join("go.mod").exists()
-            || proj_path.join("requirements.txt").exists()
-            || proj_path.join("pyproject.toml").exists()
-            || proj_path.join("platformio.ini").exists()
-            || proj_path.join(".git").exists()
-            || proj_path.join(".agents").exists();
+        let name1 = entry1.file_name().to_string_lossy().into_owned();
+        if name1.starts_with('.') || is_skip_dir(&name1) { continue; }
 
-        if !is_project {
-            continue;
-        }
+        let path1 = entry1.path();
 
-        let name = entry
-            .file_name()
-            .to_string_lossy()
-            .into_owned();
-
-        let (status, date, mtime) = if let Some(ref mp) = memory_path {
-            read_memory_status(mp)
+        if is_project_root(&path1) {
+            // Level-1 dir is itself a project — stop here, don't go deeper
+            if let Some(proj) = make_project(path1) {
+                projects.push(proj);
+            }
         } else {
-            ("(no memory.md)".into(), "—".into(), SystemTime::UNIX_EPOCH)
-        };
+            // Level-1 dir is a sub-category (e.g. "CLI_Tools", "Projects") — scan its children
+            let Ok(level2_iter) = std::fs::read_dir(&path1) else { continue };
 
-        projects.push((
-            MemProject { name, path: proj_path, status, date, has_memory },
-            mtime,
-        ));
+            for entry2 in level2_iter.filter_map(|e| e.ok()) {
+                let Ok(ft2) = entry2.file_type() else { continue };
+                if !ft2.is_dir() { continue; }
+
+                let name2 = entry2.file_name().to_string_lossy().into_owned();
+                if name2.starts_with('.') || is_skip_dir(&name2) { continue; }
+
+                let path2 = entry2.path();
+                if is_project_root(&path2) {
+                    if let Some(proj) = make_project(path2) {
+                        projects.push(proj);
+                    }
+                }
+            }
+        }
     }
 
     projects.sort_by(|a, b| b.1.cmp(&a.1));
     projects.into_iter().map(|(p, _)| p).collect()
 }
 
+fn is_skip_dir(name: &str) -> bool {
+    matches!(name,
+        "node_modules" | "target" | "dist" | "build" | ".next"
+        | "__pycache__" | "vendor" | ".turbo" | "out"
+    )
+}
+
+fn is_project_root(path: &Path) -> bool {
+    path.join(".git").exists()
+        || path.join("memory.md").exists()
+        || path.join("Cargo.toml").exists()
+        || path.join("package.json").exists()
+        || path.join("go.mod").exists()
+        || path.join("pyproject.toml").exists()
+        || path.join("platformio.ini").exists()
+        || path.join(".agents").exists()
+}
+
+fn make_project(path: PathBuf) -> Option<(MemProject, SystemTime)> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let memory_path = find_memory_file(&path);
+    let has_memory = memory_path.is_some();
+
+    let (status, date, version, version_nickname, mtime) = if let Some(ref mp) = memory_path {
+        read_memory_status(mp)
+    } else {
+        ("(no memory.md)".into(), "—".into(), None, None, SystemTime::UNIX_EPOCH)
+    };
+
+    Some((
+        MemProject { name, path, status, date, has_memory, version, version_nickname },
+        mtime,
+    ))
+}
+
 /// Extract the first status/date line from memory.md.
 /// Looks for "Tarih:" in "Son Durum" section, then falls back to
 /// the first bullet under any section.
-fn read_memory_status(path: &Path) -> (String, String, SystemTime) {
+fn read_memory_status(path: &Path) -> (String, String, Option<String>, Option<String>, SystemTime) {
     let mtime = std::fs::metadata(path)
         .ok()
         .and_then(|m| m.modified().ok())
@@ -115,13 +142,41 @@ fn read_memory_status(path: &Path) -> (String, String, SystemTime) {
 
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return ("(unreadable)".into(), "—".into(), mtime),
+        Err(_) => return ("(unreadable)".into(), "—".into(), None, None, mtime),
     };
 
     let date = extract_date(&content);
     let status = extract_status(&content);
+    let version = extract_version(&content);
+    let version_nickname = extract_version_nickname(&content);
 
-    (status, date, mtime)
+    (status, date, version, version_nickname, mtime)
+}
+
+fn extract_version(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let t = line.trim();
+        if t.starts_with("- Sürüm:") || t.starts_with("Sürüm:") || t.starts_with("- Version:") || t.starts_with("Version:") {
+            let val = t.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+            if !val.is_empty() && val != "—" {
+                return Some(val);
+            }
+        }
+    }
+    None
+}
+
+fn extract_version_nickname(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let t = line.trim();
+        if t.starts_with("- Sürüm Adı:") || t.starts_with("Sürüm Adı:") || t.starts_with("- Nickname:") || t.starts_with("Nickname:") {
+            let val = t.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+            if !val.is_empty() && val != "—" {
+                return Some(val);
+            }
+        }
+    }
+    None
 }
 
 fn extract_date(content: &str) -> String {
