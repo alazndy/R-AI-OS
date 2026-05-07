@@ -20,11 +20,10 @@
 
 ## Antigravity
 ### Yaptıkları
-- **Auto-Daemon Spawning:** `raios` artık çalışmıyorsa `aiosd`'yi arka planda (penceresiz) otomatik başlatıyor.
-- **Deep Discovery:** Proje keşfi 4 seviye derinliğe çıkarıldı, kategori klasörlerini eleyen akıllı filtreleme eklendi.
-- **IPC Hardening:** Manuel JSON stringleri yerine `serde_json::json!` makrosuyla %100 güvenli StateSync sağlandı.
-- **Dashboard Polish:** Puan ortalaması taşma hatası ve boş ekran donmaları giderildi.
-- **Manual Refresh:** Dashboard'a 'r' tuşu ile zorunlu StateSync tetikleyici eklendi.
+- **README Overhaul:** Proje vizyonunu yansıtan, ürün odaklı ve profesyonel İngilizce README hazırlandı ve GitHub'a push edildi.
+- **NotebookLM Export:** Tüm kod tabanı (`.rs`, `.toml`, `.md`, `.json`, `.yaml`) Markdown blokları içine sarılarak `C:\Users\turha\Desktop\RAIOS_Source_NotebookLM` klasörüne paketlendi.
+- **Git Hardening:** `gitrepo.md` güncellendi, major sürüm (Ghost Protocol) repo durumuna işlendi.
+- **Automation:** Kod dönüştürme işlemi için Python tabanlı `export_for_notebook.py` otomasyonu geliştirildi.
 
 ## Plan
 ### Tamamlananlar
