@@ -34,3 +34,4 @@ fd-lock = "4.0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
+regex-lite = "0.1"

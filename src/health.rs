@@ -15,6 +15,11 @@ pub struct ProjectHealth {
     pub constitution_issues: Vec<String>,
     pub graphify_done: bool,
     pub graph_report: Option<PathBuf>,
+    // Security
+    pub security_score: Option<u8>,
+    pub security_grade: Option<String>,
+    pub security_issue_count: usize,
+    pub security_critical: usize,
 }
 
 const CONSTITUTION_RULES: &[(&str, &str)] = &[
@@ -47,7 +52,22 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
         constitution_issues: constitution_issues.into_iter().map(|s| s.to_string()).collect(),
         graphify_done,
         graph_report,
+        security_score: None,
+        security_grade: None,
+        security_issue_count: 0,
+        security_critical: 0,
     }
+}
+
+/// Run full security scan and attach results to a health report.
+pub fn check_project_with_security(proj: &EntityProject) -> ProjectHealth {
+    let mut h = check_project(proj);
+    let report = crate::security::scan_project(&h.path);
+    h.security_score       = Some(report.score);
+    h.security_grade       = Some(report.grade.to_string());
+    h.security_issue_count = report.issues.len();
+    h.security_critical    = report.critical_count();
+    h
 }
 
 /// Returns (done, report_path) — checks for graphify output files in project.

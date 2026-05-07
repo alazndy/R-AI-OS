@@ -80,6 +80,18 @@ pub enum Commands {
     },
     /// Show workspace portfolio statistics
     Stats,
+    /// Run OWASP security scan on one or all projects
+    Security {
+        /// Filter to a single project by name
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Show full issue list (default: summary only)
+        #[arg(long)]
+        full: bool,
+        /// Scan only the given directory (bypass entities.json)
+        #[arg(long)]
+        path: Option<String>,
+    },
     /// Scaffold a new project following MASTER.md rules
     New {
         /// Project name
@@ -142,6 +154,9 @@ pub fn run(cli: Cli) {
         }
         Commands::Stats => {
             cmd_stats(&cfg.dev_ops_path, cli.json);
+        }
+        Commands::Security { project, full, path } => {
+            cmd_security(project, full, path, &cfg.dev_ops_path, cli.json);
         }
         Commands::New { name, category, github, no_vault } => {
             cmd_new(&name, &category, github, no_vault, &cfg.dev_ops_path, cli.json);
@@ -497,5 +512,120 @@ fn cmd_new(name: &str, category: &str, github: bool, no_vault: bool, dev_ops: &s
         println!("Done. Project ready at {}", result.path.display());
     } else {
         println!("Completed with some errors. Check the steps above.");
+    }
+}
+
+fn cmd_security(
+    project: Option<String>,
+    full: bool,
+    scan_path: Option<String>,
+    dev_ops: &std::path::Path,
+    json: bool,
+) {
+    use crate::security::{scan_project, Severity};
+
+    // Collect targets
+    let targets: Vec<(String, std::path::PathBuf)> = if let Some(p) = scan_path {
+        vec![("custom".into(), std::path::PathBuf::from(p))]
+    } else {
+        let projects = crate::entities::load_entities(dev_ops);
+        if let Some(q) = project {
+            let q = q.to_lowercase();
+            projects.into_iter()
+                .filter(|p| p.name.to_lowercase().contains(&q))
+                .map(|p| (p.name, p.local_path))
+                .collect()
+        } else {
+            projects.into_iter().map(|p| (p.name, p.local_path)).collect()
+        }
+    };
+
+    if targets.is_empty() {
+        eprintln!("No projects found.");
+        return;
+    }
+
+    let mut all_reports = Vec::new();
+
+    for (name, path) in &targets {
+        if !json {
+            eprint!("  scanning {}...", name);
+        }
+        let report = scan_project(path);
+        if !json {
+            eprintln!(" {} ({}/100)", report.grade, report.score);
+        }
+        all_reports.push((name.clone(), path.clone(), report));
+    }
+
+    if json {
+        #[derive(serde::Serialize)]
+        struct Row<'a> {
+            name: &'a str,
+            path: String,
+            score: u8,
+            grade: &'a str,
+            issues: usize,
+            critical: usize,
+        }
+        let rows: Vec<Row> = all_reports.iter().map(|(n, p, r)| Row {
+            name: n,
+            path: p.display().to_string(),
+            score: r.score,
+            grade: r.grade,
+            issues: r.issues.len(),
+            critical: r.critical_count(),
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+        return;
+    }
+
+    // Human-readable output
+    println!();
+    println!("Security Scan Results");
+    println!("{}", "─".repeat(72));
+    println!("{:<28} {:>5}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}",
+        "Project", "Score", "Grade", "Crit", "High", "Med", "Low");
+    println!("{}", "─".repeat(72));
+
+    let mut total_score: u32 = 0;
+    let mut total_crit  = 0usize;
+
+    for (name, _, report) in &all_reports {
+        let crit = report.issues.iter().filter(|i| i.severity == Severity::Critical).count();
+        let high = report.issues.iter().filter(|i| i.severity == Severity::High).count();
+        let med  = report.issues.iter().filter(|i| i.severity == Severity::Medium).count();
+        let low  = report.issues.iter().filter(|i| i.severity == Severity::Low).count();
+        let name_trunc: String = name.chars().take(27).collect();
+
+        println!("{:<28} {:>5}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}",
+            name_trunc, report.score, report.grade, crit, high, med, low);
+
+        total_score += report.score as u32;
+        total_crit  += crit;
+
+        if full && !report.issues.is_empty() {
+            for issue in &report.issues {
+                let file_display = issue.file.as_ref()
+                    .map(|f| f.file_name().unwrap_or_default().to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let line_display = issue.line.map(|l| format!(":{}", l)).unwrap_or_default();
+                println!("  [{:>8}] [{}] {} — {}{}",
+                    issue.severity.label(), issue.owasp, issue.title,
+                    file_display, line_display);
+                if let Some(ref snip) = issue.snippet {
+                    println!("             {}", snip.chars().take(64).collect::<String>());
+                }
+            }
+            println!();
+        }
+    }
+
+    println!("{}", "─".repeat(72));
+    let avg = if all_reports.is_empty() { 0 } else { total_score as usize / all_reports.len() };
+    println!("Average score: {}/100   Total critical issues: {}", avg, total_crit);
+
+    if !full && all_reports.iter().any(|(_, _, r)| !r.issues.is_empty()) {
+        println!("\nUse --full to see individual issues.");
     }
 }

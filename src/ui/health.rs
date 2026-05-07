@@ -134,19 +134,40 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
             Span::styled(" ✗graph ", Style::new().fg(DIM))
         };
 
+        // Security score
+        let sec_span = match h.security_score {
+            Some(s) => {
+                let grade = h.security_grade.as_deref().unwrap_or("-");
+                let col = match s {
+                    90..=100 => GREEN,
+                    75..=89  => CYAN,
+                    50..=74  => AMBER,
+                    _        => RED,
+                };
+                let crit_tag = if h.security_critical > 0 {
+                    format!(" ⚠{}", h.security_critical)
+                } else {
+                    String::new()
+                };
+                Span::styled(
+                    format!(" 🔒{}/100{}{} ", s, grade, crit_tag),
+                    Style::new().fg(col).bold(),
+                )
+            }
+            None => Span::styled(" 🔒— ", Style::new().fg(DIM)),
+        };
+
         let sc = project_status_color(&h.status);
         let name_color = if selected { GREEN } else { MID };
         let prefix = if selected { "  ▶ " } else { "    " };
 
         lines.push(Line::from(vec![
             Span::styled(prefix, Style::new().fg(GREEN)),
-            Span::styled(format!("{:<28}", h.name), Style::new().fg(name_color).bold()),
-            Span::styled(format!(" [{:<10}]", h.status), Style::new().fg(sc)),
+            Span::styled(format!("{:<24}", h.name), Style::new().fg(name_color).bold()),
             git_span,
-            graph_span,
             Span::styled(score_str, Style::new().fg(score_color)),
+            sec_span,
             mem_span,
-            issues_span,
         ]));
     }
 
@@ -162,13 +183,23 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
             .sum::<u8>() as usize / total.max(1)
     } else { 0 };
 
+    let sec_scanned = app.health_report.iter().filter(|h| h.security_score.is_some()).count();
+    let sec_critical = app.health_report.iter().map(|h| h.security_critical).sum::<usize>();
+    let avg_sec = if sec_scanned > 0 {
+        app.health_report.iter().filter_map(|h| h.security_score).map(|s| s as usize).sum::<usize>() / sec_scanned
+    } else { 0 };
+
     let footer = Paragraph::new(Line::from(vec![
-        Span::styled(
-            format!(" {}/{} dirty  ", dirty, total),
-            Style::new().fg(if dirty > 0 { AMBER } else { GREEN }),
-        ),
-        Span::styled(format!("avg score: {}/100  ", avg_score), Style::new().fg(MID)),
-        Span::styled(format!("no memory.md: {}  ", no_mem), Style::new().fg(if no_mem > 0 { AMBER } else { DIM })),
+        Span::styled(format!(" {}/{} dirty ", dirty, total), Style::new().fg(if dirty > 0 { AMBER } else { GREEN })),
+        Span::styled(format!(" comp:{}/100 ", avg_score), Style::new().fg(MID)),
+        if sec_scanned > 0 {
+            Span::styled(
+                format!(" 🔒{}/100 ⚠crit:{} ", avg_sec, sec_critical),
+                Style::new().fg(if sec_critical > 0 { RED } else { GREEN }),
+            )
+        } else {
+            Span::styled(" 🔒— (raios security çalıştır)", Style::new().fg(DIM))
+        },
         Span::styled("  [↑↓] nav  [Enter] open  [Esc] back", Style::new().fg(DIM)),
     ]))
     .block(Block::new().borders(Borders::TOP).border_style(Style::new().fg(DIM)));
