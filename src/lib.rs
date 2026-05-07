@@ -1,6 +1,8 @@
 pub mod agent_runner;
 pub mod app;
 pub mod cli;
+pub mod cortex;
+pub mod hybrid_search;
 pub mod new_project;
 pub mod setup_wizard;
 pub mod security;

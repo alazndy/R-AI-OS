@@ -112,6 +112,13 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.is_checking_health = true;
+                if let Some(ref tx_daemon) = self.tx_daemon {
+                    let _ = tx_daemon.send("{\"command\":\"GetState\"}".into());
+                    self.add_activity("System", "Manual health refresh requested", "Info");
+                }
+            }
             _ => {}
         }
     }
@@ -428,6 +435,7 @@ impl App {
                 if index_ready {
                     self.index_status = Some("Index Ready (Synced)".into());
                 }
+                self.is_checking_health = false;
                 self.add_activity("System", "Full state synchronized with daemon", "Info");
             }
             BgMsg::ProjectOpened { memory, git_log } => {
@@ -1594,17 +1602,14 @@ impl App {
                 }
             }
             "/health" => {
-                if !self.projects.is_empty() && !self.is_checking_health {
+                if !self.projects.is_empty() {
                     self.is_checking_health = true;
-                    self.health_report.clear();
                     self.state = AppState::HealthView;
                     if let Some(ref tx_daemon) = self.tx_daemon {
-                        let _ = tx_daemon.send("{\"command\":\"HealthScan\"}".into());
+                        let _ = tx_daemon.send("{\"command\":\"GetState\"}".into());
                     }
-                } else if self.projects.is_empty() {
-                    self.sync_status = Some("Load entities.json first".into());
                 } else {
-                    self.state = AppState::HealthView;
+                    self.sync_status = Some("Load entities.json first".into());
                 }
             }
             "/reindex" => {

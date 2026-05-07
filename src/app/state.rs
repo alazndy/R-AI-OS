@@ -72,7 +72,7 @@ pub enum BgMsg {
     WizardDone,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Activity {
     pub timestamp: String,
     pub source: String, // "Git", "Agent", "System"
@@ -80,7 +80,7 @@ pub struct Activity {
     pub level: &'static str, // "Info", "Warning", "Error"
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LogEntry {
     pub timestamp: String,
     pub sender: String,

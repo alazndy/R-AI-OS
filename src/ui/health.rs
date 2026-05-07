@@ -180,7 +180,8 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
     let avg_score = if total > 0 {
         app.health_report.iter()
             .filter_map(|h| h.compliance_score)
-            .sum::<u8>() as usize / total.max(1)
+            .map(|s| s as usize)
+            .sum::<usize>() / total.max(1)
     } else { 0 };
 
     let sec_scanned = app.health_report.iter().filter(|h| h.security_score.is_some()).count();

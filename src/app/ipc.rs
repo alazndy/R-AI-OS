@@ -8,19 +8,48 @@ use std::time::Duration;
 use crate::app::state::BgMsg;
 use crate::indexer::SearchResult;
 
+use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 const DAEMON_ADDR: &str = "127.0.0.1:42069";
 const RETRY_INTERVAL: Duration = Duration::from_secs(8);
 const MAX_RETRIES: u32 = 10;
+
+fn ensure_daemon_running() {
+    // Check if port is already open
+    if TcpStream::connect_timeout(
+        &DAEMON_ADDR.parse().unwrap(),
+        Duration::from_millis(200)
+    ).is_ok() {
+        return;
+    }
+
+    println!("Daemon not found. Spawning aiosd in background...");
+    
+    let mut cmd = Command::new("aiosd");
+    
+    #[cfg(windows)]
+    {
+        // 0x08000000 = CREATE_NO_WINDOW
+        cmd.creation_flags(0x08000000);
+    }
+
+    let _ = cmd.stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    // Give it a second to wake up
+    thread::sleep(Duration::from_secs(2));
+}
 
 pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
     let (tx_daemon_local, rx_daemon_local) = mpsc::channel::<String>();
 
     thread::spawn(move || {
-        // Give the daemon a moment if it was just launched
-        thread::sleep(Duration::from_millis(600));
-
+        ensure_daemon_running();
+        
         let mut attempts = 0u32;
-
         loop {
             match TcpStream::connect(DAEMON_ADDR) {
                 Ok(mut stream) => {
@@ -122,23 +151,28 @@ fn dispatch_event(tx: &Sender<BgMsg>, v: &serde_json::Value) {
             }
         }
         Some("StateSync") => {
-            if let (Ok(projects), Ok(health_reports), Ok(active_agents), Some(index_ready), Some(handover_count), Ok(pending_file_changes)) = (
-                serde_json::from_value::<Vec<crate::entities::EntityProject>>(v["projects"].clone()),
-                serde_json::from_value::<Vec<crate::health::ProjectHealth>>(v["health_reports"].clone()),
-                serde_json::from_value::<Vec<crate::daemon::proxy::AgentProcess>>(v["active_agents"].clone()),
-                v["index_ready"].as_bool(),
-                v["handover_count"].as_u64(),
-                serde_json::from_value::<Vec<crate::daemon::state::FileChangeApproval>>(v["pending_file_changes"].clone()),
-            ) {
-                tx.send(BgMsg::StateSync {
-                    projects,
-                    health_reports,
-                    active_agents,
-                    index_ready,
-                    handover_count: handover_count as u32,
-                    pending_file_changes,
-                }).ok();
-            }
+            let projects = serde_json::from_value::<Vec<crate::entities::EntityProject>>(v["projects"].clone()).unwrap_or_default();
+            let health_reports = serde_json::from_value::<Vec<crate::health::ProjectHealth>>(v["health_reports"].clone()).unwrap_or_default();
+            let active_agents = serde_json::from_value::<Vec<crate::daemon::proxy::AgentProcess>>(v["active_agents"].clone()).unwrap_or_default();
+            let index_ready = v["index_ready"].as_bool().unwrap_or(false);
+            let handover_count = v["handover_count"].as_u64().unwrap_or(0) as u32;
+            let pending_file_changes = serde_json::from_value::<Vec<crate::daemon::state::FileChangeApproval>>(v["pending_file_changes"].clone()).unwrap_or_default();
+
+            let report_count = health_reports.len();
+            tx.send(BgMsg::StateSync {
+                projects,
+                health_reports,
+                active_agents,
+                index_ready,
+                handover_count,
+                pending_file_changes,
+            }).ok();
+
+            tx.send(BgMsg::NewLog(crate::app::state::LogEntry {
+                timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                sender: "IPC".into(),
+                content: format!("Synced state from daemon (Reports: {})", report_count),
+            })).ok();
         }
         Some("HumanApprovalRequired") => {
             if let (Some(target), Some(instruction), Some(reason)) = (
@@ -166,6 +200,11 @@ fn dispatch_event(tx: &Sender<BgMsg>, v: &serde_json::Value) {
         Some("HumanApprovalResult") => {
             if let Some(status) = v["status"].as_str() {
                 tx.send(BgMsg::HumanApprovalResult { status: status.into() }).ok();
+            }
+        }
+        Some("NewLog") => {
+            if let Ok(log) = serde_json::from_value::<crate::app::state::LogEntry>(v["log"].clone()) {
+                tx.send(BgMsg::NewLog(log)).ok();
             }
         }
         _ => {}

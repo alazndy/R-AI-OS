@@ -23,16 +23,38 @@ pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast:
 
         println!("[Daemon] Scanning health for {} projects...", projects.len());
         
+        let tx_clone = tx.clone();
+        let state_clone = state.clone();
+        
+        // Use a task set or similar to run in parallel
+        let mut handles = vec![];
+        for proj in projects.clone() {
+            let tx_log = tx.clone();
+            handles.push(tokio::task::spawn_blocking(move || {
+                let report = check_project(&proj);
+                let log_msg = serde_json::json!({
+                    "event": "NewLog",
+                    "log": {
+                        "timestamp": chrono::Local::now().format("%H:%M:%S").to_string(),
+                        "sender": "HealthWorker",
+                        "content": format!("Checked: {}", proj.name)
+                    }
+                });
+                let _ = tx_log.send(log_msg.to_string());
+                report
+            }));
+        }
+
         let mut reports = Vec::new();
-        for proj in projects {
-            // Perform check
-            let report = check_project(&proj);
-            reports.push(report);
+        for handle in handles {
+            if let Ok(report) = handle.await {
+                reports.push(report);
+            }
         }
 
         // 2. Update state with new reports
         {
-            let mut s = state.write().await;
+            let mut s = state_clone.write().await;
             s.health_reports = reports.clone();
             println!("[Daemon] Health scan complete. Reports updated.");
             
@@ -43,9 +65,10 @@ pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast:
                 "health_reports": s.health_reports,
                 "active_agents": s.active_agents,
                 "index_ready": s.index.is_some(),
-                "handover_count": s.handover_count
+                "handover_count": s.handover_count,
+                "pending_file_changes": s.pending_file_changes
             });
-            let _ = tx.send(msg.to_string());
+            let _ = tx_clone.send(msg.to_string());
         }
 
         // Wait before next scan (e.g., 5 minutes)

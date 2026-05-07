@@ -252,6 +252,18 @@ impl McpServer {
                         "type": "object",
                         "properties": {}
                     }
+                },
+                {
+                    "name": "semantic_search",
+                    "description": "Semantic (intent-aware) search across the entire Dev Ops workspace. Finds relevant code, docs, and notes by meaning, not just keywords. Uses local vector embeddings — no data leaves the machine.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": { "type": "string", "description": "Natural language search query" },
+                            "top_k": { "type": "integer", "description": "Number of results to return (default 8, max 20)" }
+                        },
+                        "required": ["query"]
+                    }
                 }
             ]
         }))
@@ -262,12 +274,13 @@ impl McpServer {
         let args = &params["arguments"];
 
         match name {
-            "update_state"  => self.tool_update_state(args),
-            "handover"      => self.tool_handover(args),
-            "add_task"      => self.tool_add_task(args),
-            "get_health"    => self.tool_get_health(args),
-            "list_projects" => self.tool_list_projects(args),
-            "get_stats"     => self.tool_get_stats(),
+            "update_state"    => self.tool_update_state(args),
+            "handover"        => self.tool_handover(args),
+            "add_task"        => self.tool_add_task(args),
+            "get_health"      => self.tool_get_health(args),
+            "list_projects"   => self.tool_list_projects(args),
+            "get_stats"       => self.tool_get_stats(),
+            "semantic_search" => self.tool_semantic_search(args),
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
@@ -488,6 +501,55 @@ impl McpServer {
             "content": [{
                 "type": "text",
                 "text": serde_json::to_string_pretty(&stats).unwrap_or_default()
+            }]
+        }))
+    }
+
+    fn tool_semantic_search(&self, args: &Value) -> Result<Value, String> {
+        let query = args["query"].as_str().ok_or("missing query")?;
+        let top_k = args["top_k"].as_u64().unwrap_or(8).min(20) as usize;
+
+        // Initialise Cortex (loads stored index from disk)
+        let mut cortex = crate::cortex::Cortex::init().unwrap();
+
+        // Incremental index of the workspace
+        let _indexed = cortex.index_workspace(&self.config.dev_ops_path)
+            .unwrap_or(0);
+
+        // Semantic search
+        let vector_hits = cortex.search(query, top_k)
+            .map_err(|e| format!("Search failed: {e}"))?;
+
+        // Also run BM25 for hybrid RRF
+        let bm25_hits = {
+            let idx = crate::indexer::ProjectIndex::build(&self.config.dev_ops_path)
+                .map_err(|e| format!("BM25 index build failed: {e}"))?;
+            idx.search(query)
+        };
+
+        let fused = crate::hybrid_search::fuse(bm25_hits, vector_hits, top_k);
+
+        let results: Vec<serde_json::Value> = fused.iter().map(|r| {
+            json!({
+                "path": r.path.to_string_lossy(),
+                "project": r.project,
+                "snippet": r.snippet,
+                "line": r.start_line,
+                "rrf_score": format!("{:.4}", r.rrf_score),
+                "source": r.source.label(),
+            })
+        }).collect();
+
+        let stats = cortex.chunk_count();
+        let summary = format!(
+            "Semantic search for '{}' -> {} result(s) (index: {} chunks, {} files)",
+            query, results.len(), stats, cortex.file_count()
+        );
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": format!("{}\n\n{}", summary, serde_json::to_string_pretty(&results).unwrap_or_default())
             }]
         }))
     }

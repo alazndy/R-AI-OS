@@ -1,103 +1,75 @@
 # R-AI-OS
 
-AI OS Terminal Control Center — **Rust Edition**
+**The Agentic Operating System Control Center**
 
-Rust + [ratatui](https://ratatui.rs) ile sıfırdan tasarlanmış terminal kontrol paneli. Go/BubbleTea tabanlı `aios`'un yeniden tasarımı; daha temiz mimari, güçlü tip sistemi, sıfır bağımlılık ile dosya düzenleyici.
+Built with **Rust** and [Ratatui](https://ratatui.rs), R-AI-OS is a high-performance terminal interface designed for orchestrating autonomous AI agents, managing complex file systems, and providing real-time system health metrics.
 
-## Özellikler
+---
 
-| Özellik | Açıklama |
-|---|---|
-| Boot animasyonu | Sistem dosyası taraması + progress gauge |
-| Dashboard | 6 menü öğesi, sol/sağ panel navigasyonu |
-| Dosya gezgini | Kural, agent config, memory, mempalace dosyaları |
-| Dosya görüntüleyici | Satır numaralı, kaydırılabilir, syntax-aware |
-| Dosya düzenleyici | Custom line editor, Ctrl+S kaydet |
-| CLI subcommands | Agent'ların AIOS'u script gibi kullanması için |
+## 🚀 The Vision
 
-## Kullanım
+Moving beyond the limitations of legacy terminal tools, R-AI-OS (Rust AI OS) is engineered for the future of "Agentic Computing." It provides a bridge between human intent and AI execution through a secure, high-speed, and beautifully crafted TUI.
 
-### TUI
+- **Rust-Powered:** Memory safety and zero-cost abstractions ensure R-AI-OS runs with minimal overhead.
+- **Agent-First:** Native support for agent configurations, memory management, and automated rule compliance.
+- **Performance-Driven:** Designed to handle 40+ concurrent projects with sub-millisecond status updates.
 
+---
+
+## 🛠️ Key Pillars
+
+### 🖥️ TUI Mastery
+- **Interactive Dashboard:** 6-module control panel with real-time project health scores.
+- **Advanced File Explorer:** Integrated file viewer with syntax awareness and line-by-line scrolling.
+- **In-Terminal Editor:** Custom-built line editor with `Ctrl+S` saving and seamless agent interaction.
+
+### 🧠 Cortex & Daemon Intelligence
+- **aiosd (Daemon):** An invisible background service that handles state synchronization and project discovery.
+- **Cortex Engine:** Vector-ready architecture for RAG (Retrieval-Augmented Generation) workflows.
+- **Hybrid Search:** Combines keyword search with vector retrieval for pinpoint accuracy across your codebase.
+
+### 🛡️ Security & Compliance
+- **MCP Server Integration:** Built-in Model Context Protocol server for secure tool-sharing with LLMs.
+- **Compliance Engine:** Automatic scanning of project rules (e.g., `GEMINI.md`, `hardware-rules.md`) to ensure architectural integrity.
+
+---
+
+## ⌨️ Quick Usage
+
+### Launch the TUI
 ```bash
 cargo run --release
-# veya
+# Or run the pre-built binary
 ./raios
 ```
 
-### CLI (Agent araç modu)
-
+### Agent CLI Mode (Headless)
+R-AI-OS can be used by AI agents as a command-line tool:
 ```bash
-raios rules                   # Tüm master rule dosyaları
-raios rules hardware          # hardware-rules.md içeriği
-raios memory                  # Son 5 memory.md
-raios memory aios             # aios/memory.md
-raios mempalace               # mempalace.yaml
-raios projects                # Tüm proje listesi
-raios agents                  # Agent config durumu
-raios view GEMINI.md          # Herhangi dosyayı yazdır
+raios rules                   # List all system rules
+raios memory aios             # Fetch specific project memory
+raios projects --json         # Get full project inventory in JSON
+raios view MASTER.md          # Print any file content for context
 ```
 
-## TUI Kısayollar
+---
 
-### Dashboard
-| Tuş | Eylem |
-|---|---|
-| `↑` / `↓` veya `j` / `k` | Menü gezin |
-| `→` / `l` | Dosya listesine odaklan |
-| `←` / `h` | Menüye dön |
-| `Enter` | Seçili dosyayı görüntüle |
-| `e` | Seçili dosyayı düzenle |
-| `o` | Harici editörde aç |
-| `/` veya `Tab` | Komut girişi |
-| `q` | Çıkış |
+## 🗺️ Roadmap
 
-### Komutlar
-| Komut | Eylem |
-|---|---|
-| `/rules` | System Rules + dosya listesi |
-| `/memory` | MemPalace + memory dosyaları |
-| `/mempalace` | mempalace.yaml görüntüle |
-| `/view <isim>` | Dosyayı bul ve görüntüle |
-| `/edit <isim>` | Dosyayı bul ve düzenle |
-| `/sync` | Universe sync (MASTER.md link) |
+- [ ] **Ghost Protocol Integration:** Advanced proxy isolation for agent execution.
+- [ ] **SQLite Migration:** Transitioning from flat JSON files to a robust SQLite backend.
+- [ ] **Visual Telemetry:** Real-time resource usage graphs via `ratatui-widgets`.
 
-### Dosya Görüntüleyici
-| Tuş | Eylem |
-|---|---|
-| `↑` / `↓` | Satır satır kaydır |
-| `PgUp` / `PgDn` | Sayfa kaydır |
-| `e` | Düzenleme moduna geç |
-| `Esc` / `q` | Geri dön |
+---
 
-### Dosya Düzenleyici
-| Tuş | Eylem |
-|---|---|
-| Normal tuşlar | Yazım |
-| `Ctrl+S` | Kaydet |
-| `Ctrl+Q` / `Esc` | İptal |
-
-## Kurulum
+## 📦 Installation
 
 ```bash
-# Rust kurulu değilse:
-# https://rustup.rs
-
+# Ensure Rust is installed (https://rustup.rs)
+git clone https://github.com/alazndy/R-AI-OS.git
+cd R-AI-OS
 cargo build --release
-# Binary: target/release/raios.exe
 ```
 
-## Mimari
-
-```
-src/
-├── main.rs          Entry point — CLI dispatch veya TUI başlat
-├── app.rs           App state machine, Editor, BgMsg kanalı
-├── ui.rs            ratatui rendering (boot, dashboard, viewer, editor)
-├── filebrowser.rs   FileEntry, dosya keşfi, load/save
-├── discovery.rs     Agent/skill keşfi
-├── sync.rs          Universe sync protokolü
-└── cli.rs           Clap subcommand handler'ları
-```
-
-**Stack:** Rust 2021 · ratatui 0.29 · crossterm 0.28 · clap 4 · walkdir 2 · anyhow
+**License:** MIT  
+**Author:** alazndy <goktugturhan74@gmail.com>

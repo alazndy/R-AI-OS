@@ -80,6 +80,17 @@ pub enum Commands {
     },
     /// Show workspace portfolio statistics
     Stats,
+    /// Search across the entire Dev Ops workspace (Semantic + BM25)
+    Search {
+        /// The search query
+        query: String,
+        /// Number of results to return
+        #[arg(short, long, default_value = "8")]
+        top_k: usize,
+        /// Force full re-indexing before search
+        #[arg(long)]
+        reindex: bool,
+    },
     /// Run OWASP security scan on one or all projects
     Security {
         /// Filter to a single project by name
@@ -154,6 +165,9 @@ pub fn run(cli: Cli) {
         }
         Commands::Stats => {
             cmd_stats(&cfg.dev_ops_path, cli.json);
+        }
+        Commands::Search { query, top_k, reindex } => {
+            cmd_search(&query, top_k, reindex, &cfg.dev_ops_path, cli.json);
         }
         Commands::Security { project, full, path } => {
             cmd_security(project, full, path, &cfg.dev_ops_path, cli.json);
@@ -627,5 +641,64 @@ fn cmd_security(
 
     if !full && all_reports.iter().any(|(_, _, r)| !r.issues.is_empty()) {
         println!("\nUse --full to see individual issues.");
+    }
+}
+
+fn cmd_search(query: &str, top_k: usize, _reindex: bool, dev_ops: &Path, json: bool) {
+    if !json {
+        println!("🧠 Cortex: Indexing workspace...");
+    }
+
+    // 1. Initialise & Index
+    let mut cortex = crate::cortex::Cortex::init().unwrap();
+    let _ = cortex.index_workspace(dev_ops);
+
+    // 2. Semantic Hits
+    let vector_hits = cortex.search(query, top_k).unwrap_or_default();
+
+    // 3. BM25 Hits
+    let bm25_hits = {
+        let idx = crate::indexer::ProjectIndex::build(dev_ops).unwrap();
+        idx.search(query)
+    };
+
+    // 4. Hybrid Fusion (RRF)
+    let fused = crate::hybrid_search::fuse(bm25_hits, vector_hits, top_k);
+
+    if json {
+        let results: Vec<serde_json::Value> = fused.iter().map(|r| {
+            serde_json::json!({
+                "path": r.path.to_string_lossy(),
+                "project": r.project,
+                "snippet": r.snippet,
+                "line": r.start_line,
+                "score": r.rrf_score,
+                "source": r.source.label()
+            })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&results).unwrap());
+        return;
+    }
+
+    println!("\nSearch Results for: '{}'", query);
+    println!("{}", "─".repeat(72));
+
+    if fused.is_empty() {
+        println!("No results found.");
+        return;
+    }
+
+    for r in fused {
+        let source_tag = match r.source {
+            crate::hybrid_search::ResultSource::VectorOnly => "🧠 Semantic",
+            crate::hybrid_search::ResultSource::BM25Only   => "🔍 Keyword ",
+            crate::hybrid_search::ResultSource::Hybrid     => "🔗 Hybrid  ",
+        };
+
+        println!("[{}] {:<30} (score: {:.4})", source_tag, r.project, r.rrf_score);
+        println!("  Path: {}", r.path.to_string_lossy());
+        println!("  Line: {}", r.start_line);
+        println!("  Snippet: \"{}...\"", r.snippet.chars().take(120).collect::<String>().replace('\n', " "));
+        println!();
     }
 }

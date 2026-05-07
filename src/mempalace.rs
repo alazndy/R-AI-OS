@@ -48,52 +48,35 @@ pub fn build(dev_ops: &Path) -> Vec<MemRoom> {
 }
 
 fn scan_projects(room_path: &Path) -> Vec<MemProject> {
-    // Two-pass scan: depth 1 then depth 2.
-    // If a depth-1 dir IS a project root, add it and do NOT recurse into it.
-    // If a depth-1 dir is NOT a project (i.e. it's a sub-category like "CLI_Tools"),
-    // scan its immediate children as potential projects.
-    // This prevents monorepos and project internals from being counted as separate projects.
     let mut projects: Vec<(MemProject, SystemTime)> = Vec::new();
-
-    let Ok(level1_iter) = std::fs::read_dir(room_path) else { return vec![] };
-
-    for entry1 in level1_iter.filter_map(|e| e.ok()) {
-        let Ok(ft) = entry1.file_type() else { continue };
-        if !ft.is_dir() { continue; }
-
-        let name1 = entry1.file_name().to_string_lossy().into_owned();
-        if name1.starts_with('.') || is_skip_dir(&name1) { continue; }
-
-        let path1 = entry1.path();
-
-        if is_project_root(&path1) {
-            // Level-1 dir is itself a project — stop here, don't go deeper
-            if let Some(proj) = make_project(path1) {
-                projects.push(proj);
-            }
-        } else {
-            // Level-1 dir is a sub-category (e.g. "CLI_Tools", "Projects") — scan its children
-            let Ok(level2_iter) = std::fs::read_dir(&path1) else { continue };
-
-            for entry2 in level2_iter.filter_map(|e| e.ok()) {
-                let Ok(ft2) = entry2.file_type() else { continue };
-                if !ft2.is_dir() { continue; }
-
-                let name2 = entry2.file_name().to_string_lossy().into_owned();
-                if name2.starts_with('.') || is_skip_dir(&name2) { continue; }
-
-                let path2 = entry2.path();
-                if is_project_root(&path2) {
-                    if let Some(proj) = make_project(path2) {
-                        projects.push(proj);
-                    }
-                }
-            }
-        }
-    }
-
+    recursive_scan(room_path, &mut projects, 0);
+    
     projects.sort_by(|a, b| b.1.cmp(&a.1));
     projects.into_iter().map(|(p, _)| p).collect()
+}
+
+fn recursive_scan(current_path: &Path, projects: &mut Vec<(MemProject, SystemTime)>, depth: usize) {
+    if depth > 4 { return; } // Safety limit
+
+    let Ok(entries) = std::fs::read_dir(current_path) else { return };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let Ok(ft) = entry.file_type() else { continue };
+        if !ft.is_dir() { continue; }
+
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || is_skip_dir(&name) { continue; }
+
+        let path = entry.path();
+        if is_project_root(&path) {
+            if let Some(proj) = make_project(path) {
+                projects.push(proj);
+            }
+            // Once a project root is found, do NOT recurse into it to avoid finding sub-components as projects
+        } else {
+            recursive_scan(&path, projects, depth + 1);
+        }
+    }
 }
 
 fn is_skip_dir(name: &str) -> bool {
@@ -104,14 +87,33 @@ fn is_skip_dir(name: &str) -> bool {
 }
 
 fn is_project_root(path: &Path) -> bool {
-    path.join(".git").exists()
-        || path.join("memory.md").exists()
+    // A folder is a project root if it has code-specific markers
+    let has_code_marker = path.join(".git").exists()
         || path.join("Cargo.toml").exists()
         || path.join("package.json").exists()
         || path.join("go.mod").exists()
         || path.join("pyproject.toml").exists()
         || path.join("platformio.ini").exists()
-        || path.join(".agents").exists()
+        || path.join(".agents").exists();
+
+    let has_memory = path.join("memory.md").exists();
+
+    // If it has code markers, it's definitely a project.
+    // If it ONLY has memory.md, it might be a category folder.
+    // We check if it has a 'src' folder or other typical project structure to be sure.
+    if has_code_marker {
+        return true;
+    }
+
+    if has_memory {
+        // Look for a 'src', 'app', 'lib', or 'scripts' folder to confirm it's a project, not a category
+        return path.join("src").exists() 
+            || path.join("app").exists() 
+            || path.join("lib").exists() 
+            || path.join("scripts").exists();
+    }
+
+    false
 }
 
 fn make_project(path: PathBuf) -> Option<(MemProject, SystemTime)> {

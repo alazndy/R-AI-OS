@@ -43,6 +43,12 @@ impl Server {
             super::git::start_git_worker(git_state, git_tx).await;
         });
 
+        let cortex_tx_rx = tx.subscribe();
+        let cortex_state = self.state.clone();
+        tokio::spawn(async move {
+            super::cortex::start_cortex_worker(cortex_state, cortex_tx_rx).await;
+        });
+
         // Start file watcher
         let config = Config::load().unwrap_or_else(|| Config {
             dev_ops_path: PathBuf::from(""),
@@ -130,6 +136,41 @@ impl Server {
                                             let _ = writer.write_all(response.as_bytes()).await;
                                         }
                                     }
+                                } else if v["command"] == "VectorSearch" {
+                                    if let Some(query) = v["query"].as_str() {
+                                        let top_k = v["top_k"].as_u64().unwrap_or(10) as usize;
+                                        
+                                        // 1. Semantic hits
+                                        let mut cortex = crate::cortex::Cortex::init().unwrap(); // Fallback handles this
+                                        let vector_hits = cortex.search(query, top_k).unwrap_or_default();
+                                        
+                                        // 2. BM25 hits
+                                        let bm25_hits = {
+                                            let s = state_for_client.read().await;
+                                            if let Some(ref idx) = s.index {
+                                                idx.search(query)
+                                            } else {
+                                                vec![]
+                                            }
+                                        };
+
+                                        // 3. Hybrid Fuse
+                                        let fused = crate::hybrid_search::fuse(bm25_hits, vector_hits, top_k);
+                                        
+                                        let results: Vec<serde_json::Value> = fused.iter().map(|r| {
+                                            serde_json::json!({
+                                                "path": r.path.to_string_lossy(),
+                                                "project": r.project,
+                                                "snippet": r.snippet,
+                                                "line": r.start_line,
+                                                "score": r.rrf_score,
+                                                "source": r.source.label()
+                                            })
+                                        }).collect();
+
+                                        let response = format!("{{\"event\":\"VectorResults\",\"results\":{}}}\n", serde_json::to_string(&results).unwrap());
+                                        let _ = writer.write_all(response.as_bytes()).await;
+                                    }
                                 } else if v["command"] == "Handover" {
                                     let target = v["target"].as_str().unwrap_or("unknown");
                                     let instruction = v["instruction"].as_str().unwrap_or("");
@@ -165,15 +206,16 @@ impl Server {
                                     let _ = writer.write_all(response.as_bytes()).await;
                                 } else if v["command"] == "GetState" {
                                     let s = state_for_client.read().await;
-                                    let response = format!("{{\"event\":\"StateSync\", \"projects\":{}, \"health_reports\":{}, \"active_agents\":{}, \"index_ready\":{}, \"handover_count\":{}, \"pending_file_changes\":{}}}\n",
-                                        serde_json::to_string(&s.projects).unwrap(),
-                                        serde_json::to_string(&s.health_reports).unwrap(),
-                                        serde_json::to_string(&s.active_agents).unwrap(),
-                                        s.index.is_some(),
-                                        s.handover_count,
-                                        serde_json::to_string(&s.pending_file_changes).unwrap()
-                                    );
-                                    let _ = writer.write_all(response.as_bytes()).await;
+                                    let response = serde_json::json!({
+                                        "event": "StateSync",
+                                        "projects": s.projects,
+                                        "health_reports": s.health_reports,
+                                        "active_agents": s.active_agents,
+                                        "index_ready": s.index.is_some(),
+                                        "handover_count": s.handover_count,
+                                        "pending_file_changes": s.pending_file_changes
+                                    });
+                                    let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
                                 } else if v["command"] == "RequestFileChange" {
                                     let mut s = state_for_client.write().await;
                                     let approval = crate::daemon::state::FileChangeApproval {
