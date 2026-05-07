@@ -1,49 +1,57 @@
 # R-AI-OS Memory
 
 ## Son Durum
-- **Version:** v0.9.0 → v1.0.0 (pre-release, feature-complete)
-- **Status:** 6 yeni özellik eklendi: 3 CLI subcommand + 3 MCP tool + 2 TUI iyileştirmesi. Derleme başarılı.
-- **Aktif agentlar:** Gemini CLI + Claude Code + Antigravity
-- **Durum:** Feature branch tamamlandı, commit + PR bekliyor.
+- **Version:** v1.1.0
+- **Status:** Stabil. 6 yeni özellik + 3 kritik fix tamamlandı.
+- **Aktif agentlar:** Claude Code
+- **Durum:** Binary `.cargo/bin` ve `.aios` dizinlerine deploy edildi.
+
+## Claude
+### Yaptıkları
+- **v1.0.0 Features (6 özellik):**
+  - `raios commit [--push] [--dry-run]` — toplu dirty proje commit
+  - `raios stats [--json]` — portfolio grade/dirty/kategori istatistikleri
+  - `raios new <name> [--category] [--github]` — MASTER kurallarına uygun proje scaffold
+  - Dashboard Quick Stats widget (grade %, dirty, local-only sayıları)
+  - All Projects sort (`s` tuşu): Name / Grade / Dirty / Category / Status
+  - MCP: `get_health`, `list_projects`, `get_stats` yeni toollar
+- **v1.1.0 Fixes (3 fix):**
+  - `app/ipc.rs`: `println!` kaldırıldı, retry loop eklendi (8s, max 10 deneme)
+  - `mempalace.rs`: WalkDir max_depth(4) → 2-level akıllı scan (monorepo içleri artık proje sayılmıyor)
+  - `entities.rs`: discover artık scanner'ı kaynak kabul ediyor, ghost kayıtlar otomatik temizleniyor (98 → 40 proje)
+
+### Yapacakları
+- [ ] `raios stats` çalışma süresi optimizasyonu (health check paralel yapılabilir)
+- [ ] Dashboard stats widget'ı daemon bağlıyken otomatik yenile
+
+### Notlar
+- `09_Archive/akort-legacy-archive` monorepo olduğu için tek proje olarak sayılıyor (doğru davranış)
+- `raios discover` sonrası entities.json ghost kayıtlardan temizleniyor
 
 ## Gemini
 ### Yaptıkları
-- **Büyük Çalışma Alanı Temizliği:** `Dev_Ops_New` altındaki 90 projenin tamamı tarandı, DIRTY olanlar commit edildi ve tüm sistem CLEAN durumuna getirildi.
-- **Hafıza Standardizasyonu:** `memory.md` dosyası eksik olan tüm projelere MASTER.md uyumlu standart şablonlar eklendi.
-- **GitHub Entegrasyonu (R-AI-OS v0.9.0):**
-    - `raios health` komutuna projelerin GitHub "remote origin" linklerini otomatik çekme ve gösterme desteği eklendi.
-    - `git_get_remote_url` fonksiyonu ile Git entegrasyonu güçlendirildi.
-- **GitHub Portfolyo Optimizasyonu:**
-    - 12 adet boş, 0KB veya çöp (locales vb.) repo GitHub'dan kalıcı olarak temizlendi.
-    - 6 farklı Akort repo'su (`akort`, `AkortAPP`, `Akort5` vb.) tek bir **`akort-legacy-archive`** repo'su altında birleştirildi.
-    - GitHub repo isimleri, yerel klasör isimleriyle senkronize edildi (`portfolio-site`, `Android-LCARS-Launcher` vb.).
-- **Sürüm Güncellemesi:** R-AI-OS versiyonu v0.9.0'a yükseltildi, binary'ler hem `.aios` hem de `.cargo/bin` dizinlerinde güncellendi.
-- **Daemon Yönetimi:** `aiosd` daemon'ı v0.9.0 sürümüyle yeniden başlatıldı ve IPC bağlantısı doğrulandı.
-
+- v0.9.0: GitHub Remote URL desteği, 90 projeyi CLEAN'e çekme, memory.md standardizasyonu
 ### Yapacakları
-- [ ] GitHub Sync: `entities.json` ile remote repo verilerini (commit sayısı, star) periyodik eşleme.
-- [ ] R-AI-OS Grade C İyileştirmesi: Kod içindeki `println!` ve `.unwrap()` yapılarını `log` ve güvenli hata yönetimi ile değiştirme.
-- [ ] Otomatik "Local Only" push: GitHub'da karşılığı olmayan önemli projeler için tek komutla repo açma/push.
-
-### Notlar
-- `raios health` çıktısı artık `| URL: https://github.com/...` formatını destekliyor.
-- GitHub yetkileri `delete_repo` scope'u ile genişletildi.
-- `Dev_Ops_New/09_Archive/akort-legacy-archive` artık tüm eski Akort versiyonlarının güvenli limanı.
+- [ ] GitHub Sync: entities.json ↔ remote repo verileri periyodik eşleme
 
 ## Plan
 ### Tamamlananlar
-- [x] v0.9.0: GitHub Remote URL Support in CLI
-- [x] Workspace-wide Auto-Cleanup (90 projects CLEAN)
-- [x] Memory.md Auto-Initialization for all projects
-- [x] GitHub Repository Pruning (12 trash repos deleted)
-- [x] Akort Project Consolidation (6 to 1 archive)
-- [x] Local-to-Remote Naming Sync (portfolio-site, etc.)
-- [x] Binary deployment to system PATH (.cargo/bin & .aios)
+- [x] v0.9.0: GitHub Remote URL + Workspace Auto-Cleanup
+- [x] v1.0.0: CLI Power Tools (commit/stats/new) + TUI Sort + MCP Tools
+- [x] v1.1.0: IPC reconnect loop, mempalace derinlik fix, entities prune
+
+### Devam Edenler
+- [ ] —
+
+### Sıradakiler
+- [ ] Parallel health check (`raios stats` hız optimizasyonu)
+- [ ] SQLite migration (entities.json → SQLite)
+- [ ] Cron/scheduled maintenance agents
 
 ## Karar Günlüğü
 | Tarih | Agent | Karar | Neden |
 |-------|-------|-------|-------|
-| 2026-05-07 | Gemini | Akort Consolidation | GitHub'daki kalabalığı azaltmak ve kod tarihçesini tek bir private arşivde korumak. |
-| 2026-05-07 | Gemini | GitHub-to-Local Naming | Yerel klasör isimleri daha güncel ve anlamlı olduğu için GitHub'daki repo isimlerini yerelle eşitleme. |
-| 2026-05-07 | Gemini | raios v0.9.0 Bump | GitHub link desteği gibi major bir CLI değişikliği sonrası sürüm yükseltme. |
-| 2026-05-07 | Gemini | Batch Commit Policy | Dağınık durumdaki 90 projeyi hızlıca takip edilebilir (CLEAN) hale getirmek için toplu senkronizasyon commit'i. |
+| 2026-05-07 | Gemini | Akort Consolidation | GitHub'daki kalabalığı azaltmak |
+| 2026-05-07 | Claude | 6 yeni özellik (v1.0.0) | CLI araçları + TUI + MCP |
+| 2026-05-07 | Claude | mempalace 2-level scan | 98 hayalet proje → 40 gerçek proje |
+| 2026-05-07 | Claude | IPC retry loop | TUI'ye println! basılıyordu, bağlantı tek seferdi |
