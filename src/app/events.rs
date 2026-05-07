@@ -230,30 +230,38 @@ impl App {
                 }
             }
             BgMsg::TransitionToSetup => {
-                // Auto-detect paths
                 use crate::config::Config as Cfg;
                 let detected = Cfg::auto_detect();
+
+                // Pre-fill wizard fields from auto-detect
+                if let Some(p) = &detected.dev_ops {
+                    self.wizard_dev_ops = p.to_string_lossy().into_owned();
+                }
+                if let Some(p) = &detected.master_md {
+                    self.wizard_master = p.to_string_lossy().into_owned();
+                }
+                if let Some(p) = &detected.vault_projects {
+                    self.wizard_vault = p.to_string_lossy().into_owned();
+                }
+
+                // Keep legacy setup_fields for compatibility
                 self.requirements = check_requirements();
                 self.setup_fields = vec![
-                    SetupField::new(
-                        "Dev Ops Path",
-                        "Root workspace folder (contains all your projects)",
-                    ).with_detected(detected.dev_ops),
-                    SetupField::new(
-                        "MASTER.md Path",
-                        "Central agent constitution file",
-                    ).with_detected(detected.master_md),
-                    SetupField::new(
-                        "Skills Path",
-                        "Agent skills directory (.agents/skills)",
-                    ).with_detected(detected.skills),
-                    SetupField::new(
-                        "Vault Projects Path",
-                        "Obsidian Vault Projects folder",
-                    ).with_detected(detected.vault_projects),
+                    SetupField::new("Dev Ops Path", "Root workspace").with_detected(detected.dev_ops.clone()),
+                    SetupField::new("MASTER.md Path", "Agent constitution").with_detected(detected.master_md.clone()),
+                    SetupField::new("Skills Path", ".agents/skills").with_detected(detected.skills.clone()),
+                    SetupField::new("Vault Projects Path", "Obsidian Vault").with_detected(detected.vault_projects.clone()),
                 ];
                 self.setup_cursor = 0;
+                self.wizard_step = crate::setup_wizard::WizardStep::Welcome;
                 self.state = AppState::Setup;
+
+                // Detect agents in background
+                let tx = self.tx.clone();
+                thread::spawn(move || {
+                    let status = crate::setup_wizard::detect_agents();
+                    tx.send(BgMsg::AgentStatusReady(status)).ok();
+                });
             }
             BgMsg::TransitionToDashboard => {
                 self.state = AppState::Dashboard;
@@ -466,6 +474,17 @@ impl App {
             BgMsg::StatsReady(stats) => {
                 self.stats_cache = Some(stats);
                 self.is_computing_stats = false;
+            }
+            BgMsg::AgentStatusReady(status) => {
+                self.wizard_agent_status = Some(status);
+            }
+            BgMsg::WizardActions(actions) => {
+                self.wizard_action_log.extend(actions);
+                self.wizard_running = false;
+            }
+            BgMsg::WizardDone => {
+                self.wizard_running = false;
+                self.wizard_step = crate::setup_wizard::WizardStep::Done;
             }
             BgMsg::FileChanged(path) => {
                 // Bouncing Limit takibi: _session_notes.md değiştiğinde ardışık HANDOVER kontrolü yap
@@ -986,58 +1005,218 @@ impl App {
     }
 
     fn handle_setup_key(&mut self, key: KeyEvent) -> Result<()> {
-        if self.setup_editing {
+        use crate::setup_wizard::WizardStep;
+
+        // Editing mode — capture text input
+        if self.wizard_editing {
             match key.code {
                 KeyCode::Enter => {
-                    self.setup_fields[self.setup_cursor].value = self.setup_input.clone();
-                    self.setup_fields[self.setup_cursor].auto_detected = false;
-                    self.setup_editing = false;
+                    self.wizard_commit_input();
+                    self.wizard_editing = false;
                 }
-                KeyCode::Esc => self.setup_editing = false,
-                KeyCode::Char(c) => self.setup_input.push(c),
-                KeyCode::Backspace => { self.setup_input.pop(); }
+                KeyCode::Esc => { self.wizard_editing = false; }
+                KeyCode::Char(c) => self.wizard_input.push(c),
+                KeyCode::Backspace => { self.wizard_input.pop(); }
                 _ => {}
             }
             return Ok(());
         }
 
+        // Running — ignore all keys
+        if self.wizard_running { return Ok(()); }
+
         match key.code {
-            KeyCode::Up => {
-                if self.setup_cursor > 0 { self.setup_cursor -= 1; }
+            KeyCode::Char('q') => self.should_quit = true,
+
+            // Navigate fields within a step
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.wizard_field_cursor > 0 { self.wizard_field_cursor -= 1; }
             }
-            KeyCode::Down => {
-                if self.setup_cursor + 1 < self.setup_fields.len() { self.setup_cursor += 1; }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.wizard_field_cursor += 1;
             }
-            KeyCode::Char('e') | KeyCode::Enter => {
-                self.setup_editing = true;
-            }
-            KeyCode::Char('s') => {
-                let all_filled = self.setup_fields.iter().all(|f| !f.value.is_empty());
-                if all_filled {
-                    let cfg = Config {
-                        dev_ops_path:   PathBuf::from(&self.setup_fields[0].value),
-                        master_md_path: PathBuf::from(&self.setup_fields[1].value),
-                        skills_path:    PathBuf::from(&self.setup_fields[2].value),
-                        vault_projects_path: PathBuf::from(&self.setup_fields[3].value),
-                    };
-                    match cfg.save() {
-                        Ok(()) => {
-                            self.config = cfg;
-                            self.state = AppState::Dashboard;
-                            self.execute_command("/sync")?;
-                        }
-                        Err(e) => {
-                            self.setup_status = Some(format!("Save error: {}", e));
-                        }
+
+            // Enter: begin editing or advance step
+            KeyCode::Enter => {
+                match &self.wizard_step {
+                    WizardStep::Welcome => {
+                        self.wizard_step = WizardStep::Workspace;
+                        self.wizard_field_cursor = 0;
                     }
-                } else {
-                    self.setup_status = Some("Please fill in all fields before saving.".into());
+                    WizardStep::Done => {
+                        // Apply config and open dashboard
+                        let dev_ops = PathBuf::from(&self.wizard_dev_ops);
+                        let master  = PathBuf::from(&self.wizard_master);
+                        let skills  = dev_ops.join(".agents").join("skills");
+                        let vault   = if self.wizard_vault.is_empty() { PathBuf::new() }
+                                      else { PathBuf::from(&self.wizard_vault) };
+                        if !dev_ops.as_os_str().is_empty() {
+                            let cfg = Config {
+                                dev_ops_path: dev_ops,
+                                master_md_path: master,
+                                skills_path: skills,
+                                vault_projects_path: vault,
+                            };
+                            let _ = cfg.save();
+                            self.config = cfg;
+                        }
+                        self.state = AppState::Dashboard;
+                        let tx = self.tx.clone();
+                        tx.send(BgMsg::TransitionToDashboard).ok();
+                    }
+                    WizardStep::Initialize => {
+                        self.wizard_run_initialize();
+                    }
+                    _ => {
+                        // Start editing current field
+                        self.wizard_start_edit();
+                    }
                 }
             }
-            KeyCode::Char('q') => self.should_quit = true,
+
+            // [s] — advance to next step (also runs current step's setup)
+            KeyCode::Char('s') => {
+                self.wizard_advance_step();
+            }
+
+            // [Tab] — skip/unskip agent steps
+            KeyCode::Tab => {
+                match self.wizard_step {
+                    WizardStep::Claude      => self.wizard_skip_claude      = !self.wizard_skip_claude,
+                    WizardStep::Gemini      => self.wizard_skip_gemini      = !self.wizard_skip_gemini,
+                    WizardStep::Antigravity => self.wizard_skip_antigravity = !self.wizard_skip_antigravity,
+                    _ => { self.wizard_advance_step(); }
+                }
+            }
+
             _ => {}
         }
         Ok(())
+    }
+
+    fn wizard_commit_input(&mut self) {
+        use crate::setup_wizard::WizardStep;
+        match self.wizard_step {
+            WizardStep::Workspace => {
+                match self.wizard_field_cursor {
+                    0 => self.wizard_dev_ops = self.wizard_input.clone(),
+                    1 => self.wizard_github  = self.wizard_input.clone(),
+                    2 => self.wizard_vault   = self.wizard_input.clone(),
+                    _ => {}
+                }
+            }
+            WizardStep::Master => {
+                self.wizard_master = self.wizard_input.clone();
+            }
+            _ => {}
+        }
+        self.wizard_input.clear();
+    }
+
+    fn wizard_start_edit(&mut self) {
+        use crate::setup_wizard::WizardStep;
+        self.wizard_input = match self.wizard_step {
+            WizardStep::Workspace => match self.wizard_field_cursor {
+                0 => self.wizard_dev_ops.clone(),
+                1 => self.wizard_github.clone(),
+                2 => self.wizard_vault.clone(),
+                _ => String::new(),
+            },
+            WizardStep::Master => self.wizard_master.clone(),
+            _ => return,
+        };
+        self.wizard_editing = true;
+    }
+
+    fn wizard_advance_step(&mut self) {
+        use crate::setup_wizard::WizardStep;
+        use std::path::Path;
+
+        // Run setup actions for current step before advancing
+        let dev_ops = PathBuf::from(&self.wizard_dev_ops);
+        let master  = PathBuf::from(&self.wizard_master);
+        let tx = self.tx.clone();
+        let github  = self.wizard_github.clone();
+        let skip_c  = self.wizard_skip_claude;
+        let skip_g  = self.wizard_skip_gemini;
+        let skip_a  = self.wizard_skip_antigravity;
+
+        match &self.wizard_step {
+            WizardStep::Workspace if !dev_ops.as_os_str().is_empty() => {
+                let tx2 = tx.clone();
+                let d = dev_ops.clone(); let gh = github.clone();
+                thread::spawn(move || {
+                    let actions = crate::setup_wizard::exec_workspace(&d, &gh);
+                    tx2.send(BgMsg::WizardActions(actions)).ok();
+                });
+            }
+            WizardStep::Master => {
+                if !master.as_os_str().is_empty() {
+                    let tx2 = tx.clone(); let m = master.clone(); let gh = github.clone();
+                    thread::spawn(move || {
+                        let actions = crate::setup_wizard::exec_master(&m, &gh);
+                        tx2.send(BgMsg::WizardActions(actions)).ok();
+                    });
+                }
+            }
+            WizardStep::Claude if !skip_c => {
+                let tx2 = tx.clone(); let d = dev_ops.clone(); let m = master.clone();
+                thread::spawn(move || {
+                    let actions = crate::setup_wizard::exec_claude(&d, &m);
+                    tx2.send(BgMsg::WizardActions(actions)).ok();
+                });
+            }
+            WizardStep::Gemini if !skip_g => {
+                let tx2 = tx.clone(); let m = master.clone();
+                thread::spawn(move || {
+                    let actions = crate::setup_wizard::exec_gemini(&m);
+                    tx2.send(BgMsg::WizardActions(actions)).ok();
+                });
+            }
+            WizardStep::Antigravity if !skip_a => {
+                let tx2 = tx.clone(); let d = dev_ops.clone(); let m = master.clone();
+                thread::spawn(move || {
+                    let actions = crate::setup_wizard::exec_antigravity(&d, &m);
+                    tx2.send(BgMsg::WizardActions(actions)).ok();
+                });
+            }
+            WizardStep::Skills => {
+                if !dev_ops.as_os_str().is_empty() {
+                    let tx2 = tx.clone(); let d = dev_ops.clone();
+                    thread::spawn(move || {
+                        let actions = crate::setup_wizard::exec_skills(&d);
+                        tx2.send(BgMsg::WizardActions(actions)).ok();
+                    });
+                }
+            }
+            _ => {}
+        }
+
+        self.wizard_step = self.wizard_step.next();
+        self.wizard_field_cursor = 0;
+    }
+
+    fn wizard_run_initialize(&mut self) {
+        use std::path::Path;
+        let dev_ops = PathBuf::from(&self.wizard_dev_ops);
+        let master  = PathBuf::from(&self.wizard_master);
+        let vault   = if self.wizard_vault.is_empty() { None }
+                      else { Some(PathBuf::from(&self.wizard_vault)) };
+        let skills  = dev_ops.join(".agents").join("skills");
+        let tx = self.tx.clone();
+
+        if dev_ops.as_os_str().is_empty() {
+            return;
+        }
+
+        self.wizard_running = true;
+        thread::spawn(move || {
+            let actions = crate::setup_wizard::exec_initialize(
+                &dev_ops, &master, &skills, vault.as_deref(),
+            );
+            tx.send(BgMsg::WizardActions(actions)).ok();
+            tx.send(BgMsg::WizardDone).ok();
+        });
     }
 
     fn handle_dashboard_key(&mut self, key: KeyEvent) -> Result<()> {

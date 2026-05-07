@@ -2,6 +2,7 @@ pub mod agent_runner;
 pub mod app;
 pub mod cli;
 pub mod new_project;
+pub mod setup_wizard;
 pub mod compliance;
 pub mod daemon;
 pub mod config;

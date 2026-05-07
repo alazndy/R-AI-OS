@@ -67,6 +67,9 @@ pub enum BgMsg {
         approval: crate::daemon::state::FileChangeApproval,
     },
     StatsReady(PortfolioStats),
+    AgentStatusReady(AgentStatus),
+    WizardActions(Vec<WizardAction>),
+    WizardDone,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +109,10 @@ impl SetupField {
         self
     }
 }
+
+// ─── Wizard ──────────────────────────────────────────────────────────────────
+
+pub use crate::setup_wizard::{WizardStep, WizardAction, AgentStatus};
 
 // ─── Project Sort Mode ───────────────────────────────────────────────────────
 

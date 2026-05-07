@@ -239,6 +239,22 @@ pub struct App {
     // Portfolio stats cache (computed in background on dashboard load)
     pub stats_cache: Option<PortfolioStats>,
     pub is_computing_stats: bool,
+
+    // Setup Wizard
+    pub wizard_step: WizardStep,
+    pub wizard_dev_ops: String,
+    pub wizard_master: String,
+    pub wizard_github: String,
+    pub wizard_vault: String,
+    pub wizard_field_cursor: usize,  // which input field is active in current step
+    pub wizard_editing: bool,
+    pub wizard_input: String,
+    pub wizard_agent_status: Option<crate::setup_wizard::AgentStatus>,
+    pub wizard_action_log: Vec<crate::setup_wizard::WizardAction>,
+    pub wizard_skip_claude: bool,
+    pub wizard_skip_gemini: bool,
+    pub wizard_skip_antigravity: bool,
+    pub wizard_running: bool,
 }
 
 impl App {
@@ -367,6 +383,20 @@ impl App {
             pending_change_cursor: 0,
             stats_cache: None,
             is_computing_stats: false,
+            wizard_step: WizardStep::default(),
+            wizard_dev_ops: String::new(),
+            wizard_master: String::new(),
+            wizard_github: String::new(),
+            wizard_vault: String::new(),
+            wizard_field_cursor: 0,
+            wizard_editing: false,
+            wizard_input: String::new(),
+            wizard_agent_status: None,
+            wizard_action_log: Vec::new(),
+            wizard_skip_claude: false,
+            wizard_skip_gemini: false,
+            wizard_skip_antigravity: false,
+            wizard_running: false,
         }
     }
 
