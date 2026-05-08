@@ -119,6 +119,14 @@ TODO
     let gitrepo_ok = std::fs::write(project_dir.join("gitrepo.md"), gitrepo_content).is_ok();
     steps.push(("Write gitrepo.md".into(), gitrepo_ok));
 
+    // 4b. Write .raios.yaml manifest
+    let manifest = format!(
+        "name: \"{}\"\ncategory: \"{}\"\nstack: unknown\ngithub: null\nstatus: active\n",
+        cfg.name, cfg.category
+    );
+    let manifest_ok = std::fs::write(project_dir.join(".raios.yaml"), manifest).is_ok();
+    steps.push(("Write .raios.yaml".into(), manifest_ok));
+
     // 5. git init
     let git_ok = Command::new("git")
         .arg("init")

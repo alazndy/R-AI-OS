@@ -87,29 +87,28 @@ fn is_skip_dir(name: &str) -> bool {
 }
 
 fn is_project_root(path: &Path) -> bool {
-    // A folder is a project root if it has code-specific markers
-    let has_code_marker = path.join(".git").exists()
+    // 1. .raios.yaml manifest = definitive project root (no ambiguity)
+    if path.join(".raios.yaml").exists() {
+        return true;
+    }
+
+    // 2. Code markers = project root
+    if path.join(".git").exists()
         || path.join("Cargo.toml").exists()
         || path.join("package.json").exists()
         || path.join("go.mod").exists()
         || path.join("pyproject.toml").exists()
         || path.join("platformio.ini").exists()
-        || path.join(".agents").exists();
-
-    let has_memory = path.join("memory.md").exists();
-
-    // If it has code markers, it's definitely a project.
-    // If it ONLY has memory.md, it might be a category folder.
-    // We check if it has a 'src' folder or other typical project structure to be sure.
-    if has_code_marker {
+        || path.join(".agents").exists()
+    {
         return true;
     }
 
-    if has_memory {
-        // Look for a 'src', 'app', 'lib', or 'scripts' folder to confirm it's a project, not a category
-        return path.join("src").exists() 
-            || path.join("app").exists() 
-            || path.join("lib").exists() 
+    // 3. memory.md + project-like structure = likely project (not a category folder)
+    if path.join("memory.md").exists() {
+        return path.join("src").exists()
+            || path.join("app").exists()
+            || path.join("lib").exists()
             || path.join("scripts").exists();
     }
 

@@ -272,6 +272,22 @@ pub fn scan_project(path: &Path) -> SecurityReport {
 // ─── Detection ────────────────────────────────────────────────────────────────
 
 fn detect_project_type(path: &Path) -> ProjectType {
+    // 1. Read .raios.yaml manifest first (authoritative)
+    if let Ok(content) = std::fs::read_to_string(path.join(".raios.yaml")) {
+        for line in content.lines() {
+            if let Some(rest) = line.strip_prefix("stack:") {
+                let stack = rest.trim().trim_matches('"');
+                return match stack {
+                    "rust"   => ProjectType::Rust,
+                    "node" | "nodejs" => ProjectType::NodeJs,
+                    "python" => ProjectType::Python,
+                    "web"    => ProjectType::Web,
+                    _        => ProjectType::Unknown,
+                };
+            }
+        }
+    }
+    // 2. Heuristic fallback
     if path.join("Cargo.toml").exists() { return ProjectType::Rust; }
     if path.join("package.json").exists() { return ProjectType::NodeJs; }
     if path.join("pyproject.toml").exists() || path.join("requirements.txt").exists() || path.join("setup.py").exists() {

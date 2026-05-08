@@ -1,6 +1,6 @@
 [package]
 name = "r-ai-os"
-version = "1.1.4"
+version = "1.1.6"
 edition = "2021"
 authors = ["alazndy <goktugturhan74@gmail.com>"]
 description = "AI OS Terminal Control Center — Rust Edition"
@@ -35,6 +35,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
 regex-lite = "0.1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+which = "6"
 # Cortex / Vector Engine — optional (enable with --features cortex)
 fastembed = { version = "3", features = ["online"], optional = true }
 instant-distance = "0.6"

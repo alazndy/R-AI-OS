@@ -40,12 +40,12 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
     let constitution_issues = check_constitution(path);
     let (graphify_done, graph_report) = check_graphify(path);
 
-    ProjectHealth {
+    let health = ProjectHealth {
         name: proj.name.clone(),
         path: path.clone(),
         status: proj.status.clone(),
         git_dirty,
-        remote_url,
+        remote_url: remote_url.clone(),
         compliance_score,
         compliance_grade: compliance_grade.to_string(),
         has_memory,
@@ -56,7 +56,26 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
         security_grade: None,
         security_issue_count: 0,
         security_critical: 0,
+    };
+
+    // Write to SQLite health_cache (best-effort, don't fail if DB unavailable)
+    if let Ok(conn) = crate::db::open_db() {
+        let path_str = path.to_string_lossy().to_string();
+        if let Some(project_id) = crate::db::project_id_for_path(&conn, &path_str) {
+            let _ = crate::db::upsert_health(
+                &conn, project_id,
+                compliance_grade,
+                compliance_score,
+                None, None,
+                0, 0,
+                git_dirty.unwrap_or(false),
+                has_memory,
+                remote_url.as_deref(),
+            );
+        }
     }
+
+    health
 }
 
 /// Run full security scan and attach results to a health report.
@@ -95,6 +114,84 @@ pub fn find_graphify_script(dev_ops: &Path) -> Option<PathBuf> {
         dev_ops.join("AI OS").join("graphify").join("src").join("graphify.py"),
     ];
     candidates.into_iter().find(|p| p.exists())
+}
+
+use std::process::Command;
+use crate::daemon::state::ValidationError;
+
+pub fn validate_file(path: &Path, proj: &EntityProject) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    // 1. Compliance Check (Security/Constitution)
+    if let Ok(content) = std::fs::read_to_string(path) {
+        let report = crate::compliance::check_file(path, &content);
+        for v in report.violations {
+            errors.push(ValidationError {
+                file: path.display().to_string(),
+                message: v.rule.to_string(),
+                line: Some(v.line),
+                source: "compliance".into(),
+            });
+        }
+    }
+
+    // 2. Language Specific Checks
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ext == "rs" {
+        // Run cargo check
+        if let Ok(cargo_errors) = run_cargo_check(&proj.local_path) {
+            errors.extend(cargo_errors);
+        }
+    }
+
+    errors
+}
+
+fn run_cargo_check(project_path: &Path) -> Result<Vec<ValidationError>, String> {
+    let output = Command::new("cargo")
+        .args(&["check", "--message-format=json"])
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut errors = Vec::new();
+
+    for line in stdout.lines() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            if v["reason"] == "compiler-message" {
+                let message = &v["message"];
+                let level = message["level"].as_str().unwrap_or("");
+                if level == "error" {
+                    let msg_text = message["message"].as_str().unwrap_or("Unknown error").to_string();
+                    let spans = message["spans"].as_array();
+                    if let Some(spans) = spans {
+                        for span in spans {
+                            if span["is_primary"].as_bool().unwrap_or(false) {
+                                let file = span["file_name"].as_str().unwrap_or("unknown").to_string();
+                                let line = span["line_start"].as_u64().map(|n| n as usize);
+                                errors.push(ValidationError {
+                                    file,
+                                    message: msg_text.clone(),
+                                    line,
+                                    source: "cargo check".into(),
+                                });
+                            }
+                        }
+                    } else {
+                        errors.push(ValidationError {
+                            file: "unknown".into(),
+                            message: msg_text,
+                            line: None,
+                            source: "cargo check".into(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(errors)
 }
 
 fn compute_compliance(path: &Path) -> (Option<u8>, &'static str) {

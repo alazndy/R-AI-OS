@@ -401,90 +401,67 @@ fn cmd_commit(
     }
 }
 
-fn cmd_stats(dev_ops: &std::path::Path, json: bool) {
-    use std::collections::HashMap;
+fn cmd_stats(_dev_ops: &std::path::Path, json: bool) {
+    let conn = match crate::db::open_db() {
+        Ok(c) => c,
+        Err(e) => { eprintln!("DB error: {}", e); return; }
+    };
 
-    let projects = crate::entities::load_entities(dev_ops);
-    let total = projects.len();
+    let s = match crate::db::query_stats(&conn) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("Stats query failed: {}", e); return; }
+    };
 
-    let mut active = 0usize;
-    let mut archived = 0usize;
-    let mut dirty = 0usize;
-    let mut no_memory = 0usize;
-    let mut local_only = 0usize;
-    let mut grade_a = 0usize;
-    let mut grade_b = 0usize;
-    let mut grade_c = 0usize;
-    let mut grade_d = 0usize;
-    let mut category_counts: HashMap<String, usize> = HashMap::new();
-
-    for p in &projects {
-        match p.status.as_str() {
-            "active" => active += 1,
-            "archived" | "legacy" => archived += 1,
-            _ => active += 1,
-        }
-        if p.github.is_none() { local_only += 1; }
-        if crate::filebrowser::git_is_dirty(&p.local_path) == Some(true) { dirty += 1; }
-        if !p.local_path.join("memory.md").exists() { no_memory += 1; }
-        let health = crate::health::check_project(p);
-        match health.compliance_grade.as_str() {
-            "A" => grade_a += 1,
-            "B" => grade_b += 1,
-            "C" => grade_c += 1,
-            _ => grade_d += 1,
-        }
-        *category_counts.entry(p.category.clone()).or_insert(0) += 1;
-    }
+    // Category breakdown (still needs a project scan for categories)
+    let top_cats: Vec<(String, i64)> = {
+        let mut stmt = conn.prepare(
+            "SELECT category, COUNT(*) AS n FROM projects GROUP BY category ORDER BY n DESC LIMIT 8"
+        ).unwrap();
+        stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,i64>(1)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    };
 
     if json {
-        #[derive(serde::Serialize)]
-        struct Stats {
-            total: usize, active: usize, archived: usize,
-            dirty: usize, no_memory: usize, local_only: usize,
-            grade_a: usize, grade_b: usize, grade_c: usize, grade_d: usize,
-            categories: HashMap<String, usize>,
-        }
-        let s = Stats { total, active, archived, dirty, no_memory, local_only,
-            grade_a, grade_b, grade_c, grade_d, categories: category_counts };
-        println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+        let out = serde_json::json!({
+            "total": s.total, "active": s.active, "archived": s.archived,
+            "dirty": s.dirty, "no_memory": s.no_memory, "local_only": s.no_github,
+            "avg_compliance": s.avg_compliance as u64,
+            "avg_security": s.avg_security as u64,
+            "grade_a": s.grade_a, "grade_b": s.grade_b,
+            "grade_c": s.grade_c, "grade_d": s.grade_d,
+        });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         return;
     }
 
-    fn bar(n: usize, total: usize, width: usize) -> String {
+    fn bar(n: i64, total: i64, width: usize) -> String {
         if total == 0 { return String::new(); }
-        let filled = (n * width) / total;
+        let filled = (n as usize * width) / total as usize;
         "█".repeat(filled)
     }
+    fn pct(n: i64, total: i64) -> i64 { if total > 0 { n * 100 / total } else { 0 } }
 
     println!("Portfolio Statistics — R-AI-OS v{}", env!("CARGO_PKG_VERSION"));
     println!("{}", "─".repeat(46));
-    println!("Total projects:      {:>5}", total);
-    println!("Active / Archived:   {:>5} / {}", active, archived);
-    println!("Dirty (uncommitted): {:>5}", dirty);
-    println!("No memory.md:        {:>5}", no_memory);
-    println!("Local only (no GH):  {:>5}", local_only);
+    println!("Total projects:      {:>5}", s.total);
+    println!("Active / Archived:   {:>5} / {}", s.active, s.archived);
+    println!("Dirty (uncommitted): {:>5}", s.dirty);
+    println!("No memory.md:        {:>5}", s.no_memory);
+    println!("Local only (no GH):  {:>5}", s.no_github);
+    println!("Avg compliance:      {:>4}/100", s.avg_compliance as u64);
+    println!("Avg security:        {:>4}/100", s.avg_security as u64);
     println!();
     println!("Grade Distribution:");
-    println!("  A (≥80): {:>4} projects  {} {}%",
-        grade_a, bar(grade_a, total, 24),
-        if total > 0 { grade_a * 100 / total } else { 0 });
-    println!("  B (≥60): {:>4} projects  {} {}%",
-        grade_b, bar(grade_b, total, 24),
-        if total > 0 { grade_b * 100 / total } else { 0 });
-    println!("  C (≥40): {:>4} projects  {} {}%",
-        grade_c, bar(grade_c, total, 24),
-        if total > 0 { grade_c * 100 / total } else { 0 });
-    println!("  D  (<40): {:>4} projects  {} {}%",
-        grade_d, bar(grade_d, total, 24),
-        if total > 0 { grade_d * 100 / total } else { 0 });
+    println!("  A (≥80): {:>4} projects  {} {}%", s.grade_a, bar(s.grade_a, s.total, 24), pct(s.grade_a, s.total));
+    println!("  B (≥60): {:>4} projects  {} {}%", s.grade_b, bar(s.grade_b, s.total, 24), pct(s.grade_b, s.total));
+    println!("  C (≥40): {:>4} projects  {} {}%", s.grade_c, bar(s.grade_c, s.total, 24), pct(s.grade_c, s.total));
+    println!("  D  (<40): {:>4} projects  {} {}%", s.grade_d, bar(s.grade_d, s.total, 24), pct(s.grade_d, s.total));
     println!();
     println!("Top Categories:");
-    let mut cats: Vec<_> = category_counts.iter().collect();
-    cats.sort_by(|a, b| b.1.cmp(a.1));
-    for (cat, count) in cats.iter().take(8) {
-        let display = cat.replace('_', " ");
-        println!("  {:<28} {}", display, count);
+    for (cat, count) in &top_cats {
+        println!("  {:<28} {}", cat.replace('_', " "), count);
     }
 }
 
