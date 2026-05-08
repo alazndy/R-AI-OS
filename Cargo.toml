@@ -43,3 +43,6 @@ instant-distance = "0.6"
 
 [features]
 cortex = ["fastembed"]
+
+[dev-dependencies]
+tempfile = "3"

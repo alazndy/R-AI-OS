@@ -99,7 +99,7 @@ const PATTERNS: &[Pattern] = &[
     Pattern {
         owasp: "A02", title: "Hardcoded API key / secret",
         severity: Severity::Critical,
-        pattern: r#"(?i)(api_key|api_secret|secret_key|auth_token|access_token|private_key)\s*[=:]\s*['"][a-zA-Z0-9_\-]{16,}['"]"#,
+        pattern: r#"(?i)(api_key|api_secret|secret_key|auth_token|access_token|private_key)\s*[=:]\s*['"][a-zA-Z0-9_-]{16,}['"]"#,
         exts: &["rs","py","ts","tsx","js","jsx","go","env","toml","yaml","yml","json"],
     },
     Pattern {
@@ -239,6 +239,56 @@ const SKIP_DIRS: &[&str] = &[
     ".next", "__pycache__", "vendor", ".turbo",
 ];
 
+// ─── semgrep tool dispatch ────────────────────────────────────────────────────
+
+/// Run semgrep if available. Returns true if it ran (even with 0 findings).
+fn run_semgrep(path: &Path, issues: &mut Vec<SecurityIssue>) -> bool {
+    run_semgrep_inner(path, issues).unwrap_or(false)
+}
+
+fn run_semgrep_inner(path: &Path, issues: &mut Vec<SecurityIssue>) -> Option<bool> {
+    let semgrep_path = which::which("semgrep").ok()?;
+
+    let output = Command::new(&semgrep_path)
+        .args([
+            "--config", "p/owasp-top-ten",
+            "--json", "--quiet", "--no-rewrite-rule-ids",
+            path.to_str().unwrap_or("."),
+        ])
+        .output().ok()?;
+
+    if !output.status.success() && output.stdout.is_empty() { return Some(false); }
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let results = json["results"].as_array()?;
+
+    for r in results {
+        let msg = r["extra"]["message"].as_str().unwrap_or("semgrep finding").to_string();
+        let sev = match r["extra"]["severity"].as_str().unwrap_or("WARNING") {
+            "ERROR"   => Severity::Critical,
+            "WARNING" => Severity::High,
+            "INFO"    => Severity::Low,
+            _         => Severity::Medium,
+        };
+        let owasp_tag = r["extra"]["metadata"]["owasp"].as_str().unwrap_or("");
+        let owasp: &'static str = ["A01","A02","A03","A04","A05","A06","A07","A08","A09","A10"]
+            .iter()
+            .find(|&&o| owasp_tag.contains(o))
+            .copied()
+            .unwrap_or("A00");
+
+        issues.push(SecurityIssue {
+            owasp,
+            title: "semgrep finding",
+            severity: sev,
+            file: r["path"].as_str().map(PathBuf::from),
+            line: r["start"]["line"].as_u64().map(|l| l as usize),
+            snippet: Some(msg),
+        });
+    }
+    Some(!results.is_empty() || output.status.success())
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 pub fn scan_project(path: &Path) -> SecurityReport {
@@ -246,17 +296,16 @@ pub fn scan_project(path: &Path) -> SecurityReport {
     let mut issues = Vec::new();
     let mut checks_run = 0;
 
-    // 1. Static pattern scan
+    // 1. Static scan — always runs (fast, no deps, deterministic)
     static_scan(path, &mut issues, &mut checks_run);
-
-    // 2. Check .env committed to git
     check_env_in_git(path, &mut issues);
     checks_run += 1;
 
+    // 2. semgrep — additional layer if installed (appends findings, doesn't replace)
+    if run_semgrep(path, &mut issues) { checks_run += 1; }
+
     // 3. Dependency audit
     let audit_output = run_dependency_audit(path, &project_type);
-
-    // 4. Parse audit output for issues
     if let Some(ref output) = audit_output {
         parse_audit_issues(output, &project_type, &mut issues);
     }
@@ -304,8 +353,15 @@ fn static_scan(root: &Path, issues: &mut Vec<SecurityIssue>, checks_run: &mut us
         .max_depth(6)
         .into_iter()
         .filter_entry(|e| {
+            // Never filter the scan root itself (depth 0)
+            if e.depth() == 0 { return true; }
             let n = e.file_name().to_string_lossy();
-            !n.starts_with('.') && !SKIP_DIRS.contains(&n.as_ref())
+            // Only skip hidden DIRECTORIES and tooling dirs — not hidden files
+            if e.file_type().is_dir() {
+                !n.starts_with('.') && !SKIP_DIRS.contains(&n.as_ref())
+            } else {
+                true
+            }
         })
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file());
@@ -519,5 +575,113 @@ pub fn severity_emoji(s: &Severity) -> &'static str {
         Severity::Medium   => "🟡",
         Severity::Low      => "🔵",
         Severity::Info     => "⚪",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_file(dir: &std::path::Path, name: &str, content: &str) {
+        fs::write(dir.join(name), content).unwrap();
+    }
+
+    #[test]
+    fn hardcoded_api_key_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_file(tmp.path(), "app.ts",
+            r#"const api_key = "sk-1234567890abcdef1234567890abcdef";"#);
+        let report = scan_project(tmp.path());
+        let has_key_issue = report.issues.iter()
+            .any(|i| i.owasp == "A02" && i.severity == Severity::Critical);
+        assert!(has_key_issue, "Should detect hardcoded API key");
+    }
+
+    #[test]
+    fn clean_file_no_critical_issues() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_file(tmp.path(), "main.rs",
+            r#"fn main() { println!("Hello, world!"); }"#);
+        let report = scan_project(tmp.path());
+        assert_eq!(report.critical_count(), 0);
+    }
+
+    #[test]
+    fn debug_true_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_file(tmp.path(), "settings.py", "DEBUG = True\n");
+        let report = scan_project(tmp.path());
+        let found = report.issues.iter()
+            .any(|i| i.owasp == "A05" && i.title.contains("DEBUG"));
+        assert!(found, "Should detect DEBUG=True");
+    }
+
+    #[test]
+    fn eval_usage_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_file(tmp.path(), "app.js", "eval(userInput);");
+        let report = scan_project(tmp.path());
+        let found = report.issues.iter()
+            .any(|i| i.owasp == "A03");
+        assert!(found, "Should detect eval()");
+    }
+
+    #[test]
+    fn score_starts_at_100() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_file(tmp.path(), "clean.rs", "fn add(a: i32, b: i32) -> i32 { a + b }");
+        let report = scan_project(tmp.path());
+        assert_eq!(report.score, 100, "Clean file should score 100");
+    }
+
+    #[test]
+    fn api_key_regex_compiles_and_matches() {
+        let pattern = r#"(?i)(api_key|api_secret|secret_key|auth_token|access_token|private_key)\s*[=:]\s*['"][a-zA-Z0-9_-]{16,}['"]"#;
+        let re = regex_lite::Regex::new(pattern).expect("Regex must compile");
+        let content = r#"const api_key = "sk-1234567890abcdef1234567890abcdef";"#;
+        assert!(re.is_match(content), "Regex should match hardcoded API key");
+    }
+
+    #[test]
+    fn eval_regex_compiles_and_matches() {
+        let re = regex_lite::Regex::new(r"\beval\s*\(").expect("Regex must compile");
+        assert!(re.is_match("eval(userInput);"));
+    }
+
+    #[test]
+    fn debug_regex_compiles_and_matches() {
+        let re = regex_lite::Regex::new(r"(?i)DEBUG\s*=\s*True").expect("Regex must compile");
+        assert!(re.is_match("DEBUG = True"));
+    }
+
+    #[test]
+    fn static_scan_finds_api_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_file(tmp.path(), "app.ts",
+            r#"const api_key = "sk-1234567890abcdef1234567890abcdef";"#);
+        let mut issues = Vec::new();
+        let mut count = 0;
+        static_scan(tmp.path(), &mut issues, &mut count);
+        let found = issues.iter().any(|i| i.owasp == "A02" && i.severity == Severity::Critical);
+        assert!(found, "static_scan should find API key. Issues found: {:?}", issues.len());
+    }
+
+    #[test]
+    fn manifest_detected_as_rust() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_file(tmp.path(), ".raios.yaml", "stack: \"rust\"\n");
+        let ptype = detect_project_type(tmp.path());
+        assert_eq!(ptype, ProjectType::Rust);
+    }
+
+    #[test]
+    fn manifest_overrides_heuristic() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Has package.json (Node) but manifest says python
+        write_file(tmp.path(), "package.json", "{}");
+        write_file(tmp.path(), ".raios.yaml", "stack: \"python\"\n");
+        let ptype = detect_project_type(tmp.path());
+        assert_eq!(ptype, ProjectType::Python, "Manifest should override heuristic");
     }
 }

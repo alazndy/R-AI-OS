@@ -289,8 +289,13 @@ impl App {
             }
         });
 
-        // --- Connect to aiosd Daemon ---
+        // --- Connect to aiosd Daemon (or spawn embedded workers if offline) ---
         let tx_daemon = ipc::connect_daemon(tx.clone());
+
+        // Spawn embedded workers when aiosd is not available
+        if !config.dev_ops_path.as_os_str().is_empty() {
+            crate::workers::spawn_embedded_workers(tx.clone(), config.dev_ops_path.clone());
+        }
 
         Self {
             state: AppState::Booting,

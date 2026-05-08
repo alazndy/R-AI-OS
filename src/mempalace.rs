@@ -264,3 +264,65 @@ fn room_icon(folder: &str) -> &'static str {
     "📁"
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn tmp_proj(dir: &std::path::Path, markers: &[&str]) {
+        fs::create_dir_all(dir).unwrap();
+        for m in markers {
+            fs::write(dir.join(m), "").unwrap();
+        }
+    }
+
+    #[test]
+    fn raios_yaml_takes_priority() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = tmp.path().join("myproj");
+        tmp_proj(&proj, &[".raios.yaml"]);
+        assert!(is_project_root(&proj), ".raios.yaml alone should be enough");
+    }
+
+    #[test]
+    fn git_marker_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = tmp.path().join("git_proj");
+        fs::create_dir_all(proj.join(".git")).unwrap();
+        assert!(is_project_root(&proj));
+    }
+
+    #[test]
+    fn cargo_toml_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = tmp.path().join("rust_proj");
+        tmp_proj(&proj, &["Cargo.toml"]);
+        assert!(is_project_root(&proj));
+    }
+
+    #[test]
+    fn empty_dir_not_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("empty");
+        fs::create_dir_all(&dir).unwrap();
+        assert!(!is_project_root(&dir));
+    }
+
+    #[test]
+    fn memory_md_without_structure_not_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("maybe");
+        tmp_proj(&dir, &["memory.md"]);
+        assert!(!is_project_root(&dir), "memory.md alone (no src/app/lib) should not be a project");
+    }
+
+    #[test]
+    fn memory_md_with_src_is_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("has_src");
+        tmp_proj(&dir, &["memory.md"]);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        assert!(is_project_root(&dir));
+    }
+}
+
