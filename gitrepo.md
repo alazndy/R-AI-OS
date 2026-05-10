@@ -1,6 +1,6 @@
-# R-AI-OS — Git Repo
+# Git Repository Info
 
-- **GitHub:** https://github.com/alazndy/R-AI-OS
-- **Açıklama:** AI OS Terminal Control Center — Rust Edition (v1.1.4 Ghost Protocol)
-- **Son Güncelleme:** 2026-05-07
-- **Durum:** active / production ready
+- **Repo URL:** https://github.com/alazndy/R-AI-OS.git
+- **Açıklama:** R-AI-OS (Recursive AI Operating System) - Gelişmiş AI yönetim ve otomasyon katmanı.
+- **Kurulum Tarihi:** 10.05.2026
+- **Son Güncelleme:** 10.05.2026
