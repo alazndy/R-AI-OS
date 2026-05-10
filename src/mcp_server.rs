@@ -264,6 +264,27 @@ impl McpServer {
                         },
                         "required": ["query"]
                     }
+                },
+                {
+                    "name": "ask_architect",
+                    "description": "Consult the Architectural Memory. Use this to ask questions about where to put new modules, how to follow project conventions, or previous architectural decisions. Searches MASTER.md rules and memory.md decision logs.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "question": { "type": "string", "description": "The architectural question (e.g. 'Where should I add a new API endpoint?')" }
+                        },
+                        "required": ["question"]
+                    }
+                },
+                {
+                    "name": "get_validation_errors",
+                    "description": "Get latest compilation (cargo check) or compliance errors for a project. Useful for self-healing after a code change.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name (optional)" }
+                        }
+                    }
                 }
             ]
         }))
@@ -281,8 +302,94 @@ impl McpServer {
             "list_projects"   => self.tool_list_projects(args),
             "get_stats"       => self.tool_get_stats(),
             "semantic_search" => self.tool_semantic_search(args),
+            "ask_architect"   => self.tool_ask_architect(args),
+            "get_validation_errors" => self.tool_get_validation_errors(args),
             _ => Err(format!("Unknown tool: {}", name)),
         }
+    }
+
+    fn tool_ask_architect(&self, args: &Value) -> Result<Value, String> {
+        let question = args["question"].as_str().ok_or("missing question")?;
+        
+        // Use Cortex for semantic search but specifically mention rules and decisions
+        let mut cortex = crate::cortex::Cortex::init().unwrap();
+        let _ = cortex.index_file(&self.config.master_md_path);
+        
+        // Find memory files and index them
+        let memory_files = crate::filebrowser::discover_memory_files(&self.config.dev_ops_path, 10);
+        for mem in memory_files {
+            let _ = cortex.index_file(&mem.path);
+        }
+
+        let hits = cortex.search(question, 5).map_err(|e| e.to_string())?;
+
+        let results: Vec<serde_json::Value> = hits.iter().map(|r| {
+            json!({
+                "source": r.path,
+                "rule_or_decision": r.text,
+                "score": r.score
+            })
+        }).collect();
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": format!("Architectural Guidance for '{}':\n\n{}", question, serde_json::to_string_pretty(&results).unwrap_or_default())
+            }]
+        }))
+    }
+
+    fn tool_get_validation_errors(&self, args: &Value) -> Result<Value, String> {
+        let project_filter = args["project"].as_str().map(|s| s.to_lowercase());
+
+        // Connect to daemon and ask for state
+        use std::io::{Read};
+        let mut stream = std::net::TcpStream::connect("127.0.0.1:42069")
+            .map_err(|e| format!("Could not connect to daemon: {}", e))?;
+        
+        // Auth
+        let token_path = Config::config_file().parent().unwrap().join(".ipc_token");
+        if let Ok(token) = std::fs::read_to_string(token_path) {
+            let _ = stream.write_all(format!("AUTH {}\n", token.trim()).as_bytes());
+        }
+
+        let _ = stream.write_all(b"{\"command\":\"GetState\"}\n");
+        
+        let mut buffer = [0; 32768];
+        let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+        let response = String::from_utf8_lossy(&buffer[..n]);
+        
+        for line in response.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if v["event"] == "StateSync" {
+                    let mut errors = v["latest_errors"].as_array().cloned().unwrap_or_default();
+                    
+                    if let Some(ref filter) = project_filter {
+                        // In a real scenario, ValidationError would have a project field.
+                        // For now we filter by file path matching project path or just return all if filter matches name
+                        // Let's assume the user wants errors for the project they mentioned.
+                        // We can't perfectly filter without project field in ValidationError, 
+                        // but we can check if any error file path contains the filter.
+                        errors.retain(|e| {
+                            e["file"].as_str().map_or(false, |f| f.to_lowercase().contains(filter))
+                        });
+                    }
+
+                    return Ok(json!({
+                        "content": [{
+                            "type": "text",
+                            "text": if errors.is_empty() { 
+                                "No validation errors found.".into() 
+                            } else {
+                                serde_json::to_string_pretty(&errors).unwrap_or_default()
+                            }
+                        }]
+                    }));
+                }
+            }
+        }
+
+        Err("Failed to retrieve validation errors from daemon".into())
     }
 
     fn tool_update_state(&self, args: &Value) -> Result<Value, String> {

@@ -1,13 +1,12 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Style, Stylize},
+    style::{Color, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Table, Row, Cell, TableState},
 };
 use crate::app::App;
 use crate::ui::*;
-
 
 pub fn render_diagnostics(frame: &mut Frame, area: Rect, app: &App) {
     let mut lines = vec![
@@ -58,8 +57,8 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
     ])
     .areas(area);
 
-    // Header
-    let status = if app.is_checking_health {
+    // --- Header ---
+    let status_text = if app.is_checking_health {
         Span::styled(" Checking projects...", Style::new().fg(AMBER).bold())
     } else {
         Span::styled(
@@ -67,10 +66,10 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
             Style::new().fg(GREEN),
         )
     };
-    let header = Paragraph::new(vec![
+    let header_widget = Paragraph::new(vec![
         Line::from(vec![
             Span::styled("  HEALTH DASHBOARD", Style::new().fg(MID).bold()),
-            status,
+            status_text,
         ]),
         Line::from(Span::styled(
             "  Constitution compliance + git status across all projects",
@@ -78,105 +77,84 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
         )),
     ])
     .block(Block::new().borders(Borders::BOTTOM).border_style(Style::new().fg(DIM)));
-    frame.render_widget(header, header_area);
+    frame.render_widget(header_widget, header_area);
 
-    // Content
-    if app.is_checking_health && app.health_report.is_empty() {
-        let msg = Paragraph::new(Span::styled(
-            "  Running checks...",
-            Style::new().fg(DIM).italic(),
-        ));
-        frame.render_widget(msg, content_area);
-        return;
-    }
+    // --- Table Content ---
+    let header_style = Style::new().fg(MID).bold();
+    let selected_style = Style::new().bg(Color::Rgb(0, 40, 30)).fg(GREEN).bold();
 
-    let visible = content_area.height as usize;
-    let scroll = app.health_cursor.saturating_sub(visible / 2);
-    let mut lines: Vec<Line> = Vec::new();
-
-    for (i, h) in app.health_report.iter().enumerate().skip(scroll).take(visible) {
+    let rows: Vec<Row> = app.health_report.iter().enumerate().map(|(i, h)| {
         let selected = i == app.health_cursor;
-
-        let git_span = match h.git_dirty {
-            Some(true)  => Span::styled(" ●dirty ", Style::new().fg(AMBER)),
-            Some(false) => Span::styled(" ○clean ", Style::new().fg(GREEN)),
-            None        => Span::styled(" -      ", Style::new().fg(DIM)),
+        
+        let git_icon = match h.git_dirty {
+            Some(true)  => "● dirty",
+            Some(false) => "○ clean",
+            None        => "-      ",
+        };
+        let git_color = match h.git_dirty {
+            Some(true)  => AMBER,
+            Some(false) => GREEN,
+            _           => DIM,
         };
 
         let score_color = match h.compliance_score {
             Some(s) if s >= 80 => GREEN,
             Some(s) if s >= 60 => AMBER,
-            Some(_) => RED,
-            None => DIM,
+            _                  => RED,
         };
-        let score_str = h.compliance_score
-            .map(|s| format!("{:3}/100 {}", s, h.compliance_grade))
-            .unwrap_or_else(|| "   -     ".into());
+        let comp_text = h.compliance_score
+            .map(|s| format!("{} {}", s, h.compliance_grade))
+            .unwrap_or_else(|| "—".into());
 
-        let mem_span = if h.has_memory {
-            Span::styled(" ✓mem", Style::new().fg(GREEN))
-        } else {
-            Span::styled(" ✗mem", Style::new().fg(RED))
+        let sec_text = match h.security_score {
+            Some(s) => format!("🔒 {} {}", s, h.security_grade.as_deref().unwrap_or("-")),
+            None    => "—".into(),
         };
 
-        let issues_span = if h.constitution_issues.is_empty() {
-            Span::styled(" ✓ const", Style::new().fg(GREEN))
-        } else {
-            Span::styled(
-                format!(" ⚠ {} issues", h.constitution_issues.len()),
-                Style::new().fg(AMBER),
-            )
-        };
+        let mem_text = if h.has_memory { "✓ mem" } else { "✗ mem" };
+        let mem_color = if h.has_memory { GREEN } else { RED };
 
-        let graph_span = if h.graphify_done {
-            Span::styled(" ✓graph ", Style::new().fg(GREEN))
-        } else {
-            Span::styled(" ✗graph ", Style::new().fg(DIM))
-        };
+        let type_text = if h.path.join("Cargo.toml").exists() { "Rust" } 
+                        else if h.path.join("package.json").exists() { "Node" }
+                        else { "Other" };
 
-        // Security score
-        let sec_span = match h.security_score {
-            Some(s) => {
-                let grade = h.security_grade.as_deref().unwrap_or("-");
-                let col = match s {
-                    90..=100 => GREEN,
-                    75..=89  => CYAN,
-                    50..=74  => AMBER,
-                    _        => RED,
-                };
-                let crit_tag = if h.security_critical > 0 {
-                    format!(" ⚠{}", h.security_critical)
-                } else {
-                    String::new()
-                };
-                Span::styled(
-                    format!(" 🔒{}/100{}{} ", s, grade, crit_tag),
-                    Style::new().fg(col).bold(),
-                )
-            }
-            None => Span::styled(" 🔒— ", Style::new().fg(DIM)),
-        };
+        Row::new(vec![
+            Cell::from(if selected { "▶" } else { " " }),
+            Cell::from(Span::styled(git_icon, Style::new().fg(git_color))),
+            Cell::from(Span::styled(h.name.as_str(), Style::new().bold())),
+            Cell::from(Span::styled(comp_text, Style::new().fg(score_color))),
+            Cell::from(Span::styled(sec_text, Style::new().fg(MID))),
+            Cell::from(Span::styled(mem_text, Style::new().fg(mem_color))),
+            Cell::from(Span::styled(type_text, Style::new().fg(DIM))),
+        ]).style(if selected { selected_style } else { Style::new().fg(MID) })
+    }).collect();
 
-        let sc = project_status_color(&h.status);
-        let name_color = if selected { GREEN } else { MID };
-        let prefix = if selected { "  ▶ " } else { "    " };
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(2),   // Selector
+            Constraint::Length(10),  // Git
+            Constraint::Min(25),     // Name
+            Constraint::Length(12),  // Compliance
+            Constraint::Length(15),  // Security
+            Constraint::Length(10),  // Memory
+            Constraint::Length(8),   // Type
+        ],
+    )
+    .header(
+        Row::new(vec!["", "GIT", "PROJECT NAME", "COMPLIANCE", "SECURITY", "MEMORY", "TYPE"])
+            .style(header_style)
+            .bottom_margin(1)
+    )
+    .column_spacing(2);
 
-        lines.push(Line::from(vec![
-            Span::styled(prefix, Style::new().fg(GREEN)),
-            Span::styled(format!("{:<24}", h.name), Style::new().fg(name_color).bold()),
-            git_span,
-            Span::styled(score_str, Style::new().fg(score_color)),
-            sec_span,
-            mem_span,
-        ]));
-    }
+    let mut state = TableState::default();
+    state.select(Some(app.health_cursor));
+    frame.render_stateful_widget(table, content_area, &mut state);
 
-    frame.render_widget(Paragraph::new(Text::from(lines)), content_area);
-
-    // Summary footer
+    // --- Footer ---
     let total = app.health_report.len();
     let dirty = app.health_report.iter().filter(|h| h.git_dirty == Some(true)).count();
-    let no_mem = app.health_report.iter().filter(|h| !h.has_memory).count();
     let avg_score = if total > 0 {
         app.health_report.iter()
             .filter_map(|h| h.compliance_score)
@@ -186,22 +164,16 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
 
     let sec_scanned = app.health_report.iter().filter(|h| h.security_score.is_some()).count();
     let sec_critical = app.health_report.iter().map(|h| h.security_critical).sum::<usize>();
-    let avg_sec = if sec_scanned > 0 {
-        app.health_report.iter().filter_map(|h| h.security_score).map(|s| s as usize).sum::<usize>() / sec_scanned
-    } else { 0 };
 
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(format!(" {}/{} dirty ", dirty, total), Style::new().fg(if dirty > 0 { AMBER } else { GREEN })),
         Span::styled(format!(" comp:{}/100 ", avg_score), Style::new().fg(MID)),
         if sec_scanned > 0 {
-            Span::styled(
-                format!(" 🔒{}/100 ⚠crit:{} ", avg_sec, sec_critical),
-                Style::new().fg(if sec_critical > 0 { RED } else { GREEN }),
-            )
+            Span::styled(format!(" 🔒crit:{} ", sec_critical), Style::new().fg(if sec_critical > 0 { RED } else { GREEN }))
         } else {
-            Span::styled(" 🔒— (raios security çalıştır)", Style::new().fg(DIM))
+            Span::styled(" 🔒— ", Style::new().fg(DIM))
         },
-        Span::styled("  [↑↓] nav  [Enter] open  [Esc] back", Style::new().fg(DIM)),
+        Span::styled("  [↑↓] nav  [r] refresh  [Esc] back", Style::new().fg(DIM)),
     ]))
     .block(Block::new().borders(Borders::TOP).border_style(Style::new().fg(DIM)));
     frame.render_widget(footer, footer_area);
@@ -233,42 +205,7 @@ pub fn render_system_audit(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled(format!("    • {:<20}", tool.name), Style::new().fg(MID)),
                 status_span,
             ]));
-            if let Some(ref path) = tool.path {
-                lines.push(Line::from(vec![
-                    Span::styled("      Path: ", Style::new().fg(DIM)),
-                    Span::styled(path.to_string_lossy(), Style::new().fg(DIM).italic()),
-                ]));
-            }
         }
-        lines.push(Line::from(""));
-
-        lines.push(Line::from(Span::styled("  ◈ ACTIVE API KEYS (ENV)", Style::new().fg(GREEN).bold())));
-        if report.env_keys.is_empty() {
-            lines.push(Line::from(Span::styled("    No global API keys detected in environment variables.", Style::new().fg(DIM))));
-        } else {
-            for key in &report.env_keys {
-                lines.push(Line::from(vec![
-                    Span::styled("    ✓ ", Style::new().fg(GREEN)),
-                    Span::styled(key, Style::new().fg(MID)),
-                ]));
-            }
-        }
-        lines.push(Line::from(""));
-
-        lines.push(Line::from(Span::styled("  ◈ MODEL LOCATIONS & CACHE", Style::new().fg(GREEN).bold())));
-        for model in &report.local_models {
-            lines.push(Line::from(vec![
-                Span::styled("    📂 ", Style::new().fg(AMBER)),
-                Span::styled(model, Style::new().fg(MID)),
-            ]));
-        }
-    } else {
-        lines.push(Line::from(Span::styled("  No system scan performed yet.", Style::new().fg(DIM))));
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("  Run /scan-system or /audit to start a deep scan.", Style::new().fg(CYAN).italic())));
     }
-
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
-
-

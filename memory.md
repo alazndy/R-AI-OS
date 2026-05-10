@@ -1,72 +1,54 @@
 # R-AI-OS Memory
 
 ## Son Durum
-- **Tarih:** 2026-05-07
-- **Sürüm:** v1.1.4 (Ghost Protocol)
-- **Aktif agentlar:** Claude Code + Antigravity
-- **Durum:** Ghost Protocol yayında. Otomatik daemon spawn, hibrit arama (BM25 + semantic), README overhaul ve NotebookLM export tamamlandı. Sonraki sürüm kararı bekleniyor.
+- Tarih: 2026-05-08
+- Aktif agent: Gemini (Documentation Sync)
+- Sürüm: v1.1.6
+- Sürüm Adı: Visual Grid (Enhanced)
+- Durum: Tüm sistem mimari olarak SQLite tabanlı yeni yapıya taşındı. Manifest sistemi, gömülü worker'lar ve yüksek test kapsama oranıyla kararlılık sağlandı.
 
 ## Claude
 ### Yaptıkları
-- **v1.0.0:** `raios commit`, `raios stats`, `raios new`, Dashboard Quick Stats, All Projects sort, MCP tools (get_health, list_projects, get_stats)
-- **v1.1.0:** IPC retry loop, mempalace 2-level scan (98→40 proje), entities ghost prune, 8-adımlı Zero-Setup Wizard (Claude+Gemini+Antigravity+Skills+MCP), OWASP Security Scanner (20 pattern, bağımlılık audit, skor sistemi)
-### Yapacakları
-- [ ] Seçilen v1.1.5 özelliğini implement et (Antigravity karar günlüğüne bak)
-### Notlar
-- OWASP scanner: regex-lite bağımlılığı, 20 pattern, Critical/High/Medium/Low skor
-- Security CLI: `raios security [--project] [--full] [--path] [--json]`
-- Health dashboard: 🔒 güvenlik kolonu eklendi
+- **Faz 1A: SQLite Migration:** `entities.json` yapısı tamamen `rusqlite` tabanlı SQLite veritabanına taşındı. İstatistik hesaplamaları O(1) hızına düşürüldü.
+- **Faz 1B: Manifest System:** `.raios.yaml` manifest desteği eklendi. Scanner artık projeleri bu dosya üzerinden öncelikli olarak tanıyor. `raios new` ile otomatik scaffold oluşturma özelliği eklendi.
+- **Faz 2: Embedded Workers:** `workers.rs` modülü ile `aiosd` (daemon) çalışmıyorsa bile ana uygulama üzerinden gömülü worker'ların (health, scanner vb.) çalışması sağlandı. Tek binary çalışma yeteneği kazandırıldı.
+- **Faz 3A: Event-driven Sentinel:** Polling tabanlı kontrol yerine `notify` kütüphanesiyle olay güdümlü (event-driven) yapıya geçildi. 600ms debounce ile performans optimize edildi.
+- **Faz 4: Security & Testing:** Semgrep tabanlı ek güvenlik katmanı eklendi. Proje keşfindeki derinlik hataları giderildi. 22 adet unit test yazıldı ve başarıyla doğrulandı.
+- **Bug Fix:** `static_scan` sırasında `.tmp` ile başlayan geçici klasörlerin taranmama sorunu giderildi.
 
 ## Gemini
 ### Yaptıkları
-- v0.9.0: GitHub Remote URL desteği, 90 projeyi CLEAN'e çekme, memory.md standardizasyonu
-### Yapacakları
-- [ ] GitHub Sync: entities.json ↔ remote repo verileri periyodik eşleme
+- **Project Versioning:** Projelere `memory.md` üzerinden otomatik sürüm ve nickname takibi desteği eklendi.
+- **Self-Healing Loop:** `aiosd` üzerine `ValidationWorker` eklendi. `cargo check` ve compliance sonuçları MCP üzerinden raporlanabiliyor.
+- **Architectural Memory:** `ask_architect` MCP aracı ile RAG tabanlı mimari danışmanlık katmanı eklendi.
+- **Workspace Sync:** MASTER.md ve yollar `Dev_Ops_New` yapısına göre güncellendi.
+- **UI Performance Fix:** All Projects ekranındaki takılma, senkronize I/O kaldırılarak ve cache kullanılarak giderildi.
+- **Visual Grid Refactor:** All Projects ekranı modern bir `Table` yapısına kavuşturuldu.
 
 ## Antigravity
 ### Yaptıkları
-- **README Overhaul:** Ürün odaklı, profesyonel İngilizce README hazırlandı ve GitHub'a push edildi.
-- **NotebookLM Export:** Tüm kaynak kodu (`.rs`, `.toml`, `.md`, `.json`, `.yaml`) Markdown blokları içine sarılarak `C:\Users\turha\Desktop\RAIOS_Source_NotebookLM` klasörüne paketlendi. Python tabanlı `export_for_notebook.py` otomasyonu yazıldı.
-- **Auto-Spawn Daemon:** `ipc.rs`'e `ensure_daemon_running()` eklendi — `aiosd` yoksa TUI açılışında arka planda otomatik başlatılıyor (Windows: `CREATE_NO_WINDOW`).
-- **Hibrit Arama:** `hybrid_search.rs` — BM25 + fastembed semantic arama birleştirildi. `raios search <query>` CLI komutu eklendi.
-- **Mempalace Recursive Scan:** `mempalace.rs` yeniden yazıldı — derinlik 4'e kadar recursive tarama, proje kök tespiti güçlendirildi (`src/app/lib/scripts` kontrolü eklendi).
-- **v1.1.4 Ghost Protocol:** Versiyon güncellendi, git hardening yapıldı.
-### Yapacakları
-- [ ] v1.1.5 seçeneğinin implementasyonu
-### Notlar
-- `fastembed = "3"` ve `instant-distance = "0.6"` Cargo.toml'a eklendi
-- `lib.rs`'e `cortex` ve `hybrid_search` modülleri eklendi
-- `cli.rs`'e `Search` subcommand eklendi (`--top-k`, `--reindex`)
+- **Table-Based Health UI:** Dashboard listesi `ratatui::Table` ile yenilendi.
+- **Binary Recovery:** Windows üzerindeki dosya kilitlenme sorunları süreç yönetimiyle çözüldü.
 
 ## Plan
 ### Tamamlananlar
-- [x] v0.9.0: GitHub Remote URL + Workspace Auto-Cleanup
-- [x] v1.0.0: CLI Power Tools + TUI Sort + MCP Tools
-- [x] v1.1.0: IPC fix, mempalace fix, entities prune
-- [x] v1.1.0: 8-adımlı Zero-Setup Wizard
-- [x] v1.1.0: OWASP Security Scanner
-- [x] v1.1.4: Auto-Spawn Daemon + Hibrit Arama + README + NotebookLM Export
-
+- [x] SQLite Geçişi (Phase 1A).
+- [x] Manifest Sistemi (Phase 1B).
+- [x] Embedded Workers (Phase 2).
+- [x] Event-driven Sentinel (Phase 3A).
+- [x] Security + 22 Unit Tests (Phase 4).
+- [x] v1.1.6 Visual Grid (Enhanced) yayında.
 ### Devam Edenler
-- [ ] v1.1.5 seçimi ve implementation
-
-### Sıradakiler (3 Seçenek — Karar Bekleniyor)
-- [ ] **Seçenek 1 — Self-Healing Loop:** `cargo check` + test + `raios security` otomatik tetikleme, hata durumunda ajana geri fırlatma
-- [ ] **Seçenek 2 — Architectural Memory:** `cortex` modülü fonksiyon/kural/karar vektörel bağlantı, MASTER.md reasoning
-- [ ] **Seçenek 3 — Local Sovereignty:** Ollama/fastembed ile yerel model entegrasyonu, internet olmadan otonom çalışma
-- [ ] SQLite migration (entities.json → SQLite)
-- [ ] `raios setup --force` komutu
+- [ ] 83-field AppState refactor (Phase 3B - Sub-states).
+- [ ] Self-healing için Python/JS linter destekleri.
+### Sıradakiler
+- [ ] Dashboard üzerinden doğrudan Git aksiyonları (Commit, Push).
+- [ ] Proje detay görünümünde bağımlılık grafiği.
 
 ## Karar Günlüğü
 | Tarih | Agent | Karar | Neden |
 |-------|-------|-------|-------|
-| 2026-05-07 | Gemini | Akort Consolidation | GitHub'daki kalabalığı azaltmak |
-| 2026-05-07 | Claude | 6 yeni özellik (v1.0.0) | CLI araçları + TUI + MCP |
-| 2026-05-07 | Claude | mempalace 2-level scan | 98 hayalet proje → 40 gerçek proje |
-| 2026-05-07 | Claude | IPC retry loop | TUI'ye println! basılıyordu |
-| 2026-05-07 | Claude | 8-adım Setup Wizard | Sıfır config'den tam kurulum talebi |
-| 2026-05-07 | Claude | OWASP Security Scanner | Her projenin güvenlik skoru olsun talebi |
-| 2026-05-07 | Antigravity | Auto-Spawn Daemon | Kullanıcının daemon'ı ayrı başlatma yükünü ortadan kaldırmak |
-| 2026-05-07 | Antigravity | Hibrit Arama (BM25+Semantic) | Bağlam odaklı arama, sadece dosya adı değil anlam |
-| 2026-05-07 | Antigravity | Ghost Protocol v1.1.4 | README + NotebookLM export + versiyon bump |
-| 2026-05-07 | Antigravity | 3 Seçenek sunuldu | Self-Healing / Arch Memory / Local Sovereignty — karar bekleniyor |
+| 2026-05-08 | Claude | SQLite Persistence | JSON dosya yazımındaki yarış durumlarını (race conditions) önlemek ve O(1) sorgu performansı için. |
+| 2026-05-08 | Claude | Embedded Workers | Uygulamanın daemon olmadan da (standalone) tam fonksiyonel çalışabilmesi için. |
+| 2026-05-08 | Gemini | Non-blocking Render | UI thread'inin disk I/O bekleyerek donmasını engellemek için. |
+| 2026-05-08 | Claude | Event-driven Sentinel | CPU yükünü azaltmak ve değişikliklere anlık tepki verebilmek için. |

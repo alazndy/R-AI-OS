@@ -3,113 +3,114 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Row, Table, TableState, Wrap},
 };
 use crate::app::{App, state::SortMode};
 use crate::ui::*;
 
 
 pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
-    use crate::filebrowser::git_is_dirty;
-
-    // Build sorted index list (avoids cloning all projects)
-    let mut indices: Vec<usize> = (0..app.projects.len()).collect();
-    match app.project_sort {
-        SortMode::Name => indices.sort_by(|&a, &b| {
-            app.projects[a].name.to_lowercase().cmp(&app.projects[b].name.to_lowercase())
-        }),
-        SortMode::Grade => indices.sort_by(|&a, &b| {
-            let h_a = crate::health::check_project(&app.projects[a]);
-            let h_b = crate::health::check_project(&app.projects[b]);
-            h_a.compliance_grade.cmp(&h_b.compliance_grade)
-        }),
-        SortMode::GitDirty => indices.sort_by(|&a, &b| {
-            let da = git_is_dirty(&app.projects[a].local_path).unwrap_or(false);
-            let db = git_is_dirty(&app.projects[b].local_path).unwrap_or(false);
-            db.cmp(&da) // dirty first
-        }),
-        SortMode::Category => indices.sort_by(|&a, &b| {
-            app.projects[a].category.cmp(&app.projects[b].category)
-        }),
-        SortMode::Status => indices.sort_by(|&a, &b| {
-            app.projects[a].status.cmp(&app.projects[b].status)
-        }),
-    }
-
+    let indices = app.sorted_project_indices();
     let total = indices.len();
-    let visible_h = area.height.saturating_sub(3) as usize; // header + sort hint + spacer
+    
+    let [title_area, table_area] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(0),
+    ])
+    .areas(area);
 
-    let scroll = if app.project_cursor >= visible_h {
-        app.project_cursor - visible_h + 1
-    } else {
-        0
-    };
-
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(" ALL PROJECTS", Style::new().fg(MID).bold()),
-            Span::styled(
-                format!("  ({} total)", total),
-                Style::new().fg(DIM),
-            ),
-            Span::styled(
-                if app.right_panel_focus { "  [↑↓] navigate  [Enter] open  [←] menu" }
-                else { "  [→] focus  [/open <name>] jump" },
-                Style::new().fg(DIM),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  sort: ", Style::new().fg(DIM)),
-            Span::styled(app.project_sort.label(), Style::new().fg(AMBER).bold()),
-            Span::styled("  [s] cycle sort", Style::new().fg(DIM)),
-        ]),
-        Line::from(""),
-    ];
+    let title = Line::from(vec![
+        Span::styled(" ALL PROJECTS", Style::new().fg(MID).bold()),
+        Span::styled(format!("  ({} total)", total), Style::new().fg(DIM)),
+        Span::styled("  sort: ", Style::new().fg(DIM)),
+        Span::styled(app.project_sort.label(), Style::new().fg(AMBER).bold()),
+        Span::styled(
+            if app.right_panel_focus { "  [↑↓] navigate  [Enter] open  [s] cycle sort" }
+            else { "  [→] focus  [/open <name>] jump" },
+            Style::new().fg(DIM),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(title), title_area);
 
     if indices.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  entities.json not found or empty",
-            Style::new().fg(DIM).italic(),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  Expected: Dev Ops/entities.json",
-            Style::new().fg(DIM),
-        )));
-    } else {
-        for (i, &orig_i) in indices.iter().enumerate().skip(scroll).take(visible_h) {
-            let proj = &app.projects[orig_i];
-            let is_selected = app.right_panel_focus && i == app.project_cursor;
-            let sc = project_status_color(&proj.status);
-            let cat = proj.category.replace('_', " ");
-
-            let has_vault = app.vault_projects.contains(&proj.name);
-            let vault_tag = if has_vault {
-                Span::styled(" [V]", Style::new().fg(AMBER).bold())
-            } else {
-                Span::styled(" [-]", Style::new().fg(DIM))
-            };
-
-            if is_selected {
-                lines.push(Line::from(vec![
-                    Span::styled("  ▶ ", Style::new().fg(GREEN).bold()),
-                    Span::styled(proj.name.as_str(), Style::new().fg(GREEN).bold()),
-                    vault_tag,
-                    Span::styled(format!("  [{}]", proj.status), Style::new().fg(sc).bold()),
-                    Span::styled(format!("  {}", cat), Style::new().fg(DIM)),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::styled("    ", Style::new()),
-                    Span::styled(proj.name.as_str(), Style::new().fg(MID)),
-                    vault_tag,
-                    Span::styled(format!("  [{}]", proj.status), Style::new().fg(sc)),
-                    Span::styled(format!("  {}", cat), Style::new().fg(DIM)),
-                ]));
-            }
-        }
+        let msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled("  entities.json not found or empty", Style::new().fg(DIM).italic())),
+            Line::from(Span::styled("  Expected: Dev Ops/entities.json", Style::new().fg(DIM))),
+        ]);
+        frame.render_widget(msg, table_area);
+        return;
     }
 
-    frame.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }), area);
+    let header = Row::new(vec![
+        "  Name",
+        "V",
+        "Status",
+        "Category",
+        "Health",
+        "Dirty",
+    ])
+    .style(Style::new().fg(DIM).bold())
+    .bottom_margin(1);
+
+    let rows: Vec<Row> = indices.iter().map(|&orig_i| {
+        let proj = &app.projects[orig_i];
+        let sc = project_status_color(&proj.status);
+        let cat = proj.category.replace('_', " ");
+        
+        let has_vault = app.vault_projects.contains(&proj.name);
+        let vault_tag = if has_vault {
+            Span::styled("V", Style::new().fg(AMBER).bold())
+        } else {
+            Span::styled("-", Style::new().fg(DIM))
+        };
+
+        // Use cached health report if available
+        let health = app.health_report.iter().find(|h| h.name == proj.name);
+        let grade = health.map(|h| h.compliance_grade.as_str()).unwrap_or("-");
+        let gc = match grade {
+            "A" => GREEN,
+            "B" => CYAN,
+            "C" => AMBER,
+            "D" | "F" => RED,
+            _ => DIM,
+        };
+
+        let dirty_status = health.and_then(|h| h.git_dirty);
+        let dirty = match dirty_status {
+            Some(true) => Span::styled("DIRTY", Style::new().fg(RED).bold()),
+            Some(false) => Span::styled("clean", Style::new().fg(DIM)),
+            None => Span::styled("?", Style::new().fg(DIM)),
+        };
+
+        Row::new(vec![
+            Text::from(proj.name.clone()),
+            Text::from(vault_tag),
+            Text::from(Span::styled(proj.status.clone(), Style::new().fg(sc))),
+            Text::from(cat),
+            Text::from(Span::styled(grade, Style::new().fg(gc).bold())),
+            Text::from(dirty),
+        ])
+    }).collect();
+
+    let widths = [
+        Constraint::Percentage(25),
+        Constraint::Length(3),
+        Constraint::Percentage(15),
+        Constraint::Percentage(25),
+        Constraint::Percentage(10),
+        Constraint::Percentage(15),
+    ];
+
+    let mut state = TableState::default().with_selected(Some(app.project_cursor));
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(Block::default().borders(Borders::NONE))
+        .row_highlight_style(Style::default().bg(HEADER_BG).fg(GREEN).bold())
+        .highlight_symbol("▶ ");
+
+    frame.render_stateful_widget(table, table_area, &mut state);
 }
 
 pub fn render_project_detail(frame: &mut Frame, app: &App) {

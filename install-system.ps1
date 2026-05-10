@@ -5,8 +5,8 @@ $ErrorActionPreference = "Stop"
 Write-Host "🚀 R-AI-OS Kurulumu Başlatılıyor..." -ForegroundColor Cyan
 
 # 1. Klasör Yapısı Oluşturma
-$BaseDir = Join-Path $HOME "Desktop\Dev Ops"
-$SystemDir = Join-Path $BaseDir "AI OS\System"
+$BaseDir = Join-Path $HOME "Desktop\Dev_Ops_New"
+$SystemDir = Join-Path $BaseDir "00_System"
 $SkillsDir = Join-Path $SystemDir ".agents\skills"
 
 if (!(Test-Path $BaseDir)) {

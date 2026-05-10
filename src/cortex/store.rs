@@ -164,11 +164,9 @@ impl VectorEngine {
         self.embeddings = new_embs;
         self.indexed_files.insert(file_path.to_string(), mtime_secs);
         self.dirty = true;
-
-        self.rebuild_hnsw();
     }
 
-    fn rebuild_hnsw(&mut self) {
+    pub fn rebuild_hnsw(&mut self) {
         if self.embeddings.is_empty() {
             self.hnsw = None;
             return;

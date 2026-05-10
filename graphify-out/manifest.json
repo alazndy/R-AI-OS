@@ -1,0 +1,298 @@
+{
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\install-system.ps1": {
+    "mtime": 1777928867.768561,
+    "hash": "573a0684ba296aa6a5f8fd3deefae22e"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\check_discovery_v2.py": {
+    "mtime": 1777977745.9272351,
+    "hash": "35dc0ee1864c1033d78ed07a00acf7aa"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\check_discovery_v3.py": {
+    "mtime": 1777977791.6437974,
+    "hash": "fe35a5eae02a91bb6756f72a4c906e9e"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\check_discovery_v4.py": {
+    "mtime": 1777977818.444584,
+    "hash": "6a7f1fad0b0206a0243253ea36124bd3"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\test_connection.py": {
+    "mtime": 1778026229.435202,
+    "hash": "a3c490f542ec0e76d565273c6be9085e"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\test_daemon_search.rs": {
+    "mtime": 1778021842.6670096,
+    "hash": "946e921c3a62f7d93e2ef4865ce207f1"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\test_mem.rs": {
+    "mtime": 1777979717.1586297,
+    "hash": "949f4856846ddad9e5b268ef8157d706"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master.ps1": {
+    "mtime": 1778110380.9497843,
+    "hash": "357e9c8072bf879267940f869c876078"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master.py": {
+    "mtime": 1778110721.4926014,
+    "hash": "394cb02bacaecba7e42b9b6a68d794ee"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master_authority.ps1": {
+    "mtime": 1778110673.7618787,
+    "hash": "c0951626447151eb690eb0e052d3b02d"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master_authority_v2.ps1": {
+    "mtime": 1778110693.21612,
+    "hash": "4a6f91a5a2498017a277ff3ea5651db5"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master_authority_v3.ps1": {
+    "mtime": 1778110704.1211164,
+    "hash": "83692a9ca959be0dc5372b3ff03efd4c"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master_paths.ps1": {
+    "mtime": 1778110485.7094705,
+    "hash": "903672d84cbbf1f3bd8ffea79b772c8c"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master_paths_v2.ps1": {
+    "mtime": 1778110500.685431,
+    "hash": "e45cc136972d6bd63cda24ce77c493cf"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master_rooms.ps1": {
+    "mtime": 1778110570.1624963,
+    "hash": "8d62d13e7d5fdc1ab3466a8834cc6241"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master_rooms_v2.ps1": {
+    "mtime": 1778110588.3080616,
+    "hash": "210ddb119a7fde7a3f3a8dabf6efdc1b"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master_rooms_v3.ps1": {
+    "mtime": 1778110598.6622052,
+    "hash": "6520853bdd93ba70d254b9ccea19c626"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\scratch\\update_master_schema.ps1": {
+    "mtime": 1778110443.396722,
+    "hash": "376305944745611faf52732a9e48ee64"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\agent_runner.rs": {
+    "mtime": 1778019403.8021007,
+    "hash": "aa984a18035c62b74bf739799cda42ac"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\cli.rs": {
+    "mtime": 1778145583.061954,
+    "hash": "39ecbb0839a3acf5d98d2ef93bcfa9e4"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\compliance.rs": {
+    "mtime": 1777929928.9263186,
+    "hash": "a74ddcf54fa25aee61d484d069901f5f"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\config.rs": {
+    "mtime": 1777993129.432405,
+    "hash": "0de3bad34b9e7c20077a14f218899dda"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\discovery.rs": {
+    "mtime": 1777976463.0060804,
+    "hash": "3989cd7913af6a0711c2919510cfde13"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\entities.rs": {
+    "mtime": 1778112582.5998318,
+    "hash": "0f1b351c62fbde8487dd05384c8f7c05"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\filebrowser.rs": {
+    "mtime": 1778110314.2527058,
+    "hash": "9cb1480377c568036e3ec32a0ba15cd2"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\health.rs": {
+    "mtime": 1778165998.4081511,
+    "hash": "7d1fccab3169935e7fc6fb042e6ac3ba"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\hybrid_search.rs": {
+    "mtime": 1778144495.8049362,
+    "hash": "88de885b997f6e69b5044f215850583a"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\indexer.rs": {
+    "mtime": 1778025926.5004377,
+    "hash": "469bb6afb062b777ab956ac55f0efb52"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\lib.rs": {
+    "mtime": 1778144513.355198,
+    "hash": "0a48888d781e10597ed683ed39c24a94"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\mcp_server.rs": {
+    "mtime": 1778166164.8462973,
+    "hash": "b32e7f0fdda3f162b21dfd24a3b45ea0"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\mempalace.rs": {
+    "mtime": 1778155813.8149168,
+    "hash": "deb7995300b614b96c8ee97f15eae02a"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\new_project.rs": {
+    "mtime": 1778110441.6648455,
+    "hash": "f0eacc0e7260ace167bcaad5c08415d7"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\requirements.rs": {
+    "mtime": 1777928883.514653,
+    "hash": "1d53d669098f615a94512b05afca69ad"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\safe_io.rs": {
+    "mtime": 1778025329.8782406,
+    "hash": "a04453136847ec172392d2a23be10fc8"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\security.rs": {
+    "mtime": 1778144107.6729207,
+    "hash": "30752f2c094b8bc27ec5cd7c5a61692f"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\setup_wizard.rs": {
+    "mtime": 1778141337.8717182,
+    "hash": "d60ac59fc2cae2163719bd542f07604f"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\sync.rs": {
+    "mtime": 1777927459.9658883,
+    "hash": "5d6ad90934d5a44f3db4fc4bc6c529f8"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\system_scan.rs": {
+    "mtime": 1778019155.9760008,
+    "hash": "486e0f5618ac326624b18d4f3f90da33"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\tasks.rs": {
+    "mtime": 1777990538.0983522,
+    "hash": "296cff3afcf4e0ab848e20aa8b1e6df7"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\app\\editor.rs": {
+    "mtime": 1778025389.3966384,
+    "hash": "fa14dae72a69cecaa9accdd022c0555e"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\app\\events.rs": {
+    "mtime": 1778153285.9666123,
+    "hash": "9a48f1c13cdf387a161605e717a0cb8b"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\app\\ipc.rs": {
+    "mtime": 1778158344.2141278,
+    "hash": "dc6912de4624831d080aa01db2ad0475"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\app\\mod.rs": {
+    "mtime": 1778141388.6281066,
+    "hash": "8f12f463fb3ce0976d962fce777dd3b0"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\app\\state.rs": {
+    "mtime": 1778150217.5624385,
+    "hash": "458dc3bfb3b02e8af5dbc99a36a1d9b1"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\bin\\aiosd.rs": {
+    "mtime": 1778026084.788159,
+    "hash": "a633d7ed391b738447ac3d9ec5e2134f"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\bin\\raios.rs": {
+    "mtime": 1778021332.0007555,
+    "hash": "a96a31c93f0ea76c4e7d63d541bd4769"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\cortex\\chunker.rs": {
+    "mtime": 1778144366.5674193,
+    "hash": "45a7437ebde83a17752417f6aef7583c"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\cortex\\embedder.rs": {
+    "mtime": 1778144726.2725418,
+    "hash": "7d807b9e881f10c63aa08ffa41163990"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\cortex\\mod.rs": {
+    "mtime": 1778145408.1868224,
+    "hash": "5f784bc040774c910386122c954fa1a1"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\cortex\\store.rs": {
+    "mtime": 1778144870.069308,
+    "hash": "56a5576f6b97741a0d3f84bcf4411803"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\daemon\\cortex.rs": {
+    "mtime": 1778145452.8084607,
+    "hash": "5522aec9a740dc4e4ce4a782276e0e43"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\daemon\\git.rs": {
+    "mtime": 1778026072.50677,
+    "hash": "ff0fdf7f111d1645e004508f4809c174"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\daemon\\health.rs": {
+    "mtime": 1778150109.343135,
+    "hash": "30e012a4706f392743b24b762556daea"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\daemon\\mod.rs": {
+    "mtime": 1778166019.021847,
+    "hash": "394f9754090ab072645dbad69d51d293"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\daemon\\proxy.rs": {
+    "mtime": 1778025598.2872336,
+    "hash": "54a1d78c58aa1a8ffaa86d06e1bd8d71"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\daemon\\server.rs": {
+    "mtime": 1778166029.8764772,
+    "hash": "467d373940dc2a007e808fc8e816db19"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\daemon\\state.rs": {
+    "mtime": 1778165954.4919238,
+    "hash": "ba5036390d2c0784798af30d596fa73d"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\ui\\components.rs": {
+    "mtime": 1778024390.235559,
+    "hash": "9c8fea8d9e6ed845b32be2a4c80f6e05"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\ui\\dashboard.rs": {
+    "mtime": 1778110666.7143078,
+    "hash": "0cecd0cff82691f362ec7e9eab571a76"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\ui\\filebrowser.rs": {
+    "mtime": 1778025568.6698775,
+    "hash": "3f627a76bc17d42bd5af23d5751a2a0b"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\ui\\health.rs": {
+    "mtime": 1778154358.4695094,
+    "hash": "f123e1c771bb4fbae9822835108855e2"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\ui\\mempalace.rs": {
+    "mtime": 1778024390.2419598,
+    "hash": "48eef0fb1819160c09963956fb679064"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\ui\\mod.rs": {
+    "mtime": 1778024390.2332692,
+    "hash": "81ab2a6a8c9b7ba51b434383722c71dd"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\ui\\projects.rs": {
+    "mtime": 1778110826.9314122,
+    "hash": "9f3f9aa22243c43092adbe096f21e588"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\ui\\search.rs": {
+    "mtime": 1778024390.2377603,
+    "hash": "a3327c48246dc49c5d3bfd54c71b0621"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\src\\ui\\setup.rs": {
+    "mtime": 1778141609.4109025,
+    "hash": "27e694149209e61055aee8ca2236684b"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\errors.txt": {
+    "mtime": 1778023194.1130314,
+    "hash": "73ac1e9f7c4bca6181cf0725db482295"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\errors2.txt": {
+    "mtime": 1778023282.1797063,
+    "hash": "e6dff9f367d7ecb17dd9d50a48e2dcab"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\errors3.txt": {
+    "mtime": 1778023437.3797076,
+    "hash": "278eb6565959c41a03f83605bd0adfa1"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\errors4.txt": {
+    "mtime": 1778023486.4235015,
+    "hash": "44f71737a69dea8ba0f0cb29bce496e6"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\gitrepo.md": {
+    "mtime": 1778160962.8053296,
+    "hash": "5fcf36706ca57bf7d373838b7a5e7593"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\memory.md": {
+    "mtime": 1778165017.7248156,
+    "hash": "5dffb7fb8db050e03a699a633581f0be"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\README.md": {
+    "mtime": 1778160958.7076018,
+    "hash": "34178ac270fae0332db0b5310c4286d9"
+  },
+  "C:\\Users\\turha\\Desktop\\Dev_Ops_New\\07_DevTools_&_Productivity\\CLI_Tools\\R-AI-OS\\status_report_v080.md": {
+    "mtime": 1778063139.9299424,
+    "hash": "9f071cb2be6a7faf03600047a7fd8bde"
+  }
+}

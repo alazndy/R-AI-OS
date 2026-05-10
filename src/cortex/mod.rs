@@ -71,8 +71,17 @@ impl Cortex {
             }
         }
 
-        self.engine.save();
+        if indexed > 0 {
+            self.engine.rebuild_hnsw();
+            self.engine.save();
+        }
         Ok(indexed)
+    }
+
+    /// Rebuilds the search index and saves to disk.
+    pub fn rebuild_index(&mut self) {
+        self.engine.rebuild_hnsw();
+        self.engine.save();
     }
 
     /// Index a single file. Returns true if it was actually indexed (or re-indexed).
@@ -108,7 +117,6 @@ impl Cortex {
             .collect();
 
         self.engine.upsert_file(&path_str, mtime, pairs);
-        self.engine.save();
         Ok(true)
     }
 
