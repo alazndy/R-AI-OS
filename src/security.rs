@@ -523,7 +523,12 @@ fn static_scan(root: &Path, issues: &mut Vec<SecurityIssue>, checks_run: &mut us
 
             for (line_no, line) in content.lines().enumerate() {
                 if re.is_match(line) {
-                    let snippet = line.trim().chars().take(80).collect::<String>();
+                    let raw = line.trim();
+                    let snippet = if raw.chars().count() > 80 {
+                        format!("{}…", raw.chars().take(80).collect::<String>())
+                    } else {
+                        raw.to_string()
+                    };
                     issues.push(SecurityIssue {
                         owasp: pattern.owasp,
                         title: pattern.title,
