@@ -266,6 +266,28 @@ impl McpServer {
                     }
                 },
                 {
+                    "name": "project_info",
+                    "description": "Get a complete snapshot of a project in one call: git status, health grades, version, deps, env, disk usage, build type. Use this instead of calling individual tools one by one.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" }
+                        },
+                        "required": ["project"]
+                    }
+                },
+                {
+                    "name": "portfolio_status",
+                    "description": "Lightweight status overview of all known projects: name, status, git dirty, health grades, version. Use for getting the big picture before drilling into a specific project.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "filter": { "type": "string", "description": "Filter by project name (optional)" },
+                            "status": { "type": "string", "description": "Filter by status: active | archived (optional)" }
+                        }
+                    }
+                },
+                {
                     "name": "disk_usage",
                     "description": "Analyze disk usage of a project: total size, source files, cache dirs (target/, node_modules/, etc.) and largest files.",
                     "inputSchema": {
@@ -437,7 +459,9 @@ impl McpServer {
             "semantic_search" => self.tool_semantic_search(args),
             "ask_architect"   => self.tool_ask_architect(args),
             "get_validation_errors" => self.tool_get_validation_errors(args),
-            "disk_usage"   => self.tool_disk_usage(args),
+            "project_info"     => self.tool_project_info(args),
+            "portfolio_status" => self.tool_portfolio_status(args),
+            "disk_usage"       => self.tool_disk_usage(args),
             "list_ports"   => self.tool_list_ports(),
             "version_info" => self.tool_version_info(args),
             "version_bump" => self.tool_version_bump(args),
@@ -803,6 +827,201 @@ impl McpServer {
                 "type": "text",
                 "text": format!("{}\n\n{}", summary, serde_json::to_string_pretty(&results).unwrap_or_default())
             }]
+        }))
+    }
+
+    // ─── Aggregate tools ─────────────────────────────────────────────────────────
+
+    fn tool_project_info(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+
+        // Git
+        let git = crate::core::git::status(&path);
+
+        // Health (from DB cache — fast)
+        let health_cached = self.get_health_from_db(&path);
+
+        // Version
+        let ver = crate::core::version::info(&path);
+
+        // Env (fast — just file reads)
+        let env = crate::core::env::check(&path);
+
+        // Disk (fast — just dir_size calls)
+        let disk = crate::core::disk::analyze(&path);
+
+        // Deps — skip auto-run (slow), just report lockfile presence
+        let has_lockfile = path.join("Cargo.lock").exists()
+            || path.join("package-lock.json").exists()
+            || path.join("pnpm-lock.yaml").exists()
+            || path.join("go.sum").exists();
+
+        // Project type
+        let project_type = crate::core::build::detect_type(&path);
+
+        // memory.md / SIGMAP presence
+        let has_memory = path.join("memory.md").exists();
+        let has_sigmap = path.join("SIGMAP.md").exists();
+
+        let name = path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+
+        let summary = format!(
+            "Project: {} ({})\nGit: {} {}\nHealth: compliance={} security={} refactor={}\nVersion: {}\nEnv: {} ({} missing)\nDisk: {} total, {} cache\nType: {}  lockfile: {}  memory: {}  sigmap: {}",
+            name,
+            path.display(),
+            git.branch.as_deref().unwrap_or("?"),
+            if git.dirty { "dirty" } else { "clean" },
+            health_cached["compliance_grade"].as_str().unwrap_or("-"),
+            health_cached["security_grade"].as_str().unwrap_or("-"),
+            health_cached["refactor_grade"].as_str().unwrap_or("-"),
+            ver.as_ref().map(|v| v.current.as_str()).unwrap_or("-"),
+            if env.ok { "OK" } else { "issues" },
+            env.missing_keys.len(),
+            crate::core::disk::human_size(disk.total_bytes),
+            crate::core::disk::human_size(disk.cache_bytes),
+            project_type.label(),
+            has_lockfile,
+            has_memory,
+            has_sigmap,
+        );
+
+        Ok(json!({
+            "content": [{ "type": "text", "text": summary }],
+            "name": name,
+            "path": path.display().to_string(),
+            "project_type": project_type.label(),
+            "git": {
+                "branch": git.branch,
+                "dirty": git.dirty,
+                "staged_count": git.staged.len(),
+                "unstaged_count": git.unstaged.len(),
+                "untracked_count": git.untracked.len(),
+                "ahead": git.ahead,
+                "behind": git.behind,
+                "remote": git.remote
+            },
+            "health": health_cached,
+            "version": ver.as_ref().map(|v| json!({
+                "current": v.current,
+                "last_tag": v.last_tag,
+                "commits_since_tag": v.commits_since_tag
+            })),
+            "env": {
+                "ok": env.ok,
+                "has_env": env.has_env,
+                "has_example": env.has_example,
+                "missing_keys": env.missing_keys,
+                "empty_keys": env.empty_keys,
+                "total_keys": env.total_env_keys
+            },
+            "disk": {
+                "total_mb": disk.total_mb(),
+                "source_mb": disk.source_mb(),
+                "cache_mb": disk.cache_mb(),
+                "file_count": disk.file_count,
+                "cache_dirs": disk.cache_dirs.iter().map(|c| json!({
+                    "kind": c.kind,
+                    "mb": c.mb()
+                })).collect::<Vec<_>>()
+            },
+            "has_lockfile": has_lockfile,
+            "has_memory": has_memory,
+            "has_sigmap": has_sigmap
+        }))
+    }
+
+    fn get_health_from_db(&self, path: &std::path::Path) -> Value {
+        let path_str = path.to_string_lossy().to_string();
+        if let Ok(conn) = crate::db::open_db() {
+            let result = conn.query_row(
+                "SELECT h.compliance_grade, h.compliance_score, h.security_grade,
+                        h.security_score, h.security_issues, h.security_critical,
+                        h.git_dirty, h.has_memory, h.has_sigmap,
+                        h.refactor_grade, h.refactor_score, h.refactor_high, h.scanned_at
+                 FROM health_cache h
+                 JOIN projects p ON p.id = h.project_id
+                 WHERE p.path = ?1",
+                rusqlite::params![path_str],
+                |row| Ok(json!({
+                    "compliance_grade": row.get::<_, String>(0).unwrap_or_default(),
+                    "compliance_score": row.get::<_, Option<i64>>(1).unwrap_or_default(),
+                    "security_grade": row.get::<_, Option<String>>(2).unwrap_or_default(),
+                    "security_score": row.get::<_, Option<i64>>(3).unwrap_or_default(),
+                    "security_issues": row.get::<_, i64>(4).unwrap_or_default(),
+                    "security_critical": row.get::<_, i64>(5).unwrap_or_default(),
+                    "git_dirty": row.get::<_, i64>(6).unwrap_or_default() != 0,
+                    "has_memory": row.get::<_, i64>(7).unwrap_or_default() != 0,
+                    "has_sigmap": row.get::<_, i64>(8).unwrap_or_default() != 0,
+                    "refactor_grade": row.get::<_, String>(9).unwrap_or_else(|_| "-".into()),
+                    "refactor_score": row.get::<_, Option<i64>>(10).unwrap_or_default(),
+                    "refactor_high": row.get::<_, i64>(11).unwrap_or_default(),
+                    "scanned_at": row.get::<_, String>(12).unwrap_or_default()
+                })),
+            );
+            if let Ok(v) = result { return v; }
+        }
+        json!({ "compliance_grade": "-", "security_grade": null, "refactor_grade": "-" })
+    }
+
+    fn tool_portfolio_status(&self, args: &Value) -> Result<Value, String> {
+        let name_filter  = args["filter"].as_str().map(str::to_lowercase);
+        let status_filter = args["status"].as_str();
+
+        let conn = crate::db::open_db().map_err(|e| e.to_string())?;
+        let projects = crate::db::load_all_projects(&conn).map_err(|e| e.to_string())?;
+
+        let filtered: Vec<_> = projects.iter().filter(|p| {
+            if let Some(ref f) = name_filter {
+                if !p.name.to_lowercase().contains(f.as_str()) { return false; }
+            }
+            if let Some(s) = status_filter {
+                if p.status != s { return false; }
+            }
+            true
+        }).collect();
+
+        let mut rows = Vec::new();
+        let mut text_lines = vec![
+            format!("{:<30} {:<10} {:<8} {:<6} {:<6} {:<8}",
+                "PROJECT", "STATUS", "GIT", "COMP", "SEC", "REFACTOR")
+        ];
+        text_lines.push("─".repeat(72));
+
+        for p in &filtered {
+            let path = std::path::Path::new(&p.path);
+            let health = self.get_health_from_db(path);
+
+            let dirty = if health["git_dirty"].as_bool().unwrap_or(false) { "dirty" } else { "clean" };
+            let comp  = health["compliance_grade"].as_str().unwrap_or("-");
+            let sec   = health["security_grade"].as_str().unwrap_or("-");
+            let rf    = health["refactor_grade"].as_str().unwrap_or("-");
+
+            text_lines.push(format!("{:<30} {:<10} {:<8} {:<6} {:<6} {:<8}",
+                &p.name[..p.name.len().min(29)],
+                p.status, dirty, comp, sec, rf));
+
+            rows.push(json!({
+                "name": p.name,
+                "status": p.status,
+                "category": p.category,
+                "github": p.github,
+                "git_dirty": health["git_dirty"],
+                "compliance_grade": comp,
+                "security_grade": sec,
+                "refactor_grade": rf,
+                "has_memory": health["has_memory"],
+                "has_sigmap": health["has_sigmap"]
+            }));
+        }
+
+        text_lines.push(format!("\n{} projects", filtered.len()));
+
+        Ok(json!({
+            "content": [{ "type": "text", "text": text_lines.join("\n") }],
+            "total": filtered.len(),
+            "projects": rows
         }))
     }
 
