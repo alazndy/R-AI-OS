@@ -2,10 +2,10 @@
 
 ## Son Durum
 - Tarih: 2026-05-14
-- Aktif agent: Claude (core toolkit genişlemesi)
+- Aktif agent: Claude (v1.2.0 tamamlandı, E2E testler geçti)
 - Sürüm: v1.2.0
 - Sürüm Adı: Core Toolkit
-- Durum: `src/core/` katmanı oluşturuldu — 7 modül, 32 CLI komutu, 18 MCP tool. Raios artık AI özellikleri olmadan da tam fonksiyonel bir developer toolkit.
+- Durum: **Production-ready.** 7 core modül, 32 CLI komutu, 23 MCP tool, 66 unit test — hepsi yeşil. TUI zenginleştirildi, health view'dan git commit/push yapılabiliyor. `raios_project_info` aggregate MCP tool hazır.
 
 ## Claude
 ### Yaptıkları
@@ -23,7 +23,10 @@
   - `version.rs` — semver bump, CHANGELOG.md üretimi, git tag (2 CLI, 2 MCP tool)
   - `process.rs` — port listesi, process listesi, kill-port (2 CLI, 1 MCP tool)
   - `disk.rs` — proje boyut analizi, cache temizleme (2 CLI, 1 MCP tool)
-- **Toplam:** 32 yeni CLI komutu, 18 MCP tool, 47 unit test
+- **Aggregate MCP Tools:** `project_info` (tek çağrıda git+health+version+env+disk) + `portfolio_status` (42 proje özet tablosu). Önceki 5-8 tool çağrısı → 1 çağrıya düştü.
+- **TUI Enhancements:** Proje detay paneli health grades + constitution issues + env flags gösteriyor. Health view'da `[c]` commit / `[p]` push kısayolları eklendi.
+- **E2E Test:** 66/66 unit test yeşil. CLI smoke tests geçti. 23 MCP tool doğrulandı.
+- **Toplam:** 32 CLI komutu, 23 MCP tool, 66 unit test
 
 ## Gemini
 ### Yaptıkları
@@ -52,20 +55,28 @@
 - [x] Embedded Workers (Phase 2).
 - [x] Event-driven Sentinel (Phase 3A).
 - [x] Security + 22 Unit Tests (Phase 4).
-- [x] v1.1.6 Visual Grid (Enhanced) yayında.
+- [x] v1.1.6 Visual Grid (Enhanced).
+- [x] Refactor Scanner — health entegrasyonu.
+- [x] v1.2.0 Core Toolkit — 7 modül, 32 CLI, 23 MCP tool.
+- [x] project_info + portfolio_status aggregate MCP tools.
+- [x] TUI — proje detay zenginleştirildi, health view git actions.
+- [x] E2E test — 66/66 unit test, CLI smoke, 23 MCP tool.
 ### Devam Edenler
-- [ ] 83-field AppState refactor (Phase 3B - Sub-states).
-- [ ] TUI git panel (commit/push/diff TUI içinden).
+- [ ] 83-field AppState refactor (Phase 3B — Sub-states).
+- [ ] portfolio_status status kolonunu DB'den düzgün çek (bazı projelerde memory.md içeriği karışıyor).
 ### Sıradakiler
-- [ ] core/ modülleri TUI'ya entegre (Health + Dashboard'da build/test/deps göster).
-- [ ] raios_project_info MCP tool — tüm core verilerini tek çağrıda dönen aggregate tool.
-- [ ] CI/CD durum takibi (GitHub Actions status).
+- [ ] CI/CD durum takibi (GitHub Actions API).
+- [ ] Health view'da build/test/deps kolonları.
 - [ ] Proje detay görünümünde bağımlılık grafiği.
 
 ## Karar Günlüğü
+
 | Tarih | Agent | Karar | Neden |
 |-------|-------|-------|-------|
-| 2026-05-08 | Claude | SQLite Persistence | JSON dosya yazımındaki yarış durumlarını (race conditions) önlemek ve O(1) sorgu performansı için. |
-| 2026-05-08 | Claude | Embedded Workers | Uygulamanın daemon olmadan da (standalone) tam fonksiyonel çalışabilmesi için. |
+| 2026-05-08 | Claude | SQLite Persistence | JSON dosya yazımındaki race condition'ları önlemek ve O(1) sorgu performansı için. |
+| 2026-05-08 | Claude | Embedded Workers | Uygulamanın daemon olmadan standalone çalışabilmesi için. |
 | 2026-05-08 | Gemini | Non-blocking Render | UI thread'inin disk I/O bekleyerek donmasını engellemek için. |
-| 2026-05-08 | Claude | Event-driven Sentinel | CPU yükünü azaltmak ve değişikliklere anlık tepki verebilmek için. |
+| 2026-05-08 | Claude | Event-driven Sentinel | CPU yükünü azaltmak ve anlık tepki için. |
+| 2026-05-14 | Claude | AI-free Core Toolkit | Raios'un AI API'sine bağımlı olmaması; her feature CLI + MCP olarak erişilebilir olsun diye. |
+| 2026-05-14 | Claude | project_info aggregate tool | Agent'ların 5-8 tool yerine 1 çağrıyla tüm proje bilgisine erişmesi için (~5x token tasarrufu). |
+| 2026-05-14 | Claude | 66 unit test baseline | Her modülün izole test edilebilmesi; regresyon tespiti için CI hazırlığı. |
