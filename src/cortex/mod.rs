@@ -107,8 +107,10 @@ impl Cortex {
                     break; // safety cap hit across all projects
                 }
                 seen += 1;
-                if self.index_file(entry.path()).unwrap_or(false) {
-                    indexed += 1;
+                match self.index_file(entry.path()) {
+                    Ok(true) => indexed += 1,
+                    Ok(false) => {}
+                    Err(e) => eprintln!("[cortex] failed to index {}: {e}", entry.path().display()),
                 }
             }
 
@@ -142,8 +144,10 @@ impl Cortex {
             .filter(|e| e.file_type().is_file());
 
         for entry in walker {
-            if self.index_file(entry.path()).unwrap_or(false) {
-                indexed += 1;
+            match self.index_file(entry.path()) {
+                Ok(true) => indexed += 1,
+                Ok(false) => {}
+                Err(e) => eprintln!("[cortex] failed to index {}: {e}", entry.path().display()),
             }
         }
 
