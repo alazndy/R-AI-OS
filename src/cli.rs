@@ -505,7 +505,10 @@ fn cmd_memory(
     }
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&results).unwrap());
+        match serde_json::to_string_pretty(&results) {
+            Ok(json) => println!("{}", json),
+            Err(e) => eprintln!("JSON serialization error: {e}"),
+        }
     }
 }
 
@@ -561,7 +564,10 @@ fn cmd_memory_search(query: &str, top: usize, dev_ops: &std::path::Path, json: b
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&json_out).unwrap());
+        match serde_json::to_string_pretty(&json_out) {
+            Ok(json) => println!("{}", json),
+            Err(e) => eprintln!("JSON serialization error: {e}"),
+        }
     } else {
         for (i, r) in results.iter().enumerate() {
             let score_pct = (r.score * 100.0) as u32;
