@@ -374,6 +374,17 @@ pub fn scan_project(path: &Path) -> SecurityReport {
     }
 }
 
+fn compiled_pattern_regexes() -> &'static Vec<Option<regex_lite::Regex>> {
+    static COMPILED: std::sync::OnceLock<Vec<Option<regex_lite::Regex>>> =
+        std::sync::OnceLock::new();
+    COMPILED.get_or_init(|| {
+        PATTERNS
+            .iter()
+            .map(|p| regex_lite::Regex::new(p.pattern).ok())
+            .collect()
+    })
+}
+
 /// Scan a single file for OWASP security patterns.
 /// Returns empty Vec if the extension is not in WATCHED_EXTS or file cannot be read.
 pub fn scan_file(path: &Path) -> Vec<SecurityIssue> {
@@ -384,21 +395,31 @@ pub fn scan_file(path: &Path) -> Vec<SecurityIssue> {
 
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return vec![],
+        Err(e) => {
+            eprintln!("[security] cannot read {}: {e}", path.display());
+            return vec![];
+        }
     };
 
-    let patterns_for_ext: Vec<&Pattern> =
-        PATTERNS.iter().filter(|p| p.exts.contains(&ext)).collect();
-
+    let compiled = compiled_pattern_regexes();
     let mut issues = Vec::new();
-    for pattern in &patterns_for_ext {
-        let re = match regex_lite::Regex::new(pattern.pattern) {
-            Ok(r) => r,
-            Err(_) => continue,
+
+    for (pattern, re_opt) in PATTERNS.iter().zip(compiled.iter()) {
+        if !pattern.exts.contains(&ext) {
+            continue;
+        }
+        let re = match re_opt {
+            Some(r) => r,
+            None => continue,
         };
         for (line_no, line) in content.lines().enumerate() {
             if re.is_match(line) {
-                let snippet = line.trim().chars().take(80).collect::<String>();
+                let raw = line.trim();
+                let snippet = if raw.chars().count() > 80 {
+                    format!("{}…", raw.chars().take(80).collect::<String>())
+                } else {
+                    raw.to_string()
+                };
                 issues.push(SecurityIssue {
                     owasp: pattern.owasp,
                     title: pattern.title,
@@ -407,7 +428,7 @@ pub fn scan_file(path: &Path) -> Vec<SecurityIssue> {
                     line: Some(line_no + 1),
                     snippet: Some(snippet),
                 });
-                break;
+                break; // one finding per pattern per file
             }
         }
     }
