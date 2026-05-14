@@ -999,7 +999,12 @@ fn cmd_security(
 
     // Collect targets
     let targets: Vec<(String, std::path::PathBuf)> = if let Some(p) = scan_path {
-        vec![("custom".into(), std::path::PathBuf::from(p))]
+        let target = std::path::PathBuf::from(&p);
+        if !target.exists() {
+            eprintln!("Path does not exist: {}", target.display());
+            std::process::exit(1);
+        }
+        vec![("custom".into(), target)]
     } else {
         let projects = crate::entities::load_entities(dev_ops);
         if let Some(q) = project {
@@ -1108,30 +1113,7 @@ fn cmd_security(
         total_crit += crit;
 
         if full && !report.issues.is_empty() {
-            for issue in &report.issues {
-                let file_display = issue
-                    .file
-                    .as_ref()
-                    .map(|f| {
-                        f.file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                let line_display = issue.line.map(|l| format!(":{}", l)).unwrap_or_default();
-                println!(
-                    "  [{:>8}] [{}] {} — {}{}",
-                    issue.severity.label(),
-                    issue.owasp,
-                    issue.title,
-                    file_display,
-                    line_display
-                );
-                if let Some(ref snip) = issue.snippet {
-                    println!("             {}", snip.chars().take(64).collect::<String>());
-                }
-            }
+            print_security_report(report, false);
             println!();
         }
     }
@@ -1196,6 +1178,40 @@ fn cmd_security_watch(path: &std::path::Path, json: bool) -> anyhow::Result<()> 
         }
     }
     Ok(())
+}
+
+fn print_security_report(report: &crate::security::SecurityReport, json: bool) {
+    if json {
+        let issues: Vec<serde_json::Value> = report.issues.iter().map(|i| {
+            serde_json::json!({
+                "owasp": i.owasp,
+                "severity": i.severity.label(),
+                "title": i.title,
+                "file": i.file.as_ref().map(|p| p.display().to_string()),
+                "line": i.line,
+                "snippet": i.snippet
+            })
+        }).collect();
+        match serde_json::to_string_pretty(&issues) {
+            Ok(j) => println!("{j}"),
+            Err(e) => eprintln!("JSON error: {e}"),
+        }
+        return;
+    }
+    println!("Security scan: score={}/100 grade={}", report.score, report.grade);
+    if report.issues.is_empty() {
+        println!("No issues found");
+        return;
+    }
+    for issue in &report.issues {
+        let file_info = issue.file.as_ref()
+            .map(|p| format!(" — {}:{}", p.display(), issue.line.unwrap_or(0)))
+            .unwrap_or_default();
+        println!("⚠ {} [{}] {}{}", issue.severity.label(), issue.owasp, issue.title, file_info);
+        if let Some(ref s) = issue.snippet {
+            println!("   \"{}\"", s);
+        }
+    }
 }
 
 fn print_guard_result(
