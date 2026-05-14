@@ -78,35 +78,38 @@ impl Cortex {
         let mut indexed = 0usize;
         let mut seen = 0usize;
 
-        let walker = WalkDir::new(root)
-            .max_depth(4) // shallow enough for a full workspace scan
-            .follow_links(false) // prevents infinite loops from pnpm/yarn symlinks
-            .into_iter()
-            .filter_entry(|e| {
-                let n = e.file_name().to_string_lossy();
-                // Skip known noise dirs by name
-                if SKIP_DIRS.contains(&n.as_ref()) {
-                    return false;
-                }
-                // Extra guard: skip anything inside a .pnpm virtual store
-                if e.path()
-                    .components()
-                    .any(|c| c.as_os_str() == ".pnpm")
-                {
-                    return false;
-                }
-                true
-            })
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file());
+        // Fetch registered projects to avoid blindly scanning the giant root directory
+        let projects = crate::entities::load_entities(root);
 
-        for entry in walker {
-            if seen >= MAX_FILES_PER_INDEX {
-                break; // safety cap hit
+        for proj in projects {
+            if !proj.local_path.exists() {
+                continue;
             }
-            seen += 1;
-            if self.index_file(entry.path()).unwrap_or(false) {
-                indexed += 1;
+
+            let walker = WalkDir::new(&proj.local_path)
+                .max_depth(6) // deep enough for a single project
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(|e| {
+                    let n = e.file_name().to_string_lossy();
+                    !SKIP_DIRS.contains(&n.as_ref())
+                        && !e.path().components().any(|c| c.as_os_str() == ".pnpm")
+                })
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file());
+
+            for entry in walker {
+                if seen >= MAX_FILES_PER_INDEX {
+                    break; // safety cap hit across all projects
+                }
+                seen += 1;
+                if self.index_file(entry.path()).unwrap_or(false) {
+                    indexed += 1;
+                }
+            }
+
+            if seen >= MAX_FILES_PER_INDEX {
+                break;
             }
         }
 
