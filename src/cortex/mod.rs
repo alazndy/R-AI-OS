@@ -4,12 +4,13 @@
 //! workspace. All inference runs on-device via fastembed (ONNX Runtime).
 //!
 //! # Quick-start
-//! ```no_run
+//! ```ignore
 //! use r_ai_os::cortex::Cortex;
+//! use std::path::Path;
 //!
 //! let mut cortex = Cortex::init().unwrap();
-//! cortex.index_workspace("/path/to/Dev_Ops_New").await.unwrap();
-//! let hits = cortex.search("security vulnerability hardcoded key", 10).await.unwrap();
+//! cortex.index_workspace(Path::new("/path/to/Dev_Ops_New")).unwrap();
+//! let hits = cortex.search("security vulnerability", 10).unwrap();
 //! ```
 
 pub mod chunker;

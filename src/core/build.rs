@@ -234,7 +234,7 @@ pub fn test(dir: &Path) -> TestResult {
 fn test_rust(dir: &Path) -> TestResult {
     let start = Instant::now();
     let out = Command::new("cargo")
-        .args(["test", "--", "--test-output=immediate"])
+        .args(["test"])
         .current_dir(dir)
         .output();
     let elapsed = start.elapsed();
