@@ -12,6 +12,7 @@ pub struct ProjectHealth {
     pub compliance_score: Option<u8>,
     pub compliance_grade: String,
     pub has_memory: bool,
+    pub has_sigmap: bool,
     pub constitution_issues: Vec<String>,
     pub graphify_done: bool,
     pub graph_report: Option<PathBuf>,
@@ -20,6 +21,11 @@ pub struct ProjectHealth {
     pub security_grade: Option<String>,
     pub security_issue_count: usize,
     pub security_critical: usize,
+    // Refactor
+    pub refactor_score: u8,
+    pub refactor_grade: String,
+    pub refactor_high_count: usize,
+    pub refactor_medium_count: usize,
 }
 
 const CONSTITUTION_RULES: &[(&str, &str)] = &[
@@ -28,6 +34,7 @@ const CONSTITUTION_RULES: &[(&str, &str)] = &[
     ("api_key",       "no client-side API keys"),
     ("prompt-master", "prompt-master skill"),
     ("graphify",      "graphify skill"),
+    ("sigmap",        "SIGMAP.md context map"),
 ];
 
 pub fn check_project(proj: &EntityProject) -> ProjectHealth {
@@ -36,9 +43,11 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
     let git_dirty = crate::filebrowser::git_is_dirty(path);
     let remote_url = crate::filebrowser::git_get_remote_url(path);
     let has_memory = path.join("memory.md").exists();
+    let has_sigmap = path.join("SIGMAP.md").exists();
     let (compliance_score, compliance_grade) = compute_compliance(path);
     let constitution_issues = check_constitution(path);
     let (graphify_done, graph_report) = check_graphify(path);
+    let refactor = crate::refactor_scan::scan_project(path);
 
     let health = ProjectHealth {
         name: proj.name.clone(),
@@ -49,6 +58,7 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
         compliance_score,
         compliance_grade: compliance_grade.to_string(),
         has_memory,
+        has_sigmap,
         constitution_issues: constitution_issues.into_iter().map(|s| s.to_string()).collect(),
         graphify_done,
         graph_report,
@@ -56,6 +66,10 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
         security_grade: None,
         security_issue_count: 0,
         security_critical: 0,
+        refactor_score: refactor.score,
+        refactor_grade: refactor.grade.clone(),
+        refactor_high_count: refactor.high_count,
+        refactor_medium_count: refactor.medium_count,
     };
 
     // Write to SQLite health_cache (best-effort, don't fail if DB unavailable)
@@ -70,7 +84,11 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
                 0, 0,
                 git_dirty.unwrap_or(false),
                 has_memory,
+                has_sigmap,
                 remote_url.as_deref(),
+                &refactor.grade,
+                refactor.score,
+                refactor.high_count,
             );
         }
     }

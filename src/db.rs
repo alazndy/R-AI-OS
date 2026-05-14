@@ -22,6 +22,11 @@ fn db_path() -> std::path::PathBuf {
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
+    // Idempotent column additions for existing DBs (errors mean column already exists)
+    let _ = conn.execute_batch("ALTER TABLE health_cache ADD COLUMN refactor_grade TEXT NOT NULL DEFAULT '-'");
+    let _ = conn.execute_batch("ALTER TABLE health_cache ADD COLUMN refactor_score INTEGER");
+    let _ = conn.execute_batch("ALTER TABLE health_cache ADD COLUMN refactor_high INTEGER NOT NULL DEFAULT 0");
+
     conn.execute_batch("
         CREATE TABLE IF NOT EXISTS projects (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,8 +52,12 @@ fn migrate(conn: &Connection) -> Result<()> {
             security_critical INTEGER NOT NULL DEFAULT 0,
             git_dirty        INTEGER NOT NULL DEFAULT 0,
             has_memory       INTEGER NOT NULL DEFAULT 0,
+            has_sigmap       INTEGER NOT NULL DEFAULT 0,
             remote_url       TEXT,
-            scanned_at       TEXT DEFAULT (datetime('now'))
+            scanned_at       TEXT DEFAULT (datetime('now')),
+            refactor_grade   TEXT NOT NULL DEFAULT '-',
+            refactor_score   INTEGER,
+            refactor_high    INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS tasks (
@@ -202,13 +211,18 @@ pub fn upsert_health(
     security_critical: usize,
     git_dirty: bool,
     has_memory: bool,
+    has_sigmap: bool,
     remote_url: Option<&str>,
+    refactor_grade: &str,
+    refactor_score: u8,
+    refactor_high: usize,
 ) -> Result<()> {
     conn.execute(
         "INSERT INTO health_cache
             (project_id, compliance_grade, compliance_score, security_grade, security_score,
-             security_issues, security_critical, git_dirty, has_memory, remote_url, scanned_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))
+             security_issues, security_critical, git_dirty, has_memory, has_sigmap, remote_url,
+             refactor_grade, refactor_score, refactor_high, scanned_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'))
          ON CONFLICT(project_id) DO UPDATE SET
              compliance_grade=excluded.compliance_grade,
              compliance_score=excluded.compliance_score,
@@ -218,7 +232,11 @@ pub fn upsert_health(
              security_critical=excluded.security_critical,
              git_dirty=excluded.git_dirty,
              has_memory=excluded.has_memory,
+             has_sigmap=excluded.has_sigmap,
              remote_url=COALESCE(excluded.remote_url, remote_url),
+             refactor_grade=excluded.refactor_grade,
+             refactor_score=excluded.refactor_score,
+             refactor_high=excluded.refactor_high,
              scanned_at=datetime('now')",
         params![
             project_id,
@@ -230,7 +248,11 @@ pub fn upsert_health(
             security_critical as i64,
             git_dirty as i64,
             has_memory as i64,
+            has_sigmap as i64,
             remote_url,
+            refactor_grade,
+            refactor_score as i64,
+            refactor_high as i64,
         ],
     )?;
     Ok(())
@@ -244,6 +266,7 @@ pub struct PortfolioStats {
     pub archived: i64,
     pub dirty: i64,
     pub no_memory: i64,
+    pub no_sigmap: i64,
     pub no_github: i64,
     pub avg_compliance: f64,
     pub avg_security: f64,
@@ -259,6 +282,7 @@ pub fn query_stats(conn: &Connection) -> Result<PortfolioStats> {
     let archived: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE status IN ('archived','legacy')", [], |r| r.get(0))?;
     let dirty: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE git_dirty = 1", [], |r| r.get(0))?;
     let no_memory: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE has_memory = 0", [], |r| r.get(0))?;
+    let no_sigmap: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE has_sigmap = 0", [], |r| r.get(0))?;
     let no_github: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE github IS NULL", [], |r| r.get(0))?;
     let avg_compliance: f64 = conn.query_row("SELECT COALESCE(AVG(compliance_score), 0) FROM health_cache", [], |r| r.get(0))?;
     let avg_security: f64 = conn.query_row("SELECT COALESCE(AVG(security_score), 0) FROM health_cache", [], |r| r.get(0))?;
@@ -267,7 +291,7 @@ pub fn query_stats(conn: &Connection) -> Result<PortfolioStats> {
     let grade_c: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'C'", [], |r| r.get(0))?;
     let grade_d: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE compliance_grade NOT IN ('A','B','C') AND compliance_grade != '-'", [], |r| r.get(0))?;
 
-    Ok(PortfolioStats { total, active, archived, dirty, no_memory, no_github,
+    Ok(PortfolioStats { total, active, archived, dirty, no_memory, no_sigmap, no_github,
         avg_compliance, avg_security, grade_a, grade_b, grade_c, grade_d })
 }
 
@@ -356,7 +380,7 @@ mod tests {
         let conn = in_memory();
         upsert_project(&conn, "P", "c", "/tmp/p", None, "active", None, None, None, None).unwrap();
         let id = project_id_for_path(&conn, "/tmp/p").unwrap();
-        upsert_health(&conn, id, "A", Some(90), Some("A"), Some(95), 0, 0, false, true, None).unwrap();
+        upsert_health(&conn, id, "A", Some(90), Some("A"), Some(95), 0, 0, false, true, true, None, "A", 95, 0).unwrap();
         let stats = query_stats(&conn).unwrap();
         assert_eq!(stats.grade_a, 1);
     }

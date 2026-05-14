@@ -266,6 +266,139 @@ impl McpServer {
                     }
                 },
                 {
+                    "name": "disk_usage",
+                    "description": "Analyze disk usage of a project: total size, source files, cache dirs (target/, node_modules/, etc.) and largest files.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" }
+                        },
+                        "required": ["project"]
+                    }
+                },
+                {
+                    "name": "list_ports",
+                    "description": "List all listening TCP ports on this machine with their PID and process name.",
+                    "inputSchema": { "type": "object", "properties": {} }
+                },
+                {
+                    "name": "version_info",
+                    "description": "Get current version, last git tag, and commits since last tag for a project.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" }
+                        },
+                        "required": ["project"]
+                    }
+                },
+                {
+                    "name": "version_bump",
+                    "description": "Bump project semver (patch/minor/major), optionally update CHANGELOG.md and create git tag.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project":   { "type": "string",  "description": "Project name or absolute path" },
+                            "level":     { "type": "string",  "description": "patch | minor | major" },
+                            "changelog": { "type": "boolean", "description": "Update CHANGELOG.md (default false)" },
+                            "tag":       { "type": "boolean", "description": "Create git tag (default false)" }
+                        },
+                        "required": ["project", "level"]
+                    }
+                },
+                {
+                    "name": "env_status",
+                    "description": "Check .env file health: missing keys vs .env.example, empty values, undocumented keys. Never returns secret values — key names only.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" }
+                        },
+                        "required": ["project"]
+                    }
+                },
+                {
+                    "name": "deps_status",
+                    "description": "Check dependency health: outdated packages and CVE vulnerabilities. Auto-detects Rust/Node/Python/Go.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" }
+                        },
+                        "required": ["project"]
+                    }
+                },
+                {
+                    "name": "run_build",
+                    "description": "Build a project. Auto-detects Rust/Node/Python/Go. Returns ok status, warnings, errors, and diagnostics.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" }
+                        },
+                        "required": ["project"]
+                    }
+                },
+                {
+                    "name": "run_tests",
+                    "description": "Run tests for a project. Auto-detects cargo test / npm test / pytest / go test. Returns passed/failed counts.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" }
+                        },
+                        "required": ["project"]
+                    }
+                },
+                {
+                    "name": "git_status",
+                    "description": "Get git status of a project: branch, dirty files, staged/unstaged/untracked lists, ahead/behind remote.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" }
+                        },
+                        "required": ["project"]
+                    }
+                },
+                {
+                    "name": "git_log",
+                    "description": "Get recent commit history of a project.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" },
+                            "count":   { "type": "integer", "description": "Number of commits to return (default 10)" }
+                        },
+                        "required": ["project"]
+                    }
+                },
+                {
+                    "name": "git_diff",
+                    "description": "Get diff summary (files changed, insertions, deletions) and full diff text of a project.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" },
+                            "staged":  { "type": "boolean", "description": "Show staged changes only (default false)" }
+                        },
+                        "required": ["project"]
+                    }
+                },
+                {
+                    "name": "git_commit",
+                    "description": "Stage all changes and commit in a project. Optionally push after commit.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": { "type": "string", "description": "Project name or absolute path" },
+                            "message": { "type": "string", "description": "Commit message" },
+                            "push":    { "type": "boolean", "description": "Push after committing (default false)" }
+                        },
+                        "required": ["project", "message"]
+                    }
+                },
+                {
                     "name": "ask_architect",
                     "description": "Consult the Architectural Memory. Use this to ask questions about where to put new modules, how to follow project conventions, or previous architectural decisions. Searches MASTER.md rules and memory.md decision logs.",
                     "inputSchema": {
@@ -304,6 +437,18 @@ impl McpServer {
             "semantic_search" => self.tool_semantic_search(args),
             "ask_architect"   => self.tool_ask_architect(args),
             "get_validation_errors" => self.tool_get_validation_errors(args),
+            "disk_usage"   => self.tool_disk_usage(args),
+            "list_ports"   => self.tool_list_ports(),
+            "version_info" => self.tool_version_info(args),
+            "version_bump" => self.tool_version_bump(args),
+            "env_status"  => self.tool_env_status(args),
+            "deps_status" => self.tool_deps_status(args),
+            "run_build"   => self.tool_run_build(args),
+            "run_tests"   => self.tool_run_tests(args),
+            "git_status"  => self.tool_git_status(args),
+            "git_log"     => self.tool_git_log(args),
+            "git_diff"    => self.tool_git_diff(args),
+            "git_commit"  => self.tool_git_commit(args),
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
@@ -658,6 +803,322 @@ impl McpServer {
                 "type": "text",
                 "text": format!("{}\n\n{}", summary, serde_json::to_string_pretty(&results).unwrap_or_default())
             }]
+        }))
+    }
+
+    // ─── Disk tools ──────────────────────────────────────────────────────────────
+
+    fn tool_disk_usage(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+        let r = crate::core::disk::analyze(&path);
+        let mut lines = vec![
+            format!("Total: {}  Source: {}  Cache: {}  Files: {}",
+                crate::core::disk::human_size(r.total_bytes),
+                crate::core::disk::human_size(r.source_bytes),
+                crate::core::disk::human_size(r.cache_bytes),
+                r.file_count),
+        ];
+        for c in &r.cache_dirs {
+            lines.push(format!("  cache  {:.<30} {}  ({})",
+                c.path.file_name().unwrap_or_default().to_string_lossy(),
+                crate::core::disk::human_size(c.bytes), c.kind));
+        }
+        for (f, s) in r.largest_files.iter().take(5) {
+            lines.push(format!("  large  {}  {}",
+                f.file_name().unwrap_or_default().to_string_lossy(),
+                crate::core::disk::human_size(*s)));
+        }
+        Ok(json!({
+            "content": [{ "type": "text", "text": lines.join("\n") }],
+            "total_mb": r.total_mb(),
+            "source_mb": r.source_mb(),
+            "cache_mb": r.cache_mb(),
+            "file_count": r.file_count,
+            "cache_dirs": r.cache_dirs.len()
+        }))
+    }
+
+    // ─── Process tools ───────────────────────────────────────────────────────────
+
+    fn tool_list_ports(&self) -> Result<Value, String> {
+        let ports = crate::core::process::list_ports();
+        let text = if ports.is_empty() {
+            "No listening ports found".into()
+        } else {
+            let mut lines = vec![format!("{:<8} {:<10} {}", "PORT", "PID", "PROCESS")];
+            for p in &ports {
+                let pid_s = p.pid.map(|n| n.to_string()).unwrap_or_else(|| "—".into());
+                let name  = p.process_name.as_deref().unwrap_or("—");
+                lines.push(format!("{:<8} {:<10} {}", p.port, pid_s, name));
+            }
+            lines.join("\n")
+        };
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "ports": ports
+        }))
+    }
+
+    // ─── Version tools ───────────────────────────────────────────────────────────
+
+    fn tool_version_info(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+        let v = crate::core::version::info(&path)
+            .ok_or_else(|| "No version file found".to_string())?;
+
+        let text = format!(
+            "Version: {} ({})\nFile: {}\nLast tag: {}\nCommits since tag: {}",
+            v.current, v.project_type, v.version_file,
+            v.last_tag.as_deref().unwrap_or("none"),
+            v.commits_since_tag,
+        );
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "current": v.current,
+            "project_type": v.project_type,
+            "last_tag": v.last_tag,
+            "commits_since_tag": v.commits_since_tag
+        }))
+    }
+
+    fn tool_version_bump(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+        let level = args["level"].as_str().ok_or("missing level")?;
+        let bump_type = crate::core::version::BumpType::from_str(level)
+            .ok_or_else(|| format!("Invalid level '{}' — use patch | minor | major", level))?;
+        let changelog = args["changelog"].as_bool().unwrap_or(false);
+        let tag       = args["tag"].as_bool().unwrap_or(false);
+
+        let r = crate::core::version::bump(&path, &bump_type, changelog, tag);
+        let text = if r.ok {
+            format!("✓ {} → {}  ({})\n{}", r.old_version, r.new_version, r.version_file, r.changelog_entry)
+        } else {
+            format!("✗ {}", r.message)
+        };
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "ok": r.ok,
+            "old_version": r.old_version,
+            "new_version": r.new_version,
+            "changelog_entry": r.changelog_entry
+        }))
+    }
+
+    // ─── Env tools ───────────────────────────────────────────────────────────────
+
+    fn tool_env_status(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+        let r = crate::core::env::check(&path);
+
+        let mut lines = vec![
+            format!("has_env: {}  has_example: {}  total_keys: {}",
+                r.has_env, r.has_example, r.total_env_keys),
+        ];
+        if !r.missing_keys.is_empty() {
+            lines.push(format!("MISSING ({}):{}", r.missing_keys.len(),
+                r.missing_keys.iter().map(|k| format!(" {}", k)).collect::<String>()));
+        }
+        if !r.empty_keys.is_empty() {
+            lines.push(format!("EMPTY ({}):{}", r.empty_keys.len(),
+                r.empty_keys.iter().map(|k| format!(" {}=", k)).collect::<String>()));
+        }
+        if !r.undocumented_keys.is_empty() {
+            lines.push(format!("UNDOCUMENTED ({}):{}", r.undocumented_keys.len(),
+                r.undocumented_keys.iter().map(|k| format!(" {}", k)).collect::<String>()));
+        }
+        if r.ok { lines.push("✓ All env keys present and set".into()); }
+
+        Ok(json!({
+            "content": [{ "type": "text", "text": lines.join("\n") }],
+            "ok": r.ok,
+            "has_env": r.has_env,
+            "has_example": r.has_example,
+            "missing_keys": r.missing_keys,
+            "empty_keys": r.empty_keys,
+            "undocumented_keys": r.undocumented_keys,
+            "total_env_keys": r.total_env_keys,
+            "total_example_keys": r.total_example_keys
+        }))
+    }
+
+    // ─── Deps tools ──────────────────────────────────────────────────────────────
+
+    fn tool_deps_status(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+        let r = crate::core::deps::check(&path);
+
+        let cve_summary = if r.cve_critical > 0 {
+            format!("🔴 {} CVEs ({} critical)", r.cve_count, r.cve_critical)
+        } else if r.cve_count > 0 {
+            format!("⚠ {} CVEs", r.cve_count)
+        } else {
+            "✓ No known CVEs".into()
+        };
+
+        let outdated_summary = if r.outdated_count > 0 {
+            format!("⚠ {} outdated packages", r.outdated_count)
+        } else {
+            "✓ All deps up to date".into()
+        };
+
+        let details = r.cve_issues.iter()
+            .map(|v| format!("[{}] {} {} — {}", v.severity.to_uppercase(), v.package, v.version, v.description))
+            .chain(r.outdated.iter().take(10).map(|d| format!("{} {} → {}", d.name, d.current, d.latest)))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let text = format!("{}\n{}\n{}", cve_summary, outdated_summary, details);
+
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "cve_count": r.cve_count,
+            "cve_critical": r.cve_critical,
+            "outdated_count": r.outdated_count,
+            "has_lockfile": r.has_lockfile,
+            "project_type": r.project_type,
+            "tool_missing": r.tool_missing
+        }))
+    }
+
+    // ─── Build tools ─────────────────────────────────────────────────────────────
+
+    fn tool_run_build(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+        let r = crate::core::build::build(&path);
+        let status = if r.ok { "✓ OK" } else { "✗ FAILED" };
+        let text = format!(
+            "{} {} — {} in {}ms  ({} warnings, {} errors)\n{}",
+            status, r.project_type, r.command, r.duration_ms,
+            r.warnings, r.errors,
+            r.diagnostics.iter()
+                .map(|d| format!("  [{}] {}:{} — {}", d.level, d.file, d.line.map(|l|l.to_string()).unwrap_or_default(), d.message))
+                .collect::<Vec<_>>().join("\n")
+        );
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "ok": r.ok,
+            "warnings": r.warnings,
+            "errors": r.errors,
+            "duration_ms": r.duration_ms,
+            "project_type": r.project_type
+        }))
+    }
+
+    fn tool_run_tests(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+        let r = crate::core::build::test(&path);
+        let status = if r.ok { "✓" } else { "✗" };
+        let text = format!(
+            "{} {} — {} passed, {} failed, {} ignored  ({}ms)\n{}",
+            status, r.command, r.passed, r.failed, r.ignored, r.duration_ms,
+            r.failures.iter().map(|f| format!("  ↳ {}", f)).collect::<Vec<_>>().join("\n")
+        );
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "ok": r.ok,
+            "passed": r.passed,
+            "failed": r.failed,
+            "ignored": r.ignored,
+            "duration_ms": r.duration_ms,
+            "project_type": r.project_type
+        }))
+    }
+
+    // ─── Git tools ───────────────────────────────────────────────────────────────
+
+    fn resolve_git_path(&self, args: &Value) -> Result<std::path::PathBuf, String> {
+        let project = args["project"].as_str().ok_or("missing project")?;
+        let direct = std::path::Path::new(project);
+        if direct.exists() {
+            return Ok(direct.to_path_buf());
+        }
+        if let Ok(conn) = crate::db::open_db() {
+            if let Ok(projects) = crate::db::load_all_projects(&conn) {
+                if let Some(found) = projects.iter().find(|p| {
+                    p.name.to_lowercase().contains(&project.to_lowercase())
+                }) {
+                    return Ok(std::path::PathBuf::from(&found.path));
+                }
+            }
+        }
+        Err(format!("Project not found: {}", project))
+    }
+
+    fn tool_git_status(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+        let s = crate::core::git::status(&path);
+        let text = format!(
+            "Branch: {}  {}\nAhead: {}  Behind: {}\nStaged: {}  Modified: {}  Untracked: {}",
+            s.branch.as_deref().unwrap_or("(detached)"),
+            if s.dirty { "dirty" } else { "clean" },
+            s.ahead, s.behind,
+            s.staged.len(), s.unstaged.len(), s.untracked.len(),
+        );
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "data": s
+        }))
+    }
+
+    fn tool_git_log(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+        let count = args["count"].as_u64().unwrap_or(10) as usize;
+        let entries = crate::core::git::log(&path, count);
+        let text = entries.iter()
+            .map(|e| format!("{} {} ({} {})", e.short_hash, e.message, e.author, e.date))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "data": entries
+        }))
+    }
+
+    fn tool_git_diff(&self, args: &Value) -> Result<Value, String> {
+        let path = self.resolve_git_path(args)?;
+        let staged = args["staged"].as_bool().unwrap_or(false);
+        let d = crate::core::git::diff(&path, staged);
+        let summary = format!(
+            "{} files changed  +{}  -{}",
+            d.files_changed, d.insertions, d.deletions
+        );
+        let text = if d.diff_text.is_empty() {
+            summary
+        } else {
+            format!("{}\n\n{}", summary, d.diff_text)
+        };
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "data": { "files_changed": d.files_changed, "insertions": d.insertions, "deletions": d.deletions }
+        }))
+    }
+
+    fn tool_git_commit(&self, args: &Value) -> Result<Value, String> {
+        let path    = self.resolve_git_path(args)?;
+        let message = args["message"].as_str().ok_or("missing message")?;
+        let push    = args["push"].as_bool().unwrap_or(false);
+
+        let commit_result = crate::core::git::commit(&path, message, true);
+        if !commit_result.ok {
+            return Ok(json!({
+                "content": [{ "type": "text", "text": format!("Commit failed: {}", commit_result.message) }],
+                "ok": false
+            }));
+        }
+
+        let mut text = format!("✓ Committed: {}", commit_result.message);
+        if push {
+            let push_result = crate::core::git::push(&path);
+            if push_result.ok {
+                text.push_str("\n✓ Pushed to origin");
+            } else {
+                text.push_str(&format!("\n✗ Push failed: {}", push_result.message));
+            }
+        }
+
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "ok": true
         }))
     }
 }

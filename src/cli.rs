@@ -127,6 +127,156 @@ pub enum Commands {
     },
     /// Install/Bootstrap the entire ECC, Maestro, and system architecture (90+ Agents)
     Bootstrap,
+    /// Bump project version (semver) and optionally update CHANGELOG
+    VersionBump {
+        /// Bump level: patch | minor | major
+        level: String,
+        /// Project name or path (default: current directory)
+        project: Option<String>,
+        /// Update CHANGELOG.md with commits since last tag
+        #[arg(long)]
+        changelog: bool,
+        /// Create a git tag after bumping
+        #[arg(long)]
+        tag: bool,
+    },
+    /// Show current version and changelog since last tag
+    VersionInfo {
+        /// Project name or path (default: current directory)
+        project: Option<String>,
+    },
+    /// Analyze disk usage of a project or all projects
+    Disk {
+        /// Project name or path (default: all projects)
+        project: Option<String>,
+    },
+    /// Remove build artifacts (target/, node_modules/, __pycache__, etc.)
+    Clean {
+        /// Project name or path (default: current directory)
+        project: Option<String>,
+        /// Show what would be deleted without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+        /// Clean all known projects
+        #[arg(long)]
+        all: bool,
+    },
+    /// List all listening ports with PID and process name
+    Ps {
+        /// Show top N processes by memory (default: show ports only)
+        #[arg(short, long)]
+        procs: bool,
+        /// Number of processes to show
+        #[arg(short, long, default_value = "15")]
+        top: usize,
+    },
+    /// Kill a process by port number
+    KillPort {
+        /// Port number to kill
+        port: u16,
+    },
+    /// Check .env files: missing keys, empty values, undocumented secrets
+    Env {
+        /// Project name or path (default: current directory)
+        project: Option<String>,
+        /// Run for all known projects
+        #[arg(long)]
+        all: bool,
+    },
+    /// Check dependencies: outdated packages and CVE vulnerabilities
+    Deps {
+        /// Project name or path (default: current directory)
+        project: Option<String>,
+        /// Show only CVE vulnerabilities (skip outdated)
+        #[arg(long)]
+        audit: bool,
+        /// Run for all known projects
+        #[arg(long)]
+        all: bool,
+    },
+    /// Build a project (auto-detects Rust/Node/Python/Go)
+    Build {
+        /// Project name or path (default: current directory)
+        project: Option<String>,
+    },
+    /// Run tests for a project (auto-detects test runner)
+    Test {
+        /// Project name or path (default: current directory)
+        project: Option<String>,
+        /// Run tests for all known projects
+        #[arg(long)]
+        all: bool,
+    },
+    /// Git operations on any project
+    Git {
+        #[command(subcommand)]
+        cmd: GitCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum GitCommands {
+    /// Show working tree status
+    Status {
+        /// Project name or path (default: current directory)
+        project: Option<String>,
+    },
+    /// Show commit log
+    Log {
+        /// Project name or path
+        project: Option<String>,
+        /// Number of commits to show
+        #[arg(short = 'n', long, default_value = "10")]
+        count: usize,
+    },
+    /// Show diff
+    Diff {
+        /// Project name or path
+        project: Option<String>,
+        /// Show staged changes only
+        #[arg(long)]
+        staged: bool,
+    },
+    /// Stage all and commit
+    Commit {
+        /// Commit message
+        #[arg(short, long)]
+        message: String,
+        /// Project name or path
+        project: Option<String>,
+        /// Push after committing
+        #[arg(long)]
+        push: bool,
+    },
+    /// Push current branch to origin
+    Push {
+        /// Project name or path
+        project: Option<String>,
+    },
+    /// Pull from origin (fast-forward only)
+    Pull {
+        /// Project name or path
+        project: Option<String>,
+    },
+    /// List branches
+    Branches {
+        /// Project name or path
+        project: Option<String>,
+    },
+    /// Checkout a branch
+    Checkout {
+        /// Branch name
+        branch: String,
+        /// Project name or path
+        project: Option<String>,
+    },
+    /// Create and checkout a new branch
+    Branch {
+        /// New branch name
+        name: String,
+        /// Project name or path
+        project: Option<String>,
+    },
 }
 
 /// Load config or fall back to auto-detected dev_ops and a dummy master path.
@@ -190,6 +340,39 @@ pub fn run(cli: Cli) {
         }
         Commands::Bootstrap => {
             cmd_bootstrap();
+        }
+        Commands::VersionBump { level, project, changelog, tag } => {
+            cmd_version_bump(&level, project, changelog, tag, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::VersionInfo { project } => {
+            cmd_version_info(project, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::Disk { project } => {
+            cmd_disk(project, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::Clean { project, dry_run, all } => {
+            cmd_clean(project, dry_run, all, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::Ps { procs, top } => {
+            cmd_ps(procs, top, cli.json);
+        }
+        Commands::KillPort { port } => {
+            cmd_kill_port(port, cli.json);
+        }
+        Commands::Env { project, all } => {
+            cmd_env(project, all, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::Deps { project, audit, all } => {
+            cmd_deps(project, audit, all, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::Build { project } => {
+            cmd_build(project, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::Test { project, all } => {
+            cmd_test(project, all, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::Git { cmd } => {
+            cmd_git(cmd, &cfg.dev_ops_path, cli.json);
         }
     }
 }
@@ -945,12 +1128,569 @@ fn cmd_task(description: &str, project_dir: Option<String>) {
             
             // Execute the agent via the runner
             // Note: We use 'gemini' or 'claude' as the base runner and pass the subagent name in the prompt
-            let prompt = format!("Use your specialist subagent '{}' to solve this task: {}", agent, description);
+            let _prompt = format!("Use your specialist subagent '{}' to solve this task: {}", agent, description);
             let _ = crate::agent_runner::run_agent("gemini", project_dir, None);
             // In a real implementation, we'd pass the prompt to the process stdin or as an argument.
             // For now, we've identified the agent and started the platform.
         }
         Ok(None) => println!("?? No specific specialist found for this task. Try being more descriptive."),
         Err(e) => eprintln!("? Routing error: {}", e),
+    }
+}
+
+// ─── Disk commands ───────────────────────────────────────────────────────────
+
+fn cmd_disk(project: Option<String>, dev_ops: &Path, json: bool) {
+    use crate::core::disk;
+
+    let reports = if project.is_none() {
+        disk::analyze_all(dev_ops)
+    } else {
+        vec![disk::analyze(&resolve_project_path(project, dev_ops))]
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&reports).unwrap_or_default());
+        return;
+    }
+
+    println!("{:<32} {:>10} {:>10} {:>10} {:>6}", "PROJECT", "TOTAL", "SOURCE", "CACHE", "FILES");
+    println!("{}", "─".repeat(72));
+
+    for r in &reports {
+        let name = r.path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| r.path.display().to_string());
+        println!("{:<32} {:>10} {:>10} {:>10} {:>6}",
+            &name[..name.len().min(31)],
+            disk::human_size(r.total_bytes),
+            disk::human_size(r.source_bytes),
+            disk::human_size(r.cache_bytes),
+            r.file_count);
+
+        for c in &r.cache_dirs {
+            println!("  ↳ {:.<28} {:>10}  ({})", c.path.file_name().unwrap_or_default().to_string_lossy(), disk::human_size(c.bytes), c.kind);
+        }
+    }
+
+    let total_cache: u64 = reports.iter().map(|r| r.cache_bytes).sum();
+    if total_cache > 0 {
+        println!("\n  Total reclaimable cache: {}", disk::human_size(total_cache));
+        println!("  Run `raios clean --all` to free it");
+    }
+}
+
+fn cmd_clean(project: Option<String>, dry_run: bool, all: bool, dev_ops: &Path, json: bool) {
+    use crate::core::disk;
+
+    let paths: Vec<std::path::PathBuf> = if all {
+        crate::db::open_db()
+            .and_then(|conn| crate::db::load_all_projects(&conn))
+            .map(|ps| ps.iter()
+                .map(|p| std::path::PathBuf::from(&p.path))
+                .filter(|p| p.exists())
+                .collect())
+            .unwrap_or_default()
+    } else {
+        vec![resolve_project_path(project, dev_ops)]
+    };
+
+    let mut total_freed = 0u64;
+    let prefix = if dry_run { "DRY RUN" } else { "CLEAN" };
+
+    for path in &paths {
+        let result = disk::clean(path, dry_run);
+        total_freed += result.freed_bytes;
+
+        if json {
+            println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        } else {
+            for dir in &result.cleaned_dirs {
+                let rel = dir.strip_prefix(path).unwrap_or(dir);
+                println!("[{}] {} — {}", prefix, rel.display(),
+                    disk::human_size(result.freed_bytes / result.cleaned_dirs.len().max(1) as u64));
+            }
+            for e in &result.errors {
+                eprintln!("  ✗ {}", e);
+            }
+        }
+    }
+
+    if !json {
+        let action = if dry_run { "Would free" } else { "Freed" };
+        println!("\n✓ {} {}", action, disk::human_size(total_freed));
+    }
+}
+
+// ─── Process commands ────────────────────────────────────────────────────────
+
+fn cmd_ps(show_procs: bool, top: usize, json: bool) {
+    use crate::core::process;
+
+    let ports = process::list_ports();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&ports).unwrap_or_default());
+    } else {
+        println!("{:<8} {:<10} {:<8} {}", "PORT", "PID", "PROTO", "PROCESS");
+        println!("{}", "─".repeat(50));
+        for p in &ports {
+            let pid_s  = p.pid.map(|n| n.to_string()).unwrap_or_else(|| "—".into());
+            let name   = p.process_name.as_deref().unwrap_or("—");
+            println!("{:<8} {:<10} {:<8} {}", p.port, pid_s, p.protocol, name);
+        }
+        if ports.is_empty() { println!("  No listening ports found"); }
+    }
+
+    if show_procs {
+        let procs = process::list_processes(top);
+        if json {
+            println!("{}", serde_json::to_string_pretty(&procs).unwrap_or_default());
+        } else {
+            println!("\n{:<8} {:<6} {:<8} {}", "PID", "CPU%", "MEM MB", "PROCESS");
+            println!("{}", "─".repeat(50));
+            for p in &procs {
+                let cpu = p.cpu_pct.map(|c| format!("{:.1}", c)).unwrap_or_else(|| "—".into());
+                let mem = p.mem_mb.map(|m| format!("{:.1}", m)).unwrap_or_else(|| "—".into());
+                println!("{:<8} {:<6} {:<8} {}", p.pid, cpu, mem, p.name);
+            }
+        }
+    }
+}
+
+fn cmd_kill_port(port: u16, json: bool) {
+    let r = crate::core::process::kill_port(port);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+    } else if r.ok {
+        println!("✓ {}", r.message);
+    } else {
+        eprintln!("✗ {}", r.message);
+    }
+}
+
+// ─── Version commands ────────────────────────────────────────────────────────
+
+fn cmd_version_info(project: Option<String>, dev_ops: &Path, json: bool) {
+    let path = resolve_project_path(project, dev_ops);
+    match crate::core::version::info(&path) {
+        None => eprintln!("✗ No version file found (Cargo.toml / package.json / pyproject.toml)"),
+        Some(v) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            } else {
+                println!("Version:  {} ({})", v.current, v.project_type);
+                println!("File:     {}", v.version_file);
+                match &v.last_tag {
+                    Some(t) => println!("Last tag: {}  ({} commits since)", t, v.commits_since_tag),
+                    None    => println!("Last tag: (none)"),
+                }
+                if v.commits_since_tag > 0 {
+                    println!("\nChanges since {}:", v.last_tag.as_deref().unwrap_or("beginning"));
+                    let entry = crate::core::version::changelog(&path);
+                    println!("{}", entry);
+                }
+            }
+        }
+    }
+}
+
+fn cmd_version_bump(level: &str, project: Option<String>, changelog: bool, tag: bool, dev_ops: &Path, json: bool) {
+    let bump_type = match crate::core::version::BumpType::from_str(level) {
+        Some(b) => b,
+        None => {
+            eprintln!("✗ Invalid bump level '{}' — use: patch | minor | major", level);
+            return;
+        }
+    };
+    let path = resolve_project_path(project, dev_ops);
+    let r = crate::core::version::bump(&path, &bump_type, changelog, tag);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        return;
+    }
+
+    if r.ok {
+        println!("✓ {} → {}  ({})", r.old_version, r.new_version, r.version_file);
+        if changelog { println!("✓ CHANGELOG.md updated"); }
+        if tag       { println!("✓ Git tag v{} created", r.new_version); }
+        if !r.changelog_entry.is_empty() {
+            println!("\n{}", r.changelog_entry);
+        }
+    } else {
+        eprintln!("✗ {}", r.message);
+    }
+}
+
+// ─── Env command ─────────────────────────────────────────────────────────────
+
+fn cmd_env(project: Option<String>, all: bool, dev_ops: &Path, json: bool) {
+    use crate::core::env;
+
+    if all {
+        if let Ok(conn) = crate::db::open_db() {
+            if let Ok(projects) = crate::db::load_all_projects(&conn) {
+                for p in &projects {
+                    let path = std::path::Path::new(&p.path);
+                    if !path.exists() { continue; }
+                    let r = env::check(path);
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+                    } else {
+                        let status = if r.ok { "✓" } else { "✗" };
+                        let detail = match (r.missing_keys.len(), r.empty_keys.len()) {
+                            (0, 0) if !r.has_env => "no .env".to_string(),
+                            (0, 0) => format!("{} keys OK", r.total_env_keys),
+                            (m, e) => format!("{} missing  {} empty", m, e),
+                        };
+                        println!("{} {:<30}  {}", status, p.name, detail);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    let path = resolve_project_path(project, dev_ops);
+    let r = env::check(&path);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        return;
+    }
+
+    // Files overview
+    println!("Env files:");
+    for f in &r.files {
+        if f.exists {
+            println!("  ✓ {:<25} {} keys", f.name, f.key_count);
+        }
+    }
+    if !r.has_env     { println!("  ✗ .env              MISSING"); }
+    if !r.has_example { println!("  ✗ .env.example      MISSING — new devs can't onboard"); }
+
+    // Issues
+    if !r.missing_keys.is_empty() {
+        println!("\n⚠  Missing keys ({}) — in .env.example but not in .env:", r.missing_keys.len());
+        for k in &r.missing_keys { println!("    - {}", k); }
+    }
+    if !r.empty_keys.is_empty() {
+        println!("\n⚠  Empty values ({}):", r.empty_keys.len());
+        for k in &r.empty_keys { println!("    - {}=", k); }
+    }
+    if !r.undocumented_keys.is_empty() {
+        println!("\nℹ  Undocumented keys ({}) — in .env but not in .env.example:", r.undocumented_keys.len());
+        for k in &r.undocumented_keys { println!("    - {}", k); }
+    }
+    if r.ok { println!("\n✓ All env keys present and set"); }
+}
+
+// ─── Deps command ────────────────────────────────────────────────────────────
+
+fn print_deps_report(r: &crate::core::deps::DepsReport, json: bool) {
+    if json {
+        println!("{}", serde_json::to_string_pretty(r).unwrap_or_default());
+        return;
+    }
+
+    println!("── {} ──  lockfile: {}",
+        r.project_type,
+        if r.has_lockfile { "✓" } else { "✗ MISSING" });
+
+    if r.cve_count > 0 {
+        println!("  🔴 {} CVE ({} critical)", r.cve_count, r.cve_critical);
+        for v in &r.cve_issues {
+            println!("    [{:>8}] {} {} — {}", v.severity.to_uppercase(), v.package, v.version, v.description);
+        }
+    } else {
+        println!("  🔒 No known CVEs");
+    }
+
+    if r.outdated_count > 0 {
+        println!("  ⚠  {} outdated", r.outdated_count);
+        for d in r.outdated.iter().take(10) {
+            println!("    {:<30} {} → {}", d.name, d.current, d.latest);
+        }
+        if r.outdated_count > 10 {
+            println!("    … and {} more", r.outdated_count - 10);
+        }
+    } else {
+        println!("  ✓  All deps up to date");
+    }
+
+    for msg in &r.tool_missing {
+        println!("  ℹ  Tool not found: {}", msg);
+    }
+}
+
+fn cmd_deps(project: Option<String>, _audit_only: bool, all: bool, dev_ops: &Path, json: bool) {
+    use crate::core::deps;
+
+    if all {
+        if let Ok(conn) = crate::db::open_db() {
+            if let Ok(projects) = crate::db::load_all_projects(&conn) {
+                for p in &projects {
+                    let path = std::path::Path::new(&p.path);
+                    if !path.exists() { continue; }
+                    let r = deps::check(path);
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+                    } else {
+                        print!("{:<30} ", p.name);
+                        let cve = if r.cve_critical > 0 {
+                            format!("🔴 {} crit", r.cve_critical)
+                        } else if r.cve_count > 0 {
+                            format!("⚠  {} cve", r.cve_count)
+                        } else {
+                            "✓ 0 cve".into()
+                        };
+                        let out = if r.outdated_count > 0 {
+                            format!("⚠  {} outdated", r.outdated_count)
+                        } else {
+                            "✓ current".into()
+                        };
+                        println!("{}  {}", cve, out);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    let path = resolve_project_path(project, dev_ops);
+    let report = deps::check(&path);
+    print_deps_report(&report, json);
+}
+
+// ─── Build command ───────────────────────────────────────────────────────────
+
+fn cmd_build(project: Option<String>, dev_ops: &Path, json: bool) {
+    let path = resolve_project_path(project, dev_ops);
+    let result = crate::core::build::build(&path);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        return;
+    }
+
+    let status = if result.ok { "✓ OK" } else { "✗ FAILED" };
+    println!("{} {} — {} in {}ms  ({} warnings, {} errors)",
+        status, result.project_type, result.command,
+        result.duration_ms, result.warnings, result.errors);
+
+    for d in &result.diagnostics {
+        let loc = d.line.map(|l| format!(":{}",l)).unwrap_or_default();
+        println!("  [{}] {}{} — {}", d.level.to_uppercase(), d.file, loc, d.message);
+    }
+
+    if !result.ok && result.diagnostics.is_empty() {
+        println!("{}", result.raw_output);
+    }
+}
+
+fn cmd_test(project: Option<String>, all: bool, dev_ops: &Path, json: bool) {
+    use crate::core::build;
+
+    if all {
+        if let Ok(conn) = crate::db::open_db() {
+            if let Ok(projects) = crate::db::load_all_projects(&conn) {
+                let mut total_pass = 0usize;
+                let mut total_fail = 0usize;
+                for p in &projects {
+                    let path = std::path::Path::new(&p.path);
+                    if !path.exists() { continue; }
+                    let r = build::test(path);
+                    total_pass += r.passed;
+                    total_fail += r.failed;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+                    } else {
+                        let status = if r.ok { "✓" } else { "✗" };
+                        println!("{} {:<30} {}/{} tests  {}ms",
+                            status, p.name,
+                            r.passed, r.passed + r.failed,
+                            r.duration_ms);
+                        for f in &r.failures {
+                            println!("    ↳ {}", f);
+                        }
+                    }
+                }
+                if !json {
+                    println!("\nTotal: {} passed, {} failed", total_pass, total_fail);
+                }
+            }
+        }
+        return;
+    }
+
+    let path = resolve_project_path(project, dev_ops);
+    let result = build::test(&path);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        return;
+    }
+
+    let status = if result.ok { "✓" } else { "✗" };
+    println!("{} {} — {} passed, {} failed, {} ignored  ({}ms)",
+        status, result.command,
+        result.passed, result.failed, result.ignored,
+        result.duration_ms);
+
+    for f in &result.failures {
+        println!("  ↳ {}", f);
+    }
+
+    if !result.ok && result.failures.is_empty() {
+        println!("{}", result.raw_output);
+    }
+}
+
+// ─── Git command ──────────────────────────────────────────────────────────────
+
+fn resolve_project_path(project: Option<String>, dev_ops: &Path) -> std::path::PathBuf {
+    match project {
+        None => std::env::current_dir().unwrap_or_else(|_| dev_ops.to_path_buf()),
+        Some(ref p) => {
+            let direct = std::path::Path::new(p);
+            if direct.exists() {
+                return direct.to_path_buf();
+            }
+            // search by name in DB
+            if let Ok(conn) = crate::db::open_db() {
+                if let Ok(projects) = crate::db::load_all_projects(&conn) {
+                    if let Some(found) = projects.iter().find(|pr| {
+                        pr.name.to_lowercase().contains(&p.to_lowercase())
+                    }) {
+                        return std::path::PathBuf::from(&found.path);
+                    }
+                }
+            }
+            direct.to_path_buf()
+        }
+    }
+}
+
+fn cmd_git(cmd: GitCommands, dev_ops: &Path, json: bool) {
+    use crate::core::git;
+
+    match cmd {
+        GitCommands::Status { project } => {
+            let path = resolve_project_path(project, dev_ops);
+            let s = git::status(&path);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+            } else {
+                let branch = s.branch.as_deref().unwrap_or("(detached)");
+                let dirty  = if s.dirty { "● dirty" } else { "○ clean" };
+                println!("Branch: {}  {}", branch, dirty);
+                if s.ahead > 0  { println!("  ↑ {} ahead of remote", s.ahead); }
+                if s.behind > 0 { println!("  ↓ {} behind remote", s.behind); }
+                if !s.staged.is_empty() {
+                    println!("Staged ({}):", s.staged.len());
+                    for f in &s.staged   { println!("  + {}", f); }
+                }
+                if !s.unstaged.is_empty() {
+                    println!("Modified ({}):", s.unstaged.len());
+                    for f in &s.unstaged { println!("  ~ {}", f); }
+                }
+                if !s.untracked.is_empty() {
+                    println!("Untracked ({}):", s.untracked.len());
+                    for f in &s.untracked { println!("  ? {}", f); }
+                }
+                if !s.dirty { println!("  Nothing to commit."); }
+            }
+        }
+
+        GitCommands::Log { project, count } => {
+            let path = resolve_project_path(project, dev_ops);
+            let entries = git::log(&path, count);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&entries).unwrap_or_default());
+            } else {
+                for e in &entries {
+                    println!("{} {} ({}  {})", e.short_hash, e.message, e.author, e.date);
+                }
+            }
+        }
+
+        GitCommands::Diff { project, staged } => {
+            let path = resolve_project_path(project, dev_ops);
+            let d = git::diff(&path, staged);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&d).unwrap_or_default());
+            } else {
+                println!("{} files changed  +{}  -{}", d.files_changed, d.insertions, d.deletions);
+                if !d.diff_text.is_empty() { println!("\n{}", d.diff_text); }
+            }
+        }
+
+        GitCommands::Commit { message, project, push } => {
+            let path = resolve_project_path(project, dev_ops);
+            let result = git::commit(&path, &message, true);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+            } else if result.ok {
+                println!("✓ Committed: {}", result.message);
+                if push {
+                    let pr = git::push(&path);
+                    if pr.ok { println!("✓ Pushed"); }
+                    else     { eprintln!("✗ Push failed: {}", pr.message); }
+                }
+            } else {
+                eprintln!("✗ Commit failed: {}", result.message);
+            }
+        }
+
+        GitCommands::Push { project } => {
+            let path = resolve_project_path(project, dev_ops);
+            let r = git::push(&path);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+            } else if r.ok { println!("✓ {}", r.message); }
+            else            { eprintln!("✗ {}", r.message); }
+        }
+
+        GitCommands::Pull { project } => {
+            let path = resolve_project_path(project, dev_ops);
+            let r = git::pull(&path);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+            } else if r.ok { println!("✓ {}", r.message); }
+            else            { eprintln!("✗ {}", r.message); }
+        }
+
+        GitCommands::Branches { project } => {
+            let path = resolve_project_path(project, dev_ops);
+            let bs = git::branches(&path);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&bs).unwrap_or_default());
+            } else {
+                for b in &bs {
+                    let cur = if b.current { "* " } else { "  " };
+                    let rem = if b.remote  { " [remote]" } else { "" };
+                    println!("{}{}{}", cur, b.name, rem);
+                }
+            }
+        }
+
+        GitCommands::Checkout { branch, project } => {
+            let path = resolve_project_path(project, dev_ops);
+            let r = git::checkout(&path, &branch);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+            } else if r.ok { println!("✓ {}", r.message); }
+            else            { eprintln!("✗ {}", r.message); }
+        }
+
+        GitCommands::Branch { name, project } => {
+            let path = resolve_project_path(project, dev_ops);
+            let r = git::create_branch(&path, &name);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+            } else if r.ok { println!("✓ {}", r.message); }
+            else            { eprintln!("✗ {}", r.message); }
+        }
     }
 }

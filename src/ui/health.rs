@@ -114,9 +114,23 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
         let mem_text = if h.has_memory { "✓ mem" } else { "✗ mem" };
         let mem_color = if h.has_memory { GREEN } else { RED };
 
-        let type_text = if h.path.join("Cargo.toml").exists() { "Rust" } 
+        let sig_text = if h.has_sigmap { "✓ sig" } else { "✗ sig" };
+        let sig_color = if h.has_sigmap { GREEN } else { RED };
+
+        let type_text = if h.path.join("Cargo.toml").exists() { "Rust" }
                         else if h.path.join("package.json").exists() { "Node" }
                         else { "Other" };
+
+        let rf_color = match h.refactor_grade.as_str() {
+            "A" | "B" => GREEN,
+            "C"       => AMBER,
+            _         => RED,
+        };
+        let rf_text = if h.refactor_high_count > 0 {
+            format!("{} ⚠{}", h.refactor_grade, h.refactor_high_count)
+        } else {
+            h.refactor_grade.clone()
+        };
 
         Row::new(vec![
             Cell::from(if selected { "▶" } else { " " }),
@@ -124,7 +138,9 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
             Cell::from(Span::styled(h.name.as_str(), Style::new().bold())),
             Cell::from(Span::styled(comp_text, Style::new().fg(score_color))),
             Cell::from(Span::styled(sec_text, Style::new().fg(MID))),
+            Cell::from(Span::styled(rf_text, Style::new().fg(rf_color))),
             Cell::from(Span::styled(mem_text, Style::new().fg(mem_color))),
+            Cell::from(Span::styled(sig_text, Style::new().fg(sig_color))),
             Cell::from(Span::styled(type_text, Style::new().fg(DIM))),
         ]).style(if selected { selected_style } else { Style::new().fg(MID) })
     }).collect();
@@ -134,15 +150,17 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
         [
             Constraint::Length(2),   // Selector
             Constraint::Length(10),  // Git
-            Constraint::Min(25),     // Name
+            Constraint::Min(20),     // Name
             Constraint::Length(12),  // Compliance
             Constraint::Length(15),  // Security
-            Constraint::Length(10),  // Memory
+            Constraint::Length(10),  // Refactor
+            Constraint::Length(8),   // Memory
+            Constraint::Length(8),   // Sigmap
             Constraint::Length(8),   // Type
         ],
     )
     .header(
-        Row::new(vec!["", "GIT", "PROJECT NAME", "COMPLIANCE", "SECURITY", "MEMORY", "TYPE"])
+        Row::new(vec!["", "GIT", "PROJECT NAME", "COMPLIANCE", "SECURITY", "REFACTOR", "MEM", "SIG", "TYPE"])
             .style(header_style)
             .bottom_margin(1)
     )
@@ -164,6 +182,7 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
 
     let sec_scanned = app.health_report.iter().filter(|h| h.security_score.is_some()).count();
     let sec_critical = app.health_report.iter().map(|h| h.security_critical).sum::<usize>();
+    let rf_high_total = app.health_report.iter().map(|h| h.refactor_high_count).sum::<usize>();
 
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(format!(" {}/{} dirty ", dirty, total), Style::new().fg(if dirty > 0 { AMBER } else { GREEN })),
@@ -173,6 +192,10 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
         } else {
             Span::styled(" 🔒— ", Style::new().fg(DIM))
         },
+        Span::styled(
+            format!(" ♻ high:{} ", rf_high_total),
+            Style::new().fg(if rf_high_total > 0 { AMBER } else { GREEN }),
+        ),
         Span::styled("  [↑↓] nav  [r] refresh  [Esc] back", Style::new().fg(DIM)),
     ]))
     .block(Block::new().borders(Borders::TOP).border_style(Style::new().fg(DIM)));
