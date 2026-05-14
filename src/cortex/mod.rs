@@ -30,16 +30,29 @@ const INDEXED_EXTS: &[&str] = &[
     "md", "rs", "ts", "tsx", "js", "jsx", "py", "toml", "json", "yaml", "yml", "go",
 ];
 
+/// Hard cap: never index more than this many files in one call.
+/// Prevents runaway indexing on giant workspaces.
+const MAX_FILES_PER_INDEX: usize = 5_000;
+
 const SKIP_DIRS: &[&str] = &[
     "node_modules",
+    ".pnpm",
     "target",
     ".git",
     "dist",
     "build",
     ".next",
+    ".nuxt",
     "__pycache__",
     ".turbo",
+    ".cache",
+    ".venv",
+    "venv",
     "vendor",
+    ".yarn",
+    "coverage",
+    ".svelte-kit",
+    "out",
 ];
 
 // ─── Public Cortex struct ─────────────────────────────────────────────────────
@@ -60,15 +73,63 @@ impl Cortex {
 
     /// Index (or re-index changed files in) a workspace directory.
     /// Skips files that haven't changed since last indexing.
+    /// Hard-capped at MAX_FILES_PER_INDEX to avoid runaway indexing.
     pub fn index_workspace(&mut self, root: &Path) -> Result<usize> {
         let mut indexed = 0usize;
+        let mut seen = 0usize;
 
         let walker = WalkDir::new(root)
+            .max_depth(4) // shallow enough for a full workspace scan
+            .follow_links(false) // prevents infinite loops from pnpm/yarn symlinks
+            .into_iter()
+            .filter_entry(|e| {
+                let n = e.file_name().to_string_lossy();
+                // Skip known noise dirs by name
+                if SKIP_DIRS.contains(&n.as_ref()) {
+                    return false;
+                }
+                // Extra guard: skip anything inside a .pnpm virtual store
+                if e.path()
+                    .components()
+                    .any(|c| c.as_os_str() == ".pnpm")
+                {
+                    return false;
+                }
+                true
+            })
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file());
+
+        for entry in walker {
+            if seen >= MAX_FILES_PER_INDEX {
+                break; // safety cap hit
+            }
+            seen += 1;
+            if self.index_file(entry.path()).unwrap_or(false) {
+                indexed += 1;
+            }
+        }
+
+        if indexed > 0 {
+            self.engine.rebuild_hnsw();
+            self.engine.save();
+        }
+        Ok(indexed)
+    }
+
+    /// Index a single project directory with deeper depth (max 6).
+    /// Use this when the user has selected a specific project in the TUI.
+    pub fn index_project(&mut self, project_path: &Path) -> Result<usize> {
+        let mut indexed = 0usize;
+
+        let walker = WalkDir::new(project_path)
             .max_depth(6)
+            .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
                 let n = e.file_name().to_string_lossy();
                 !SKIP_DIRS.contains(&n.as_ref())
+                    && !e.path().components().any(|c| c.as_os_str() == ".pnpm")
             })
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file());
