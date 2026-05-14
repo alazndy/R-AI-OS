@@ -1,14 +1,21 @@
+use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-use anyhow::Result;
 
 const INDEXED_EXTS: &[&str] = &[
     "md", "rs", "ts", "tsx", "js", "jsx", "py", "toml", "json", "yaml", "yml",
 ];
 
 const SKIP_DIRS: &[&str] = &[
-    "node_modules", "target", ".git", "dist", "build", ".next", "__pycache__", ".turbo",
+    "node_modules",
+    "target",
+    ".git",
+    "dist",
+    "build",
+    ".next",
+    "__pycache__",
+    ".turbo",
 ];
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -76,10 +83,11 @@ impl ProjectIndex {
             total_tokens += tokens.len();
             let snippet: String = line.trim().chars().take(100).collect();
             for token in tokens {
-                self.inverted
-                    .entry(token)
-                    .or_default()
-                    .push((file_id, line_no + 1, snippet.clone()));
+                self.inverted.entry(token).or_default().push((
+                    file_id,
+                    line_no + 1,
+                    snippet.clone(),
+                ));
             }
         }
 

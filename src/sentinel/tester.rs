@@ -1,7 +1,7 @@
-use std::process::Command;
-use std::path::Path;
-use anyhow::Result;
 use crate::daemon::state::ValidationError;
+use anyhow::Result;
+use std::path::Path;
+use std::process::Command;
 
 pub fn run_cargo_test(project_path: &Path) -> Result<Vec<ValidationError>> {
     let output = Command::new("cargo")
@@ -14,13 +14,13 @@ pub fn run_cargo_test(project_path: &Path) -> Result<Vec<ValidationError>> {
 
     // Note: Parsing cargo test JSON is different from cargo check.
     // It reports test results. For now, let's look for "failed" results.
-    
+
     for line in stdout.lines() {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
             if v["event"] == "test" && v["status"] == "failed" {
                 let name = v["name"].as_str().unwrap_or("unknown test");
                 let stdout_err = v["stdout"].as_str().unwrap_or("");
-                
+
                 errors.push(ValidationError {
                     file: "tests".to_string(),
                     message: format!("Test Failed: {} - {}", name, stdout_err),

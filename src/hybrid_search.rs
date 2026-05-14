@@ -10,9 +10,9 @@
 //! BM25 results are retrieved from the in-memory `ProjectIndex`.
 //! Vector results are retrieved from the `Cortex` engine (blocking call).
 
-use std::collections::HashMap;
-use crate::indexer::SearchResult as BM25Result;
 use crate::cortex::store::VectorResult;
+use crate::indexer::SearchResult as BM25Result;
+use std::collections::HashMap;
 
 /// Combined search result after RRF fusion.
 #[derive(Debug, Clone)]
@@ -70,7 +70,14 @@ pub fn fuse(
     for (rank, r) in bm25_results.iter().enumerate() {
         let key = r.path.to_string_lossy().into_owned();
         let rrf = 1.0 / (K + (rank + 1) as f64);
-        let entry = scores.entry(key).or_insert((0.0, None, None, r.line, r.snippet.clone(), r.project.clone()));
+        let entry = scores.entry(key).or_insert((
+            0.0,
+            None,
+            None,
+            r.line,
+            r.snippet.clone(),
+            r.project.clone(),
+        ));
         entry.0 += rrf;
         entry.1 = Some(r.score);
     }
@@ -87,7 +94,14 @@ pub fn fuse(
             .and_then(|c| c.as_os_str().to_str())
             .unwrap_or("?")
             .to_string();
-        let entry = scores.entry(key.clone()).or_insert((0.0, None, None, r.start_line, r.text.clone(), project.clone()));
+        let entry = scores.entry(key.clone()).or_insert((
+            0.0,
+            None,
+            None,
+            r.start_line,
+            r.text.clone(),
+            project.clone(),
+        ));
         entry.0 += rrf;
         entry.2 = Some(r.score);
         // Prefer the vector snippet (often richer context)
@@ -102,27 +116,33 @@ pub fn fuse(
     // Build sorted result list
     let mut results: Vec<HybridResult> = scores
         .into_iter()
-        .map(|(path_str, (rrf, bm25, vec_score, line, snippet, project))| {
-            let source = match (bm25.is_some(), vec_score.is_some()) {
-                (true, true)  => ResultSource::Hybrid,
-                (true, false) => ResultSource::BM25Only,
-                (false, true) => ResultSource::VectorOnly,
-                (false, false) => ResultSource::BM25Only,
-            };
-            HybridResult {
-                path: std::path::PathBuf::from(&path_str),
-                project,
-                snippet: snippet.chars().take(200).collect(),
-                start_line: line,
-                rrf_score: rrf,
-                bm25_score: bm25,
-                vector_score: vec_score,
-                source,
-            }
-        })
+        .map(
+            |(path_str, (rrf, bm25, vec_score, line, snippet, project))| {
+                let source = match (bm25.is_some(), vec_score.is_some()) {
+                    (true, true) => ResultSource::Hybrid,
+                    (true, false) => ResultSource::BM25Only,
+                    (false, true) => ResultSource::VectorOnly,
+                    (false, false) => ResultSource::BM25Only,
+                };
+                HybridResult {
+                    path: std::path::PathBuf::from(&path_str),
+                    project,
+                    snippet: snippet.chars().take(200).collect(),
+                    start_line: line,
+                    rrf_score: rrf,
+                    bm25_score: bm25,
+                    vector_score: vec_score,
+                    source,
+                }
+            },
+        )
         .collect();
 
-    results.sort_by(|a, b| b.rrf_score.partial_cmp(&a.rrf_score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.rrf_score
+            .partial_cmp(&a.rrf_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(top_n);
     results
 }

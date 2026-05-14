@@ -1,13 +1,13 @@
-use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
-use tokio::time::{sleep, Duration};
-use std::process::Command;
 use crate::daemon::state::DaemonState;
+use std::process::Command;
+use std::sync::Arc;
+use tokio::sync::{broadcast, RwLock};
+use tokio::time::{sleep, Duration};
 
 /// Background worker that periodically updates Git status for all projects.
 pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>) {
     println!("[Daemon] Git Worker started.");
-    
+
     loop {
         let projects = {
             let s = state.read().await;
@@ -19,8 +19,11 @@ pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Se
             continue;
         }
 
-        println!("[Daemon] Scanning Git status for {} projects...", projects.len());
-        
+        println!(
+            "[Daemon] Scanning Git status for {} projects...",
+            projects.len()
+        );
+
         let mut updated = false;
         {
             let mut s = state.write().await;
@@ -29,7 +32,7 @@ pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Se
                     // 1. Get branch name
                     let branch = Command::new("git")
                         .current_dir(&proj.local_path)
-                        .args(&["rev-parse", "--abbrev-ref", "HEAD"])
+                        .args(["rev-parse", "--abbrev-ref", "HEAD"])
                         .output()
                         .ok()
                         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -38,7 +41,7 @@ pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Se
                     // 2. Get dirty status
                     let dirty = Command::new("git")
                         .current_dir(&proj.local_path)
-                        .args(&["status", "--porcelain"])
+                        .args(["status", "--porcelain"])
                         .output()
                         .ok()
                         .map(|o| !o.stdout.is_empty())
@@ -60,23 +63,32 @@ pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Se
                     if let Some(ref gh_url) = proj.github {
                         if gh_url.contains("github.com") {
                             // Try to get stars and last update via gh api
-                            let repo = gh_url.trim_end_matches(".git")
-                                .split("github.com/").last()
+                            let repo = gh_url
+                                .trim_end_matches(".git")
+                                .split("github.com/")
+                                .last()
                                 .unwrap_or("");
-                            
+
                             if !repo.is_empty() {
                                 let output = Command::new("gh")
-                                    .args(&["api", &format!("repos/{}", repo), "--template", "{{.stargazers_count}}|{{.updated_at}}"])
+                                    .args([
+                                        "api",
+                                        &format!("repos/{}", repo),
+                                        "--template",
+                                        "{{.stargazers_count}}|{{.updated_at}}",
+                                    ])
                                     .output();
-                                
+
                                 if let Ok(o) = output {
                                     let res = String::from_utf8_lossy(&o.stdout).trim().to_string();
                                     let parts: Vec<&str> = res.split('|').collect();
                                     if parts.len() == 2 {
                                         let stars = parts[0].parse::<u32>().ok();
                                         let last = parts[1].to_string();
-                                        
-                                        if proj.stars != stars || proj.last_commit.as_ref() != Some(&last) {
+
+                                        if proj.stars != stars
+                                            || proj.last_commit.as_ref() != Some(&last)
+                                        {
                                             proj.stars = stars;
                                             proj.last_commit = Some(last);
                                             updated = true;

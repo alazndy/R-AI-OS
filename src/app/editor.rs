@@ -10,7 +10,7 @@ pub fn simple_diff(old: &str, new: &str) -> Vec<String> {
     for i in 0..max {
         let o = old_lines.get(i);
         let n = new_lines.get(i);
-        
+
         match (o, n) {
             (Some(o_val), Some(n_val)) => {
                 if o_val == n_val {
@@ -34,6 +34,7 @@ pub fn simple_diff(old: &str, new: &str) -> Vec<String> {
 
 // ─── Simple line editor ───────────────────────────────────────────────────────
 
+#[derive(Debug, Default)]
 pub struct Editor {
     pub lines: Vec<String>,
     pub cursor_row: usize,
@@ -45,8 +46,18 @@ pub struct Editor {
 impl Editor {
     pub fn from_content(content: &str, view_height: usize) -> Self {
         let lines: Vec<String> = content.lines().map(str::to_owned).collect();
-        let lines = if lines.is_empty() { vec![String::new()] } else { lines };
-        Self { lines, cursor_row: 0, cursor_col: 0, scroll: 0, view_height }
+        let lines = if lines.is_empty() {
+            vec![String::new()]
+        } else {
+            lines
+        };
+        Self {
+            lines,
+            cursor_row: 0,
+            cursor_col: 0,
+            scroll: 0,
+            view_height,
+        }
     }
 
     pub fn to_string(&self) -> String {
@@ -108,29 +119,29 @@ impl Editor {
                     self.cursor_col = 0;
                 }
             }
-            KeyCode::Up => {
-                if self.cursor_row > 0 {
-                    self.cursor_row -= 1;
-                    let max = self.lines[self.cursor_row].chars().count();
-                    self.cursor_col = self.cursor_col.min(max);
-                }
+            KeyCode::Up if self.cursor_row > 0 => {
+                self.cursor_row -= 1;
+                let max = self.lines[self.cursor_row].chars().count();
+                self.cursor_col = self.cursor_col.min(max);
             }
-            KeyCode::Down => {
-                if self.cursor_row + 1 < self.lines.len() {
-                    self.cursor_row += 1;
-                    let max = self.lines[self.cursor_row].chars().count();
-                    self.cursor_col = self.cursor_col.min(max);
-                }
+            KeyCode::Down if self.cursor_row + 1 < self.lines.len() => {
+                self.cursor_row += 1;
+                let max = self.lines[self.cursor_row].chars().count();
+                self.cursor_col = self.cursor_col.min(max);
             }
             KeyCode::Home => self.cursor_col = 0,
             KeyCode::End => self.cursor_col = self.lines[self.cursor_row].chars().count(),
             KeyCode::PageUp => {
                 self.cursor_row = self.cursor_row.saturating_sub(self.view_height);
-                self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].chars().count());
+                self.cursor_col = self
+                    .cursor_col
+                    .min(self.lines[self.cursor_row].chars().count());
             }
             KeyCode::PageDown => {
                 self.cursor_row = (self.cursor_row + self.view_height).min(self.lines.len() - 1);
-                self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].chars().count());
+                self.cursor_col = self
+                    .cursor_col
+                    .min(self.lines[self.cursor_row].chars().count());
             }
             _ => {}
         }

@@ -1,6 +1,6 @@
+use chrono::Local;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use chrono::Local;
 
 pub struct NewProjectConfig<'a> {
     pub name: &'a str,
@@ -25,7 +25,11 @@ pub fn create(cfg: &NewProjectConfig) -> NewProjectResult {
     let dirs_to_create = ["", "code", "reference", "public"];
     let mut dir_ok = true;
     for sub in &dirs_to_create {
-        let target = if sub.is_empty() { project_dir.clone() } else { project_dir.join(sub) };
+        let target = if sub.is_empty() {
+            project_dir.clone()
+        } else {
+            project_dir.join(sub)
+        };
         if let Err(e) = std::fs::create_dir_all(&target) {
             steps.push((format!("create dir {}: {}", target.display(), e), false));
             dir_ok = false;
@@ -34,7 +38,8 @@ pub fn create(cfg: &NewProjectConfig) -> NewProjectResult {
     steps.push(("Create folder structure".into(), dir_ok));
 
     // 2. Write memory.md
-    let memory_content = format!(r#"# {name} Memory
+    let memory_content = format!(
+        r#"# {name} Memory
 
 ## Son Durum
 - Tarih: {today}
@@ -76,13 +81,17 @@ pub fn create(cfg: &NewProjectConfig) -> NewProjectResult {
 | Tarih | Agent | Karar | Neden |
 |-------|-------|-------|-------|
 | {today} | Claude | Proje oluşturuldu | raios new komutu |
-"#, name = cfg.name, today = today);
+"#,
+        name = cfg.name,
+        today = today
+    );
 
     let mem_ok = std::fs::write(project_dir.join("memory.md"), memory_content).is_ok();
     steps.push(("Write memory.md".into(), mem_ok));
 
     // 3. Write README.md
-    let readme_content = format!(r#"# {name}
+    let readme_content = format!(
+        r#"# {name}
 
 > Created: {today}
 
@@ -106,7 +115,10 @@ TODO
 ## Stack
 
 TODO
-"#, name = cfg.name, today = today);
+"#,
+        name = cfg.name,
+        today = today
+    );
 
     let readme_ok = std::fs::write(project_dir.join("README.md"), readme_content).is_ok();
     steps.push(("Write README.md".into(), readme_ok));
@@ -137,7 +149,10 @@ TODO
     steps.push(("git init".into(), git_ok));
 
     // 6. Initial commit
-    let _ = Command::new("git").args(["add", "-A"]).current_dir(&project_dir).output();
+    let _ = Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(&project_dir)
+        .output();
     let init_commit_ok = Command::new("git")
         .args(["commit", "-m", "chore: initial scaffold (raios new)"])
         .current_dir(&project_dir)
@@ -151,7 +166,15 @@ TODO
     if cfg.github {
         let slug = cfg.name.to_lowercase().replace(' ', "-");
         let gh_out = Command::new("gh")
-            .args(["repo", "create", &slug, "--private", "--source=.", "--push", "--remote=origin"])
+            .args([
+                "repo",
+                "create",
+                &slug,
+                "--private",
+                "--source=.",
+                "--push",
+                "--remote=origin",
+            ])
             .current_dir(&project_dir)
             .output();
 
@@ -171,19 +194,42 @@ TODO
     }
 
     // 8. Add to entities.json
-    let entities_ok = add_to_entities(cfg.dev_ops, cfg.name, cfg.category, &project_dir, github_url.as_deref());
+    let entities_ok = add_to_entities(
+        cfg.dev_ops,
+        cfg.name,
+        cfg.category,
+        &project_dir,
+        github_url.as_deref(),
+    );
     steps.push(("Update entities.json".into(), entities_ok));
 
     // 9. Update Vault Proje Atlası (unless --no-vault)
     if !cfg.no_vault {
-        let vault_ok = update_vault_atlas(cfg.dev_ops, cfg.name, cfg.category, &project_dir, github_url.as_deref(), &today);
+        let vault_ok = update_vault_atlas(
+            cfg.dev_ops,
+            cfg.name,
+            cfg.category,
+            &project_dir,
+            github_url.as_deref(),
+            &today,
+        );
         steps.push(("Update Vault Proje Atlası".into(), vault_ok));
     }
 
-    NewProjectResult { path: project_dir, github_url, steps }
+    NewProjectResult {
+        path: project_dir,
+        github_url,
+        steps,
+    }
 }
 
-fn add_to_entities(dev_ops: &Path, name: &str, category: &str, path: &Path, github: Option<&str>) -> bool {
+fn add_to_entities(
+    dev_ops: &Path,
+    name: &str,
+    category: &str,
+    path: &Path,
+    github: Option<&str>,
+) -> bool {
     let mut projects = crate::entities::load_entities(dev_ops);
     if projects.iter().any(|p| p.local_path == path) {
         return true;
@@ -211,14 +257,27 @@ fn update_vault_atlas(
     today: &str,
 ) -> bool {
     let atlas_candidates = [
-        PathBuf::from(r"C:\Users\turha\Documents\Obsidian Vaults\Vault101\Projeler\Proje Atlası.md"),
-        dev_ops.join("..").join("..").join("Documents").join("Obsidian Vaults").join("Vault101").join("Projeler").join("Proje Atlası.md"),
+        PathBuf::from(
+            r"C:\Users\turha\Documents\Obsidian Vaults\Vault101\Projeler\Proje Atlası.md",
+        ),
+        dev_ops
+            .join("..")
+            .join("..")
+            .join("Documents")
+            .join("Obsidian Vaults")
+            .join("Vault101")
+            .join("Projeler")
+            .join("Proje Atlası.md"),
     ];
 
     for atlas_path in &atlas_candidates {
-        if !atlas_path.exists() { continue; }
+        if !atlas_path.exists() {
+            continue;
+        }
 
-        let Ok(mut content) = std::fs::read_to_string(atlas_path) else { continue };
+        let Ok(mut content) = std::fs::read_to_string(atlas_path) else {
+            continue;
+        };
 
         let github_display = github.unwrap_or("—");
         let entry = format!(

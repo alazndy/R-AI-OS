@@ -8,8 +8,6 @@
 //! vector store and RRF fusion to work without any native model dependencies.
 //! Switch to real embeddings by compiling with `--features cortex`.
 
-use anyhow::Result;
-
 /// Dimensionality common to both modes.
 /// all-MiniLM-L6-v2 uses 384; our TF-IDF fallback also maps to 384 buckets.
 pub const EMBEDDING_DIM: usize = 384;
@@ -30,15 +28,16 @@ mod real {
 
     impl Embedder {
         pub fn init() -> Result<Self> {
-            let opts = InitOptions::new(EmbeddingModel::AllMiniLML6V2)
-                .with_show_download_progress(true);
-            let model = TextEmbedding::try_new(opts)
-                .context("fastembed init failed")?;
+            let opts =
+                InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true);
+            let model = TextEmbedding::try_new(opts).context("fastembed init failed")?;
             Ok(Self { model })
         }
 
         pub fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Embedding>> {
-            let raw: Vec<Vec<f32>> = self.model.embed(texts, None)
+            let raw: Vec<Vec<f32>> = self
+                .model
+                .embed(texts, None)
                 .context("embedding inference failed")?;
             Ok(raw.into_iter().map(|v| norm(v)).collect())
         }
@@ -54,7 +53,9 @@ mod real {
         let len = v.len().min(EMBEDDING_DIM);
         arr[..len].copy_from_slice(&v[..len]);
         let n: f32 = arr.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if n > 1e-9 { arr.iter_mut().for_each(|x| *x /= n); }
+        if n > 1e-9 {
+            arr.iter_mut().for_each(|x| *x /= n);
+        }
         arr
     }
 }
@@ -70,7 +71,9 @@ mod fallback {
     pub struct Embedder;
 
     impl Embedder {
-        pub fn init() -> Result<Self> { Ok(Self) }
+        pub fn init() -> Result<Self> {
+            Ok(Self)
+        }
 
         pub fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Embedding>> {
             Ok(texts.into_iter().map(|t| bow_embed(&t)).collect())
@@ -98,7 +101,9 @@ mod fallback {
 
         // L2 normalise
         let n: f32 = arr.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if n > 1e-9 { arr.iter_mut().for_each(|x| *x /= n); }
+        if n > 1e-9 {
+            arr.iter_mut().for_each(|x| *x /= n);
+        }
         arr
     }
 

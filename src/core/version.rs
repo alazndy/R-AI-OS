@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
-use serde::{Deserialize, Serialize};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -55,7 +55,13 @@ pub fn info(dir: &Path) -> Option<VersionInfo> {
     let (current, project_type, version_file) = read_version(dir)?;
     let last_tag = last_git_tag(dir);
     let commits_since_tag = count_commits_since_tag(dir, last_tag.as_deref());
-    Some(VersionInfo { current, project_type, version_file, last_tag, commits_since_tag })
+    Some(VersionInfo {
+        current,
+        project_type,
+        version_file,
+        last_tag,
+        commits_since_tag,
+    })
 }
 
 pub fn bump(dir: &Path, bump_type: &BumpType, update_changelog: bool, tag: bool) -> BumpResult {
@@ -66,7 +72,8 @@ pub fn bump(dir: &Path, bump_type: &BumpType, update_changelog: bool, tag: bool)
             new_version: String::new(),
             version_file: String::new(),
             changelog_entry: String::new(),
-            message: "Cannot detect version file (Cargo.toml / package.json / pyproject.toml)".into(),
+            message: "Cannot detect version file (Cargo.toml / package.json / pyproject.toml)"
+                .into(),
         };
     };
 
@@ -84,8 +91,11 @@ pub fn bump(dir: &Path, bump_type: &BumpType, update_changelog: bool, tag: bool)
     let vfile_path = dir.join(&version_file);
     if let Err(e) = write_version(&vfile_path, &project_type, &current, &new_version) {
         return BumpResult {
-            ok: false, old_version: current, new_version,
-            version_file, changelog_entry: String::new(),
+            ok: false,
+            old_version: current,
+            new_version,
+            version_file,
+            changelog_entry: String::new(),
             message: format!("Failed to write version: {}", e),
         };
     }
@@ -100,7 +110,13 @@ pub fn bump(dir: &Path, bump_type: &BumpType, update_changelog: bool, tag: bool)
     if tag {
         let tag_name = format!("v{}", new_version);
         let _ = Command::new("git")
-            .args(["tag", "-a", &tag_name, "-m", &format!("Release {}", tag_name)])
+            .args([
+                "tag",
+                "-a",
+                &tag_name,
+                "-m",
+                &format!("Release {}", tag_name),
+            ])
             .current_dir(dir)
             .output();
     }
@@ -128,7 +144,9 @@ pub fn changelog(dir: &Path) -> String {
 fn bump_semver(version: &str, bump: &BumpType) -> Option<String> {
     let clean = version.trim_start_matches('v');
     let parts: Vec<u64> = clean.split('.').filter_map(|p| p.parse().ok()).collect();
-    if parts.len() < 3 { return None; }
+    if parts.len() < 3 {
+        return None;
+    }
     let (major, minor, patch) = (parts[0], parts[1], parts[2]);
     Some(match bump {
         BumpType::Major => format!("{}.0.0", major + 1),
@@ -140,9 +158,15 @@ fn bump_semver(version: &str, bump: &BumpType) -> Option<String> {
 // ─── Version file readers / writers ──────────────────────────────────────────
 
 fn read_version(dir: &Path) -> Option<(String, String, String)> {
-    if let Some(v) = read_cargo_version(dir)    { return Some((v, "Rust".into(),   "Cargo.toml".into())); }
-    if let Some(v) = read_npm_version(dir)      { return Some((v, "Node".into(),   "package.json".into())); }
-    if let Some(v) = read_pyproject_version(dir){ return Some((v, "Python".into(), "pyproject.toml".into())); }
+    if let Some(v) = read_cargo_version(dir) {
+        return Some((v, "Rust".into(), "Cargo.toml".into()));
+    }
+    if let Some(v) = read_npm_version(dir) {
+        return Some((v, "Node".into(), "package.json".into()));
+    }
+    if let Some(v) = read_pyproject_version(dir) {
+        return Some((v, "Python".into(), "pyproject.toml".into()));
+    }
     None
 }
 
@@ -152,7 +176,9 @@ fn read_cargo_version(dir: &Path) -> Option<String> {
         let line = line.trim();
         if line.starts_with("version") && line.contains('=') {
             let val = line.split('=').nth(1)?.trim().trim_matches('"').to_string();
-            if looks_like_semver(&val) { return Some(val); }
+            if looks_like_semver(&val) {
+                return Some(val);
+            }
         }
     }
     None
@@ -170,7 +196,9 @@ fn read_pyproject_version(dir: &Path) -> Option<String> {
         let line = line.trim();
         if line.starts_with("version") && line.contains('=') {
             let val = line.split('=').nth(1)?.trim().trim_matches('"').to_string();
-            if looks_like_semver(&val) { return Some(val); }
+            if looks_like_semver(&val) {
+                return Some(val);
+            }
         }
     }
     None
@@ -199,27 +227,55 @@ fn build_changelog_entry(dir: &Path, version: &str, since_tag: Option<&str>) -> 
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let commits = git_log_since(dir, since_tag);
 
-    let mut feats  = Vec::new();
-    let mut fixes  = Vec::new();
+    let mut feats = Vec::new();
+    let mut fixes = Vec::new();
     let mut chores = Vec::new();
     let mut others = Vec::new();
 
     for c in &commits {
         let lower = c.to_lowercase();
-        if lower.starts_with("feat")     { feats.push(c); }
-        else if lower.starts_with("fix") { fixes.push(c); }
-        else if lower.starts_with("chore") || lower.starts_with("refactor") || lower.starts_with("docs") {
+        if lower.starts_with("feat") {
+            feats.push(c);
+        } else if lower.starts_with("fix") {
+            fixes.push(c);
+        } else if lower.starts_with("chore")
+            || lower.starts_with("refactor")
+            || lower.starts_with("docs")
+        {
             chores.push(c);
+        } else {
+            others.push(c);
         }
-        else { others.push(c); }
     }
 
     let mut entry = format!("## v{} — {}\n", version, date);
-    if !feats.is_empty()  { entry.push_str("### Features\n");  for c in &feats  { entry.push_str(&format!("- {}\n", c)); } }
-    if !fixes.is_empty()  { entry.push_str("### Fixes\n");     for c in &fixes  { entry.push_str(&format!("- {}\n", c)); } }
-    if !chores.is_empty() { entry.push_str("### Chore\n");     for c in &chores { entry.push_str(&format!("- {}\n", c)); } }
-    if !others.is_empty() { entry.push_str("### Other\n");     for c in &others { entry.push_str(&format!("- {}\n", c)); } }
-    if commits.is_empty() { entry.push_str("- (no commits since last tag)\n"); }
+    if !feats.is_empty() {
+        entry.push_str("### Features\n");
+        for c in &feats {
+            entry.push_str(&format!("- {}\n", c));
+        }
+    }
+    if !fixes.is_empty() {
+        entry.push_str("### Fixes\n");
+        for c in &fixes {
+            entry.push_str(&format!("- {}\n", c));
+        }
+    }
+    if !chores.is_empty() {
+        entry.push_str("### Chore\n");
+        for c in &chores {
+            entry.push_str(&format!("- {}\n", c));
+        }
+    }
+    if !others.is_empty() {
+        entry.push_str("### Other\n");
+        for c in &others {
+            entry.push_str(&format!("- {}\n", c));
+        }
+    }
+    if commits.is_empty() {
+        entry.push_str("- (no commits since last tag)\n");
+    }
 
     entry
 }
@@ -244,10 +300,13 @@ fn git_log_since(dir: &Path, since_tag: Option<&str>) -> Vec<String> {
         .args(["log", &range, "--pretty=format:%s", "--no-color"])
         .current_dir(dir)
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines()
-            .filter(|l| !l.is_empty())
-            .map(str::to_string)
-            .collect())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -255,22 +314,34 @@ fn last_git_tag(dir: &Path) -> Option<String> {
     let out = Command::new("git")
         .args(["describe", "--tags", "--abbrev=0"])
         .current_dir(dir)
-        .output().ok()?;
+        .output()
+        .ok()?;
     if out.status.success() {
         let tag = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if tag.is_empty() { None } else { Some(tag) }
+        if tag.is_empty() {
+            None
+        } else {
+            Some(tag)
+        }
     } else {
         None
     }
 }
 
 fn count_commits_since_tag(dir: &Path, tag: Option<&str>) -> usize {
-    let range = tag.map(|t| format!("{}..HEAD", t)).unwrap_or_else(|| "HEAD".into());
+    let range = tag
+        .map(|t| format!("{}..HEAD", t))
+        .unwrap_or_else(|| "HEAD".into());
     Command::new("git")
         .args(["rev-list", "--count", &range])
         .current_dir(dir)
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(0))
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse()
+                .unwrap_or(0)
+        })
         .unwrap_or(0)
 }
 
@@ -329,6 +400,6 @@ mod tests {
     fn bump_type_from_str() {
         assert_eq!(BumpType::from_str("patch"), Some(BumpType::Patch));
         assert_eq!(BumpType::from_str("MINOR"), Some(BumpType::Minor));
-        assert_eq!(BumpType::from_str("xyz"),   None);
+        assert_eq!(BumpType::from_str("xyz"), None);
     }
 }

@@ -1,6 +1,6 @@
+use anyhow::{anyhow, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{anyhow, Result};
 
 pub fn sync_universe(dev_ops: &Path, master: &Path) -> Result<String> {
     if !master.exists() {
@@ -37,7 +37,10 @@ pub fn sync_universe(dev_ops: &Path, master: &Path) -> Result<String> {
         }
     }
 
-    Ok(format!("Universe Synchronized: {} projects aligned with MASTER rules.", count))
+    Ok(format!(
+        "Universe Synchronized: {} projects aligned with MASTER rules.",
+        count
+    ))
 }
 
 fn link_file(src: &Path, dst: &PathBuf) {

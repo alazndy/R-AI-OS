@@ -4,11 +4,11 @@
 //! Claude Code integration (settings.json):
 //!   "mcpServers": { "raios": { "command": "raios", "args": ["mcp-server"] } }
 
-use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 
 use crate::config::Config;
 
@@ -42,14 +42,22 @@ struct RpcError {
 
 impl RpcResponse {
     fn ok(id: Value, result: Value) -> Self {
-        Self { jsonrpc: "2.0", id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
     fn err(id: Value, code: i32, message: impl Into<String>) -> Self {
         Self {
             jsonrpc: "2.0",
             id,
             result: None,
-            error: Some(RpcError { code, message: message.into() }),
+            error: Some(RpcError {
+                code,
+                message: message.into(),
+            }),
         }
     }
 }
@@ -65,9 +73,13 @@ impl McpServer {
         let config = Config::load().unwrap_or_else(|| {
             let detected = Config::auto_detect();
             Config {
-                dev_ops_path:   detected.dev_ops.unwrap_or_else(|| PathBuf::from(".")),
-                master_md_path: detected.master_md.unwrap_or_else(|| PathBuf::from("MASTER.md")),
-                skills_path:    detected.skills.unwrap_or_else(|| PathBuf::from(".agents/skills")),
+                dev_ops_path: detected.dev_ops.unwrap_or_else(|| PathBuf::from(".")),
+                master_md_path: detected
+                    .master_md
+                    .unwrap_or_else(|| PathBuf::from("MASTER.md")),
+                skills_path: detected
+                    .skills
+                    .unwrap_or_else(|| PathBuf::from(".agents/skills")),
                 vault_projects_path: detected.vault_projects.unwrap_or_default(),
             }
         });
@@ -79,13 +91,13 @@ impl McpServer {
         let is_notification = req.id.is_none();
 
         let result = match req.method.as_str() {
-            "initialize"          => self.handle_initialize(&req.params),
-            "initialized"         => return None, // notification, no reply
-            "ping"                => Ok(json!({})),
-            "resources/list"      => self.handle_resources_list(),
-            "resources/read"      => self.handle_resources_read(&req.params),
-            "tools/list"          => self.handle_tools_list(),
-            "tools/call"          => self.handle_tools_call(&req.params),
+            "initialize" => self.handle_initialize(&req.params),
+            "initialized" => return None, // notification, no reply
+            "ping" => Ok(json!({})),
+            "resources/list" => self.handle_resources_list(),
+            "resources/read" => self.handle_resources_read(&req.params),
+            "tools/list" => self.handle_tools_list(),
+            "tools/call" => self.handle_tools_call(&req.params),
             other => Err(format!("Unknown method: {}", other)),
         };
 
@@ -450,40 +462,40 @@ impl McpServer {
         let args = &params["arguments"];
 
         match name {
-            "update_state"    => self.tool_update_state(args),
-            "handover"        => self.tool_handover(args),
-            "add_task"        => self.tool_add_task(args),
-            "get_health"      => self.tool_get_health(args),
-            "list_projects"   => self.tool_list_projects(args),
-            "get_stats"       => self.tool_get_stats(),
+            "update_state" => self.tool_update_state(args),
+            "handover" => self.tool_handover(args),
+            "add_task" => self.tool_add_task(args),
+            "get_health" => self.tool_get_health(args),
+            "list_projects" => self.tool_list_projects(args),
+            "get_stats" => self.tool_get_stats(),
             "semantic_search" => self.tool_semantic_search(args),
-            "ask_architect"   => self.tool_ask_architect(args),
+            "ask_architect" => self.tool_ask_architect(args),
             "get_validation_errors" => self.tool_get_validation_errors(args),
-            "project_info"     => self.tool_project_info(args),
+            "project_info" => self.tool_project_info(args),
             "portfolio_status" => self.tool_portfolio_status(args),
-            "disk_usage"       => self.tool_disk_usage(args),
-            "list_ports"   => self.tool_list_ports(),
+            "disk_usage" => self.tool_disk_usage(args),
+            "list_ports" => self.tool_list_ports(),
             "version_info" => self.tool_version_info(args),
             "version_bump" => self.tool_version_bump(args),
-            "env_status"  => self.tool_env_status(args),
+            "env_status" => self.tool_env_status(args),
             "deps_status" => self.tool_deps_status(args),
-            "run_build"   => self.tool_run_build(args),
-            "run_tests"   => self.tool_run_tests(args),
-            "git_status"  => self.tool_git_status(args),
-            "git_log"     => self.tool_git_log(args),
-            "git_diff"    => self.tool_git_diff(args),
-            "git_commit"  => self.tool_git_commit(args),
+            "run_build" => self.tool_run_build(args),
+            "run_tests" => self.tool_run_tests(args),
+            "git_status" => self.tool_git_status(args),
+            "git_log" => self.tool_git_log(args),
+            "git_diff" => self.tool_git_diff(args),
+            "git_commit" => self.tool_git_commit(args),
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
 
     fn tool_ask_architect(&self, args: &Value) -> Result<Value, String> {
         let question = args["question"].as_str().ok_or("missing question")?;
-        
+
         // Use Cortex for semantic search but specifically mention rules and decisions
         let mut cortex = crate::cortex::Cortex::init().unwrap();
         let _ = cortex.index_file(&self.config.master_md_path);
-        
+
         // Find memory files and index them
         let memory_files = crate::filebrowser::discover_memory_files(&self.config.dev_ops_path, 10);
         for mem in memory_files {
@@ -492,13 +504,16 @@ impl McpServer {
 
         let hits = cortex.search(question, 5).map_err(|e| e.to_string())?;
 
-        let results: Vec<serde_json::Value> = hits.iter().map(|r| {
-            json!({
-                "source": r.path,
-                "rule_or_decision": r.text,
-                "score": r.score
+        let results: Vec<serde_json::Value> = hits
+            .iter()
+            .map(|r| {
+                json!({
+                    "source": r.path,
+                    "rule_or_decision": r.text,
+                    "score": r.score
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(json!({
             "content": [{
@@ -512,10 +527,10 @@ impl McpServer {
         let project_filter = args["project"].as_str().map(|s| s.to_lowercase());
 
         // Connect to daemon and ask for state
-        use std::io::{Read};
+        use std::io::Read;
         let mut stream = std::net::TcpStream::connect("127.0.0.1:42069")
             .map_err(|e| format!("Could not connect to daemon: {}", e))?;
-        
+
         // Auth
         let token_path = Config::config_file().parent().unwrap().join(".ipc_token");
         if let Ok(token) = std::fs::read_to_string(token_path) {
@@ -523,32 +538,34 @@ impl McpServer {
         }
 
         let _ = stream.write_all(b"{\"command\":\"GetState\"}\n");
-        
+
         let mut buffer = [0; 32768];
         let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
         let response = String::from_utf8_lossy(&buffer[..n]);
-        
+
         for line in response.lines() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                 if v["event"] == "StateSync" {
                     let mut errors = v["latest_errors"].as_array().cloned().unwrap_or_default();
-                    
+
                     if let Some(ref filter) = project_filter {
                         // In a real scenario, ValidationError would have a project field.
                         // For now we filter by file path matching project path or just return all if filter matches name
                         // Let's assume the user wants errors for the project they mentioned.
-                        // We can't perfectly filter without project field in ValidationError, 
+                        // We can't perfectly filter without project field in ValidationError,
                         // but we can check if any error file path contains the filter.
                         errors.retain(|e| {
-                            e["file"].as_str().map_or(false, |f| f.to_lowercase().contains(filter))
+                            e["file"]
+                                .as_str()
+                                .is_some_and(|f| f.to_lowercase().contains(filter))
                         });
                     }
 
                     return Ok(json!({
                         "content": [{
                             "type": "text",
-                            "text": if errors.is_empty() { 
-                                "No validation errors found.".into() 
+                            "text": if errors.is_empty() {
+                                "No validation errors found.".into()
                             } else {
                                 serde_json::to_string_pretty(&errors).unwrap_or_default()
                             }
@@ -562,8 +579,8 @@ impl McpServer {
     }
 
     fn tool_update_state(&self, args: &Value) -> Result<Value, String> {
-        let agent   = args["agent"].as_str().unwrap_or("unknown");
-        let action  = args["action"].as_str().unwrap_or("");
+        let agent = args["agent"].as_str().unwrap_or("unknown");
+        let action = args["action"].as_str().unwrap_or("");
         let summary = args["summary"].as_str().unwrap_or("");
 
         // Find memory.md path
@@ -584,8 +601,7 @@ impl McpServer {
         let existing = std::fs::read_to_string(&mem_path).unwrap_or_default();
         let new_content = format!("{}{}", existing, entry);
 
-        crate::safe_io::safe_write(&mem_path, &new_content)
-            .map_err(|e| e.to_string())?;
+        crate::safe_io::safe_write(&mem_path, &new_content).map_err(|e| e.to_string())?;
 
         Ok(json!({
             "content": [{
@@ -596,9 +612,9 @@ impl McpServer {
     }
 
     fn tool_handover(&self, args: &Value) -> Result<Value, String> {
-        let target      = args["target"].as_str().unwrap_or("unknown");
+        let target = args["target"].as_str().unwrap_or("unknown");
         let instruction = args["instruction"].as_str().unwrap_or("");
-        let context     = args["context"].as_str().unwrap_or("(no context)");
+        let context = args["context"].as_str().unwrap_or("(no context)");
 
         // 1. Log handover to _session_notes.md
         let notes_path = self.config.dev_ops_path.join("_session_notes.md");
@@ -634,15 +650,15 @@ impl McpServer {
     }
 
     fn tool_add_task(&self, args: &Value) -> Result<Value, String> {
-        let text    = args["text"].as_str().ok_or("missing text")?;
-        let agent   = args["agent"].as_str();
+        let text = args["text"].as_str().ok_or("missing text")?;
+        let agent = args["agent"].as_str();
         let project = args["project"].as_str();
 
         let fake_line = match (agent, project) {
             (Some(a), Some(p)) => format!("- [ ] {} @{} #{}", text, a, p),
-            (Some(a), None)    => format!("- [ ] {} @{}", text, a),
-            (None, Some(p))    => format!("- [ ] {} #{}", text, p),
-            (None, None)       => format!("- [ ] {}", text),
+            (Some(a), None) => format!("- [ ] {} @{}", text, a),
+            (None, Some(p)) => format!("- [ ] {} #{}", text, p),
+            (None, None) => format!("- [ ] {}", text),
         };
 
         if let Some(task) = crate::tasks::parse_task_line(&fake_line) {
@@ -664,11 +680,12 @@ impl McpServer {
         let filter = args["project"].as_str().map(str::to_lowercase);
         let projects = crate::entities::load_entities(&self.config.dev_ops_path);
 
-        let reports: Vec<_> = projects.iter()
+        let reports: Vec<_> = projects
+            .iter()
             .filter(|p| {
-                filter.as_ref().map_or(true, |f| {
-                    p.name.to_lowercase().contains(f.as_str())
-                })
+                filter
+                    .as_ref()
+                    .is_none_or(|f| p.name.to_lowercase().contains(f.as_str()))
             })
             .map(|p| {
                 let h = crate::health::check_project(p);
@@ -700,26 +717,29 @@ impl McpServer {
         let status_filter = args["status"].as_str().map(str::to_lowercase);
         let projects = crate::entities::load_entities(&self.config.dev_ops_path);
 
-        let list: Vec<_> = projects.iter()
+        let list: Vec<_> = projects
+            .iter()
             .filter(|p| {
-                let name_ok = filter.as_ref().map_or(true, |f| {
+                let name_ok = filter.as_ref().is_none_or(|f| {
                     p.name.to_lowercase().contains(f.as_str())
-                    || p.category.to_lowercase().contains(f.as_str())
+                        || p.category.to_lowercase().contains(f.as_str())
                 });
-                let status_ok = status_filter.as_ref().map_or(true, |s| {
-                    p.status.to_lowercase().contains(s.as_str())
-                });
+                let status_ok = status_filter
+                    .as_ref()
+                    .is_none_or(|s| p.status.to_lowercase().contains(s.as_str()));
                 name_ok && status_ok
             })
-            .map(|p| json!({
-                "name": p.name,
-                "category": p.category,
-                "status": p.status,
-                "github": p.github,
-                "local_path": p.local_path.display().to_string(),
-                "stars": p.stars,
-                "last_commit": p.last_commit,
-            }))
+            .map(|p| {
+                json!({
+                    "name": p.name,
+                    "category": p.category,
+                    "status": p.status,
+                    "github": p.github,
+                    "local_path": p.local_path.display().to_string(),
+                    "stars": p.stars,
+                    "last_commit": p.last_commit,
+                })
+            })
             .collect();
 
         let summary = format!("{} project(s) found", list.len());
@@ -748,12 +768,21 @@ impl McpServer {
                 "archived" | "legacy" => archived += 1,
                 _ => active += 1,
             }
-            if p.github.is_none() { local_only += 1; }
-            if !p.local_path.join("memory.md").exists() { no_memory += 1; }
-            if crate::filebrowser::git_is_dirty(&p.local_path) == Some(true) { dirty += 1; }
+            if p.github.is_none() {
+                local_only += 1;
+            }
+            if !p.local_path.join("memory.md").exists() {
+                no_memory += 1;
+            }
+            if crate::filebrowser::git_is_dirty(&p.local_path) == Some(true) {
+                dirty += 1;
+            }
             let h = crate::health::check_project(p);
             let grade: &'static str = match h.compliance_grade.as_str() {
-                "A" => "A", "B" => "B", "C" => "C", _ => "D",
+                "A" => "A",
+                "B" => "B",
+                "C" => "C",
+                _ => "D",
             };
             *grade_counts.entry(grade).or_insert(0) += 1;
         }
@@ -789,11 +818,13 @@ impl McpServer {
         let mut cortex = crate::cortex::Cortex::init().unwrap();
 
         // Incremental index of the workspace
-        let _indexed = cortex.index_workspace(&self.config.dev_ops_path)
+        let _indexed = cortex
+            .index_workspace(&self.config.dev_ops_path)
             .unwrap_or(0);
 
         // Semantic search
-        let vector_hits = cortex.search(query, top_k)
+        let vector_hits = cortex
+            .search(query, top_k)
             .map_err(|e| format!("Search failed: {e}"))?;
 
         // Also run BM25 for hybrid RRF
@@ -805,21 +836,27 @@ impl McpServer {
 
         let fused = crate::hybrid_search::fuse(bm25_hits, vector_hits, top_k);
 
-        let results: Vec<serde_json::Value> = fused.iter().map(|r| {
-            json!({
-                "path": r.path.to_string_lossy(),
-                "project": r.project,
-                "snippet": r.snippet,
-                "line": r.start_line,
-                "rrf_score": format!("{:.4}", r.rrf_score),
-                "source": r.source.label(),
+        let results: Vec<serde_json::Value> = fused
+            .iter()
+            .map(|r| {
+                json!({
+                    "path": r.path.to_string_lossy(),
+                    "project": r.project,
+                    "snippet": r.snippet,
+                    "line": r.start_line,
+                    "rrf_score": format!("{:.4}", r.rrf_score),
+                    "source": r.source.label(),
+                })
             })
-        }).collect();
+            .collect();
 
         let stats = cortex.chunk_count();
         let summary = format!(
             "Semantic search for '{}' -> {} result(s) (index: {} chunks, {} files)",
-            query, results.len(), stats, cortex.file_count()
+            query,
+            results.len(),
+            stats,
+            cortex.file_count()
         );
 
         Ok(json!({
@@ -863,7 +900,8 @@ impl McpServer {
         let has_memory = path.join("memory.md").exists();
         let has_sigmap = path.join("SIGMAP.md").exists();
 
-        let name = path.file_name()
+        let name = path
+            .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
 
@@ -944,63 +982,84 @@ impl McpServer {
                  JOIN projects p ON p.id = h.project_id
                  WHERE p.path = ?1",
                 rusqlite::params![path_str],
-                |row| Ok(json!({
-                    "compliance_grade": row.get::<_, String>(0).unwrap_or_default(),
-                    "compliance_score": row.get::<_, Option<i64>>(1).unwrap_or_default(),
-                    "security_grade": row.get::<_, Option<String>>(2).unwrap_or_default(),
-                    "security_score": row.get::<_, Option<i64>>(3).unwrap_or_default(),
-                    "security_issues": row.get::<_, i64>(4).unwrap_or_default(),
-                    "security_critical": row.get::<_, i64>(5).unwrap_or_default(),
-                    "git_dirty": row.get::<_, i64>(6).unwrap_or_default() != 0,
-                    "has_memory": row.get::<_, i64>(7).unwrap_or_default() != 0,
-                    "has_sigmap": row.get::<_, i64>(8).unwrap_or_default() != 0,
-                    "refactor_grade": row.get::<_, String>(9).unwrap_or_else(|_| "-".into()),
-                    "refactor_score": row.get::<_, Option<i64>>(10).unwrap_or_default(),
-                    "refactor_high": row.get::<_, i64>(11).unwrap_or_default(),
-                    "scanned_at": row.get::<_, String>(12).unwrap_or_default()
-                })),
+                |row| {
+                    Ok(json!({
+                        "compliance_grade": row.get::<_, String>(0).unwrap_or_default(),
+                        "compliance_score": row.get::<_, Option<i64>>(1).unwrap_or_default(),
+                        "security_grade": row.get::<_, Option<String>>(2).unwrap_or_default(),
+                        "security_score": row.get::<_, Option<i64>>(3).unwrap_or_default(),
+                        "security_issues": row.get::<_, i64>(4).unwrap_or_default(),
+                        "security_critical": row.get::<_, i64>(5).unwrap_or_default(),
+                        "git_dirty": row.get::<_, i64>(6).unwrap_or_default() != 0,
+                        "has_memory": row.get::<_, i64>(7).unwrap_or_default() != 0,
+                        "has_sigmap": row.get::<_, i64>(8).unwrap_or_default() != 0,
+                        "refactor_grade": row.get::<_, String>(9).unwrap_or_else(|_| "-".into()),
+                        "refactor_score": row.get::<_, Option<i64>>(10).unwrap_or_default(),
+                        "refactor_high": row.get::<_, i64>(11).unwrap_or_default(),
+                        "scanned_at": row.get::<_, String>(12).unwrap_or_default()
+                    }))
+                },
             );
-            if let Ok(v) = result { return v; }
+            if let Ok(v) = result {
+                return v;
+            }
         }
         json!({ "compliance_grade": "-", "security_grade": null, "refactor_grade": "-" })
     }
 
     fn tool_portfolio_status(&self, args: &Value) -> Result<Value, String> {
-        let name_filter  = args["filter"].as_str().map(str::to_lowercase);
+        let name_filter = args["filter"].as_str().map(str::to_lowercase);
         let status_filter = args["status"].as_str();
 
         let conn = crate::db::open_db().map_err(|e| e.to_string())?;
         let projects = crate::db::load_all_projects(&conn).map_err(|e| e.to_string())?;
 
-        let filtered: Vec<_> = projects.iter().filter(|p| {
-            if let Some(ref f) = name_filter {
-                if !p.name.to_lowercase().contains(f.as_str()) { return false; }
-            }
-            if let Some(s) = status_filter {
-                if p.status != s { return false; }
-            }
-            true
-        }).collect();
+        let filtered: Vec<_> = projects
+            .iter()
+            .filter(|p| {
+                if let Some(ref f) = name_filter {
+                    if !p.name.to_lowercase().contains(f.as_str()) {
+                        return false;
+                    }
+                }
+                if let Some(s) = status_filter {
+                    if p.status != s {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
 
         let mut rows = Vec::new();
-        let mut text_lines = vec![
-            format!("{:<30} {:<10} {:<8} {:<6} {:<6} {:<8}",
-                "PROJECT", "STATUS", "GIT", "COMP", "SEC", "REFACTOR")
-        ];
+        let mut text_lines = vec![format!(
+            "{:<30} {:<10} {:<8} {:<6} {:<6} {:<8}",
+            "PROJECT", "STATUS", "GIT", "COMP", "SEC", "REFACTOR"
+        )];
         text_lines.push("─".repeat(72));
 
         for p in &filtered {
             let path = std::path::Path::new(&p.path);
             let health = self.get_health_from_db(path);
 
-            let dirty = if health["git_dirty"].as_bool().unwrap_or(false) { "dirty" } else { "clean" };
-            let comp  = health["compliance_grade"].as_str().unwrap_or("-");
-            let sec   = health["security_grade"].as_str().unwrap_or("-");
-            let rf    = health["refactor_grade"].as_str().unwrap_or("-");
+            let dirty = if health["git_dirty"].as_bool().unwrap_or(false) {
+                "dirty"
+            } else {
+                "clean"
+            };
+            let comp = health["compliance_grade"].as_str().unwrap_or("-");
+            let sec = health["security_grade"].as_str().unwrap_or("-");
+            let rf = health["refactor_grade"].as_str().unwrap_or("-");
 
-            text_lines.push(format!("{:<30} {:<10} {:<8} {:<6} {:<6} {:<8}",
+            text_lines.push(format!(
+                "{:<30} {:<10} {:<8} {:<6} {:<6} {:<8}",
                 &p.name[..p.name.len().min(29)],
-                p.status, dirty, comp, sec, rf));
+                p.status,
+                dirty,
+                comp,
+                sec,
+                rf
+            ));
 
             rows.push(json!({
                 "name": p.name,
@@ -1030,22 +1089,27 @@ impl McpServer {
     fn tool_disk_usage(&self, args: &Value) -> Result<Value, String> {
         let path = self.resolve_git_path(args)?;
         let r = crate::core::disk::analyze(&path);
-        let mut lines = vec![
-            format!("Total: {}  Source: {}  Cache: {}  Files: {}",
-                crate::core::disk::human_size(r.total_bytes),
-                crate::core::disk::human_size(r.source_bytes),
-                crate::core::disk::human_size(r.cache_bytes),
-                r.file_count),
-        ];
+        let mut lines = vec![format!(
+            "Total: {}  Source: {}  Cache: {}  Files: {}",
+            crate::core::disk::human_size(r.total_bytes),
+            crate::core::disk::human_size(r.source_bytes),
+            crate::core::disk::human_size(r.cache_bytes),
+            r.file_count
+        )];
         for c in &r.cache_dirs {
-            lines.push(format!("  cache  {:.<30} {}  ({})",
+            lines.push(format!(
+                "  cache  {:.<30} {}  ({})",
                 c.path.file_name().unwrap_or_default().to_string_lossy(),
-                crate::core::disk::human_size(c.bytes), c.kind));
+                crate::core::disk::human_size(c.bytes),
+                c.kind
+            ));
         }
         for (f, s) in r.largest_files.iter().take(5) {
-            lines.push(format!("  large  {}  {}",
+            lines.push(format!(
+                "  large  {}  {}",
                 f.file_name().unwrap_or_default().to_string_lossy(),
-                crate::core::disk::human_size(*s)));
+                crate::core::disk::human_size(*s)
+            ));
         }
         Ok(json!({
             "content": [{ "type": "text", "text": lines.join("\n") }],
@@ -1067,7 +1131,7 @@ impl McpServer {
             let mut lines = vec![format!("{:<8} {:<10} {}", "PORT", "PID", "PROCESS")];
             for p in &ports {
                 let pid_s = p.pid.map(|n| n.to_string()).unwrap_or_else(|| "—".into());
-                let name  = p.process_name.as_deref().unwrap_or("—");
+                let name = p.process_name.as_deref().unwrap_or("—");
                 lines.push(format!("{:<8} {:<10} {}", p.port, pid_s, name));
             }
             lines.join("\n")
@@ -1082,12 +1146,14 @@ impl McpServer {
 
     fn tool_version_info(&self, args: &Value) -> Result<Value, String> {
         let path = self.resolve_git_path(args)?;
-        let v = crate::core::version::info(&path)
-            .ok_or_else(|| "No version file found".to_string())?;
+        let v =
+            crate::core::version::info(&path).ok_or_else(|| "No version file found".to_string())?;
 
         let text = format!(
             "Version: {} ({})\nFile: {}\nLast tag: {}\nCommits since tag: {}",
-            v.current, v.project_type, v.version_file,
+            v.current,
+            v.project_type,
+            v.version_file,
             v.last_tag.as_deref().unwrap_or("none"),
             v.commits_since_tag,
         );
@@ -1106,11 +1172,14 @@ impl McpServer {
         let bump_type = crate::core::version::BumpType::from_str(level)
             .ok_or_else(|| format!("Invalid level '{}' — use patch | minor | major", level))?;
         let changelog = args["changelog"].as_bool().unwrap_or(false);
-        let tag       = args["tag"].as_bool().unwrap_or(false);
+        let tag = args["tag"].as_bool().unwrap_or(false);
 
         let r = crate::core::version::bump(&path, &bump_type, changelog, tag);
         let text = if r.ok {
-            format!("✓ {} → {}  ({})\n{}", r.old_version, r.new_version, r.version_file, r.changelog_entry)
+            format!(
+                "✓ {} → {}  ({})\n{}",
+                r.old_version, r.new_version, r.version_file, r.changelog_entry
+            )
         } else {
             format!("✗ {}", r.message)
         };
@@ -1129,23 +1198,43 @@ impl McpServer {
         let path = self.resolve_git_path(args)?;
         let r = crate::core::env::check(&path);
 
-        let mut lines = vec![
-            format!("has_env: {}  has_example: {}  total_keys: {}",
-                r.has_env, r.has_example, r.total_env_keys),
-        ];
+        let mut lines = vec![format!(
+            "has_env: {}  has_example: {}  total_keys: {}",
+            r.has_env, r.has_example, r.total_env_keys
+        )];
         if !r.missing_keys.is_empty() {
-            lines.push(format!("MISSING ({}):{}", r.missing_keys.len(),
-                r.missing_keys.iter().map(|k| format!(" {}", k)).collect::<String>()));
+            lines.push(format!(
+                "MISSING ({}):{}",
+                r.missing_keys.len(),
+                r.missing_keys
+                    .iter()
+                    .map(|k| format!(" {}", k))
+                    .collect::<String>()
+            ));
         }
         if !r.empty_keys.is_empty() {
-            lines.push(format!("EMPTY ({}):{}", r.empty_keys.len(),
-                r.empty_keys.iter().map(|k| format!(" {}=", k)).collect::<String>()));
+            lines.push(format!(
+                "EMPTY ({}):{}",
+                r.empty_keys.len(),
+                r.empty_keys
+                    .iter()
+                    .map(|k| format!(" {}=", k))
+                    .collect::<String>()
+            ));
         }
         if !r.undocumented_keys.is_empty() {
-            lines.push(format!("UNDOCUMENTED ({}):{}", r.undocumented_keys.len(),
-                r.undocumented_keys.iter().map(|k| format!(" {}", k)).collect::<String>()));
+            lines.push(format!(
+                "UNDOCUMENTED ({}):{}",
+                r.undocumented_keys.len(),
+                r.undocumented_keys
+                    .iter()
+                    .map(|k| format!(" {}", k))
+                    .collect::<String>()
+            ));
         }
-        if r.ok { lines.push("✓ All env keys present and set".into()); }
+        if r.ok {
+            lines.push("✓ All env keys present and set".into());
+        }
 
         Ok(json!({
             "content": [{ "type": "text", "text": lines.join("\n") }],
@@ -1180,9 +1269,24 @@ impl McpServer {
             "✓ All deps up to date".into()
         };
 
-        let details = r.cve_issues.iter()
-            .map(|v| format!("[{}] {} {} — {}", v.severity.to_uppercase(), v.package, v.version, v.description))
-            .chain(r.outdated.iter().take(10).map(|d| format!("{} {} → {}", d.name, d.current, d.latest)))
+        let details = r
+            .cve_issues
+            .iter()
+            .map(|v| {
+                format!(
+                    "[{}] {} {} — {}",
+                    v.severity.to_uppercase(),
+                    v.package,
+                    v.version,
+                    v.description
+                )
+            })
+            .chain(
+                r.outdated
+                    .iter()
+                    .take(10)
+                    .map(|d| format!("{} {} → {}", d.name, d.current, d.latest)),
+            )
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -1207,11 +1311,23 @@ impl McpServer {
         let status = if r.ok { "✓ OK" } else { "✗ FAILED" };
         let text = format!(
             "{} {} — {} in {}ms  ({} warnings, {} errors)\n{}",
-            status, r.project_type, r.command, r.duration_ms,
-            r.warnings, r.errors,
-            r.diagnostics.iter()
-                .map(|d| format!("  [{}] {}:{} — {}", d.level, d.file, d.line.map(|l|l.to_string()).unwrap_or_default(), d.message))
-                .collect::<Vec<_>>().join("\n")
+            status,
+            r.project_type,
+            r.command,
+            r.duration_ms,
+            r.warnings,
+            r.errors,
+            r.diagnostics
+                .iter()
+                .map(|d| format!(
+                    "  [{}] {}:{} — {}",
+                    d.level,
+                    d.file,
+                    d.line.map(|l| l.to_string()).unwrap_or_default(),
+                    d.message
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
         );
         Ok(json!({
             "content": [{ "type": "text", "text": text }],
@@ -1229,8 +1345,17 @@ impl McpServer {
         let status = if r.ok { "✓" } else { "✗" };
         let text = format!(
             "{} {} — {} passed, {} failed, {} ignored  ({}ms)\n{}",
-            status, r.command, r.passed, r.failed, r.ignored, r.duration_ms,
-            r.failures.iter().map(|f| format!("  ↳ {}", f)).collect::<Vec<_>>().join("\n")
+            status,
+            r.command,
+            r.passed,
+            r.failed,
+            r.ignored,
+            r.duration_ms,
+            r.failures
+                .iter()
+                .map(|f| format!("  ↳ {}", f))
+                .collect::<Vec<_>>()
+                .join("\n")
         );
         Ok(json!({
             "content": [{ "type": "text", "text": text }],
@@ -1253,9 +1378,10 @@ impl McpServer {
         }
         if let Ok(conn) = crate::db::open_db() {
             if let Ok(projects) = crate::db::load_all_projects(&conn) {
-                if let Some(found) = projects.iter().find(|p| {
-                    p.name.to_lowercase().contains(&project.to_lowercase())
-                }) {
+                if let Some(found) = projects
+                    .iter()
+                    .find(|p| p.name.to_lowercase().contains(&project.to_lowercase()))
+                {
                     return Ok(std::path::PathBuf::from(&found.path));
                 }
             }
@@ -1270,8 +1396,11 @@ impl McpServer {
             "Branch: {}  {}\nAhead: {}  Behind: {}\nStaged: {}  Modified: {}  Untracked: {}",
             s.branch.as_deref().unwrap_or("(detached)"),
             if s.dirty { "dirty" } else { "clean" },
-            s.ahead, s.behind,
-            s.staged.len(), s.unstaged.len(), s.untracked.len(),
+            s.ahead,
+            s.behind,
+            s.staged.len(),
+            s.unstaged.len(),
+            s.untracked.len(),
         );
         Ok(json!({
             "content": [{ "type": "text", "text": text }],
@@ -1283,7 +1412,8 @@ impl McpServer {
         let path = self.resolve_git_path(args)?;
         let count = args["count"].as_u64().unwrap_or(10) as usize;
         let entries = crate::core::git::log(&path, count);
-        let text = entries.iter()
+        let text = entries
+            .iter()
             .map(|e| format!("{} {} ({} {})", e.short_hash, e.message, e.author, e.date))
             .collect::<Vec<_>>()
             .join("\n");
@@ -1313,9 +1443,9 @@ impl McpServer {
     }
 
     fn tool_git_commit(&self, args: &Value) -> Result<Value, String> {
-        let path    = self.resolve_git_path(args)?;
+        let path = self.resolve_git_path(args)?;
         let message = args["message"].as_str().ok_or("missing message")?;
-        let push    = args["push"].as_bool().unwrap_or(false);
+        let push = args["push"].as_bool().unwrap_or(false);
 
         let commit_result = crate::core::git::commit(&path, message, true);
         if !commit_result.ok {

@@ -1,6 +1,6 @@
+use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::Result;
 
 // ─── Task model ───────────────────────────────────────────────────────────────
 
@@ -21,8 +21,8 @@ impl Task {
     /// Agent short label for the badge.
     pub fn agent_label(&self) -> Option<&str> {
         match self.agent.as_deref() {
-            Some("claude")      => Some("◆C"),
-            Some("gemini")      => Some("◈G"),
+            Some("claude") => Some("◆C"),
+            Some("gemini") => Some("◈G"),
             Some("antigravity") => Some("⬡A"),
             _ => None,
         }
@@ -47,7 +47,10 @@ fn parse_line(line: &str) -> Option<Task> {
     if let Some(r) = t.strip_prefix("- [ ] ") {
         completed = false;
         rest = r;
-    } else if let Some(r) = t.strip_prefix("- [x] ").or_else(|| t.strip_prefix("- [X] ")) {
+    } else if let Some(r) = t
+        .strip_prefix("- [x] ")
+        .or_else(|| t.strip_prefix("- [X] "))
+    {
         completed = true;
         rest = r;
     } else {
@@ -62,7 +65,11 @@ fn parse_line(line: &str) -> Option<Task> {
         if let Some(a) = word.strip_prefix('@') {
             let a_lower = a.to_lowercase();
             if matches!(a_lower.as_str(), "claude" | "gemini" | "antigravity" | "ag") {
-                agent = Some(if a_lower == "ag" { "antigravity".into() } else { a_lower });
+                agent = Some(if a_lower == "ag" {
+                    "antigravity".into()
+                } else {
+                    a_lower
+                });
             } else {
                 text_parts.push(word); // Unknown @ tag, keep in text
             }
@@ -80,7 +87,12 @@ fn parse_line(line: &str) -> Option<Task> {
         return None;
     }
 
-    Some(Task { text, completed, agent, project })
+    Some(Task {
+        text,
+        completed,
+        agent,
+        project,
+    })
 }
 
 fn serialize(task: &Task) -> String {
@@ -141,31 +153,35 @@ pub fn dispatch_to_agent(
 
     // Build the agent command
     let agent_cmd = match agent {
-        "gemini"      => "gemini",
+        "gemini" => "gemini",
         "antigravity" => "antigravity",
-        _             => "claude",
+        _ => "claude",
     };
 
     let launched = launch_in_terminal(agent_cmd, &work_dir);
 
     match (clip_ok, launched) {
-        (true,  true)  => format!("✓ Task copied to clipboard + {} launched in {}", agent_cmd, short_path(&work_dir)),
-        (true,  false) => format!("✓ Task in clipboard — paste when you open {}", agent_cmd),
-        (false, true)  => format!("✓ {} launched (clipboard failed)", agent_cmd),
+        (true, true) => format!(
+            "✓ Task copied to clipboard + {} launched in {}",
+            agent_cmd,
+            short_path(&work_dir)
+        ),
+        (true, false) => format!("✓ Task in clipboard — paste when you open {}", agent_cmd),
+        (false, true) => format!("✓ {} launched (clipboard failed)", agent_cmd),
         (false, false) => format!("✗ Dispatch failed — check {} is on PATH", agent_cmd),
     }
 }
 
 fn build_prompt(task: &Task, agent: &str, sentinel_errors: Option<Vec<String>>) -> String {
-    let proj_ctx = task.project.as_deref()
+    let proj_ctx = task
+        .project
+        .as_deref()
         .map(|p| format!("Project: {}\n", p))
         .unwrap_or_default();
 
     let mut msg = format!(
         "=== TASK FROM R-AI-OS ===\n{}Agent: {}\nTask: {}\n",
-        proj_ctx,
-        agent,
-        task.text
+        proj_ctx, agent, task.text
     );
 
     if let Some(errors) = sentinel_errors {
@@ -185,10 +201,7 @@ fn copy_to_clipboard(text: &str) -> bool {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let mut child = match Command::new("clip.exe")
-        .stdin(Stdio::piped())
-        .spawn()
-    {
+    let mut child = match Command::new("clip.exe").stdin(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(_) => return false,
     };
@@ -220,5 +233,8 @@ fn launch_in_terminal(agent_cmd: &str, work_dir: &str) -> bool {
 }
 
 fn short_path(path: &str) -> String {
-    path.split(['/', '\\']).last().unwrap_or(path).to_string()
+    path.split(['/', '\\'])
+        .next_back()
+        .unwrap_or(path)
+        .to_string()
 }

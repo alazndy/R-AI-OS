@@ -37,7 +37,13 @@ impl ComplianceReport {
 
     pub fn score_color(&self) -> u8 {
         // 0=green, 1=amber, 2=red
-        if self.score >= 80 { 0 } else if self.score >= 60 { 1 } else { 2 }
+        if self.score >= 80 {
+            0
+        } else if self.score >= 60 {
+            1
+        } else {
+            2
+        }
     }
 
     pub fn language(&self) -> &'static str {
@@ -86,7 +92,11 @@ pub fn check_file(path: &Path, content: &str) -> ComplianceReport {
         }
     }
 
-    if path.file_name().map(|n| n == "package.json").unwrap_or(false) {
+    if path
+        .file_name()
+        .map(|n| n == "package.json")
+        .unwrap_or(false)
+    {
         check_package_json(content, &mut violations);
     }
 
@@ -183,10 +193,7 @@ fn check_typescript(line: &str, ln: usize, v: &mut Vec<Violation>) {
                 severity: 4,
             });
         }
-        if t.starts_with("export default ")
-            && !t.contains("function ")
-            && !t.contains("class ")
-        {
+        if t.starts_with("export default ") && !t.contains("function ") && !t.contains("class ") {
             v.push(Violation {
                 line: ln,
                 rule: "Prefer named exports over export default",

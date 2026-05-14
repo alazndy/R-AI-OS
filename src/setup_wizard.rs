@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 // ─── Steps ───────────────────────────────────────────────────────────────────
@@ -20,45 +20,47 @@ pub enum WizardStep {
 impl WizardStep {
     pub fn next(&self) -> Self {
         match self {
-            Self::Welcome     => Self::Workspace,
-            Self::Workspace   => Self::Master,
-            Self::Master      => Self::Claude,
-            Self::Claude      => Self::Gemini,
-            Self::Gemini      => Self::Antigravity,
+            Self::Welcome => Self::Workspace,
+            Self::Workspace => Self::Master,
+            Self::Master => Self::Claude,
+            Self::Claude => Self::Gemini,
+            Self::Gemini => Self::Antigravity,
             Self::Antigravity => Self::Skills,
-            Self::Skills      => Self::Initialize,
-            Self::Initialize  => Self::Done,
-            Self::Done        => Self::Done,
+            Self::Skills => Self::Initialize,
+            Self::Initialize => Self::Done,
+            Self::Done => Self::Done,
         }
     }
 
     pub fn index(&self) -> usize {
         match self {
-            Self::Welcome     => 0,
-            Self::Workspace   => 1,
-            Self::Master      => 2,
-            Self::Claude      => 3,
-            Self::Gemini      => 4,
+            Self::Welcome => 0,
+            Self::Workspace => 1,
+            Self::Master => 2,
+            Self::Claude => 3,
+            Self::Gemini => 4,
             Self::Antigravity => 5,
-            Self::Skills      => 6,
-            Self::Initialize  => 7,
-            Self::Done        => 8,
+            Self::Skills => 6,
+            Self::Initialize => 7,
+            Self::Done => 8,
         }
     }
 
-    pub fn total() -> usize { 8 }
+    pub fn total() -> usize {
+        8
+    }
 
     pub fn title(&self) -> &'static str {
         match self {
-            Self::Welcome     => "WELCOME",
-            Self::Workspace   => "WORKSPACE",
-            Self::Master      => "MASTER.md",
-            Self::Claude      => "CLAUDE CODE",
-            Self::Gemini      => "GEMINI CLI",
+            Self::Welcome => "WELCOME",
+            Self::Workspace => "WORKSPACE",
+            Self::Master => "MASTER.md",
+            Self::Claude => "CLAUDE CODE",
+            Self::Gemini => "GEMINI CLI",
             Self::Antigravity => "ANTIGRAVITY",
-            Self::Skills      => "SKILLS & HOOKS",
-            Self::Initialize  => "INITIALIZE",
-            Self::Done        => "DONE",
+            Self::Skills => "SKILLS & HOOKS",
+            Self::Initialize => "INITIALIZE",
+            Self::Done => "DONE",
         }
     }
 }
@@ -106,19 +108,22 @@ pub fn detect_agents() -> AgentStatus {
 }
 
 fn run_version(args: &[&str]) -> Option<(bool, String)> {
-    let out = Command::new(args[0])
-        .args(&args[1..])
-        .output()
-        .ok()?;
+    let out = Command::new(args[0]).args(&args[1..]).output().ok()?;
     let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let v = if v.is_empty() {
         String::from_utf8_lossy(&out.stderr).trim().to_string()
-    } else { v };
-    Some((out.status.success(), v.lines().next().unwrap_or("").to_string()))
+    } else {
+        v
+    };
+    Some((
+        out.status.success(),
+        v.lines().next().unwrap_or("").to_string(),
+    ))
 }
 
 // ─── Execution ────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone)]
 pub struct WizardAction {
     pub desc: String,
     pub ok: bool,
@@ -127,13 +132,25 @@ pub struct WizardAction {
 
 impl WizardAction {
     fn ok(desc: impl Into<String>) -> Self {
-        Self { desc: desc.into(), ok: true, skipped: false }
+        Self {
+            desc: desc.into(),
+            ok: true,
+            skipped: false,
+        }
     }
     fn fail(desc: impl Into<String>) -> Self {
-        Self { desc: desc.into(), ok: false, skipped: false }
+        Self {
+            desc: desc.into(),
+            ok: false,
+            skipped: false,
+        }
     }
     fn skip(desc: impl Into<String>) -> Self {
-        Self { desc: desc.into(), ok: true, skipped: true }
+        Self {
+            desc: desc.into(),
+            ok: true,
+            skipped: true,
+        }
     }
 }
 
@@ -182,7 +199,10 @@ pub fn exec_workspace(dev_ops: &Path, github_user: &str) -> Vec<WizardAction> {
     let entities_path = dev_ops.join("entities.json");
     if !entities_path.exists() {
         let content = serde_json::json!({ "projects": [] });
-        match std::fs::write(&entities_path, serde_json::to_string_pretty(&content).unwrap_or_default()) {
+        match std::fs::write(
+            &entities_path,
+            serde_json::to_string_pretty(&content).unwrap_or_default(),
+        ) {
             Ok(_) => log.push(WizardAction::ok("created: entities.json")),
             Err(e) => log.push(WizardAction::fail(format!("entities.json: {}", e))),
         }
@@ -193,7 +213,8 @@ pub fn exec_workspace(dev_ops: &Path, github_user: &str) -> Vec<WizardAction> {
     // tasks.md
     let tasks_path = dev_ops.join("tasks.md");
     if !tasks_path.exists() {
-        let content = "# Tasks\n\n<!-- raios task format: - [ ] Task text @agent #ProjectName -->\n";
+        let content =
+            "# Tasks\n\n<!-- raios task format: - [ ] Task text @agent #ProjectName -->\n";
         match std::fs::write(&tasks_path, content) {
             Ok(_) => log.push(WizardAction::ok("created: tasks.md")),
             Err(e) => log.push(WizardAction::fail(format!("tasks.md: {}", e))),
@@ -235,7 +256,10 @@ pub fn exec_master(master_path: &Path, github_user: &str) -> Vec<WizardAction> {
 
     let content = master_template(github_user);
     match std::fs::write(master_path, content) {
-        Ok(_) => log.push(WizardAction::ok(format!("created: {}", master_path.display()))),
+        Ok(_) => log.push(WizardAction::ok(format!(
+            "created: {}",
+            master_path.display()
+        ))),
         Err(e) => log.push(WizardAction::fail(format!("MASTER.md: {}", e))),
     }
     log
@@ -263,9 +287,11 @@ pub fn exec_claude(dev_ops: &Path, master_path: &Path) -> Vec<WizardAction> {
     // settings.json — register raios MCP
     let settings_path = claude_dir.join("settings.json");
     match register_mcp_claude(&settings_path) {
-        Ok(true)  => log.push(WizardAction::ok("registered: raios MCP in ~/.claude/settings.json")),
+        Ok(true) => log.push(WizardAction::ok(
+            "registered: raios MCP in ~/.claude/settings.json",
+        )),
         Ok(false) => log.push(WizardAction::skip("already registered: raios MCP")),
-        Err(e)    => log.push(WizardAction::fail(format!("MCP register: {}", e))),
+        Err(e) => log.push(WizardAction::fail(format!("MCP register: {}", e))),
     }
 
     // rules/ directory
@@ -302,9 +328,11 @@ pub fn exec_gemini(master_path: &Path) -> Vec<WizardAction> {
     // GEMINI settings.json — MCP
     let gemini_settings = gemini_dir.join("settings.json");
     match register_mcp_gemini(&gemini_settings) {
-        Ok(true)  => log.push(WizardAction::ok("registered: raios MCP in ~/.gemini/settings.json")),
+        Ok(true) => log.push(WizardAction::ok(
+            "registered: raios MCP in ~/.gemini/settings.json",
+        )),
         Ok(false) => log.push(WizardAction::skip("already registered: raios MCP (Gemini)")),
-        Err(e)    => log.push(WizardAction::fail(format!("Gemini MCP: {}", e))),
+        Err(e) => log.push(WizardAction::fail(format!("Gemini MCP: {}", e))),
     }
 
     log
@@ -335,10 +363,7 @@ pub fn exec_skills(dev_ops: &Path) -> Vec<WizardAction> {
     let mut log = Vec::new();
     let agents_dir = dev_ops.join(".agents");
 
-    let dirs_to_create = [
-        agents_dir.join("skills"),
-        agents_dir.join("hooks"),
-    ];
+    let dirs_to_create = [agents_dir.join("skills"), agents_dir.join("hooks")];
 
     for d in &dirs_to_create {
         if d.exists() {
@@ -407,7 +432,10 @@ pub fn exec_initialize(
     let projects = crate::entities::discover_entities(dev_ops);
     let count = projects.len();
     match crate::entities::save_entities(dev_ops, projects) {
-        Ok(_) => log.push(WizardAction::ok(format!("discovered {} projects → entities.json", count))),
+        Ok(_) => log.push(WizardAction::ok(format!(
+            "discovered {} projects → entities.json",
+            count
+        ))),
         Err(e) => log.push(WizardAction::fail(format!("discover: {}", e))),
     }
 
@@ -476,7 +504,8 @@ fn register_mcp_gemini(settings_path: &Path) -> Result<bool, String> {
 // ─── Templates ────────────────────────────────────────────────────────────────
 
 fn master_template(github_user: &str) -> String {
-    format!(r#"# MASTER — {user}
+    format!(
+        r#"# MASTER — {user}
 
 ---
 
@@ -530,11 +559,18 @@ Tüm projeler `Dev Ops/` altında, istisna yok.
 
 ### GitHub
 - Kullanıcı: {user}
-"#, user = if github_user.is_empty() { "User" } else { github_user })
+"#,
+        user = if github_user.is_empty() {
+            "User"
+        } else {
+            github_user
+        }
+    )
 }
 
 fn claude_md_template(master_path: &Path) -> String {
-    format!(r#"# Claude Code Rules
+    format!(
+        r#"# Claude Code Rules
 
 > Full constitution: {}
 
@@ -552,11 +588,14 @@ fn claude_md_template(master_path: &Path) -> String {
 
 ## Agent Handover
 Use `handover` MCP tool to pass tasks to Gemini or Antigravity.
-"#, master_path.display())
+"#,
+        master_path.display()
+    )
 }
 
 fn gemini_md_template(master_path: &Path) -> String {
-    format!(r#"# Gemini CLI Rules
+    format!(
+        r#"# Gemini CLI Rules
 
 > Full constitution: {}
 
@@ -571,11 +610,14 @@ Research, alternative architecture exploration, graphify analysis.
 ## Mandatory
 - `graphify` motor: run on every research session
 - Document findings in project memory.md
-"#, master_path.display())
+"#,
+        master_path.display()
+    )
 }
 
 fn antigravity_md_template(master_path: &Path) -> String {
-    format!(r#"# Antigravity Rules
+    format!(
+        r#"# Antigravity Rules
 
 > Full constitution: {}
 
@@ -591,7 +633,9 @@ Visual and performance-focused development. System health monitoring.
 ## Mandatory
 - `verify-ai-os` on session start
 - Monitor Core Web Vitals: LCP, FID, CLS
-"#, master_path.display())
+"#,
+        master_path.display()
+    )
 }
 
 // ─── Skill stubs ──────────────────────────────────────────────────────────────

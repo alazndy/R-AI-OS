@@ -1,9 +1,9 @@
-use std::time::Duration;
+use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::RwLock;
 use tokio::time::timeout;
-use anyhow::{Result, Context};
 use uuid::Uuid;
 
 use crate::daemon::state::DaemonState;
@@ -29,9 +29,14 @@ impl ExecutionProxy {
     }
 
     /// Spawns an agent in an isolated environment with a Death Timer.
-    pub async fn spawn_agent(&self, agent_name: &str, project_path: &str, timeout_secs: u64) -> Result<String> {
+    pub async fn spawn_agent(
+        &self,
+        agent_name: &str,
+        project_path: &str,
+        timeout_secs: u64,
+    ) -> Result<String> {
         let process_id = Uuid::new_v4();
-        
+
         // Register the process in state
         let agent_proc = AgentProcess {
             id: process_id,
@@ -46,7 +51,10 @@ impl ExecutionProxy {
             state_lock.active_agents.push(agent_proc.clone());
         }
 
-        println!("[Proxy] Spawning agent '{}' (ID: {}) with {}s death timer", agent_name, process_id, timeout_secs);
+        println!(
+            "[Proxy] Spawning agent '{}' (ID: {}) with {}s death timer",
+            agent_name, process_id, timeout_secs
+        );
 
         let agent_name_cloned = agent_name.to_string();
         let path_cloned = project_path.to_string();
@@ -54,28 +62,30 @@ impl ExecutionProxy {
 
         // Spawn a background task to handle the process execution
         tokio::spawn(async move {
-            use tokio::io::{BufReader, AsyncBufReadExt};
             use std::process::Stdio;
+            use tokio::io::{AsyncBufReadExt, BufReader};
 
             let mut cmd = Command::new("powershell");
-            cmd.args(&["-Command", &agent_name_cloned]); // Use powershell as a bridge for commands
+            cmd.args(["-Command", &agent_name_cloned]); // Use powershell as a bridge for commands
             cmd.current_dir(&path_cloned);
             cmd.stdout(Stdio::piped());
             cmd.stderr(Stdio::piped());
-            
+
             // Wait for the child process to complete, with a timeout
             let result = match cmd.spawn() {
                 Ok(mut child) => {
                     let stdout = child.stdout.take().unwrap();
                     let stderr = child.stderr.take().unwrap();
                     let state_for_logs = state_cloned.clone();
-                    
+
                     // Stream output to logs
                     tokio::spawn(async move {
                         let mut reader = BufReader::new(stdout).lines();
                         while let Ok(Some(line)) = reader.next_line().await {
                             let mut s = state_for_logs.write().await;
-                            if let Some(agent) = s.active_agents.iter_mut().find(|a| a.id == process_id) {
+                            if let Some(agent) =
+                                s.active_agents.iter_mut().find(|a| a.id == process_id)
+                            {
                                 agent.logs.push(format!("[stdout] {}", line));
                             }
                         }
@@ -86,7 +96,9 @@ impl ExecutionProxy {
                         let mut reader = BufReader::new(stderr).lines();
                         while let Ok(Some(line)) = reader.next_line().await {
                             let mut s = state_for_err.write().await;
-                            if let Some(agent) = s.active_agents.iter_mut().find(|a| a.id == process_id) {
+                            if let Some(agent) =
+                                s.active_agents.iter_mut().find(|a| a.id == process_id)
+                            {
                                 agent.logs.push(format!("[stderr] {}", line));
                             }
                         }
@@ -113,11 +125,18 @@ impl ExecutionProxy {
 
             // Update state
             let mut state_lock = state_cloned.write().await;
-            if let Some(agent) = state_lock.active_agents.iter_mut().find(|a| a.id == process_id) {
+            if let Some(agent) = state_lock
+                .active_agents
+                .iter_mut()
+                .find(|a| a.id == process_id)
+            {
                 agent.status = result.to_string();
             }
-            
-            println!("[Proxy] Agent '{}' (ID: {}) finished. Status: {}", agent_name_cloned, process_id, result);
+
+            println!(
+                "[Proxy] Agent '{}' (ID: {}) finished. Status: {}",
+                agent_name_cloned, process_id, result
+            );
         });
 
         Ok(process_id.to_string())

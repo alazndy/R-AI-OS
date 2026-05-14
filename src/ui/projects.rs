@@ -1,32 +1,31 @@
+use crate::app::App;
+use crate::ui::*;
 use ratatui::{
-    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Paragraph, Row, Table, TableState, Wrap},
+    Frame,
 };
-use crate::app::{App, state::SortMode};
-use crate::ui::*;
-
 
 pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
     let indices = app.sorted_project_indices();
     let total = indices.len();
-    
-    let [title_area, table_area] = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(0),
-    ])
-    .areas(area);
+
+    let [title_area, table_area] =
+        Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(area);
 
     let title = Line::from(vec![
         Span::styled(" ALL PROJECTS", Style::new().fg(MID).bold()),
         Span::styled(format!("  ({} total)", total), Style::new().fg(DIM)),
         Span::styled("  sort: ", Style::new().fg(DIM)),
-        Span::styled(app.project_sort.label(), Style::new().fg(AMBER).bold()),
+        Span::styled(app.projects.sort.label(), Style::new().fg(AMBER).bold()),
         Span::styled(
-            if app.right_panel_focus { "  [↑↓] navigate  [Enter] open  [s] cycle sort" }
-            else { "  [→] focus  [/open <name>] jump" },
+            if app.ui.right_panel_focus {
+                "  [↑↓] navigate  [Enter] open  [s] cycle sort"
+            } else {
+                "  [→] focus  [/open <name>] jump"
+            },
             Style::new().fg(DIM),
         ),
     ]);
@@ -35,63 +34,65 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
     if indices.is_empty() {
         let msg = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("  entities.json not found or empty", Style::new().fg(DIM).italic())),
-            Line::from(Span::styled("  Expected: Dev Ops/entities.json", Style::new().fg(DIM))),
+            Line::from(Span::styled(
+                "  entities.json not found or empty",
+                Style::new().fg(DIM).italic(),
+            )),
+            Line::from(Span::styled(
+                "  Expected: Dev Ops/entities.json",
+                Style::new().fg(DIM),
+            )),
         ]);
         frame.render_widget(msg, table_area);
         return;
     }
 
-    let header = Row::new(vec![
-        "  Name",
-        "V",
-        "Status",
-        "Category",
-        "Health",
-        "Dirty",
-    ])
-    .style(Style::new().fg(DIM).bold())
-    .bottom_margin(1);
+    let header = Row::new(vec!["  Name", "V", "Status", "Category", "Health", "Dirty"])
+        .style(Style::new().fg(DIM).bold())
+        .bottom_margin(1);
 
-    let rows: Vec<Row> = indices.iter().map(|&orig_i| {
-        let proj = &app.projects[orig_i];
-        let sc = project_status_color(&proj.status);
-        let cat = proj.category.replace('_', " ");
-        
-        let has_vault = app.vault_projects.contains(&proj.name);
-        let vault_tag = if has_vault {
-            Span::styled("V", Style::new().fg(AMBER).bold())
-        } else {
-            Span::styled("-", Style::new().fg(DIM))
-        };
+    let rows: Vec<Row> = indices
+        .iter()
+        .map(|&orig_i| {
+            let proj = &app.projects.list[orig_i];
+            let sc = project_status_color(&proj.status);
+            let cat = proj.category.replace('_', " ");
 
-        // Use cached health report if available
-        let health = app.health_report.iter().find(|h| h.name == proj.name);
-        let grade = health.map(|h| h.compliance_grade.as_str()).unwrap_or("-");
-        let gc = match grade {
-            "A" => GREEN,
-            "B" => CYAN,
-            "C" => AMBER,
-            "D" | "F" => RED,
-            _ => DIM,
-        };
+            let has_vault = app.system.vault_projects.contains(&proj.name);
+            let vault_tag = if has_vault {
+                Span::styled("V", Style::new().fg(AMBER).bold())
+            } else {
+                Span::styled("-", Style::new().fg(DIM))
+            };
 
-        let dirty_status = health.and_then(|h| h.git_dirty);
-        let dirty = match dirty_status {
-            Some(true) => Span::styled("DIRTY", Style::new().fg(RED).bold()),
-            Some(false) => Span::styled("clean", Style::new().fg(DIM)),
-            None => Span::styled("?", Style::new().fg(DIM)),
-        };
+            // Use cached health report if available
+            let health = app.health.report.iter().find(|h| h.name == proj.name);
+            let grade = health.map(|h| h.compliance_grade.as_str()).unwrap_or("-");
+            let gc = match grade {
+                "A" => GREEN,
+                "B" => CYAN,
+                "C" => AMBER,
+                "D" | "F" => RED,
+                _ => DIM,
+            };
 
-        Row::new(vec![
-            Text::from(proj.name.clone()),
-            Text::from(vault_tag),
-            Text::from(Span::styled(proj.status.clone(), Style::new().fg(sc))),
-            Text::from(cat),
-            Text::from(Span::styled(grade, Style::new().fg(gc).bold())),
-            Text::from(dirty),
-        ])
-    }).collect();
+            let dirty_status = health.and_then(|h| h.git_dirty);
+            let dirty = match dirty_status {
+                Some(true) => Span::styled("DIRTY", Style::new().fg(RED).bold()),
+                Some(false) => Span::styled("clean", Style::new().fg(DIM)),
+                None => Span::styled("?", Style::new().fg(DIM)),
+            };
+
+            Row::new(vec![
+                Text::from(proj.name.clone()),
+                Text::from(vault_tag),
+                Text::from(Span::styled(proj.status.clone(), Style::new().fg(sc))),
+                Text::from(cat),
+                Text::from(Span::styled(grade, Style::new().fg(gc).bold())),
+                Text::from(dirty),
+            ])
+        })
+        .collect();
 
     let widths = [
         Constraint::Percentage(25),
@@ -102,7 +103,7 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Percentage(15),
     ];
 
-    let mut state = TableState::default().with_selected(Some(app.project_cursor));
+    let mut state = TableState::default().with_selected(Some(app.projects.cursor));
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -117,7 +118,9 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(PANEL_BG)), area);
 
-    let Some(ref proj) = app.active_project else { return };
+    let Some(ref proj) = app.projects.active else {
+        return;
+    };
 
     let [header_area, main_area, footer_area] = Layout::vertical([
         Constraint::Length(3),
@@ -144,18 +147,20 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
             ),
         ]),
     ])
-    .block(Block::new().borders(Borders::BOTTOM).border_style(Style::new().fg(DIM)));
+    .block(
+        Block::new()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::new().fg(DIM)),
+    );
     frame.render_widget(header, header_area);
 
     // Left / Right split
-    let [left_area, right_area] = Layout::horizontal([
-        Constraint::Percentage(62),
-        Constraint::Percentage(38),
-    ])
-    .areas(main_area);
+    let [left_area, right_area] =
+        Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)])
+            .areas(main_area);
 
     // ── Left: memory.md ──────────────────────────────────────────────────────
-    let mem_color = if !app.project_panel_focus { GREEN } else { DIM };
+    let mem_color = if !app.projects.panel_focus { GREEN } else { DIM };
     let mem_block = Block::new()
         .borders(Borders::RIGHT)
         .border_style(Style::new().fg(mem_color))
@@ -163,17 +168,20 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     let mem_inner = mem_block.inner(left_area);
     frame.render_widget(mem_block, left_area);
 
-    let scroll = app.project_memory_scroll as usize;
+    let scroll = app.projects.memory_scroll as usize;
     let visible = mem_inner.height as usize;
     let mut in_block = false;
-    for line in app.project_memory_lines.iter().take(scroll) {
+    for line in app.projects.memory_lines.iter().take(scroll) {
         update_code_block_state(line, "md", &mut in_block);
     }
-    let mem_lines: Vec<Line> = if app.project_memory_lines.is_empty() {
-        vec![Line::from(Span::styled("  Loading...", Style::new().fg(DIM)))]
+    let mem_lines: Vec<Line> = if app.projects.memory_lines.is_empty() {
+        vec![Line::from(Span::styled(
+            "  Loading...",
+            Style::new().fg(DIM),
+        ))]
     } else {
         let mut out = Vec::new();
-        for line in app.project_memory_lines.iter().skip(scroll).take(visible) {
+        for line in app.projects.memory_lines.iter().skip(scroll).take(visible) {
             out.push(Line::from(highlight_line(line, &mut in_block, "md")));
         }
         out
@@ -181,12 +189,9 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(mem_lines)), mem_inner);
 
     // ── Right: git log + stats ────────────────────────────────────────────────
-    let git_color = if app.project_panel_focus { GREEN } else { DIM };
-    let [git_area, stats_area] = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(14),
-    ])
-    .areas(right_area);
+    let git_color = if app.ui.right_panel_focus { GREEN } else { DIM };
+    let [git_area, stats_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(14)]).areas(right_area);
 
     let git_block = Block::new()
         .borders(Borders::NONE)
@@ -194,10 +199,13 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     let git_inner = git_block.inner(git_area);
     frame.render_widget(git_block, git_area);
 
-    let git_lines: Vec<Line> = if app.project_git_log.is_empty() {
-        vec![Line::from(Span::styled("  Loading...", Style::new().fg(DIM)))]
+    let git_lines: Vec<Line> = if app.projects.git_log.is_empty() {
+        vec![Line::from(Span::styled(
+            "  Loading...",
+            Style::new().fg(DIM),
+        ))]
     } else {
-        app.project_git_log
+        app.projects.git_log
             .iter()
             .map(|entry| {
                 if let Some(sp) = entry.find(' ') {
@@ -214,7 +222,7 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(git_lines)), git_inner);
 
     // Stats
-    let graph_status = if let Some(h) = app.health_report.iter().find(|h| h.name == proj.name) {
+    let graph_status = if let Some(h) = app.health.report.iter().find(|h| h.name == proj.name) {
         if h.graphify_done {
             Span::styled("ready", Style::new().fg(GREEN))
         } else {
@@ -229,41 +237,72 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
         version_text.push_str(&format!(" ({})", nick));
     }
 
-    let health = app.health_report.iter().find(|h| h.name == proj.name);
+    let health = app.health.report.iter().find(|h| h.name == proj.name);
 
     let grade_color = |g: &str| match g {
-        "A" => GREEN, "B" => CYAN, "C" => AMBER, _ => RED,
+        "A" => GREEN,
+        "B" => CYAN,
+        "C" => AMBER,
+        _ => RED,
     };
 
-    let comp_span = health.map(|h| {
-        let label = format!("{} ({}/100)", h.compliance_grade,
-            h.compliance_score.unwrap_or(0));
-        Span::styled(label, Style::new().fg(grade_color(&h.compliance_grade)).bold())
-    }).unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
+    let comp_span = health
+        .map(|h| {
+            let label = format!(
+                "{} ({}/100)",
+                h.compliance_grade,
+                h.compliance_score.unwrap_or(0)
+            );
+            Span::styled(
+                label,
+                Style::new().fg(grade_color(&h.compliance_grade)).bold(),
+            )
+        })
+        .unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
 
-    let sec_span = health.map(|h| {
-        let g = h.security_grade.as_deref().unwrap_or("-");
-        let label = if h.security_issue_count > 0 {
-            format!("{} ({} issues)", g, h.security_issue_count)
-        } else {
-            format!("{} ✓", g)
-        };
-        Span::styled(label, Style::new().fg(grade_color(g)))
-    }).unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
+    let sec_span = health
+        .map(|h| {
+            let g = h.security_grade.as_deref().unwrap_or("-");
+            let label = if h.security_issue_count > 0 {
+                format!("{} ({} issues)", g, h.security_issue_count)
+            } else {
+                format!("{} ✓", g)
+            };
+            Span::styled(label, Style::new().fg(grade_color(g)))
+        })
+        .unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
 
-    let rf_span = health.map(|h| {
-        let label = if h.refactor_high_count > 0 {
-            format!("{} (⚠ {} HIGH)", h.refactor_grade, h.refactor_high_count)
-        } else {
-            format!("{} ✓", h.refactor_grade)
-        };
-        Span::styled(label, Style::new().fg(grade_color(&h.refactor_grade)))
-    }).unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
+    let rf_span = health
+        .map(|h| {
+            let label = if h.refactor_high_count > 0 {
+                format!("{} (⚠ {} HIGH)", h.refactor_grade, h.refactor_high_count)
+            } else {
+                format!("{} ✓", h.refactor_grade)
+            };
+            Span::styled(label, Style::new().fg(grade_color(&h.refactor_grade)))
+        })
+        .unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
 
-    let mem_color  = if health.map(|h| h.has_memory).unwrap_or(false)  { GREEN } else { RED };
-    let sig_color  = if health.map(|h| h.has_sigmap).unwrap_or(false)  { GREEN } else { AMBER };
-    let mem_text   = if health.map(|h| h.has_memory).unwrap_or(false)  { "✓ memory.md" } else { "✗ memory.md" };
-    let sig_text   = if health.map(|h| h.has_sigmap).unwrap_or(false)  { "✓ SIGMAP.md" } else { "✗ SIGMAP.md" };
+    let mem_color = if health.map(|h| h.has_memory).unwrap_or(false) {
+        GREEN
+    } else {
+        RED
+    };
+    let sig_color = if health.map(|h| h.has_sigmap).unwrap_or(false) {
+        GREEN
+    } else {
+        AMBER
+    };
+    let mem_text = if health.map(|h| h.has_memory).unwrap_or(false) {
+        "✓ memory.md"
+    } else {
+        "✗ memory.md"
+    };
+    let sig_text = if health.map(|h| h.has_sigmap).unwrap_or(false) {
+        "✓ SIGMAP.md"
+    } else {
+        "✗ SIGMAP.md"
+    };
 
     let mut stats = vec![
         Line::from(vec![
@@ -274,8 +313,14 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
         ]),
         Line::from(vec![
             Span::styled(" GitHub  ", Style::new().fg(DIM)),
-            Span::styled(format!("⭐{}  ", proj.stars.unwrap_or(0)), Style::new().fg(AMBER)),
-            Span::styled(proj.last_commit.as_deref().unwrap_or("no commits"), Style::new().fg(DIM)),
+            Span::styled(
+                format!("⭐{}  ", proj.stars.unwrap_or(0)),
+                Style::new().fg(AMBER),
+            ),
+            Span::styled(
+                proj.last_commit.as_deref().unwrap_or("no commits"),
+                Style::new().fg(DIM),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -304,7 +349,10 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     // Constitution issues (first 2)
     if let Some(h) = health {
         if !h.constitution_issues.is_empty() {
-            stats.push(Line::from(Span::styled(" Constitution issues:", Style::new().fg(AMBER))));
+            stats.push(Line::from(Span::styled(
+                " Constitution issues:",
+                Style::new().fg(AMBER),
+            )));
             for issue in h.constitution_issues.iter().take(2) {
                 stats.push(Line::from(Span::styled(
                     format!("  ⚠ {}", issue),
@@ -322,7 +370,7 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(stats)), stats_area);
 
     // Footer
-    let total = app.project_memory_lines.len();
+    let total = app.projects.memory_lines.len();
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(
             format!(" Ln {}/{}", scroll + 1, total),
@@ -346,7 +394,12 @@ pub fn render_graph_report(frame: &mut Frame, app: &App) {
     ])
     .split(area);
 
-    let proj_name = app.active_project.as_ref().map(|p| p.name.as_str()).unwrap_or("Unknown");
+    let proj_name = app
+        .projects
+        .active
+        .as_ref()
+        .map(|p| p.name.as_str())
+        .unwrap_or("Unknown");
     let header = Block::bordered()
         .title(format!(" Graphify Report: {} ", proj_name))
         .border_style(Style::new().fg(CYAN))
@@ -354,9 +407,11 @@ pub fn render_graph_report(frame: &mut Frame, app: &App) {
     frame.render_widget(header, rows[0]);
 
     let display_h = rows[1].height as usize;
-    let lines: Vec<Line> = app.graph_report_lines
+    let lines: Vec<Line> = app
+        .projects
+        .graph_report_lines
         .iter()
-        .skip(app.graph_report_scroll as usize)
+        .skip(app.projects.graph_report_scroll as usize)
         .take(display_h)
         .map(|l| Line::from(highlight_markdown(l)))
         .collect();
@@ -366,9 +421,8 @@ pub fn render_graph_report(frame: &mut Frame, app: &App) {
         .wrap(Wrap { trim: false });
     frame.render_widget(content, rows[1]);
 
-    let footer = Paragraph::new(" [ESC/Q] Back  [UP/DOWN/J/K] Scroll  [PAGEUP/PAGEDOWN] Fast Scroll ")
-        .style(Style::new().fg(DIM).bg(HEADER_BG));
+    let footer =
+        Paragraph::new(" [ESC/Q] Back  [UP/DOWN/J/K] Scroll  [PAGEUP/PAGEDOWN] Fast Scroll ")
+            .style(Style::new().fg(DIM).bg(HEADER_BG));
     frame.render_widget(footer, rows[2]);
 }
-
-

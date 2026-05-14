@@ -40,7 +40,11 @@ pub fn build(dev_ops: &Path) -> Vec<MemRoom> {
         let icon = room_icon(&folder_name);
         let projects = scan_projects(&folder_path);
         if !projects.is_empty() {
-            rooms.push(MemRoom { folder_name, icon, projects });
+            rooms.push(MemRoom {
+                folder_name,
+                icon,
+                projects,
+            });
         }
     }
 
@@ -50,22 +54,30 @@ pub fn build(dev_ops: &Path) -> Vec<MemRoom> {
 fn scan_projects(room_path: &Path) -> Vec<MemProject> {
     let mut projects: Vec<(MemProject, SystemTime)> = Vec::new();
     recursive_scan(room_path, &mut projects, 0);
-    
+
     projects.sort_by(|a, b| b.1.cmp(&a.1));
     projects.into_iter().map(|(p, _)| p).collect()
 }
 
 fn recursive_scan(current_path: &Path, projects: &mut Vec<(MemProject, SystemTime)>, depth: usize) {
-    if depth > 4 { return; } // Safety limit
+    if depth > 4 {
+        return;
+    } // Safety limit
 
-    let Ok(entries) = std::fs::read_dir(current_path) else { return };
+    let Ok(entries) = std::fs::read_dir(current_path) else {
+        return;
+    };
 
     for entry in entries.filter_map(|e| e.ok()) {
         let Ok(ft) = entry.file_type() else { continue };
-        if !ft.is_dir() { continue; }
+        if !ft.is_dir() {
+            continue;
+        }
 
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') || is_skip_dir(&name) { continue; }
+        if name.starts_with('.') || is_skip_dir(&name) {
+            continue;
+        }
 
         let path = entry.path();
         if is_project_root(&path) {
@@ -80,9 +92,17 @@ fn recursive_scan(current_path: &Path, projects: &mut Vec<(MemProject, SystemTim
 }
 
 fn is_skip_dir(name: &str) -> bool {
-    matches!(name,
-        "node_modules" | "target" | "dist" | "build" | ".next"
-        | "__pycache__" | "vendor" | ".turbo" | "out"
+    matches!(
+        name,
+        "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | ".next"
+            | "__pycache__"
+            | "vendor"
+            | ".turbo"
+            | "out"
     )
 }
 
@@ -123,11 +143,25 @@ fn make_project(path: PathBuf) -> Option<(MemProject, SystemTime)> {
     let (status, date, version, version_nickname, mtime) = if let Some(ref mp) = memory_path {
         read_memory_status(mp)
     } else {
-        ("(no memory.md)".into(), "—".into(), None, None, SystemTime::UNIX_EPOCH)
+        (
+            "(no memory.md)".into(),
+            "—".into(),
+            None,
+            None,
+            SystemTime::UNIX_EPOCH,
+        )
     };
 
     Some((
-        MemProject { name, path, status, date, has_memory, version, version_nickname },
+        MemProject {
+            name,
+            path,
+            status,
+            date,
+            has_memory,
+            version,
+            version_nickname,
+        },
         mtime,
     ))
 }
@@ -157,8 +191,17 @@ fn read_memory_status(path: &Path) -> (String, String, Option<String>, Option<St
 fn extract_version(content: &str) -> Option<String> {
     for line in content.lines() {
         let t = line.trim();
-        if t.starts_with("- Sürüm:") || t.starts_with("Sürüm:") || t.starts_with("- Version:") || t.starts_with("Version:") {
-            let val = t.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+        if t.starts_with("- Sürüm:")
+            || t.starts_with("Sürüm:")
+            || t.starts_with("- Version:")
+            || t.starts_with("Version:")
+        {
+            let val = t
+                .split_once(':')
+                .map(|x| x.1)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if !val.is_empty() && val != "—" {
                 return Some(val);
             }
@@ -170,8 +213,17 @@ fn extract_version(content: &str) -> Option<String> {
 fn extract_version_nickname(content: &str) -> Option<String> {
     for line in content.lines() {
         let t = line.trim();
-        if t.starts_with("- Sürüm Adı:") || t.starts_with("Sürüm Adı:") || t.starts_with("- Nickname:") || t.starts_with("Nickname:") {
-            let val = t.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+        if t.starts_with("- Sürüm Adı:")
+            || t.starts_with("Sürüm Adı:")
+            || t.starts_with("- Nickname:")
+            || t.starts_with("Nickname:")
+        {
+            let val = t
+                .split_once(':')
+                .map(|x| x.1)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if !val.is_empty() && val != "—" {
                 return Some(val);
             }
@@ -185,8 +237,8 @@ fn extract_date(content: &str) -> String {
         let t = line.trim();
         if t.starts_with("- Tarih:") || t.starts_with("Tarih:") {
             let val = t
-                .splitn(2, ':')
-                .nth(1)
+                .split_once(':')
+                .map(|x| x.1)
                 .unwrap_or("")
                 .trim()
                 .to_string();
@@ -237,7 +289,13 @@ fn extract_status(content: &str) -> String {
 }
 
 fn find_memory_file(proj_path: &Path) -> Option<PathBuf> {
-    let variations = ["memory.md", "Memory.md", "MEMORY.md", "memory.MD", ".agents/memory.md"];
+    let variations = [
+        "memory.md",
+        "Memory.md",
+        "MEMORY.md",
+        "memory.MD",
+        ".agents/memory.md",
+    ];
     for v in variations {
         let p = proj_path.join(v);
         if p.exists() {
@@ -249,18 +307,42 @@ fn find_memory_file(proj_path: &Path) -> Option<PathBuf> {
 
 fn room_icon(folder: &str) -> &'static str {
     let f = folder.to_lowercase();
-    if f.contains("ai") && f.contains("veri") { return "🔬"; }
-    if f.contains("ai") && f.contains("os") { return "🤖"; }
-    if f.contains("crucix") { return "⚡"; }
-    if f.contains("endüstriyel") || f.contains("saha") { return "🏭"; }
-    if f.contains("kişisel") || f.contains("üretkenlik") { return "📋"; }
-    if f.contains("medya") || f.contains("ses") { return "🎵"; }
-    if f.contains("mobil") || f.contains("oyun") { return "📱"; }
-    if f.contains("tasarım") || f.contains("geliştirici") { return "🎨"; }
-    if f.contains("ui") && f.contains("altyapı") { return "🧩"; }
-    if f.contains("web") && f.contains("app") { return "💻"; }
-    if f.contains("web") && f.contains("platform") { return "🚀"; }
-    if f.contains("iletişim") || f.contains("sosyal") { return "💬"; }
+    if f.contains("ai") && f.contains("veri") {
+        return "🔬";
+    }
+    if f.contains("ai") && f.contains("os") {
+        return "🤖";
+    }
+    if f.contains("crucix") {
+        return "⚡";
+    }
+    if f.contains("endüstriyel") || f.contains("saha") {
+        return "🏭";
+    }
+    if f.contains("kişisel") || f.contains("üretkenlik") {
+        return "📋";
+    }
+    if f.contains("medya") || f.contains("ses") {
+        return "🎵";
+    }
+    if f.contains("mobil") || f.contains("oyun") {
+        return "📱";
+    }
+    if f.contains("tasarım") || f.contains("geliştirici") {
+        return "🎨";
+    }
+    if f.contains("ui") && f.contains("altyapı") {
+        return "🧩";
+    }
+    if f.contains("web") && f.contains("app") {
+        return "💻";
+    }
+    if f.contains("web") && f.contains("platform") {
+        return "🚀";
+    }
+    if f.contains("iletişim") || f.contains("sosyal") {
+        return "💬";
+    }
     "📁"
 }
 
@@ -313,7 +395,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("maybe");
         tmp_proj(&dir, &["memory.md"]);
-        assert!(!is_project_root(&dir), "memory.md alone (no src/app/lib) should not be a project");
+        assert!(
+            !is_project_root(&dir),
+            "memory.md alone (no src/app/lib) should not be a project"
+        );
     }
 
     #[test]
@@ -325,4 +410,3 @@ mod tests {
         assert!(is_project_root(&dir));
     }
 }
-

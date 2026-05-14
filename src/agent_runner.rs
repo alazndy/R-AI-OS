@@ -1,16 +1,20 @@
-use std::process::Command;
-use std::time::{Duration, Instant};
-use std::thread;
-use std::path::Path;
-use crate::shield::AgentShield;
 use crate::instinct::InstinctEngine;
+use crate::shield::AgentShield;
+use std::path::Path;
+use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const BUDGET_LIMIT_KB: u64 = 300;
 
-pub fn run_agent(agent: &str, project_dir: Option<String>, timeout_secs: Option<u64>) -> Result<(), String> {
+pub fn run_agent(
+    agent: &str,
+    project_dir: Option<String>,
+    timeout_secs: Option<u64>,
+) -> Result<(), String> {
     let shield = AgentShield::init();
     let mut instinct = InstinctEngine::init();
-    
+
     // 1. Pre-flight Security Check
     if let Some(ref dir) = project_dir {
         let warnings = shield.preflight_check(Path::new(dir));
@@ -24,11 +28,13 @@ pub fn run_agent(agent: &str, project_dir: Option<String>, timeout_secs: Option<
     if let Some(ref dir) = project_dir {
         let size = get_dir_size(Path::new(dir)).unwrap_or(0);
         if size > BUDGET_LIMIT_KB * 1024 {
-            println!("📉 Project size ({} KB) exceeds budget ({} KB).", size / 1024, BUDGET_LIMIT_KB);
+            println!(
+                "📉 Project size ({} KB) exceeds budget ({} KB).",
+                size / 1024,
+                BUDGET_LIMIT_KB
+            );
             println!("🔍 Compacting context via Sigmap...");
-            let _ = Command::new("sigmap")
-                .current_dir(dir)
-                .status();
+            let _ = Command::new("sigmap").current_dir(dir).status();
             budget_active = true;
         }
     }
@@ -40,13 +46,13 @@ pub fn run_agent(agent: &str, project_dir: Option<String>, timeout_secs: Option<
             c.env_remove("GEMINI_API_KEY");
             c.env_remove("OPENAI_API_KEY");
             c
-        },
+        }
         "gemini" => {
             let mut c = Command::new("gemini");
             c.env_remove("ANTHROPIC_API_KEY");
             c.env_remove("OPENAI_API_KEY");
             c
-        },
+        }
         "cursor" => Command::new("cursor"),
         "antigravity" => Command::new("antigravity"),
         _ => return Err(format!("Unsupported agent: {}", agent)),
@@ -64,13 +70,16 @@ pub fn run_agent(agent: &str, project_dir: Option<String>, timeout_secs: Option<
     if let Some(dir) = project_dir {
         cmd.current_dir(dir);
     }
-    
-    println!("🚀 Raios Kernel: Starting agent '{}' under Shield protection...", agent);
+
+    println!(
+        "🚀 Raios Kernel: Starting agent '{}' under Shield protection...",
+        agent
+    );
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return Err(format!("Failed to spawn agent: {}", e)),
     };
-    
+
     // 5. Execution & Timeout Loop
     let result = if let Some(timeout) = timeout_secs {
         println!("⏱️ Death timer active: {} seconds.", timeout);
@@ -79,7 +88,11 @@ pub fn run_agent(agent: &str, project_dir: Option<String>, timeout_secs: Option<
             match child.try_wait() {
                 Ok(Some(status)) => {
                     println!("✅ Agent ({}) exited: {}", agent, status);
-                    if status.success() { break Ok(()); } else { break Err(format!("Agent exited with {}", status)); }
+                    if status.success() {
+                        break Ok(());
+                    } else {
+                        break Err(format!("Agent exited with {}", status));
+                    }
                 }
                 Ok(None) => {
                     if start.elapsed().as_secs() > timeout {
@@ -96,7 +109,11 @@ pub fn run_agent(agent: &str, project_dir: Option<String>, timeout_secs: Option<
         match child.wait() {
             Ok(status) => {
                 println!("✅ Agent ({}) exited: {}", agent, status);
-                if status.success() { Ok(()) } else { Err(format!("Agent exited with {}", status)) }
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("Agent exited with {}", status))
+                }
             }
             Err(e) => Err(format!("Wait error: {}", e)),
         }

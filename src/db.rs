@@ -1,5 +1,5 @@
+use rusqlite::{params, Connection, Result};
 use std::path::Path;
-use rusqlite::{Connection, Result, params};
 
 // ─── Open & migrate ──────────────────────────────────────────────────────────
 
@@ -23,11 +23,16 @@ fn db_path() -> std::path::PathBuf {
 
 fn migrate(conn: &Connection) -> Result<()> {
     // Idempotent column additions for existing DBs (errors mean column already exists)
-    let _ = conn.execute_batch("ALTER TABLE health_cache ADD COLUMN refactor_grade TEXT NOT NULL DEFAULT '-'");
+    let _ = conn.execute_batch(
+        "ALTER TABLE health_cache ADD COLUMN refactor_grade TEXT NOT NULL DEFAULT '-'",
+    );
     let _ = conn.execute_batch("ALTER TABLE health_cache ADD COLUMN refactor_score INTEGER");
-    let _ = conn.execute_batch("ALTER TABLE health_cache ADD COLUMN refactor_high INTEGER NOT NULL DEFAULT 0");
+    let _ = conn.execute_batch(
+        "ALTER TABLE health_cache ADD COLUMN refactor_high INTEGER NOT NULL DEFAULT 0",
+    );
 
-    conn.execute_batch("
+    conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS projects (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             name        TEXT NOT NULL,
@@ -68,7 +73,8 @@ fn migrate(conn: &Connection) -> Result<()> {
             project    TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
-    ")?;
+    ",
+    )?;
     Ok(())
 }
 
@@ -77,7 +83,9 @@ fn migrate(conn: &Connection) -> Result<()> {
 /// One-time import from entities.json → SQLite. Deletes json after success.
 pub fn import_from_json(dev_ops: &Path, conn: &Connection) -> usize {
     let json_path = dev_ops.join("entities.json");
-    if !json_path.exists() { return 0; }
+    if !json_path.exists() {
+        return 0;
+    }
 
     #[derive(serde::Deserialize)]
     struct EntitiesFile {
@@ -98,7 +106,9 @@ pub fn import_from_json(dev_ops: &Path, conn: &Connection) -> usize {
         version: Option<String>,
         version_nickname: Option<String>,
     }
-    fn default_status() -> String { "active".into() }
+    fn default_status() -> String {
+        "active".into()
+    }
 
     let content = match std::fs::read_to_string(&json_path) {
         Ok(c) => c,
@@ -111,7 +121,9 @@ pub fn import_from_json(dev_ops: &Path, conn: &Connection) -> usize {
 
     let mut imported = 0;
     for p in &file.projects {
-        if !p.local_path.exists() { continue; }
+        if !p.local_path.exists() {
+            continue;
+        }
         let path_str = p.local_path.to_string_lossy().to_string();
         let result = conn.execute(
             "INSERT OR IGNORE INTO projects (name, category, path, github, status, stars, last_commit, version, nickname)
@@ -123,7 +135,9 @@ pub fn import_from_json(dev_ops: &Path, conn: &Connection) -> usize {
                 p.last_commit, p.version, p.version_nickname,
             ],
         );
-        if result.is_ok() { imported += 1; }
+        if result.is_ok() {
+            imported += 1;
+        }
     }
 
     if imported > 0 {
@@ -150,28 +164,36 @@ pub struct DbProject {
 pub fn load_all_projects(conn: &Connection) -> Result<Vec<DbProject>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, category, path, github, status, stars, last_commit, version, nickname
-         FROM projects ORDER BY name"
+         FROM projects ORDER BY name",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(DbProject {
-            id:          row.get(0)?,
-            name:        row.get(1)?,
-            category:    row.get(2)?,
-            path:        row.get(3)?,
-            github:      row.get(4)?,
-            status:      row.get(5)?,
-            stars:       row.get(6)?,
+            id: row.get(0)?,
+            name: row.get(1)?,
+            category: row.get(2)?,
+            path: row.get(3)?,
+            github: row.get(4)?,
+            status: row.get(5)?,
+            stars: row.get(6)?,
             last_commit: row.get(7)?,
-            version:     row.get(8)?,
-            nickname:    row.get(9)?,
+            version: row.get(8)?,
+            nickname: row.get(9)?,
         })
     })?;
     rows.collect()
 }
 
-pub fn upsert_project(conn: &Connection, name: &str, category: &str, path: &str,
-    github: Option<&str>, status: &str, stars: Option<i64>,
-    last_commit: Option<&str>, version: Option<&str>, nickname: Option<&str>,
+pub fn upsert_project(
+    conn: &Connection,
+    name: &str,
+    category: &str,
+    path: &str,
+    github: Option<&str>,
+    status: &str,
+    stars: Option<i64>,
+    last_commit: Option<&str>,
+    version: Option<&str>,
+    nickname: Option<&str>,
 ) -> Result<i64> {
     conn.execute(
         "INSERT INTO projects (name, category, path, github, status, stars, last_commit, version, nickname)
@@ -195,7 +217,8 @@ pub fn project_id_for_path(conn: &Connection, path: &str) -> Option<i64> {
         "SELECT id FROM projects WHERE path = ?1",
         params![path],
         |row| row.get(0),
-    ).ok()
+    )
+    .ok()
 }
 
 // ─── Health cache ─────────────────────────────────────────────────────────────
@@ -278,21 +301,78 @@ pub struct PortfolioStats {
 
 pub fn query_stats(conn: &Connection) -> Result<PortfolioStats> {
     let total: i64 = conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))?;
-    let active: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE status = 'active'", [], |r| r.get(0))?;
-    let archived: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE status IN ('archived','legacy')", [], |r| r.get(0))?;
-    let dirty: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE git_dirty = 1", [], |r| r.get(0))?;
-    let no_memory: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE has_memory = 0", [], |r| r.get(0))?;
-    let no_sigmap: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE has_sigmap = 0", [], |r| r.get(0))?;
-    let no_github: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE github IS NULL", [], |r| r.get(0))?;
-    let avg_compliance: f64 = conn.query_row("SELECT COALESCE(AVG(compliance_score), 0) FROM health_cache", [], |r| r.get(0))?;
-    let avg_security: f64 = conn.query_row("SELECT COALESCE(AVG(security_score), 0) FROM health_cache", [], |r| r.get(0))?;
-    let grade_a: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'A'", [], |r| r.get(0))?;
-    let grade_b: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'B'", [], |r| r.get(0))?;
-    let grade_c: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'C'", [], |r| r.get(0))?;
+    let active: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM projects WHERE status = 'active'",
+        [],
+        |r| r.get(0),
+    )?;
+    let archived: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM projects WHERE status IN ('archived','legacy')",
+        [],
+        |r| r.get(0),
+    )?;
+    let dirty: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM health_cache WHERE git_dirty = 1",
+        [],
+        |r| r.get(0),
+    )?;
+    let no_memory: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM health_cache WHERE has_memory = 0",
+        [],
+        |r| r.get(0),
+    )?;
+    let no_sigmap: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM health_cache WHERE has_sigmap = 0",
+        [],
+        |r| r.get(0),
+    )?;
+    let no_github: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM projects WHERE github IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    let avg_compliance: f64 = conn.query_row(
+        "SELECT COALESCE(AVG(compliance_score), 0) FROM health_cache",
+        [],
+        |r| r.get(0),
+    )?;
+    let avg_security: f64 = conn.query_row(
+        "SELECT COALESCE(AVG(security_score), 0) FROM health_cache",
+        [],
+        |r| r.get(0),
+    )?;
+    let grade_a: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'A'",
+        [],
+        |r| r.get(0),
+    )?;
+    let grade_b: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'B'",
+        [],
+        |r| r.get(0),
+    )?;
+    let grade_c: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'C'",
+        [],
+        |r| r.get(0),
+    )?;
     let grade_d: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE compliance_grade NOT IN ('A','B','C') AND compliance_grade != '-'", [], |r| r.get(0))?;
 
-    Ok(PortfolioStats { total, active, archived, dirty, no_memory, no_sigmap, no_github,
-        avg_compliance, avg_security, grade_a, grade_b, grade_c, grade_d })
+    Ok(PortfolioStats {
+        total,
+        active,
+        archived,
+        dirty,
+        no_memory,
+        no_sigmap,
+        no_github,
+        avg_compliance,
+        avg_security,
+        grade_a,
+        grade_b,
+        grade_c,
+        grade_d,
+    })
 }
 
 // ─── Tasks ───────────────────────────────────────────────────────────────────
@@ -306,22 +386,26 @@ pub struct DbTask {
 }
 
 pub fn load_tasks_db(conn: &Connection) -> Result<Vec<DbTask>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, text, completed, agent, project FROM tasks ORDER BY id"
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, text, completed, agent, project FROM tasks ORDER BY id")?;
     let rows = stmt.query_map([], |row| {
         Ok(DbTask {
-            id:        row.get(0)?,
-            text:      row.get(1)?,
+            id: row.get(0)?,
+            text: row.get(1)?,
             completed: row.get::<_, i64>(2)? != 0,
-            agent:     row.get(3)?,
-            project:   row.get(4)?,
+            agent: row.get(3)?,
+            project: row.get(4)?,
         })
     })?;
     rows.collect()
 }
 
-pub fn insert_task(conn: &Connection, text: &str, agent: Option<&str>, project: Option<&str>) -> Result<i64> {
+pub fn insert_task(
+    conn: &Connection,
+    text: &str,
+    agent: Option<&str>,
+    project: Option<&str>,
+) -> Result<i64> {
     conn.execute(
         "INSERT INTO tasks (text, agent, project) VALUES (?1, ?2, ?3)",
         params![text, agent, project],
@@ -351,14 +435,28 @@ mod tests {
     #[test]
     fn sqlite_open_and_migrate() {
         let conn = in_memory();
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 0);
     }
 
     #[test]
     fn project_crud_round_trip() {
         let conn = in_memory();
-        upsert_project(&conn, "TestProj", "devtools", "/tmp/test", None, "active", None, None, None, None).unwrap();
+        upsert_project(
+            &conn,
+            "TestProj",
+            "devtools",
+            "/tmp/test",
+            None,
+            "active",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let projects = load_all_projects(&conn).unwrap();
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "TestProj");
@@ -367,8 +465,32 @@ mod tests {
     #[test]
     fn upsert_is_idempotent() {
         let conn = in_memory();
-        upsert_project(&conn, "P", "cat", "/tmp/p", Some("gh/p"), "active", None, None, None, None).unwrap();
-        upsert_project(&conn, "P-renamed", "cat", "/tmp/p", None, "active", None, None, None, None).unwrap();
+        upsert_project(
+            &conn,
+            "P",
+            "cat",
+            "/tmp/p",
+            Some("gh/p"),
+            "active",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        upsert_project(
+            &conn,
+            "P-renamed",
+            "cat",
+            "/tmp/p",
+            None,
+            "active",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let projects = load_all_projects(&conn).unwrap();
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "P-renamed");
@@ -378,9 +500,29 @@ mod tests {
     #[test]
     fn health_cache_upsert() {
         let conn = in_memory();
-        upsert_project(&conn, "P", "c", "/tmp/p", None, "active", None, None, None, None).unwrap();
+        upsert_project(
+            &conn, "P", "c", "/tmp/p", None, "active", None, None, None, None,
+        )
+        .unwrap();
         let id = project_id_for_path(&conn, "/tmp/p").unwrap();
-        upsert_health(&conn, id, "A", Some(90), Some("A"), Some(95), 0, 0, false, true, true, None, "A", 95, 0).unwrap();
+        upsert_health(
+            &conn,
+            id,
+            "A",
+            Some(90),
+            Some("A"),
+            Some(95),
+            0,
+            0,
+            false,
+            true,
+            true,
+            None,
+            "A",
+            95,
+            0,
+        )
+        .unwrap();
         let stats = query_stats(&conn).unwrap();
         assert_eq!(stats.grade_a, 1);
     }

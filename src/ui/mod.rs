@@ -1,27 +1,27 @@
-pub mod setup;
 pub mod components;
-pub mod health;
-pub mod search;
-pub mod mempalace;
-pub mod projects;
 pub mod filebrowser;
-pub mod dashboard;
+pub mod health;
+pub mod mempalace;
+pub mod panels;
+pub mod projects;
+pub mod search;
 pub mod sentinel;
+pub mod setup;
 
-pub use setup::*;
 pub use components::*;
-pub use health::*;
-pub use search::*;
-pub use mempalace::*;
-pub use projects::*;
 pub use filebrowser::*;
-pub use dashboard::*;
+pub use health::*;
+pub use mempalace::*;
+pub use panels::*;
+pub use projects::*;
+pub use search::*;
 pub use sentinel::*;
+pub use setup::*;
 
 use ratatui::{
-    Frame,
     style::{Color, Style, Stylize},
     text::{Line, Span},
+    Frame,
 };
 
 use crate::app::{App, AppState};
@@ -59,64 +59,44 @@ const BANNER: &str = "\
 
 pub fn render(frame: &mut Frame, app: &App) {
     match app.state {
-        AppState::Booting        => render_boot(frame, app),
-        AppState::Setup          => render_setup(frame, app),
-        AppState::Search         => render_search(frame, app),
-        AppState::Dashboard      => render_dashboard(frame, app),
-        AppState::FileView       => render_file_view(frame, app),
-        AppState::FileEdit       => render_file_edit(frame, app),
-        AppState::ProjectDetail  => render_project_detail(frame, app),
-        AppState::HealthView     => render_health_view(frame, app),
-        AppState::MemPalaceView  => render_mempalace_view(frame, app),
-        AppState::GraphReport    => render_graph_report(frame, app),
-        AppState::GitDiffView    => render_git_diff_view(frame, app),
-        AppState::HelpView       => render_dashboard(frame, app), // Just use dashboard for now as it's a menu item
+        AppState::Booting => render_boot(frame, app),
+        AppState::Setup => render_setup(frame, app),
+        AppState::Search => render_search(frame, app),
+        AppState::Dashboard => render_dashboard(frame, app),
+        AppState::FileView => render_file_view(frame, app),
+        AppState::FileEdit => render_file_edit(frame, app),
+        AppState::ProjectDetail => render_project_detail(frame, app),
+        AppState::HealthView => render_health_view(frame, app),
+        AppState::MemPalaceView => render_mempalace_view(frame, app),
+        AppState::GraphReport => render_graph_report(frame, app),
+        AppState::GitDiffView => render_git_diff_view(frame, app),
+        AppState::HelpView => render_dashboard(frame, app), // Just use dashboard for now as it's a menu item
     }
     // Overlays rendered after everything else
-    if app.show_launcher {
+    if app.ui.show_launcher {
         render_launcher_modal(frame, app);
     }
-    if app.command_mode && !app.command_buf.is_empty() {
+    if app.ui.command_mode && !app.ui.command_buf.is_empty() {
         render_command_palette(frame, app);
     }
-    if app.file_changed_externally {
+    if app.editor.changed_externally {
         render_file_changed_badge(frame, app);
     }
-    if app.bouncing_alert {
+    if app.system.bouncing_alert {
         render_bouncing_alert(frame, app);
     }
-    if app.handover_modal.is_some() {
+    if app.system.handover_modal.is_some() {
         render_handover_modal(frame, app);
     }
 }
 
 // ─── Boot screen ─────────────────────────────────────────────────────────────
 
-
-
 // ─── Setup / First-run ───────────────────────────────────────────────────────
-
 
 // ─── Search Modal (Ctrl+P) ──────────────────────────────────────────────────
 
-
 // ─── Dashboard ───────────────────────────────────────────────────────────────
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 fn project_status_color(status: &str) -> Color {
     match status {
@@ -128,18 +108,13 @@ fn project_status_color(status: &str) -> Color {
     }
 }
 
-
-
-
-
 // ─── File viewer ─────────────────────────────────────────────────────────────
-
 
 // ─── Syntax highlighting ──────────────────────────────────────────────────────
 
 const PURPLE: Color = Color::Rgb(180, 100, 220);
-const TEAL: Color   = Color::Rgb(100, 200, 200);
-const OLIVE: Color  = Color::Rgb(100, 180, 100);
+const TEAL: Color = Color::Rgb(100, 200, 200);
+const OLIVE: Color = Color::Rgb(100, 180, 100);
 
 pub fn update_code_block_state(line: &str, ext: &str, in_block: &mut bool) {
     if ext == "md" {
@@ -225,7 +200,9 @@ fn highlight_rust(line: &str) -> Vec<Span<'_>> {
     if t.starts_with("#[") || t.starts_with("#![") {
         return vec![Span::styled(line, Style::new().fg(PURPLE))];
     }
-    if t.contains("fn ") && (t.starts_with("fn ") || t.starts_with("pub ") || t.starts_with("async ")) {
+    if t.contains("fn ")
+        && (t.starts_with("fn ") || t.starts_with("pub ") || t.starts_with("async "))
+    {
         return vec![Span::styled(line, Style::new().fg(GREEN))];
     }
     if t.starts_with("pub struct ") || t.starts_with("struct ") {
@@ -243,7 +220,12 @@ fn highlight_rust(line: &str) -> Vec<Span<'_>> {
     if t.starts_with("use ") || t.starts_with("mod ") || t.starts_with("pub mod ") {
         return vec![Span::styled(line, Style::new().fg(DIM))];
     }
-    if t.starts_with("type ") || t.starts_with("pub type ") || t.starts_with("const ") || t.starts_with("pub const ") || t.starts_with("static ") {
+    if t.starts_with("type ")
+        || t.starts_with("pub type ")
+        || t.starts_with("const ")
+        || t.starts_with("pub const ")
+        || t.starts_with("static ")
+    {
         return vec![Span::styled(line, Style::new().fg(OLIVE))];
     }
     vec![Span::styled(line, Style::new().fg(MID))]
@@ -266,7 +248,8 @@ fn highlight_typescript(line: &str) -> Vec<Span<'_>> {
     if t.contains("function ") {
         return vec![Span::styled(line, Style::new().fg(GREEN))];
     }
-    if t.starts_with("class ") || t.starts_with("export class ") || t.starts_with("abstract class ") {
+    if t.starts_with("class ") || t.starts_with("export class ") || t.starts_with("abstract class ")
+    {
         return vec![Span::styled(line, Style::new().fg(CYAN).bold())];
     }
     vec![Span::styled(line, Style::new().fg(MID))]
@@ -328,23 +311,29 @@ fn highlight_yaml(line: &str) -> Vec<Span<'_>> {
 
 // ─── File editor ─────────────────────────────────────────────────────────────
 
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // ─── MemPalace full-screen view ───────────────────────────────────────────────
 
-
 fn build_preview(app: &App) -> Vec<Line<'static>> {
-    let room = match app.mp_rooms.get(app.mp_room_cursor) {
+    let room = match app.mempalace.rooms.get(app.mempalace.room_cursor) {
         Some(r) => r,
-        None => return vec![Line::from(Span::styled("  No rooms loaded", Style::new().fg(DIM)))],
+        None => {
+            return vec![Line::from(Span::styled(
+                "  No rooms loaded",
+                Style::new().fg(DIM),
+            ))]
+        }
     };
 
     // If on a specific project, show its status
-    if let Some(pi) = app.mp_proj_cursor {
+    if let Some(pi) = app.mempalace.proj_cursor {
         if let Some(proj) = room.projects.get(pi) {
             let mut lines = vec![
-                Line::from(Span::styled(proj.name.clone(), Style::new().fg(GREEN).bold())),
+                Line::from(Span::styled(
+                    proj.name.clone(),
+                    Style::new().fg(GREEN).bold(),
+                )),
                 Line::from(Span::styled(
                     format!("  {}", room.folder_name),
                     Style::new().fg(DIM),
@@ -352,9 +341,16 @@ fn build_preview(app: &App) -> Vec<Line<'static>> {
                 Line::from(""),
             ];
 
-            let mem_icon = if proj.has_memory { "✓ memory.md" } else { "✗ no memory.md" };
+            let mem_icon = if proj.has_memory {
+                "✓ memory.md"
+            } else {
+                "✗ no memory.md"
+            };
             let mem_color = if proj.has_memory { GREEN } else { RED };
-            lines.push(Line::from(Span::styled(mem_icon, Style::new().fg(mem_color))));
+            lines.push(Line::from(Span::styled(
+                mem_icon,
+                Style::new().fg(mem_color),
+            )));
 
             if proj.date != "—" {
                 lines.push(Line::from(Span::styled(
@@ -390,7 +386,10 @@ fn build_preview(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(vec![
             Span::styled(room.icon, Style::new()),
-            Span::styled(format!("  {}", room.folder_name), Style::new().fg(CYAN).bold()),
+            Span::styled(
+                format!("  {}", room.folder_name),
+                Style::new().fg(CYAN).bold(),
+            ),
         ]),
         Line::from(Span::styled(
             format!("  {} projects", room.projects.len()),
@@ -402,7 +401,11 @@ fn build_preview(app: &App) -> Vec<Line<'static>> {
     let with_mem = room.projects.iter().filter(|p| p.has_memory).count();
     lines.push(Line::from(Span::styled(
         format!("  ✓ memory.md: {}/{}", with_mem, room.projects.len()),
-        Style::new().fg(if with_mem == room.projects.len() { GREEN } else { AMBER }),
+        Style::new().fg(if with_mem == room.projects.len() {
+            GREEN
+        } else {
+            AMBER
+        }),
     )));
     lines.push(Line::from(""));
 
@@ -421,16 +424,8 @@ fn build_preview(app: &App) -> Vec<Line<'static>> {
 
 // ─── Health Dashboard ─────────────────────────────────────────────────────────
 
-
 // ─── Command palette overlay ──────────────────────────────────────────────────
-
 
 // ─── File-changed notification badge ─────────────────────────────────────────
 
-
 // ─── Agent launcher modal ─────────────────────────────────────────────────────
-
-
-
-
-

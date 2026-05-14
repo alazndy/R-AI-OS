@@ -18,7 +18,12 @@ impl FileEntry {
     pub fn new(name: impl Into<String>, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         let exists = path.exists();
-        Self { name: name.into(), path, read_only: false, exists }
+        Self {
+            name: name.into(),
+            path,
+            read_only: false,
+            exists,
+        }
     }
 
     pub fn readonly(mut self) -> Self {
@@ -73,7 +78,8 @@ pub fn discover_all_agent_rules(dev_ops: &Path) -> Vec<AgentRuleGroup> {
         // Global CLAUDE.md (home root)
         let global_claude = h.join("CLAUDE.md");
         if global_claude.exists() {
-            g.files.push(FileEntry::new("CLAUDE.md (Global)", global_claude));
+            g.files
+                .push(FileEntry::new("CLAUDE.md (Global)", global_claude));
         }
         // ~/.claude/rules/*.md
         let rules_dir = claude_dir.join("rules");
@@ -85,14 +91,19 @@ pub fn discover_all_agent_rules(dev_ops: &Path) -> Vec<AgentRuleGroup> {
                 .collect();
             rule_files.sort();
             for p in rule_files {
-                let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let name = p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
                 g.files.push(FileEntry::new(name, p));
             }
         }
         // settings.json
         let settings = claude_dir.join("settings.json");
         if settings.exists() {
-            g.files.push(FileEntry::new("settings.json", settings).readonly());
+            g.files
+                .push(FileEntry::new("settings.json", settings).readonly());
         }
         // settings.local.json
         let local = claude_dir.join("settings.local.json");
@@ -102,7 +113,8 @@ pub fn discover_all_agent_rules(dev_ops: &Path) -> Vec<AgentRuleGroup> {
         // CLAUDE.md inside .claude/
         let inner_claude = claude_dir.join("CLAUDE.md");
         if inner_claude.exists() {
-            g.files.push(FileEntry::new("CLAUDE.md (.claude/)", inner_claude));
+            g.files
+                .push(FileEntry::new("CLAUDE.md (.claude/)", inner_claude));
         }
         groups.push(g);
     }
@@ -154,7 +166,8 @@ pub fn discover_all_agent_rules(dev_ops: &Path) -> Vec<AgentRuleGroup> {
         // hooks dir manifest
         let hooks_dir = agents_dir.join("hooks");
         if hooks_dir.is_dir() {
-            g.files.push(FileEntry::new("hooks/ (dir)", hooks_dir).readonly());
+            g.files
+                .push(FileEntry::new("hooks/ (dir)", hooks_dir).readonly());
         }
         // .md files directly under .agents/
         if let Ok(entries) = fs::read_dir(&agents_dir) {
@@ -171,7 +184,11 @@ pub fn discover_all_agent_rules(dev_ops: &Path) -> Vec<AgentRuleGroup> {
                 .collect();
             files.sort();
             for p in files {
-                let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let name = p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
                 g.files.push(FileEntry::new(name, p));
             }
         }
@@ -241,7 +258,11 @@ pub fn discover_all_agent_rules(dev_ops: &Path) -> Vec<AgentRuleGroup> {
                 .collect();
             files.sort();
             for p in files {
-                let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let name = p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
                 g.files.push(FileEntry::new(name, p));
             }
         }
@@ -297,7 +318,10 @@ fn collect_project_rules(
         .into_iter()
         .filter_entry(|e| {
             let n = e.file_name().to_string_lossy();
-            !matches!(n.as_ref(), "node_modules" | "target" | ".git" | "dist" | ".next")
+            !matches!(
+                n.as_ref(),
+                "node_modules" | "target" | ".git" | "dist" | ".next"
+            )
         })
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file());
@@ -326,7 +350,10 @@ pub fn get_master_rule_files(master_md: &Path) -> Vec<FileEntry> {
     vec![
         FileEntry::new("MASTER.md (Constitution)", master_md.to_path_buf()).readonly(),
         FileEntry::new("CLAUDE.md (Global)", h.join("CLAUDE.md")),
-        FileEntry::new("hardware-rules.md", h.join(".claude/rules/hardware-rules.md")),
+        FileEntry::new(
+            "hardware-rules.md",
+            h.join(".claude/rules/hardware-rules.md"),
+        ),
         FileEntry::new("ui-rules.md", h.join(".claude/rules/ui-rules.md")),
         FileEntry::new("web-rules.md", h.join(".claude/rules/web-rules.md")),
     ]
@@ -456,7 +483,13 @@ pub fn load_recent_projects(base: &Path) -> Vec<RecentProject> {
             let project_dir = path.parent().unwrap_or(&path).to_path_buf();
             let git_dirty = git_is_dirty(&project_dir);
             let git_branch = git_current_branch(&project_dir);
-            RecentProject { name, rel_path: rel, changes, git_dirty, git_branch }
+            RecentProject {
+                name,
+                rel_path: rel,
+                changes,
+                git_dirty,
+                git_branch,
+            }
         })
         .collect()
 }
@@ -480,10 +513,11 @@ fn extract_changes(path: &PathBuf) -> Vec<String> {
                 if changes.len() >= 3 {
                     break;
                 }
-            } else if (line.starts_with("##") || line.starts_with("# ")) && !line.contains("Claude") {
-                if !changes.is_empty() {
-                    break;
-                }
+            } else if (line.starts_with("##") || line.starts_with("# "))
+                && !line.contains("Claude")
+                && !changes.is_empty()
+            {
+                break;
             }
         }
     }
@@ -496,13 +530,16 @@ pub fn load_file_content(path: &PathBuf) -> String {
 }
 
 pub fn save_file_content(path: &Path, content: &str) -> std::io::Result<()> {
-    crate::safe_io::safe_write(path, content)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    crate::safe_io::safe_write(path, content).map_err(std::io::Error::other)
 }
 
 pub fn find_file_by_name(query: &str, master_md: &Path) -> Option<FileEntry> {
     let q = query.to_lowercase();
-    let lists = [get_master_rule_files(master_md), get_agent_config_files(), get_policy_files()];
+    let lists = [
+        get_master_rule_files(master_md),
+        get_agent_config_files(),
+        get_policy_files(),
+    ];
     for list in &lists {
         for entry in list {
             if entry.name.to_lowercase().contains(&q)
@@ -514,7 +551,11 @@ pub fn find_file_by_name(query: &str, master_md: &Path) -> Option<FileEntry> {
     }
     let p = PathBuf::from(query);
     if p.exists() {
-        let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = p
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         return Some(FileEntry::new(name, p));
     }
     None
@@ -530,7 +571,11 @@ pub fn git_get_remote_url(dir: &Path) -> Option<String> {
         .ok()?;
     if out.status.success() {
         let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if url.is_empty() { None } else { Some(url) }
+        if url.is_empty() {
+            None
+        } else {
+            Some(url)
+        }
     } else {
         None
     }
@@ -557,7 +602,11 @@ fn git_current_branch(dir: &Path) -> Option<String> {
         .ok()?;
     if out.status.success() {
         let branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if branch.is_empty() { None } else { Some(branch) }
+        if branch.is_empty() {
+            None
+        } else {
+            Some(branch)
+        }
     } else {
         None
     }
@@ -591,7 +640,11 @@ pub fn git_commit(dir: &Path, msg: &str) -> GitCommitResult {
         .output();
 
     if add.map(|o| !o.status.success()).unwrap_or(true) {
-        return GitCommitResult { committed: false, pushed: false, message: "git add failed".into() };
+        return GitCommitResult {
+            committed: false,
+            pushed: false,
+            message: "git add failed".into(),
+        };
     }
 
     let commit = Command::new("git")
@@ -600,17 +653,34 @@ pub fn git_commit(dir: &Path, msg: &str) -> GitCommitResult {
         .output();
 
     match commit {
-        Ok(o) if o.status.success() => GitCommitResult { committed: true, pushed: false, message: "ok".into() },
+        Ok(o) if o.status.success() => GitCommitResult {
+            committed: true,
+            pushed: false,
+            message: "ok".into(),
+        },
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            let nothing_to_commit = stderr.contains("nothing to commit") || stderr.contains("nothing added");
+            let nothing_to_commit =
+                stderr.contains("nothing to commit") || stderr.contains("nothing added");
             if nothing_to_commit {
-                GitCommitResult { committed: false, pushed: false, message: "nothing to commit".into() }
+                GitCommitResult {
+                    committed: false,
+                    pushed: false,
+                    message: "nothing to commit".into(),
+                }
             } else {
-                GitCommitResult { committed: false, pushed: false, message: stderr }
+                GitCommitResult {
+                    committed: false,
+                    pushed: false,
+                    message: stderr,
+                }
             }
         }
-        Err(e) => GitCommitResult { committed: false, pushed: false, message: e.to_string() },
+        Err(e) => GitCommitResult {
+            committed: false,
+            pushed: false,
+            message: e.to_string(),
+        },
     }
 }
 

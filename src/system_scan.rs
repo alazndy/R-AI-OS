@@ -1,6 +1,6 @@
+use serde::Serialize;
 use std::path::PathBuf;
 use std::process::Command;
-use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemAiTool {
@@ -15,7 +15,8 @@ pub enum ToolStatus {
     Running,
     Installed,
     Missing,
-    #[allow(dead_code)] Error(String),
+    #[allow(dead_code)]
+    Error(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -27,13 +28,13 @@ pub struct AiAuditReport {
 
 pub fn scan_system() -> AiAuditReport {
     let mut tools = Vec::new();
-    
+
     // 1. Check Ollama
     tools.push(check_ollama());
-    
+
     // 2. Check Claude Code
     tools.push(check_npm_tool("claude", "Claude Code"));
-    
+
     // 3. Check Gemini CLI
     tools.push(check_npm_tool("gemini", "Gemini CLI"));
 
@@ -67,7 +68,7 @@ fn check_ollama() -> SystemAiTool {
             status: ToolStatus::Missing,
             version: None,
             path: None,
-        }
+        },
     }
 }
 
@@ -82,13 +83,13 @@ fn check_npm_tool(cmd: &str, name: &str) -> SystemAiTool {
                 version: None,
                 path: Some(PathBuf::from(path_str)),
             }
-        },
+        }
         _ => SystemAiTool {
             name: name.into(),
             status: ToolStatus::Missing,
             version: None,
             path: None,
-        }
+        },
     }
 }
 
@@ -134,7 +135,12 @@ fn check_lm_studio() -> SystemAiTool {
 
 fn scan_env_keys() -> Vec<String> {
     let mut keys = Vec::new();
-    let common = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"];
+    let common = [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+    ];
     for key in common {
         if std::env::var(key).is_ok() {
             keys.push(key.to_string());
@@ -146,17 +152,24 @@ fn scan_env_keys() -> Vec<String> {
 fn scan_local_models() -> Vec<String> {
     let mut models = Vec::new();
     let home = dirs::home_dir().unwrap_or_default();
-    
+
     // Antigravity data
     let ag_path = home.join(".gemini/antigravity");
     if ag_path.exists() {
         models.push(format!("Antigravity Home: {}", ag_path.display()));
-        
-        let skills_count = std::fs::read_dir(ag_path.join("skills")).map(|d| d.count()).unwrap_or(0);
+
+        let skills_count = std::fs::read_dir(ag_path.join("skills"))
+            .map(|d| d.count())
+            .unwrap_or(0);
         models.push(format!("Antigravity Skills: {} deployed", skills_count));
-        
-        let brain_count = std::fs::read_dir(ag_path.join("brain")).map(|d| d.count()).unwrap_or(0);
-        models.push(format!("Antigravity Brain: {} sessions stored", brain_count));
+
+        let brain_count = std::fs::read_dir(ag_path.join("brain"))
+            .map(|d| d.count())
+            .unwrap_or(0);
+        models.push(format!(
+            "Antigravity Brain: {} sessions stored",
+            brain_count
+        ));
     }
 
     // Ollama models path

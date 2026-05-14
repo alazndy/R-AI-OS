@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-pub mod monitor;
 pub mod compiler;
+pub mod monitor;
 pub mod tester;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SentinelState {
     /// No changes detected since last verification.
+    #[default]
     Clean,
     /// File modified, awaiting check.
     Dirty,
@@ -18,10 +19,4 @@ pub enum SentinelState {
     Compiled,
     /// Compiled and tests passed.
     Verified,
-}
-
-impl Default for SentinelState {
-    fn default() -> Self {
-        Self::Clean
-    }
 }

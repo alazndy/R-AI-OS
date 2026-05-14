@@ -1,5 +1,5 @@
-use std::net::TcpStream;
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
@@ -8,9 +8,9 @@ use std::time::Duration;
 use crate::app::state::BgMsg;
 use crate::indexer::SearchResult;
 
-use std::process::{Command, Stdio};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+use std::process::{Command, Stdio};
 
 const DAEMON_ADDR: &str = "127.0.0.1:42069";
 const RETRY_INTERVAL: Duration = Duration::from_secs(8);
@@ -18,26 +18,22 @@ const MAX_RETRIES: u32 = 10;
 
 fn ensure_daemon_running() {
     // Check if port is already open
-    if TcpStream::connect_timeout(
-        &DAEMON_ADDR.parse().unwrap(),
-        Duration::from_millis(200)
-    ).is_ok() {
+    if TcpStream::connect_timeout(&DAEMON_ADDR.parse().unwrap(), Duration::from_millis(200)).is_ok()
+    {
         return;
     }
 
     println!("Daemon not found. Spawning aiosd in background...");
-    
+
     let mut cmd = Command::new("aiosd");
-    
+
     #[cfg(windows)]
     {
         // 0x08000000 = CREATE_NO_WINDOW
         cmd.creation_flags(0x08000000);
     }
 
-    let _ = cmd.stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+    let _ = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 
     // Give it a second to wake up
     thread::sleep(Duration::from_secs(2));
@@ -48,7 +44,7 @@ pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
 
     thread::spawn(move || {
         ensure_daemon_running();
-        
+
         let mut attempts = 0u32;
         loop {
             match TcpStream::connect(DAEMON_ADDR) {
@@ -74,7 +70,8 @@ pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
                         timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
                         sender: "IPC".into(),
                         content: "Connected to aiosd daemon".into(),
-                    })).ok();
+                    }))
+                    .ok();
 
                     // Reader thread
                     let tx_read = tx.clone();
@@ -103,7 +100,8 @@ pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
                         timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
                         sender: "IPC".into(),
                         content: "Daemon connection lost — retrying...".into(),
-                    })).ok();
+                    }))
+                    .ok();
 
                     attempts = 0; // reset on reconnect
                 }
@@ -114,8 +112,12 @@ pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
                         tx.send(BgMsg::NewLog(crate::app::state::LogEntry {
                             timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
                             sender: "IPC".into(),
-                            content: format!("aiosd not reachable after {} attempts — offline mode", MAX_RETRIES),
-                        })).ok();
+                            content: format!(
+                                "aiosd not reachable after {} attempts — offline mode",
+                                MAX_RETRIES
+                            ),
+                        }))
+                        .ok();
                         break;
                     }
                 }
@@ -141,7 +143,9 @@ fn dispatch_event(tx: &Sender<BgMsg>, v: &serde_json::Value) {
             }
         }
         Some("HealthReport") => {
-            if let Ok(r) = serde_json::from_value::<Vec<crate::health::ProjectHealth>>(v["report"].clone()) {
+            if let Ok(r) =
+                serde_json::from_value::<Vec<crate::health::ProjectHealth>>(v["report"].clone())
+            {
                 tx.send(BgMsg::HealthReport(r)).ok();
             }
         }
@@ -151,13 +155,28 @@ fn dispatch_event(tx: &Sender<BgMsg>, v: &serde_json::Value) {
             }
         }
         Some("StateSync") => {
-            let projects = serde_json::from_value::<Vec<crate::entities::EntityProject>>(v["projects"].clone()).unwrap_or_default();
-            let health_reports = serde_json::from_value::<Vec<crate::health::ProjectHealth>>(v["health_reports"].clone()).unwrap_or_default();
-            let active_agents = serde_json::from_value::<Vec<crate::daemon::proxy::AgentProcess>>(v["active_agents"].clone()).unwrap_or_default();
+            let projects = serde_json::from_value::<Vec<crate::entities::EntityProject>>(
+                v["projects"].clone(),
+            )
+            .unwrap_or_default();
+            let health_reports = serde_json::from_value::<Vec<crate::health::ProjectHealth>>(
+                v["health_reports"].clone(),
+            )
+            .unwrap_or_default();
+            let active_agents = serde_json::from_value::<Vec<crate::daemon::proxy::AgentProcess>>(
+                v["active_agents"].clone(),
+            )
+            .unwrap_or_default();
             let index_ready = v["index_ready"].as_bool().unwrap_or(false);
             let handover_count = v["handover_count"].as_u64().unwrap_or(0) as u32;
-            let pending_file_changes = serde_json::from_value::<Vec<crate::daemon::state::FileChangeApproval>>(v["pending_file_changes"].clone()).unwrap_or_default();
-            let sentinel_files = serde_json::from_value::<Vec<crate::daemon::state::SentinelFileStatus>>(v["sentinel_files"].clone()).unwrap_or_default();
+            let pending_file_changes = serde_json::from_value::<
+                Vec<crate::daemon::state::FileChangeApproval>,
+            >(v["pending_file_changes"].clone())
+            .unwrap_or_default();
+            let sentinel_files = serde_json::from_value::<
+                Vec<crate::daemon::state::SentinelFileStatus>,
+            >(v["sentinel_files"].clone())
+            .unwrap_or_default();
 
             let report_count = health_reports.len();
             tx.send(BgMsg::StateSync {
@@ -168,44 +187,62 @@ fn dispatch_event(tx: &Sender<BgMsg>, v: &serde_json::Value) {
                 handover_count,
                 pending_file_changes,
                 sentinel_files,
-            }).ok();
+            })
+            .ok();
 
             tx.send(BgMsg::NewLog(crate::app::state::LogEntry {
                 timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
                 sender: "IPC".into(),
                 content: format!("Synced state from daemon (Reports: {})", report_count),
-            })).ok();
+            }))
+            .ok();
         }
         Some("HumanApprovalRequired") => {
             if let (Some(target), Some(instruction), Some(reason)) = (
-                v["target"].as_str(), v["instruction"].as_str(), v["reason"].as_str(),
+                v["target"].as_str(),
+                v["instruction"].as_str(),
+                v["reason"].as_str(),
             ) {
                 tx.send(BgMsg::HumanApprovalRequired {
-                    target: target.into(), instruction: instruction.into(), reason: reason.into(),
-                }).ok();
+                    target: target.into(),
+                    instruction: instruction.into(),
+                    reason: reason.into(),
+                })
+                .ok();
             }
         }
         Some("FileChangeRequested") => {
-            if let Ok(approval) = serde_json::from_value::<crate::daemon::state::FileChangeApproval>(v["approval"].clone()) {
+            if let Ok(approval) = serde_json::from_value::<crate::daemon::state::FileChangeApproval>(
+                v["approval"].clone(),
+            ) {
                 tx.send(BgMsg::FileChangeRequested { approval }).ok();
             }
         }
         Some("HandoverApproved") => {
             if let (Some(target), Some(instruction), Some(count)) = (
-                v["target"].as_str(), v["instruction"].as_str(), v["count"].as_u64(),
+                v["target"].as_str(),
+                v["instruction"].as_str(),
+                v["count"].as_u64(),
             ) {
                 tx.send(BgMsg::HandoverApproved {
-                    target: target.into(), instruction: instruction.into(), count: count as u32,
-                }).ok();
+                    target: target.into(),
+                    instruction: instruction.into(),
+                    count: count as u32,
+                })
+                .ok();
             }
         }
         Some("HumanApprovalResult") => {
             if let Some(status) = v["status"].as_str() {
-                tx.send(BgMsg::HumanApprovalResult { status: status.into() }).ok();
+                tx.send(BgMsg::HumanApprovalResult {
+                    status: status.into(),
+                })
+                .ok();
             }
         }
         Some("NewLog") => {
-            if let Ok(log) = serde_json::from_value::<crate::app::state::LogEntry>(v["log"].clone()) {
+            if let Ok(log) = serde_json::from_value::<crate::app::state::LogEntry>(v["log"].clone())
+            {
                 tx.send(BgMsg::NewLog(log)).ok();
             }
         }

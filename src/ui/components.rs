@@ -1,21 +1,24 @@
+use crate::app::{filtered_palette, App};
+use crate::ui::*;
 use ratatui::{
-    Frame,
-    layout::{Constraint, Layout, Rect, Alignment},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Wrap, Clear},
+    widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
+    Frame,
 };
-use crate::app::{App, filtered_palette};
-use crate::ui::*;
-
 
 pub fn render_boot(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(PANEL_BG)), area);
 
     let total = 5u16;
-    let done = app.boot_results.len() as u16;
-    let progress = if total > 0 { (done * 100 / total).min(100) } else { 0 };
+    let done = app.system.boot_results.len() as u16;
+    let progress = if total > 0 {
+        (done * 100 / total).min(100)
+    } else {
+        0
+    };
 
     let center = center_rect(60, (total + 10).min(area.height), area);
 
@@ -44,7 +47,7 @@ pub fn render_boot(frame: &mut Frame, app: &App) {
     frame.render_widget(gauge, rows[2]);
 
     let items: Vec<ListItem> = app
-        .boot_results
+        .system.boot_results
         .iter()
         .map(|(name, pass)| {
             let (mark, color) = if *pass { ("✓", GREEN) } else { ("✗", RED) };
@@ -69,9 +72,18 @@ pub fn render_bouncing_alert(frame: &mut Frame, app: &App) {
 
     let text = vec![
         Line::from(""),
-        Line::from(Span::styled("🚨 HUMAN INTERVENTION REQUIRED 🚨", Style::new().fg(Color::White).bold())),
-        Line::from(Span::styled("BOUNCING LIMIT REACHED!", Style::new().fg(AMBER).bold())),
-        Line::from(Span::styled(format!("(Consecutive Handovers: {})", app.handover_count), Style::new().fg(Color::White))),
+        Line::from(Span::styled(
+            "🚨 HUMAN INTERVENTION REQUIRED 🚨",
+            Style::new().fg(Color::White).bold(),
+        )),
+        Line::from(Span::styled(
+            "BOUNCING LIMIT REACHED!",
+            Style::new().fg(AMBER).bold(),
+        )),
+        Line::from(Span::styled(
+            format!("(Consecutive Handovers: {})", app.system.handover_count),
+            Style::new().fg(Color::White),
+        )),
     ];
 
     let block = Block::default()
@@ -97,24 +109,28 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let content = if app.command_mode {
+    let content = if app.ui.command_mode {
         Line::from(vec![
             Span::styled(" ❯ ", Style::new().fg(GREEN).bold()),
-            Span::styled(app.command_buf.as_str(), Style::new().fg(Color::White)),
+            Span::styled(app.ui.command_buf.as_str(), Style::new().fg(Color::White)),
             Span::styled("█", Style::new().fg(GREEN)),
         ])
-    } else if app.right_panel_focus {
+    } else if app.ui.right_panel_focus {
         Line::from(Span::styled(
             " [↑↓] navigate  [Enter] view  [e] edit  [o] VS Code  [←] menu  [/] command",
             Style::new().fg(DIM),
         ))
-    } else if let Some(act) = app.activities.last() {
+    } else if let Some(act) = app.timeline.activities.last() {
         Line::from(vec![
             Span::styled(format!(" [LOG] {} » ", act.timestamp), Style::new().fg(DIM)),
             Span::styled(act.message.as_str(), Style::new().fg(CYAN).italic()),
         ])
     } else {
-        let hint = if !app.current_menu_files().is_empty() { "  [→] files" } else { "" };
+        let hint = if !app.current_menu_files().is_empty() {
+            "  [→] files"
+        } else {
+            ""
+        };
         Line::from(Span::styled(
             format!(" [↑↓] menu  [/] or [Tab] command{}", hint),
             Style::new().fg(DIM),
@@ -125,7 +141,7 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 pub fn render_command_palette(frame: &mut Frame, app: &App) {
-    let filtered = filtered_palette(&app.command_buf);
+    let filtered = filtered_palette(&app.ui.command_buf);
     if filtered.is_empty() {
         return;
     }
@@ -149,7 +165,10 @@ pub fn render_command_palette(frame: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(GREEN))
-        .title(Span::styled(" Commands — [↑↓] nav  [Tab] fill  [Enter] run ", Style::new().fg(DIM)));
+        .title(Span::styled(
+            " Commands — [↑↓] nav  [Tab] fill  [Enter] run ",
+            Style::new().fg(DIM),
+        ));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -157,7 +176,7 @@ pub fn render_command_palette(frame: &mut Frame, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, item)| {
-            if i == app.palette_cursor {
+            if i == app.ui.palette_cursor {
                 Line::from(vec![
                     Span::styled("  ▶ ", Style::new().fg(GREEN).bold()),
                     Span::styled(item.cmd, Style::new().fg(GREEN).bold()),
@@ -204,7 +223,8 @@ pub fn render_launcher_modal(frame: &mut Frame, app: &App) {
     );
 
     let proj_name = app
-        .active_project
+        .projects
+        .active
         .as_ref()
         .map(|p| p.name.as_str())
         .unwrap_or("?");
@@ -250,36 +270,49 @@ pub fn center_rect(width: u16, height: u16, parent: Rect) -> Rect {
 }
 
 pub fn render_handover_modal(frame: &mut Frame, app: &App) {
-    if let Some((target, instruction)) = &app.handover_modal {
+    if let Some((target, instruction)) = &app.system.handover_modal {
         let area = center_rect(60, 40, frame.area());
-        
+
         frame.render_widget(Clear, area);
-        
+
         let block = Block::default()
             .title(" ⚠️ Human Approval Required: Bouncing Limit ")
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
             .border_style(Style::default().fg(Color::Rgb(255, 170, 0))) // AMBER
             .style(Style::default().bg(Color::Rgb(8, 12, 16)));
-            
+
         let mut lines = Vec::new();
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(" The agents are bouncing tasks too much.", Style::default().fg(Color::Rgb(255, 170, 0)).bold())
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            " The agents are bouncing tasks too much.",
+            Style::default().fg(Color::Rgb(255, 170, 0)).bold(),
+        )]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled(" Target Agent: ", Style::default().fg(Color::Rgb(170, 170, 170))),
-            Span::styled(target.clone(), Style::default().fg(Color::Rgb(0, 255, 136)).bold()),
+            Span::styled(
+                " Target Agent: ",
+                Style::default().fg(Color::Rgb(170, 170, 170)),
+            ),
+            Span::styled(
+                target.clone(),
+                Style::default().fg(Color::Rgb(0, 255, 136)).bold(),
+            ),
         ]));
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(" Instruction:", Style::default().fg(Color::Rgb(170, 170, 170)))));
-        
+        lines.push(Line::from(Span::styled(
+            " Instruction:",
+            Style::default().fg(Color::Rgb(170, 170, 170)),
+        )));
+
         let instruction_words: Vec<&str> = instruction.split_whitespace().collect();
         let mut current_line = String::from("   ");
         for word in instruction_words {
             if current_line.len() + word.len() > 50 {
-                lines.push(Line::from(Span::styled(current_line.clone(), Style::default().fg(Color::Rgb(170, 170, 170)))));
+                lines.push(Line::from(Span::styled(
+                    current_line.clone(),
+                    Style::default().fg(Color::Rgb(170, 170, 170)),
+                )));
                 current_line = format!("   {}", word);
             } else {
                 current_line.push_str(word);
@@ -287,22 +320,29 @@ pub fn render_handover_modal(frame: &mut Frame, app: &App) {
             }
         }
         if !current_line.trim().is_empty() {
-            lines.push(Line::from(Span::styled(current_line, Style::default().fg(Color::Rgb(170, 170, 170)))));
+            lines.push(Line::from(Span::styled(
+                current_line,
+                Style::default().fg(Color::Rgb(170, 170, 170)),
+            )));
         }
-        
+
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled(" [Y] Approve", Style::default().fg(Color::Rgb(0, 255, 136)).bold()),
-            Span::styled("    [N] Reject", Style::default().fg(Color::Rgb(255, 80, 80)).bold()),
+            Span::styled(
+                " [Y] Approve",
+                Style::default().fg(Color::Rgb(0, 255, 136)).bold(),
+            ),
+            Span::styled(
+                "    [N] Reject",
+                Style::default().fg(Color::Rgb(255, 80, 80)).bold(),
+            ),
         ]));
-        
+
         let p = Paragraph::new(lines)
             .block(block)
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true });
-            
+
         frame.render_widget(p, area);
     }
 }
-
-

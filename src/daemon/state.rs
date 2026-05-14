@@ -1,9 +1,9 @@
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use crate::indexer::ProjectIndex;
 use crate::entities::EntityProject;
 use crate::health::ProjectHealth;
+use crate::indexer::ProjectIndex;
 use crate::sentinel::SentinelState;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use crate::daemon::proxy::AgentProcess;
 
@@ -32,7 +32,7 @@ pub struct ValidationError {
 }
 
 /// Represents the shared state managed by the daemon.
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct DaemonState {
     #[serde(skip)]
     pub index: Option<ProjectIndex>,
@@ -44,22 +44,6 @@ pub struct DaemonState {
     pub needs_human_approval: bool,
     pub latest_errors: Vec<ValidationError>,
     pub sentinel_files: Vec<SentinelFileStatus>,
-}
-
-impl Default for DaemonState {
-    fn default() -> Self {
-        Self {
-            index: None,
-            projects: Vec::new(),
-            health_reports: Vec::new(),
-            active_agents: Vec::new(),
-            pending_file_changes: Vec::new(),
-            handover_count: 0,
-            needs_human_approval: false,
-            latest_errors: Vec::new(),
-            sentinel_files: Vec::new(),
-        }
-    }
 }
 
 impl DaemonState {

@@ -1,15 +1,12 @@
-use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
 use crate::daemon::state::{DaemonState, SentinelFileStatus};
-use crate::sentinel::SentinelState;
 use crate::sentinel::compiler::run_cargo_check;
+use crate::sentinel::SentinelState;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{broadcast, RwLock};
 use tokio::time::sleep;
 
-pub async fn start_sentinel_worker(
-    state: Arc<RwLock<DaemonState>>,
-    tx: broadcast::Sender<String>,
-) {
+pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>) {
     println!("[Sentinel] Worker started.");
 
     // Simple loop to check for dirty files and run compiler
@@ -17,16 +14,21 @@ pub async fn start_sentinel_worker(
         let dirty_projects = {
             let s = state.read().await;
             // For now, let's assume we monitor the current active projects
-            s.projects.iter()
+            s.projects
+                .iter()
                 .filter(|p| p.status == "active")
                 .map(|p| (p.name.clone(), p.local_path.clone()))
                 .collect::<Vec<_>>()
         };
 
         for (name, proj_path) in dirty_projects {
-            if !proj_path.exists() { continue; }
+            if !proj_path.exists() {
+                continue;
+            }
             // Only scan Rust projects (Cargo.toml present)
-            if !proj_path.join("Cargo.toml").exists() { continue; }
+            if !proj_path.join("Cargo.toml").exists() {
+                continue;
+            }
 
             let proj_str = proj_path.to_string_lossy().to_string();
 

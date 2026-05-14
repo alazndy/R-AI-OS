@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
-use serde::{Deserialize, Serialize};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -46,8 +46,18 @@ pub struct GitOpResult {
 }
 
 impl GitOpResult {
-    fn ok(msg: impl Into<String>) -> Self { Self { ok: true, message: msg.into() } }
-    fn err(msg: impl Into<String>) -> Self { Self { ok: false, message: msg.into() } }
+    fn ok(msg: impl Into<String>) -> Self {
+        Self {
+            ok: true,
+            message: msg.into(),
+        }
+    }
+    fn err(msg: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            message: msg.into(),
+        }
+    }
 }
 
 // ─── Status ──────────────────────────────────────────────────────────────────
@@ -60,46 +70,68 @@ pub fn status(dir: &Path) -> GitStatus {
     let out = run_git(dir, &["status", "--short"]);
     let dirty = !out.trim().is_empty();
 
-    let mut staged   = Vec::new();
+    let mut staged = Vec::new();
     let mut unstaged = Vec::new();
     let mut untracked = Vec::new();
 
     for line in out.lines() {
-        if line.len() < 3 { continue; }
-        let index  = line.chars().next().unwrap_or(' ');
-        let wt     = line.chars().nth(1).unwrap_or(' ');
-        let file   = line[3..].to_string();
+        if line.len() < 3 {
+            continue;
+        }
+        let index = line.chars().next().unwrap_or(' ');
+        let wt = line.chars().nth(1).unwrap_or(' ');
+        let file = line[3..].to_string();
 
-        if index != ' ' && index != '?' { staged.push(file.clone()); }
-        if wt == 'M' || wt == 'D'       { unstaged.push(file.clone()); }
-        if index == '?' && wt == '?'    { untracked.push(file); }
+        if index != ' ' && index != '?' {
+            staged.push(file.clone());
+        }
+        if wt == 'M' || wt == 'D' {
+            unstaged.push(file.clone());
+        }
+        if index == '?' && wt == '?' {
+            untracked.push(file);
+        }
     }
 
-    GitStatus { branch, remote, dirty, staged, unstaged, untracked, ahead, behind }
+    GitStatus {
+        branch,
+        remote,
+        dirty,
+        staged,
+        unstaged,
+        untracked,
+        ahead,
+        behind,
+    }
 }
 
 // ─── Log ─────────────────────────────────────────────────────────────────────
 
 pub fn log(dir: &Path, count: usize) -> Vec<GitLogEntry> {
     let n = count.to_string();
-    let out = run_git(dir, &[
-        "log",
-        &format!("-{}", n),
-        "--pretty=format:%h\x1f%s\x1f%an\x1f%ad",
-        "--date=short",
-        "--no-color",
-    ]);
+    let out = run_git(
+        dir,
+        &[
+            "log",
+            &format!("-{}", n),
+            "--pretty=format:%h\x1f%s\x1f%an\x1f%ad",
+            "--date=short",
+            "--no-color",
+        ],
+    );
 
     out.lines()
         .filter(|l| !l.is_empty())
         .filter_map(|line| {
             let parts: Vec<&str> = line.splitn(4, '\x1f').collect();
-            if parts.len() < 4 { return None; }
+            if parts.len() < 4 {
+                return None;
+            }
             Some(GitLogEntry {
                 short_hash: parts[0].to_string(),
-                message:    parts[1].to_string(),
-                author:     parts[2].to_string(),
-                date:       parts[3].to_string(),
+                message: parts[1].to_string(),
+                author: parts[2].to_string(),
+                date: parts[3].to_string(),
             })
         })
         .collect()
@@ -127,16 +159,28 @@ pub fn diff(dir: &Path, staged: bool) -> GitDiffSummary {
     for line in stat.lines() {
         if line.contains("changed") {
             // "3 files changed, 45 insertions(+), 12 deletions(-)"
-            let nums: Vec<usize> = line.split_whitespace()
+            let nums: Vec<usize> = line
+                .split_whitespace()
                 .filter_map(|t| t.parse().ok())
                 .collect();
-            if !nums.is_empty() { files = nums[0]; }
-            if nums.len() > 1   { ins   = nums[1]; }
-            if nums.len() > 2   { del   = nums[2]; }
+            if !nums.is_empty() {
+                files = nums[0];
+            }
+            if nums.len() > 1 {
+                ins = nums[1];
+            }
+            if nums.len() > 2 {
+                del = nums[2];
+            }
         }
     }
 
-    GitDiffSummary { files_changed: files, insertions: ins, deletions: del, diff_text }
+    GitDiffSummary {
+        files_changed: files,
+        insertions: ins,
+        deletions: del,
+        diff_text,
+    }
 }
 
 // ─── Commit ──────────────────────────────────────────────────────────────────
@@ -201,7 +245,11 @@ pub fn pull(dir: &Path) -> GitOpResult {
     match out {
         Ok(o) if o.status.success() => {
             let msg = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            GitOpResult::ok(if msg.is_empty() { "up to date".to_string() } else { msg })
+            GitOpResult::ok(if msg.is_empty() {
+                "up to date".to_string()
+            } else {
+                msg
+            })
         }
         Ok(o) => GitOpResult::err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
         Err(e) => GitOpResult::err(e.to_string()),
@@ -219,7 +267,11 @@ pub fn branches(dir: &Path) -> Vec<GitBranch> {
             let name = line.trim_start_matches('*').trim().to_string();
             let remote = name.starts_with("remotes/");
             let name = name.trim_start_matches("remotes/origin/").to_string();
-            GitBranch { name, current, remote }
+            GitBranch {
+                name,
+                current,
+                remote,
+            }
         })
         .collect()
 }
@@ -255,13 +307,21 @@ pub fn create_branch(dir: &Path, name: &str) -> GitOpResult {
 pub fn current_branch(dir: &Path) -> Option<String> {
     let out = run_git(dir, &["branch", "--show-current"]);
     let b = out.trim().to_string();
-    if b.is_empty() { None } else { Some(b) }
+    if b.is_empty() {
+        None
+    } else {
+        Some(b)
+    }
 }
 
 pub fn remote_url(dir: &Path) -> Option<String> {
     let out = run_git(dir, &["remote", "get-url", "origin"]);
     let u = out.trim().to_string();
-    if u.is_empty() { None } else { Some(u) }
+    if u.is_empty() {
+        None
+    } else {
+        Some(u)
+    }
 }
 
 pub fn is_dirty(dir: &Path) -> bool {
@@ -269,10 +329,13 @@ pub fn is_dirty(dir: &Path) -> bool {
 }
 
 fn ahead_behind(dir: &Path) -> (usize, usize) {
-    let out = run_git(dir, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
-    let parts: Vec<&str> = out.trim().split_whitespace().collect();
+    let out = run_git(
+        dir,
+        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+    );
+    let parts: Vec<&str> = out.split_whitespace().collect();
     if parts.len() == 2 {
-        let ahead  = parts[0].parse().unwrap_or(0);
+        let ahead = parts[0].parse().unwrap_or(0);
         let behind = parts[1].parse().unwrap_or(0);
         (ahead, behind)
     } else {

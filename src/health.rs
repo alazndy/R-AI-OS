@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
 use crate::entities::EntityProject;
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ProjectHealth {
@@ -29,12 +29,12 @@ pub struct ProjectHealth {
 }
 
 const CONSTITUTION_RULES: &[(&str, &str)] = &[
-    ("pnpm",          "pnpm over npm/yarn"),
-    ("rls",           "RLS (Row Level Security)"),
-    ("api_key",       "no client-side API keys"),
+    ("pnpm", "pnpm over npm/yarn"),
+    ("rls", "RLS (Row Level Security)"),
+    ("api_key", "no client-side API keys"),
     ("prompt-master", "prompt-master skill"),
-    ("graphify",      "graphify skill"),
-    ("sigmap",        "SIGMAP.md context map"),
+    ("graphify", "graphify skill"),
+    ("sigmap", "SIGMAP.md context map"),
 ];
 
 pub fn check_project(proj: &EntityProject) -> ProjectHealth {
@@ -59,7 +59,10 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
         compliance_grade: compliance_grade.to_string(),
         has_memory,
         has_sigmap,
-        constitution_issues: constitution_issues.into_iter().map(|s| s.to_string()).collect(),
+        constitution_issues: constitution_issues
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
         graphify_done,
         graph_report,
         security_score: None,
@@ -77,11 +80,14 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
         let path_str = path.to_string_lossy().to_string();
         if let Some(project_id) = crate::db::project_id_for_path(&conn, &path_str) {
             let _ = crate::db::upsert_health(
-                &conn, project_id,
+                &conn,
+                project_id,
                 compliance_grade,
                 compliance_score,
-                None, None,
-                0, 0,
+                None,
+                None,
+                0,
+                0,
                 git_dirty.unwrap_or(false),
                 has_memory,
                 has_sigmap,
@@ -100,10 +106,10 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
 pub fn check_project_with_security(proj: &EntityProject) -> ProjectHealth {
     let mut h = check_project(proj);
     let report = crate::security::scan_project(&h.path);
-    h.security_score       = Some(report.score);
-    h.security_grade       = Some(report.grade.to_string());
+    h.security_score = Some(report.score);
+    h.security_grade = Some(report.grade.to_string());
     h.security_issue_count = report.issues.len();
-    h.security_critical    = report.critical_count();
+    h.security_critical = report.critical_count();
     h
 }
 
@@ -129,13 +135,17 @@ pub fn find_graphify_script(dev_ops: &Path) -> Option<PathBuf> {
     let candidates = [
         dev_ops.join("AI OS").join("graphify").join("graphify.py"),
         dev_ops.join("AI OS").join("graphify").join("main.py"),
-        dev_ops.join("AI OS").join("graphify").join("src").join("graphify.py"),
+        dev_ops
+            .join("AI OS")
+            .join("graphify")
+            .join("src")
+            .join("graphify.py"),
     ];
     candidates.into_iter().find(|p| p.exists())
 }
 
-use std::process::Command;
 use crate::daemon::state::ValidationError;
+use std::process::Command;
 
 pub fn validate_file(path: &Path, proj: &EntityProject) -> Vec<ValidationError> {
     let mut errors = Vec::new();
@@ -167,7 +177,7 @@ pub fn validate_file(path: &Path, proj: &EntityProject) -> Vec<ValidationError> 
 
 fn run_cargo_check(project_path: &Path) -> Result<Vec<ValidationError>, String> {
     let output = Command::new("cargo")
-        .args(&["check", "--message-format=json"])
+        .args(["check", "--message-format=json"])
         .current_dir(project_path)
         .output()
         .map_err(|e| e.to_string())?;
@@ -181,12 +191,16 @@ fn run_cargo_check(project_path: &Path) -> Result<Vec<ValidationError>, String> 
                 let message = &v["message"];
                 let level = message["level"].as_str().unwrap_or("");
                 if level == "error" {
-                    let msg_text = message["message"].as_str().unwrap_or("Unknown error").to_string();
+                    let msg_text = message["message"]
+                        .as_str()
+                        .unwrap_or("Unknown error")
+                        .to_string();
                     let spans = message["spans"].as_array();
                     if let Some(spans) = spans {
                         for span in spans {
                             if span["is_primary"].as_bool().unwrap_or(false) {
-                                let file = span["file_name"].as_str().unwrap_or("unknown").to_string();
+                                let file =
+                                    span["file_name"].as_str().unwrap_or("unknown").to_string();
                                 let line = span["line_start"].as_u64().map(|n| n as usize);
                                 errors.push(ValidationError {
                                     file,

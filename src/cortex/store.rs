@@ -7,11 +7,11 @@
 //! Retrieval returns the top-K most similar chunks by cosine similarity
 //! (dot-product of L2-normalised vectors).
 
-use std::path::PathBuf;
-use std::collections::HashMap;
-use instant_distance::{Builder, HnswMap, Search, Point};
-use serde::{Deserialize, Serialize};
 use super::embedder::{Embedding, EMBEDDING_DIM};
+use instant_distance::{Builder, HnswMap, Point, Search};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 // ─── Index persistence path ───────────────────────────────────────────────────
 
@@ -81,11 +81,8 @@ impl VectorEngine {
         let path = store_path();
         if let Ok(bytes) = std::fs::read(&path) {
             if let Ok(ps) = serde_json::from_slice::<PersistedStore>(&bytes) {
-                let embeddings: Vec<Embedding> = ps
-                    .embeddings
-                    .iter()
-                    .map(|v| vec_to_array(v))
-                    .collect();
+                let embeddings: Vec<Embedding> =
+                    ps.embeddings.iter().map(|v| vec_to_array(v)).collect();
 
                 let mut engine = Self {
                     metas: ps.metas,
@@ -110,7 +107,9 @@ impl VectorEngine {
 
     /// Persist to disk if dirty.
     pub fn save(&mut self) {
-        if !self.dirty { return; }
+        if !self.dirty {
+            return;
+        }
         let path = store_path();
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -147,7 +146,12 @@ impl VectorEngine {
         }
         let mut new_metas = Vec::new();
         let mut new_embs: Vec<Embedding> = Vec::new();
-        for (i, (meta, emb)) in self.metas.drain(..).zip(self.embeddings.drain(..)).enumerate() {
+        for (i, (meta, emb)) in self
+            .metas
+            .drain(..)
+            .zip(self.embeddings.drain(..))
+            .enumerate()
+        {
             if keep[i] {
                 new_metas.push(meta);
                 new_embs.push(emb);
@@ -178,7 +182,9 @@ impl VectorEngine {
 
     /// Query for semantically similar chunks (top-K by cosine similarity).
     pub fn query(&self, query_emb: &Embedding, top_k: usize) -> Vec<VectorResult> {
-        let Some(ref hnsw) = self.hnsw else { return vec![]; };
+        let Some(ref hnsw) = self.hnsw else {
+            return vec![];
+        };
 
         let point = EmbPoint(*query_emb);
         let mut search = Search::default();
@@ -196,16 +202,26 @@ impl VectorEngine {
                     text: meta.text.clone(),
                     score,
                 });
-                if results.len() >= top_k { break; }
+                if results.len() >= top_k {
+                    break;
+                }
             }
         }
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results
     }
 
-    pub fn chunk_count(&self) -> usize { self.metas.len() }
-    pub fn file_count(&self) -> usize { self.indexed_files.len() }
+    pub fn chunk_count(&self) -> usize {
+        self.metas.len()
+    }
+    pub fn file_count(&self) -> usize {
+        self.indexed_files.len()
+    }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

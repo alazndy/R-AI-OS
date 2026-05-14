@@ -1,11 +1,11 @@
-use std::sync::Arc;
-use std::path::PathBuf;
-use tokio::sync::{RwLock, broadcast};
-use tokio::net::TcpListener;
-use tokio::io::AsyncWriteExt;
-use notify::{Watcher, RecursiveMode};
-use crate::config::Config;
 use super::state::DaemonState;
+use crate::config::Config;
+use notify::{RecursiveMode, Watcher};
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
+use tokio::sync::{broadcast, RwLock};
 
 pub struct Server {
     state: Arc<RwLock<DaemonState>>,
@@ -15,7 +15,10 @@ pub struct Server {
 impl Server {
     pub fn new(state: Arc<RwLock<DaemonState>>) -> Self {
         let execution_proxy = super::proxy::ExecutionProxy::new(state.clone());
-        Self { state, execution_proxy }
+        Self {
+            state,
+            execution_proxy,
+        }
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
@@ -23,20 +26,23 @@ impl Server {
         let token = uuid::Uuid::new_v4().to_string();
         let token_path = Config::config_file().parent().unwrap().join(".ipc_token");
         std::fs::write(&token_path, &token)?;
-        println!("[Daemon] Security: IPC Token generated and saved to {:?}", token_path);
+        println!(
+            "[Daemon] Security: IPC Token generated and saved to {:?}",
+            token_path
+        );
 
         println!("Server is listening on 127.0.0.1:42069...");
         let listener = TcpListener::bind("127.0.0.1:42069").await?;
-        
+
         let (tx, _) = broadcast::channel::<String>(100);
-        
+
         // ... (workers spawn logic unchanged)
         let health_state = self.state.clone();
         let health_tx = tx.clone();
         tokio::spawn(async move {
             super::health::start_health_worker(health_state, health_tx).await;
         });
-        
+
         let git_tx = tx.clone();
         let git_state = self.state.clone();
         tokio::spawn(async move {
@@ -53,7 +59,12 @@ impl Server {
         let validation_tx = tx.clone();
         let validation_state = self.state.clone();
         tokio::spawn(async move {
-            super::validation::start_validation_worker(validation_state, validation_tx_rx, validation_tx).await;
+            super::validation::start_validation_worker(
+                validation_state,
+                validation_tx_rx,
+                validation_tx,
+            )
+            .await;
         });
 
         let sentinel_tx = tx.clone();
@@ -74,11 +85,15 @@ impl Server {
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             if let Ok(event) = res {
                 for path in event.paths {
-                    let msg = format!("{{\"event\":\"FileChanged\",\"path\":\"{}\"}}", path.display().to_string().replace("\\", "\\\\"));
+                    let msg = format!(
+                        "{{\"event\":\"FileChanged\",\"path\":\"{}\"}}",
+                        path.display().to_string().replace("\\", "\\\\")
+                    );
                     let _ = watcher_tx.send(msg);
                 }
             }
-        }).ok();
+        })
+        .ok();
 
         if let Some(ref mut w) = watcher {
             w.watch(&config.dev_ops_path, RecursiveMode::Recursive).ok();
@@ -94,12 +109,18 @@ impl Server {
                     let addr = format!("127.0.0.1:{}", port);
                     if tokio::time::timeout(
                         std::time::Duration::from_millis(100),
-                        tokio::net::TcpStream::connect(&addr)
-                    ).await.is_ok() {
+                        tokio::net::TcpStream::connect(&addr),
+                    )
+                    .await
+                    .is_ok()
+                    {
                         active.push(port);
                     }
                 }
-                let msg = format!("{{\"event\":\"ActivePorts\",\"ports\":{}}}", serde_json::to_string(&active).unwrap());
+                let msg = format!(
+                    "{{\"event\":\"ActivePorts\",\"ports\":{}}}",
+                    serde_json::to_string(&active).unwrap()
+                );
                 let _ = port_tx.send(msg);
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             }
@@ -108,24 +129,34 @@ impl Server {
         loop {
             let (mut socket, addr) = listener.accept().await?;
             println!("Client connected: {}", addr);
-            
+
             let mut rx = tx.subscribe();
             let state_for_client = self.state.clone();
             let proxy_for_client = self.execution_proxy.clone();
-            let tx_sender = tx.clone();
+            let _tx_sender = tx.clone();
             let server_token = token.clone();
 
             tokio::spawn(async move {
-                use tokio::io::{BufReader, AsyncBufReadExt};
+                use tokio::io::{AsyncBufReadExt, BufReader};
                 let (reader, mut writer) = socket.split();
                 let mut reader = BufReader::new(reader);
                 let mut line = String::new();
 
                 // 2. Authentication Challenge
                 if let Ok(n) = reader.read_line(&mut line).await {
-                    if n == 0 || !line.trim().starts_with("AUTH ") || line.trim()[5..] != server_token {
-                        println!("[Daemon] Auth failed for client {}. Dropping connection.", addr);
-                        let _ = writer.write_all(b"{\"event\":\"Error\",\"message\":\"Authentication failed\"}\n").await;
+                    if n == 0
+                        || !line.trim().starts_with("AUTH ")
+                        || line.trim()[5..] != server_token
+                    {
+                        println!(
+                            "[Daemon] Auth failed for client {}. Dropping connection.",
+                            addr
+                        );
+                        let _ = writer
+                            .write_all(
+                                b"{\"event\":\"Error\",\"message\":\"Authentication failed\"}\n",
+                            )
+                            .await;
                         return;
                     }
                     println!("[Daemon] Client {} authenticated.", addr);
@@ -152,11 +183,13 @@ impl Server {
                                 } else if v["command"] == "VectorSearch" {
                                     if let Some(query) = v["query"].as_str() {
                                         let top_k = v["top_k"].as_u64().unwrap_or(10) as usize;
-                                        
+
                                         // 1. Semantic hits
-                                        let mut cortex = crate::cortex::Cortex::init().unwrap(); // Fallback handles this
-                                        let vector_hits = cortex.search(query, top_k).unwrap_or_default();
-                                        
+                                        let vector_hits = match crate::cortex::Cortex::init() {
+                                            Ok(cortex) => cortex.search(query, top_k).unwrap_or_default(),
+                                            Err(_) => vec![],
+                                        };
+
                                         // 2. BM25 hits
                                         let bm25_hits = {
                                             let s = state_for_client.read().await;
@@ -169,7 +202,7 @@ impl Server {
 
                                         // 3. Hybrid Fuse
                                         let fused = crate::hybrid_search::fuse(bm25_hits, vector_hits, top_k);
-                                        
+
                                         let results: Vec<serde_json::Value> = fused.iter().map(|r| {
                                             serde_json::json!({
                                                 "path": r.path.to_string_lossy(),
@@ -192,7 +225,7 @@ impl Server {
                                     let mut s = state_for_client.write().await;
                                     s.handover_count += 1;
                                     let limit = 5;
-                                    
+
                                     if s.handover_count > limit {
                                         // Request approval
                                         println!("[Daemon] Handover limit exceeded. Requesting human approval.");
@@ -203,7 +236,7 @@ impl Server {
                                         println!("[Daemon] Auto-approving handover to {}. Count: {}", target, s.handover_count);
                                         let msg = format!("{{\"event\":\"HandoverApproved\", \"target\":\"{}\", \"instruction\":\"{}\", \"count\":{}}}\n", target, instruction, s.handover_count);
                                         let _ = writer.write_all(msg.as_bytes()).await;
-                                        
+
                                         // Spawn in background
                                         let proxy = proxy_for_client.clone();
                                         let target_str = target.to_string();
@@ -214,7 +247,7 @@ impl Server {
                                     }
                                 } else if v["command"] == "HealthScan" {
                                     let s = state_for_client.read().await;
-                                    let response = format!("{{\"event\":\"HealthReport\",\"report\":{}}}\n", 
+                                    let response = format!("{{\"event\":\"HealthReport\",\"report\":{}}}\n",
                                         serde_json::to_string(&s.health_reports).unwrap());
                                     let _ = writer.write_all(response.as_bytes()).await;
                                 } else if v["command"] == "GetState" {
@@ -239,7 +272,7 @@ impl Server {
                                         agent_name: v["agent"].as_str().unwrap_or("unknown").to_string(),
                                     };
                                     s.pending_file_changes.push(approval.clone());
-                                    
+
                                     // Notify TUI to show diff
                                     let event = serde_json::json!({
                                         "event": "FileChangeRequested",
@@ -292,4 +325,3 @@ impl Server {
         }
     }
 }
-

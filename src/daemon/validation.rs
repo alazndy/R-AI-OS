@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
 use crate::daemon::state::DaemonState;
 use crate::health::validate_file;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::{broadcast, RwLock};
 
 pub async fn start_validation_worker(
     state: Arc<RwLock<DaemonState>>,
@@ -16,27 +16,31 @@ pub async fn start_validation_worker(
             if v["event"] == "FileChanged" {
                 if let Some(path_str) = v["path"].as_str() {
                     let path = Path::new(path_str);
-                    
+
                     // 1. Find which project this file belongs to
                     let projects = {
                         let s = state.read().await;
                         s.projects.clone()
                     };
 
-                    let matching_proj = projects.iter().find(|p| {
-                        path.starts_with(&p.local_path)
-                    });
+                    let matching_proj = projects.iter().find(|p| path.starts_with(&p.local_path));
 
                     if let Some(proj) = matching_proj {
-                        println!("[Validation Worker] Validating {} in project {}...", path.display(), proj.name);
-                        
+                        println!(
+                            "[Validation Worker] Validating {} in project {}...",
+                            path.display(),
+                            proj.name
+                        );
+
                         let proj_clone = proj.clone();
                         let path_clone = path.to_path_buf();
-                        
+
                         // Run validation in a blocking thread
                         let errors = tokio::task::spawn_blocking(move || {
                             validate_file(&path_clone, &proj_clone)
-                        }).await.unwrap_or_default();
+                        })
+                        .await
+                        .unwrap_or_default();
 
                         // 2. Update state
                         {
@@ -44,7 +48,7 @@ pub async fn start_validation_worker(
                             // Update latest errors
                             // For now, let's keep only errors for the current project or a limit
                             s.latest_errors = errors.clone();
-                            
+
                             // 3. Broadcast Feedback
                             let feedback_msg = serde_json::json!({
                                 "event": "ValidationError",

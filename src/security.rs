@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -18,26 +18,26 @@ impl Severity {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Critical => "CRITICAL",
-            Self::High     => "HIGH",
-            Self::Medium   => "MEDIUM",
-            Self::Low      => "LOW",
-            Self::Info     => "INFO",
+            Self::High => "HIGH",
+            Self::Medium => "MEDIUM",
+            Self::Low => "LOW",
+            Self::Info => "INFO",
         }
     }
     pub fn deduction(&self) -> i32 {
         match self {
             Self::Critical => 25,
-            Self::High     => 15,
-            Self::Medium   => 10,
-            Self::Low      =>  5,
-            Self::Info     =>  0,
+            Self::High => 15,
+            Self::Medium => 10,
+            Self::Low => 5,
+            Self::Info => 0,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityIssue {
-    pub owasp: &'static str,     // e.g. "A02"
+    pub owasp: &'static str, // e.g. "A02"
     pub title: &'static str,
     pub severity: Severity,
     pub file: Option<PathBuf>,
@@ -50,7 +50,7 @@ pub struct SecurityReport {
     pub score: u8,
     pub grade: &'static str,
     pub issues: Vec<SecurityIssue>,
-    pub audit_output: Option<String>,  // npm/cargo audit raw
+    pub audit_output: Option<String>, // npm/cargo audit raw
     pub project_type: ProjectType,
     pub checks_run: usize,
 }
@@ -59,18 +59,24 @@ impl SecurityReport {
     pub fn grade_from_score(score: u8) -> &'static str {
         match score {
             90..=100 => "A",
-            75..=89  => "B",
-            50..=74  => "C",
-            25..=49  => "D",
-            _        => "F",
+            75..=89 => "B",
+            50..=74 => "C",
+            25..=49 => "D",
+            _ => "F",
         }
     }
 
     pub fn critical_count(&self) -> usize {
-        self.issues.iter().filter(|i| i.severity == Severity::Critical).count()
+        self.issues
+            .iter()
+            .filter(|i| i.severity == Severity::Critical)
+            .count()
     }
     pub fn high_count(&self) -> usize {
-        self.issues.iter().filter(|i| i.severity == Severity::High).count()
+        self.issues
+            .iter()
+            .filter(|i| i.severity == Severity::High)
+            .count()
     }
 }
 
@@ -79,7 +85,7 @@ pub enum ProjectType {
     Rust,
     NodeJs,
     Python,
-    Web,    // HTML/CSS/JS no package manager
+    Web, // HTML/CSS/JS no package manager
     Mixed,
     Unknown,
 }
@@ -87,147 +93,165 @@ pub enum ProjectType {
 // ─── OWASP static patterns ───────────────────────────────────────────────────
 
 struct Pattern {
-    owasp:    &'static str,
-    title:    &'static str,
+    owasp: &'static str,
+    title: &'static str,
     severity: Severity,
-    pattern:  &'static str,
-    exts:     &'static [&'static str],  // file extensions to check
+    pattern: &'static str,
+    exts: &'static [&'static str], // file extensions to check
 }
 
 const PATTERNS: &[Pattern] = &[
     // A02 — Cryptographic Failures
     Pattern {
-        owasp: "A02", title: "Hardcoded API key / secret",
+        owasp: "A02",
+        title: "Hardcoded API key / secret",
         severity: Severity::Critical,
         pattern: r#"(?i)(api_key|api_secret|secret_key|auth_token|access_token|private_key)\s*[=:]\s*['"][a-zA-Z0-9_-]{16,}['"]"#,
-        exts: &["rs","py","ts","tsx","js","jsx","go","env","toml","yaml","yml","json"],
+        exts: &[
+            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml", "json",
+        ],
     },
     Pattern {
-        owasp: "A02", title: "Hardcoded password",
+        owasp: "A02",
+        title: "Hardcoded password",
         severity: Severity::Critical,
         pattern: r#"(?i)(password|passwd|pwd)\s*[=:]\s*['"][^'"]{4,}['"]"#,
-        exts: &["rs","py","ts","js","go","yaml","yml","toml","env"],
+        exts: &["rs", "py", "ts", "js", "go", "yaml", "yml", "toml", "env"],
     },
     Pattern {
-        owasp: "A02", title: "MD5 used for hashing (weak)",
+        owasp: "A02",
+        title: "MD5 used for hashing (weak)",
         severity: Severity::High,
         pattern: r"(?i)(md5|Md5)\s*::",
-        exts: &["rs","py","ts","js","go"],
+        exts: &["rs", "py", "ts", "js", "go"],
     },
     Pattern {
-        owasp: "A02", title: "SHA1 used for hashing (weak)",
+        owasp: "A02",
+        title: "SHA1 used for hashing (weak)",
         severity: Severity::Medium,
         pattern: r"(?i)(sha1|Sha1)\s*::",
-        exts: &["rs","py","ts","js","go"],
+        exts: &["rs", "py", "ts", "js", "go"],
     },
     Pattern {
-        owasp: "A02", title: "HTTP instead of HTTPS in config",
+        owasp: "A02",
+        title: "HTTP instead of HTTPS in config",
         severity: Severity::Medium,
         pattern: r#"http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0)"#,
-        exts: &["env","toml","yaml","yml","json","ts","js","py"],
+        exts: &["env", "toml", "yaml", "yml", "json", "ts", "js", "py"],
     },
-
     // A03 — Injection
     Pattern {
-        owasp: "A03", title: "SQL string interpolation (injection risk)",
+        owasp: "A03",
+        title: "SQL string interpolation (injection risk)",
         severity: Severity::High,
         pattern: r#"(?i)(SELECT|INSERT|UPDATE|DELETE|DROP)\s+.*\$\{|format!\s*\(\s*"(?i)(SELECT|INSERT|UPDATE|DELETE)"#,
-        exts: &["rs","py","ts","js","go"],
+        exts: &["rs", "py", "ts", "js", "go"],
     },
     Pattern {
-        owasp: "A03", title: "eval() usage",
+        owasp: "A03",
+        title: "eval() usage",
         severity: Severity::High,
         pattern: r"\beval\s*\(",
-        exts: &["ts","js","jsx","tsx","py"],
+        exts: &["ts", "js", "jsx", "tsx", "py"],
     },
     Pattern {
-        owasp: "A03", title: "innerHTML assignment (XSS risk)",
+        owasp: "A03",
+        title: "innerHTML assignment (XSS risk)",
         severity: Severity::High,
         pattern: r"\.innerHTML\s*=",
-        exts: &["ts","tsx","js","jsx","html"],
+        exts: &["ts", "tsx", "js", "jsx", "html"],
     },
     Pattern {
-        owasp: "A03", title: "dangerouslySetInnerHTML",
+        owasp: "A03",
+        title: "dangerouslySetInnerHTML",
         severity: Severity::Medium,
         pattern: r"dangerouslySetInnerHTML",
-        exts: &["tsx","jsx","ts","js"],
+        exts: &["tsx", "jsx", "ts", "js"],
     },
     Pattern {
-        owasp: "A03", title: "Command injection via shell",
+        owasp: "A03",
+        title: "Command injection via shell",
         severity: Severity::Critical,
         pattern: r#"(?i)(os\.system|subprocess\.call|popen|exec\s*\(|shell\s*=\s*True)"#,
         exts: &["py"],
     },
     Pattern {
-        owasp: "A03", title: "Command injection via shell (JS)",
+        owasp: "A03",
+        title: "Command injection via shell (JS)",
         severity: Severity::High,
         pattern: r"(?i)(exec\s*\(|execSync\s*\(|spawnSync\s*\().*\$\{",
-        exts: &["ts","js"],
+        exts: &["ts", "js"],
     },
-
     // A05 — Security Misconfiguration
     Pattern {
-        owasp: "A05", title: "DEBUG=True in settings",
+        owasp: "A05",
+        title: "DEBUG=True in settings",
         severity: Severity::High,
         pattern: r"(?i)DEBUG\s*=\s*True",
-        exts: &["py","env","toml","yaml","yml"],
+        exts: &["py", "env", "toml", "yaml", "yml"],
     },
     Pattern {
-        owasp: "A05", title: "CORS wildcard (*)",
+        owasp: "A05",
+        title: "CORS wildcard (*)",
         severity: Severity::Medium,
         pattern: r#"(?i)(cors|Access-Control-Allow-Origin).*['"]\*['""]"#,
-        exts: &["rs","ts","js","py","go","yaml","yml"],
+        exts: &["rs", "ts", "js", "py", "go", "yaml", "yml"],
     },
     Pattern {
-        owasp: "A05", title: "JWT secret is 'secret' or 'changeme'",
+        owasp: "A05",
+        title: "JWT secret is 'secret' or 'changeme'",
         severity: Severity::Critical,
         pattern: r#"(?i)(jwt|token).*['"](secret|changeme|your.?secret|example)['""]"#,
-        exts: &["rs","ts","js","py","go","env","yaml","yml"],
+        exts: &["rs", "ts", "js", "py", "go", "env", "yaml", "yml"],
     },
     Pattern {
-        owasp: "A05", title: "Default credentials in config",
+        owasp: "A05",
+        title: "Default credentials in config",
         severity: Severity::High,
         pattern: r#"(?i)(username|user)\s*[=:]\s*['"]admin['"]"#,
-        exts: &["env","yaml","yml","toml","json"],
+        exts: &["env", "yaml", "yml", "toml", "json"],
     },
-
     // A07 — Identification and Authentication Failures
     Pattern {
-        owasp: "A07", title: "No rate limiting (missing throttle/ratelimit)",
+        owasp: "A07",
+        title: "No rate limiting (missing throttle/ratelimit)",
         severity: Severity::Low,
         pattern: r"(?i)app\.(post|put|delete)\s*\(",
-        exts: &["ts","js"],
+        exts: &["ts", "js"],
     },
     Pattern {
-        owasp: "A07", title: "Hardcoded JWT algorithm 'none'",
+        owasp: "A07",
+        title: "Hardcoded JWT algorithm 'none'",
         severity: Severity::Critical,
         pattern: r#"(?i)algorithm.*['""]none['""]\s*"#,
-        exts: &["rs","py","ts","js","go"],
+        exts: &["rs", "py", "ts", "js", "go"],
     },
-
     // A09 — Security Logging and Monitoring Failures
     Pattern {
-        owasp: "A09", title: "console.log with potential sensitive data",
+        owasp: "A09",
+        title: "console.log with potential sensitive data",
         severity: Severity::Low,
         pattern: r"console\.log\s*\(.*(?i)(password|token|secret|key)",
-        exts: &["ts","js","tsx","jsx"],
+        exts: &["ts", "js", "tsx", "jsx"],
     },
     Pattern {
-        owasp: "A09", title: "print() with potential sensitive data (Python)",
+        owasp: "A09",
+        title: "print() with potential sensitive data (Python)",
         severity: Severity::Low,
         pattern: r"print\s*\(.*(?i)(password|token|secret|key)",
         exts: &["py"],
     },
-
     // A01 — Broken Access Control
     Pattern {
-        owasp: "A01", title: "Directory traversal pattern",
+        owasp: "A01",
+        title: "Directory traversal pattern",
         severity: Severity::High,
         pattern: r"\.\./|\.\.\\",
-        exts: &["rs","py","ts","js","go"],
+        exts: &["rs", "py", "ts", "js", "go"],
     },
     Pattern {
-        owasp: "A01", title: ".unwrap() on auth/permission result (Rust)",
+        owasp: "A01",
+        title: ".unwrap() on auth/permission result (Rust)",
         severity: Severity::Low,
         pattern: r"(?i)(auth|permission|role|access).*\.unwrap\(\)",
         exts: &["rs"],
@@ -235,8 +259,15 @@ const PATTERNS: &[Pattern] = &[
 ];
 
 const SKIP_DIRS: &[&str] = &[
-    "node_modules", "target", ".git", "dist", "build",
-    ".next", "__pycache__", "vendor", ".turbo",
+    "node_modules",
+    "target",
+    ".git",
+    "dist",
+    "build",
+    ".next",
+    "__pycache__",
+    "vendor",
+    ".turbo",
 ];
 
 // ─── semgrep tool dispatch ────────────────────────────────────────────────────
@@ -251,31 +282,42 @@ fn run_semgrep_inner(path: &Path, issues: &mut Vec<SecurityIssue>) -> Option<boo
 
     let output = Command::new(&semgrep_path)
         .args([
-            "--config", "p/owasp-top-ten",
-            "--json", "--quiet", "--no-rewrite-rule-ids",
+            "--config",
+            "p/owasp-top-ten",
+            "--json",
+            "--quiet",
+            "--no-rewrite-rule-ids",
             path.to_str().unwrap_or("."),
         ])
-        .output().ok()?;
+        .output()
+        .ok()?;
 
-    if !output.status.success() && output.stdout.is_empty() { return Some(false); }
+    if !output.status.success() && output.stdout.is_empty() {
+        return Some(false);
+    }
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
     let results = json["results"].as_array()?;
 
     for r in results {
-        let msg = r["extra"]["message"].as_str().unwrap_or("semgrep finding").to_string();
+        let msg = r["extra"]["message"]
+            .as_str()
+            .unwrap_or("semgrep finding")
+            .to_string();
         let sev = match r["extra"]["severity"].as_str().unwrap_or("WARNING") {
-            "ERROR"   => Severity::Critical,
+            "ERROR" => Severity::Critical,
             "WARNING" => Severity::High,
-            "INFO"    => Severity::Low,
-            _         => Severity::Medium,
+            "INFO" => Severity::Low,
+            _ => Severity::Medium,
         };
         let owasp_tag = r["extra"]["metadata"]["owasp"].as_str().unwrap_or("");
-        let owasp: &'static str = ["A01","A02","A03","A04","A05","A06","A07","A08","A09","A10"]
-            .iter()
-            .find(|&&o| owasp_tag.contains(o))
-            .copied()
-            .unwrap_or("A00");
+        let owasp: &'static str = [
+            "A01", "A02", "A03", "A04", "A05", "A06", "A07", "A08", "A09", "A10",
+        ]
+        .iter()
+        .find(|&&o| owasp_tag.contains(o))
+        .copied()
+        .unwrap_or("A00");
 
         issues.push(SecurityIssue {
             owasp,
@@ -302,7 +344,9 @@ pub fn scan_project(path: &Path) -> SecurityReport {
     checks_run += 1;
 
     // 2. semgrep — additional layer if installed (appends findings, doesn't replace)
-    if run_semgrep(path, &mut issues) { checks_run += 1; }
+    if run_semgrep(path, &mut issues) {
+        checks_run += 1;
+    }
 
     // 3. Dependency audit
     let audit_output = run_dependency_audit(path, &project_type);
@@ -315,7 +359,14 @@ pub fn scan_project(path: &Path) -> SecurityReport {
     let score = (100i32 - deductions).clamp(0, 100) as u8;
     let grade = SecurityReport::grade_from_score(score);
 
-    SecurityReport { score, grade, issues, audit_output, project_type, checks_run }
+    SecurityReport {
+        score,
+        grade,
+        issues,
+        audit_output,
+        project_type,
+        checks_run,
+    }
 }
 
 // ─── Detection ────────────────────────────────────────────────────────────────
@@ -327,22 +378,31 @@ fn detect_project_type(path: &Path) -> ProjectType {
             if let Some(rest) = line.strip_prefix("stack:") {
                 let stack = rest.trim().trim_matches('"');
                 return match stack {
-                    "rust"   => ProjectType::Rust,
+                    "rust" => ProjectType::Rust,
                     "node" | "nodejs" => ProjectType::NodeJs,
                     "python" => ProjectType::Python,
-                    "web"    => ProjectType::Web,
-                    _        => ProjectType::Unknown,
+                    "web" => ProjectType::Web,
+                    _ => ProjectType::Unknown,
                 };
             }
         }
     }
     // 2. Heuristic fallback
-    if path.join("Cargo.toml").exists() { return ProjectType::Rust; }
-    if path.join("package.json").exists() { return ProjectType::NodeJs; }
-    if path.join("pyproject.toml").exists() || path.join("requirements.txt").exists() || path.join("setup.py").exists() {
+    if path.join("Cargo.toml").exists() {
+        return ProjectType::Rust;
+    }
+    if path.join("package.json").exists() {
+        return ProjectType::NodeJs;
+    }
+    if path.join("pyproject.toml").exists()
+        || path.join("requirements.txt").exists()
+        || path.join("setup.py").exists()
+    {
         return ProjectType::Python;
     }
-    if path.join("index.html").exists() { return ProjectType::Web; }
+    if path.join("index.html").exists() {
+        return ProjectType::Web;
+    }
     ProjectType::Unknown
 }
 
@@ -354,7 +414,9 @@ fn static_scan(root: &Path, issues: &mut Vec<SecurityIssue>, checks_run: &mut us
         .into_iter()
         .filter_entry(|e| {
             // Never filter the scan root itself (depth 0)
-            if e.depth() == 0 { return true; }
+            if e.depth() == 0 {
+                return true;
+            }
             let n = e.file_name().to_string_lossy();
             // Only skip hidden DIRECTORIES and tooling dirs — not hidden files
             if e.file_type().is_dir() {
@@ -370,11 +432,12 @@ fn static_scan(root: &Path, issues: &mut Vec<SecurityIssue>, checks_run: &mut us
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-        let patterns_for_ext: Vec<&Pattern> = PATTERNS.iter()
-            .filter(|p| p.exts.contains(&ext))
-            .collect();
+        let patterns_for_ext: Vec<&Pattern> =
+            PATTERNS.iter().filter(|p| p.exts.contains(&ext)).collect();
 
-        if patterns_for_ext.is_empty() { continue; }
+        if patterns_for_ext.is_empty() {
+            continue;
+        }
 
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
@@ -433,7 +496,10 @@ fn check_env_in_git(path: &Path, issues: &mut Vec<SecurityIssue>) {
     let gitignore = path.join(".gitignore");
     if gitignore.exists() {
         if let Ok(content) = std::fs::read_to_string(&gitignore) {
-            if !content.lines().any(|l| l.trim() == ".env" || l.trim() == "*.env") {
+            if !content
+                .lines()
+                .any(|l| l.trim() == ".env" || l.trim() == "*.env")
+            {
                 issues.push(SecurityIssue {
                     owasp: "A02",
                     title: ".env not in .gitignore",
@@ -452,7 +518,7 @@ fn check_env_in_git(path: &Path, issues: &mut Vec<SecurityIssue>) {
 fn run_dependency_audit(path: &Path, ptype: &ProjectType) -> Option<String> {
     let (cmd, args): (&str, &[&str]) = match ptype {
         ProjectType::NodeJs => ("pnpm", &["audit", "--json"]),
-        ProjectType::Rust   => ("cargo", &["audit", "--json"]),
+        ProjectType::Rust => ("cargo", &["audit", "--json"]),
         ProjectType::Python => ("pip-audit", &["--format=json"]),
         _ => return None,
     };
@@ -464,7 +530,11 @@ fn run_dependency_audit(path: &Path, ptype: &ProjectType) -> Option<String> {
         .ok()?;
 
     let text = String::from_utf8_lossy(&out.stdout).to_string();
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 fn parse_audit_issues(output: &str, ptype: &ProjectType, issues: &mut Vec<SecurityIssue>) {
@@ -472,7 +542,7 @@ fn parse_audit_issues(output: &str, ptype: &ProjectType, issues: &mut Vec<Securi
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(output) {
         match ptype {
             ProjectType::NodeJs => parse_npm_audit(&json, issues),
-            ProjectType::Rust   => parse_cargo_audit(&json, issues),
+            ProjectType::Rust => parse_cargo_audit(&json, issues),
             ProjectType::Python => parse_pip_audit(&json, issues),
             _ => {}
         }
@@ -486,14 +556,18 @@ fn parse_npm_audit(json: &serde_json::Value, issues: &mut Vec<SecurityIssue>) {
             let severity_str = vuln["severity"].as_str().unwrap_or("low");
             let severity = match severity_str {
                 "critical" => Severity::Critical,
-                "high"     => Severity::High,
+                "high" => Severity::High,
                 "moderate" => Severity::Medium,
-                _          => Severity::Low,
+                _ => Severity::Low,
             };
-            let title = vuln["title"].as_str()
-                .or_else(|| vuln["via"].as_array()
-                    .and_then(|a| a.first())
-                    .and_then(|v| v["title"].as_str()))
+            let title = vuln["title"]
+                .as_str()
+                .or_else(|| {
+                    vuln["via"]
+                        .as_array()
+                        .and_then(|a| a.first())
+                        .and_then(|v| v["title"].as_str())
+                })
                 .unwrap_or("Vulnerable dependency");
             issues.push(SecurityIssue {
                 owasp: "A06",
@@ -501,7 +575,11 @@ fn parse_npm_audit(json: &serde_json::Value, issues: &mut Vec<SecurityIssue>) {
                 severity,
                 file: None,
                 line: None,
-                snippet: Some(format!("{}: {}", pkg, title.chars().take(60).collect::<String>())),
+                snippet: Some(format!(
+                    "{}: {}",
+                    pkg,
+                    title.chars().take(60).collect::<String>()
+                )),
             });
         }
     }
@@ -513,19 +591,25 @@ fn parse_cargo_audit(json: &serde_json::Value, issues: &mut Vec<SecurityIssue>) 
             let severity_str = vuln["advisory"]["cvss"].as_str().unwrap_or("");
             let severity = match severity_str {
                 s if s.contains("9.") || s.contains("10.") => Severity::Critical,
-                s if s.contains("7.") || s.contains("8.")  => Severity::High,
+                s if s.contains("7.") || s.contains("8.") => Severity::High,
                 s if s.contains("4.") || s.contains("5.") || s.contains("6.") => Severity::Medium,
                 _ => Severity::Low,
             };
             let pkg = vuln["package"]["name"].as_str().unwrap_or("unknown");
-            let title = vuln["advisory"]["title"].as_str().unwrap_or("Vulnerability");
+            let title = vuln["advisory"]["title"]
+                .as_str()
+                .unwrap_or("Vulnerability");
             issues.push(SecurityIssue {
                 owasp: "A06",
                 title: "Vulnerable dependency (cargo)",
                 severity,
                 file: None,
                 line: None,
-                snippet: Some(format!("{}: {}", pkg, title.chars().take(60).collect::<String>())),
+                snippet: Some(format!(
+                    "{}: {}",
+                    pkg,
+                    title.chars().take(60).collect::<String>()
+                )),
             });
         }
     }
@@ -536,7 +620,8 @@ fn parse_pip_audit(json: &serde_json::Value, issues: &mut Vec<SecurityIssue>) {
         for dep in deps {
             if let Some(vulns) = dep["vulns"].as_array() {
                 for vuln in vulns {
-                    let fix = vuln["fix_versions"].as_array()
+                    let fix = vuln["fix_versions"]
+                        .as_array()
                         .and_then(|a| a.first())
                         .and_then(|v| v.as_str())
                         .unwrap_or("no fix");
@@ -561,20 +646,20 @@ fn parse_pip_audit(json: &serde_json::Value, issues: &mut Vec<SecurityIssue>) {
 pub fn score_color(score: u8) -> &'static str {
     match score {
         90..=100 => "A",
-        75..=89  => "B",
-        50..=74  => "C",
-        25..=49  => "D",
-        _        => "F",
+        75..=89 => "B",
+        50..=74 => "C",
+        25..=49 => "D",
+        _ => "F",
     }
 }
 
 pub fn severity_emoji(s: &Severity) -> &'static str {
     match s {
         Severity::Critical => "🔴",
-        Severity::High     => "🟠",
-        Severity::Medium   => "🟡",
-        Severity::Low      => "🔵",
-        Severity::Info     => "⚪",
+        Severity::High => "🟠",
+        Severity::Medium => "🟡",
+        Severity::Low => "🔵",
+        Severity::Info => "⚪",
     }
 }
 
@@ -590,10 +675,15 @@ mod tests {
     #[test]
     fn hardcoded_api_key_detected() {
         let tmp = tempfile::tempdir().unwrap();
-        write_file(tmp.path(), "app.ts",
-            r#"const api_key = "sk-1234567890abcdef1234567890abcdef";"#);
+        write_file(
+            tmp.path(),
+            "app.ts",
+            r#"const api_key = "sk-1234567890abcdef1234567890abcdef";"#,
+        );
         let report = scan_project(tmp.path());
-        let has_key_issue = report.issues.iter()
+        let has_key_issue = report
+            .issues
+            .iter()
             .any(|i| i.owasp == "A02" && i.severity == Severity::Critical);
         assert!(has_key_issue, "Should detect hardcoded API key");
     }
@@ -601,8 +691,11 @@ mod tests {
     #[test]
     fn clean_file_no_critical_issues() {
         let tmp = tempfile::tempdir().unwrap();
-        write_file(tmp.path(), "main.rs",
-            r#"fn main() { println!("Hello, world!"); }"#);
+        write_file(
+            tmp.path(),
+            "main.rs",
+            r#"fn main() { println!("Hello, world!"); }"#,
+        );
         let report = scan_project(tmp.path());
         assert_eq!(report.critical_count(), 0);
     }
@@ -612,7 +705,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_file(tmp.path(), "settings.py", "DEBUG = True\n");
         let report = scan_project(tmp.path());
-        let found = report.issues.iter()
+        let found = report
+            .issues
+            .iter()
             .any(|i| i.owasp == "A05" && i.title.contains("DEBUG"));
         assert!(found, "Should detect DEBUG=True");
     }
@@ -622,15 +717,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_file(tmp.path(), "app.js", "eval(userInput);");
         let report = scan_project(tmp.path());
-        let found = report.issues.iter()
-            .any(|i| i.owasp == "A03");
+        let found = report.issues.iter().any(|i| i.owasp == "A03");
         assert!(found, "Should detect eval()");
     }
 
     #[test]
     fn score_starts_at_100() {
         let tmp = tempfile::tempdir().unwrap();
-        write_file(tmp.path(), "clean.rs", "fn add(a: i32, b: i32) -> i32 { a + b }");
+        write_file(
+            tmp.path(),
+            "clean.rs",
+            "fn add(a: i32, b: i32) -> i32 { a + b }",
+        );
         let report = scan_project(tmp.path());
         assert_eq!(report.score, 100, "Clean file should score 100");
     }
@@ -658,13 +756,22 @@ mod tests {
     #[test]
     fn static_scan_finds_api_key() {
         let tmp = tempfile::tempdir().unwrap();
-        write_file(tmp.path(), "app.ts",
-            r#"const api_key = "sk-1234567890abcdef1234567890abcdef";"#);
+        write_file(
+            tmp.path(),
+            "app.ts",
+            r#"const api_key = "sk-1234567890abcdef1234567890abcdef";"#,
+        );
         let mut issues = Vec::new();
         let mut count = 0;
         static_scan(tmp.path(), &mut issues, &mut count);
-        let found = issues.iter().any(|i| i.owasp == "A02" && i.severity == Severity::Critical);
-        assert!(found, "static_scan should find API key. Issues found: {:?}", issues.len());
+        let found = issues
+            .iter()
+            .any(|i| i.owasp == "A02" && i.severity == Severity::Critical);
+        assert!(
+            found,
+            "static_scan should find API key. Issues found: {:?}",
+            issues.len()
+        );
     }
 
     #[test]
@@ -682,6 +789,10 @@ mod tests {
         write_file(tmp.path(), "package.json", "{}");
         write_file(tmp.path(), ".raios.yaml", "stack: \"python\"\n");
         let ptype = detect_project_type(tmp.path());
-        assert_eq!(ptype, ProjectType::Python, "Manifest should override heuristic");
+        assert_eq!(
+            ptype,
+            ProjectType::Python,
+            "Manifest should override heuristic"
+        );
     }
 }

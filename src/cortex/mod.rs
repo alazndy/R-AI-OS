@@ -17,9 +17,9 @@ pub mod chunker;
 pub mod embedder;
 pub mod store;
 
+use anyhow::Result;
 use std::path::Path;
 use std::time::SystemTime;
-use anyhow::Result;
 use walkdir::WalkDir;
 
 use chunker::chunk_file;
@@ -31,8 +31,15 @@ const INDEXED_EXTS: &[&str] = &[
 ];
 
 const SKIP_DIRS: &[&str] = &[
-    "node_modules", "target", ".git", "dist", "build", ".next",
-    "__pycache__", ".turbo", "vendor",
+    "node_modules",
+    "target",
+    ".git",
+    "dist",
+    "build",
+    ".next",
+    "__pycache__",
+    ".turbo",
+    "vendor",
 ];
 
 // ─── Public Cortex struct ─────────────────────────────────────────────────────
@@ -88,7 +95,9 @@ impl Cortex {
     /// Index a single file. Returns true if it was actually indexed (or re-indexed).
     pub fn index_file(&mut self, path: &Path) -> Result<bool> {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if !INDEXED_EXTS.contains(&ext) { return Ok(false); }
+        if !INDEXED_EXTS.contains(&ext) {
+            return Ok(false);
+        }
 
         let mtime = file_mtime(path);
         let path_str = path.to_string_lossy().into_owned();
@@ -99,14 +108,16 @@ impl Cortex {
 
         let content = std::fs::read_to_string(path)?;
         let chunks = chunk_file(path, &content);
-        if chunks.is_empty() { return Ok(false); }
+        if chunks.is_empty() {
+            return Ok(false);
+        }
 
         let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
         let embeddings = self.embedder.embed_batch(texts)?;
 
         let pairs: Vec<_> = embeddings
             .into_iter()
-            .zip(chunks.into_iter())
+            .zip(chunks)
             .map(|(emb, chunk)| {
                 let meta = ChunkMeta {
                     path: chunk.path,
@@ -128,10 +139,14 @@ impl Cortex {
     }
 
     /// Number of chunks currently in the index.
-    pub fn chunk_count(&self) -> usize { self.engine.chunk_count() }
+    pub fn chunk_count(&self) -> usize {
+        self.engine.chunk_count()
+    }
 
     /// Number of files currently indexed.
-    pub fn file_count(&self) -> usize { self.engine.file_count() }
+    pub fn file_count(&self) -> usize {
+        self.engine.file_count()
+    }
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
@@ -139,7 +154,10 @@ impl Cortex {
 fn file_mtime(path: &Path) -> u64 {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+        .and_then(|t| {
+            t.duration_since(SystemTime::UNIX_EPOCH)
+                .map_err(std::io::Error::other)
+        })
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }

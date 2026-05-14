@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 // ─── Public struct (unchanged API) ───────────────────────────────────────────
 
@@ -28,7 +28,8 @@ pub fn load_entities(dev_ops: &Path) -> Vec<EntityProject> {
     crate::db::import_from_json(dev_ops, &conn);
 
     match crate::db::load_all_projects(&conn) {
-        Ok(rows) => rows.into_iter()
+        Ok(rows) => rows
+            .into_iter()
             .filter(|r| Path::new(&r.path).exists())
             .map(row_to_entity)
             .collect(),
@@ -39,8 +40,7 @@ pub fn load_entities(dev_ops: &Path) -> Vec<EntityProject> {
 // ─── Save ─────────────────────────────────────────────────────────────────────
 
 pub fn save_entities(_dev_ops: &Path, projects: Vec<EntityProject>) -> std::io::Result<()> {
-    let conn = crate::db::open_db()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let conn = crate::db::open_db().map_err(std::io::Error::other)?;
 
     for p in &projects {
         let path_str = p.local_path.to_string_lossy().to_string();
@@ -55,7 +55,8 @@ pub fn save_entities(_dev_ops: &Path, projects: Vec<EntityProject>) -> std::io::
             p.last_commit.as_deref(),
             p.version.as_deref(),
             p.version_nickname.as_deref(),
-        ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        )
+        .map_err(std::io::Error::other)?;
     }
     Ok(())
 }
@@ -75,7 +76,9 @@ pub fn discover_entities(dev_ops: &Path) -> Vec<EntityProject> {
     let rooms = crate::mempalace::build(dev_ops);
     for room in rooms {
         for proj in room.projects {
-            if !proj.path.exists() { continue; }
+            if !proj.path.exists() {
+                continue;
+            }
             let path_str = proj.path.to_string_lossy().to_string();
             let _ = crate::db::upsert_project(
                 &conn,
@@ -94,7 +97,8 @@ pub fn discover_entities(dev_ops: &Path) -> Vec<EntityProject> {
 
     // Return everything that still exists on disk
     match crate::db::load_all_projects(&conn) {
-        Ok(rows) => rows.into_iter()
+        Ok(rows) => rows
+            .into_iter()
             .filter(|r| Path::new(&r.path).exists())
             .map(row_to_entity)
             .collect(),
@@ -106,14 +110,14 @@ pub fn discover_entities(dev_ops: &Path) -> Vec<EntityProject> {
 
 fn row_to_entity(r: crate::db::DbProject) -> EntityProject {
     EntityProject {
-        name:             r.name,
-        category:         r.category,
-        local_path:       PathBuf::from(&r.path),
-        github:           r.github,
-        status:           r.status,
-        stars:            r.stars.map(|s| s as u32),
-        last_commit:      r.last_commit,
-        version:          r.version,
+        name: r.name,
+        category: r.category,
+        local_path: PathBuf::from(&r.path),
+        github: r.github,
+        status: r.status,
+        stars: r.stars.map(|s| s as u32),
+        last_commit: r.last_commit,
+        version: r.version,
         version_nickname: r.nickname,
     }
 }

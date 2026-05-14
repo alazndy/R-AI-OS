@@ -1,10 +1,10 @@
+use anyhow::Result;
+use fd_lock::RwLock;
 use std::fs::{File, OpenOptions};
-use std::path::Path;
 use std::io::Write;
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
-use fd_lock::RwLock;
-use anyhow::Result;
 
 /// memory.md gibi kritik dosyalara güvenli (locked) yazma yapar.
 /// Eğer dosya kilitliyse, belirtilen deneme sayısı kadar bekler.
@@ -20,7 +20,10 @@ pub fn safe_write(path: &Path, content: &str) -> Result<()> {
             "agent": "Agent (via SafeIO)"
         });
         let _ = stream.write_all(format!("{}\n", msg).as_bytes());
-        println!("[SafeIO] File change for {:?} sent to Daemon for approval.", path);
+        println!(
+            "[SafeIO] File change for {:?} sent to Daemon for approval.",
+            path
+        );
         return Ok(());
     }
 
@@ -32,7 +35,7 @@ pub fn safe_write(path: &Path, content: &str) -> Result<()> {
         .open(path)?;
 
     let mut lock = RwLock::new(file);
-    
+
     // Kilidi alana kadar dene (Max 5 saniye)
     let mut retries = 0;
     let mut locked_file = loop {
@@ -40,7 +43,10 @@ pub fn safe_write(path: &Path, content: &str) -> Result<()> {
             Ok(guard) => break guard,
             Err(_) => {
                 if retries > 50 {
-                    return Err(anyhow::anyhow!("Dosya kilidi alınamadı (Timeout): {:?}", path));
+                    return Err(anyhow::anyhow!(
+                        "Dosya kilidi alınamadı (Timeout): {:?}",
+                        path
+                    ));
                 }
                 thread::sleep(Duration::from_millis(100));
                 retries += 1;
@@ -50,7 +56,7 @@ pub fn safe_write(path: &Path, content: &str) -> Result<()> {
 
     locked_file.write_all(content.as_bytes())?;
     locked_file.flush()?;
-    
+
     Ok(())
 }
 
@@ -63,7 +69,7 @@ pub fn safe_read(path: &Path) -> Result<String> {
 
     let file = File::open(path)?;
     let lock = RwLock::new(file);
-    
+
     // Read lock için try_read yeterli, ancak Read trait &mut File ister.
     // fd-lock'ta guard üzerinden &File alıp direkt fs::read_to_string kullanamayız,
     // bu yüzden shared kilit olsa bile Read işlemi için guard'ın mutabilitesini sağlamalıyız.

@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -17,10 +17,10 @@ pub enum ProjectType {
 impl ProjectType {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Rust    => "Rust",
-            Self::Node    => "Node",
-            Self::Python  => "Python",
-            Self::Go      => "Go",
+            Self::Rust => "Rust",
+            Self::Node => "Node",
+            Self::Python => "Python",
+            Self::Go => "Go",
             Self::Unknown => "Unknown",
         }
     }
@@ -62,12 +62,21 @@ pub struct TestResult {
 // ─── Project type detection ───────────────────────────────────────────────────
 
 pub fn detect_type(dir: &Path) -> ProjectType {
-    if dir.join("Cargo.toml").exists()      { return ProjectType::Rust; }
-    if dir.join("package.json").exists()    { return ProjectType::Node; }
+    if dir.join("Cargo.toml").exists() {
+        return ProjectType::Rust;
+    }
+    if dir.join("package.json").exists() {
+        return ProjectType::Node;
+    }
     if dir.join("pyproject.toml").exists()
         || dir.join("setup.py").exists()
-        || dir.join("requirements.txt").exists() { return ProjectType::Python; }
-    if dir.join("go.mod").exists()          { return ProjectType::Go; }
+        || dir.join("requirements.txt").exists()
+    {
+        return ProjectType::Python;
+    }
+    if dir.join("go.mod").exists() {
+        return ProjectType::Go;
+    }
     ProjectType::Unknown
 }
 
@@ -75,18 +84,21 @@ pub fn detect_type(dir: &Path) -> ProjectType {
 
 pub fn build(dir: &Path) -> BuildResult {
     match detect_type(dir) {
-        ProjectType::Rust    => build_rust(dir),
-        ProjectType::Node    => build_node(dir),
-        ProjectType::Python  => build_python(dir),
-        ProjectType::Go      => build_go(dir),
+        ProjectType::Rust => build_rust(dir),
+        ProjectType::Node => build_node(dir),
+        ProjectType::Python => build_python(dir),
+        ProjectType::Go => build_go(dir),
         ProjectType::Unknown => BuildResult {
             ok: false,
             project_type: "Unknown".into(),
             command: "—".into(),
             duration_ms: 0,
-            warnings: 0, errors: 1,
+            warnings: 0,
+            errors: 1,
             diagnostics: vec![],
-            raw_output: "Cannot detect project type (no Cargo.toml, package.json, go.mod, pyproject.toml)".into(),
+            raw_output:
+                "Cannot detect project type (no Cargo.toml, package.json, go.mod, pyproject.toml)"
+                    .into(),
         },
     }
 }
@@ -112,8 +124,14 @@ fn build_rust(dir: &Path) -> BuildResult {
                 project_type: "Rust".into(),
                 command: "cargo build".into(),
                 duration_ms: elapsed.as_millis() as u64,
-                warnings, errors, diagnostics,
-                raw_output: if ok { stderr } else { format!("{}\n{}", stdout, stderr) },
+                warnings,
+                errors,
+                diagnostics,
+                raw_output: if ok {
+                    stderr
+                } else {
+                    format!("{}\n{}", stdout, stderr)
+                },
             }
         }
     }
@@ -131,33 +149,44 @@ fn build_node(dir: &Path) -> BuildResult {
             project_type: "Node".into(),
             command: "—".into(),
             duration_ms: 0,
-            warnings: 0, errors: 0,
+            warnings: 0,
+            errors: 0,
             diagnostics: vec![],
             raw_output: "No build script found in package.json".into(),
         };
     }
 
-    let pm = if dir.join("pnpm-lock.yaml").exists() { "pnpm" }
-             else if dir.join("bun.lockb").exists() { "bun" }
-             else { "npm" };
+    let pm = if dir.join("pnpm-lock.yaml").exists() {
+        "pnpm"
+    } else if dir.join("bun.lockb").exists() {
+        "bun"
+    } else {
+        "npm"
+    };
 
     let start = Instant::now();
-    let out = Command::new(pm).args(["run", "build"]).current_dir(dir).output();
+    let out = Command::new(pm)
+        .args(["run", "build"])
+        .current_dir(dir)
+        .output();
     let elapsed = start.elapsed();
 
     match out {
         Err(e) => failed_result("Node", &format!("{} run build", pm), elapsed, e.to_string()),
         Ok(o) => {
-            let raw = format!("{}\n{}",
+            let raw = format!(
+                "{}\n{}",
                 String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr));
+                String::from_utf8_lossy(&o.stderr)
+            );
             let errors = if o.status.success() { 0 } else { 1 };
             BuildResult {
                 ok: o.status.success(),
                 project_type: "Node".into(),
                 command: format!("{} run build", pm),
                 duration_ms: elapsed.as_millis() as u64,
-                warnings: 0, errors,
+                warnings: 0,
+                errors,
                 diagnostics: vec![],
                 raw_output: raw,
             }
@@ -167,7 +196,10 @@ fn build_node(dir: &Path) -> BuildResult {
 
 fn build_python(dir: &Path) -> BuildResult {
     let start = Instant::now();
-    let out = Command::new("python").args(["-m", "py_compile"]).current_dir(dir).output();
+    let out = Command::new("python")
+        .args(["-m", "py_compile"])
+        .current_dir(dir)
+        .output();
     let elapsed = start.elapsed();
 
     match out {
@@ -190,7 +222,10 @@ fn build_python(dir: &Path) -> BuildResult {
 
 fn build_go(dir: &Path) -> BuildResult {
     let start = Instant::now();
-    let out = Command::new("go").args(["build", "./..."]).current_dir(dir).output();
+    let out = Command::new("go")
+        .args(["build", "./..."])
+        .current_dir(dir)
+        .output();
     let elapsed = start.elapsed();
 
     match out {
@@ -215,16 +250,18 @@ fn build_go(dir: &Path) -> BuildResult {
 
 pub fn test(dir: &Path) -> TestResult {
     match detect_type(dir) {
-        ProjectType::Rust   => test_rust(dir),
-        ProjectType::Node   => test_node(dir),
+        ProjectType::Rust => test_rust(dir),
+        ProjectType::Node => test_node(dir),
         ProjectType::Python => test_python(dir),
-        ProjectType::Go     => test_go(dir),
+        ProjectType::Go => test_go(dir),
         ProjectType::Unknown => TestResult {
             ok: false,
             project_type: "Unknown".into(),
             command: "—".into(),
             duration_ms: 0,
-            passed: 0, failed: 0, ignored: 0,
+            passed: 0,
+            failed: 0,
+            ignored: 0,
             failures: vec!["Cannot detect project type".into()],
             raw_output: String::new(),
         },
@@ -242,16 +279,21 @@ fn test_rust(dir: &Path) -> TestResult {
     match out {
         Err(e) => failed_test("Rust", "cargo test", elapsed, e.to_string()),
         Ok(o) => {
-            let raw = format!("{}\n{}",
+            let raw = format!(
+                "{}\n{}",
                 String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr));
+                String::from_utf8_lossy(&o.stderr)
+            );
             let (passed, failed, ignored, failures) = parse_rust_test_output(&raw);
             TestResult {
                 ok: o.status.success(),
                 project_type: "Rust".into(),
                 command: "cargo test".into(),
                 duration_ms: elapsed.as_millis() as u64,
-                passed, failed, ignored, failures,
+                passed,
+                failed,
+                ignored,
+                failures,
                 raw_output: raw,
             }
         }
@@ -259,27 +301,38 @@ fn test_rust(dir: &Path) -> TestResult {
 }
 
 fn test_node(dir: &Path) -> TestResult {
-    let pm = if dir.join("pnpm-lock.yaml").exists() { "pnpm" }
-             else if dir.join("bun.lockb").exists() { "bun" }
-             else { "npm" };
+    let pm = if dir.join("pnpm-lock.yaml").exists() {
+        "pnpm"
+    } else if dir.join("bun.lockb").exists() {
+        "bun"
+    } else {
+        "npm"
+    };
 
     let start = Instant::now();
-    let out = Command::new(pm).args(["test", "--", "--passWithNoTests"]).current_dir(dir).output();
+    let out = Command::new(pm)
+        .args(["test", "--", "--passWithNoTests"])
+        .current_dir(dir)
+        .output();
     let elapsed = start.elapsed();
 
     match out {
         Err(e) => failed_test("Node", &format!("{} test", pm), elapsed, e.to_string()),
         Ok(o) => {
-            let raw = format!("{}\n{}",
+            let raw = format!(
+                "{}\n{}",
                 String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr));
+                String::from_utf8_lossy(&o.stderr)
+            );
             let (passed, failed) = parse_jest_output(&raw);
             TestResult {
                 ok: o.status.success(),
                 project_type: "Node".into(),
                 command: format!("{} test", pm),
                 duration_ms: elapsed.as_millis() as u64,
-                passed, failed, ignored: 0,
+                passed,
+                failed,
+                ignored: 0,
                 failures: vec![],
                 raw_output: raw,
             }
@@ -289,22 +342,29 @@ fn test_node(dir: &Path) -> TestResult {
 
 fn test_python(dir: &Path) -> TestResult {
     let start = Instant::now();
-    let out = Command::new("python").args(["-m", "pytest", "--tb=short", "-q"]).current_dir(dir).output();
+    let out = Command::new("python")
+        .args(["-m", "pytest", "--tb=short", "-q"])
+        .current_dir(dir)
+        .output();
     let elapsed = start.elapsed();
 
     match out {
         Err(e) => failed_test("Python", "pytest", elapsed, e.to_string()),
         Ok(o) => {
-            let raw = format!("{}\n{}",
+            let raw = format!(
+                "{}\n{}",
                 String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr));
+                String::from_utf8_lossy(&o.stderr)
+            );
             let (passed, failed) = parse_pytest_output(&raw);
             TestResult {
                 ok: o.status.success(),
                 project_type: "Python".into(),
                 command: "pytest".into(),
                 duration_ms: elapsed.as_millis() as u64,
-                passed, failed, ignored: 0,
+                passed,
+                failed,
+                ignored: 0,
                 failures: vec![],
                 raw_output: raw,
             }
@@ -314,15 +374,20 @@ fn test_python(dir: &Path) -> TestResult {
 
 fn test_go(dir: &Path) -> TestResult {
     let start = Instant::now();
-    let out = Command::new("go").args(["test", "./...", "-v"]).current_dir(dir).output();
+    let out = Command::new("go")
+        .args(["test", "./...", "-v"])
+        .current_dir(dir)
+        .output();
     let elapsed = start.elapsed();
 
     match out {
         Err(e) => failed_test("Go", "go test ./...", elapsed, e.to_string()),
         Ok(o) => {
-            let raw = format!("{}\n{}",
+            let raw = format!(
+                "{}\n{}",
                 String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr));
+                String::from_utf8_lossy(&o.stderr)
+            );
             let passed = raw.matches("--- PASS").count();
             let failed = raw.matches("--- FAIL").count();
             TestResult {
@@ -330,7 +395,9 @@ fn test_go(dir: &Path) -> TestResult {
                 project_type: "Go".into(),
                 command: "go test ./...".into(),
                 duration_ms: elapsed.as_millis() as u64,
-                passed, failed, ignored: 0,
+                passed,
+                failed,
+                ignored: 0,
                 failures: vec![],
                 raw_output: raw,
             }
@@ -342,38 +409,50 @@ fn test_go(dir: &Path) -> TestResult {
 
 fn parse_cargo_json(stdout: &str) -> (usize, usize, Vec<BuildDiagnostic>) {
     let mut warnings = 0usize;
-    let mut errors   = 0usize;
-    let mut diags    = Vec::new();
+    let mut errors = 0usize;
+    let mut diags = Vec::new();
 
     for line in stdout.lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        if v["reason"] != "compiler-message" { continue; }
-        let msg   = &v["message"];
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v["reason"] != "compiler-message" {
+            continue;
+        }
+        let msg = &v["message"];
         let level = msg["level"].as_str().unwrap_or("").to_string();
-        let text  = msg["message"].as_str().unwrap_or("").to_string();
+        let text = msg["message"].as_str().unwrap_or("").to_string();
 
         match level.as_str() {
             "warning" => warnings += 1,
-            "error"   => errors   += 1,
+            "error" => errors += 1,
             _ => continue,
         }
 
-        let (file, line_no) = msg["spans"].as_array()
+        let (file, line_no) = msg["spans"]
+            .as_array()
             .and_then(|s| s.first())
-            .map(|s| (
-                s["file_name"].as_str().unwrap_or("").to_string(),
-                s["line_start"].as_u64().map(|n| n as usize),
-            ))
+            .map(|s| {
+                (
+                    s["file_name"].as_str().unwrap_or("").to_string(),
+                    s["line_start"].as_u64().map(|n| n as usize),
+                )
+            })
             .unwrap_or_default();
 
-        diags.push(BuildDiagnostic { file, line: line_no, level, message: text });
+        diags.push(BuildDiagnostic {
+            file,
+            line: line_no,
+            level,
+            message: text,
+        });
     }
     (warnings, errors, diags)
 }
 
 fn parse_rust_test_output(output: &str) -> (usize, usize, usize, Vec<String>) {
-    let mut passed  = 0usize;
-    let mut failed  = 0usize;
+    let mut passed = 0usize;
+    let mut failed = 0usize;
     let mut ignored = 0usize;
     let mut failures = Vec::new();
 
@@ -382,9 +461,15 @@ fn parse_rust_test_output(output: &str) -> (usize, usize, usize, Vec<String>) {
             // "test result: ok. 22 passed; 0 failed; 0 ignored"
             for part in line.split(';') {
                 let part = part.trim();
-                if let Some(n) = extract_num(part, "passed")  { passed  = n; }
-                if let Some(n) = extract_num(part, "failed")  { failed  = n; }
-                if let Some(n) = extract_num(part, "ignored") { ignored = n; }
+                if let Some(n) = extract_num(part, "passed") {
+                    passed = n;
+                }
+                if let Some(n) = extract_num(part, "failed") {
+                    failed = n;
+                }
+                if let Some(n) = extract_num(part, "ignored") {
+                    ignored = n;
+                }
             }
         }
         if line.starts_with("FAILED") || line.contains("---- ") && line.contains("FAILED") {
@@ -431,7 +516,8 @@ fn failed_result(ptype: &str, cmd: &str, elapsed: Duration, msg: String) -> Buil
         project_type: ptype.into(),
         command: cmd.into(),
         duration_ms: elapsed.as_millis() as u64,
-        warnings: 0, errors: 1,
+        warnings: 0,
+        errors: 1,
         diagnostics: vec![],
         raw_output: msg,
     }
@@ -443,7 +529,9 @@ fn failed_test(ptype: &str, cmd: &str, elapsed: Duration, msg: String) -> TestRe
         project_type: ptype.into(),
         command: cmd.into(),
         duration_ms: elapsed.as_millis() as u64,
-        passed: 0, failed: 1, ignored: 0,
+        passed: 0,
+        failed: 1,
+        ignored: 0,
         failures: vec![msg.clone()],
         raw_output: msg,
     }

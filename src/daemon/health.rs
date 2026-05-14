@@ -1,13 +1,13 @@
-use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
-use tokio::time::{sleep, Duration};
 use crate::daemon::state::DaemonState;
 use crate::health::check_project;
+use std::sync::Arc;
+use tokio::sync::{broadcast, RwLock};
+use tokio::time::{sleep, Duration};
 
 /// Background worker that periodically updates project health reports.
 pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>) {
     println!("[Daemon] Health Worker started.");
-    
+
     loop {
         // 1. Get projects from state
         let projects = {
@@ -21,11 +21,14 @@ pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast:
             continue;
         }
 
-        println!("[Daemon] Scanning health for {} projects...", projects.len());
-        
+        println!(
+            "[Daemon] Scanning health for {} projects...",
+            projects.len()
+        );
+
         let tx_clone = tx.clone();
         let state_clone = state.clone();
-        
+
         // Use a task set or similar to run in parallel
         let mut handles = vec![];
         for proj in projects.clone() {
@@ -57,7 +60,7 @@ pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast:
             let mut s = state_clone.write().await;
             s.health_reports = reports.clone();
             println!("[Daemon] Health scan complete. Reports updated.");
-            
+
             // 3. Broadcast new state
             let msg = serde_json::json!({
                 "event": "StateSync",

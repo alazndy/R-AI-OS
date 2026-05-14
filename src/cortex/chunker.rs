@@ -31,10 +31,7 @@ pub fn chunk_file(path: &Path, content: &str) -> Vec<Chunk> {
     }
 
     let path_str = path.to_string_lossy().into_owned();
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     match ext {
         "md" | "txt" => chunk_markdown(&path_str, content),
@@ -56,11 +53,14 @@ fn chunk_markdown(path: &str, content: &str) -> Vec<Chunk> {
     for (i, line) in content.lines().enumerate() {
         let line_no = i + 1;
 
-        let is_heading = line.starts_with("## ") || line.starts_with("### ") || line.starts_with("# ");
+        let is_heading =
+            line.starts_with("## ") || line.starts_with("### ") || line.starts_with("# ");
         let is_blank = line.trim().is_empty();
 
         // Flush on heading or after accumulating enough blank-paragraph text
-        if (is_heading && !current_lines.is_empty()) || (is_blank && current_lines.len() >= CHUNK_LINES) {
+        if (is_heading && !current_lines.is_empty())
+            || (is_blank && current_lines.len() >= CHUNK_LINES)
+        {
             flush_chunk(path, &current_lines, current_start, &mut chunks);
             current_lines.clear();
             current_start = line_no;
@@ -82,8 +82,19 @@ fn chunk_markdown(path: &str, content: &str) -> Vec<Chunk> {
 
 fn chunk_code(path: &str, content: &str) -> Vec<Chunk> {
     // Top-level definition starters — language-agnostic heuristic
-    let def_patterns = ["pub fn ", "fn ", "async fn ", "impl ", "struct ", "enum ",
-                        "def ", "class ", "function ", "const ", "export "];
+    let def_patterns = [
+        "pub fn ",
+        "fn ",
+        "async fn ",
+        "impl ",
+        "struct ",
+        "enum ",
+        "def ",
+        "class ",
+        "function ",
+        "const ",
+        "export ",
+    ];
 
     let mut chunks = Vec::new();
     let mut current_lines: Vec<&str> = Vec::new();
@@ -136,7 +147,9 @@ fn chunk_sliding_window(path: &str, content: &str) -> Vec<Chunk> {
         let end = (i + CHUNK_LINES).min(lines.len());
         let window = &lines[i..end];
         flush_chunk(path, window, i + 1, &mut chunks);
-        if end == lines.len() { break; }
+        if end == lines.len() {
+            break;
+        }
         i += CHUNK_LINES - OVERLAP_LINES;
     }
 

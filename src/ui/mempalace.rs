@@ -1,18 +1,21 @@
+use crate::app::App;
+use crate::ui::*;
 use ratatui::{
-    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
+    Frame,
 };
-use crate::app::App;
-use crate::ui::*;
-
 
 pub fn render_mempalace_info(frame: &mut Frame, area: Rect, app: &App) {
-    let count: usize = app.mp_rooms.iter().map(|r| r.projects.len()).sum();
+    let count: usize = app.mempalace.rooms.iter().map(|r| r.projects.len()).sum();
     let hint = if count > 0 {
-        format!("  {} rooms · {} projects — /mempalace to open full view", app.mp_rooms.len(), count)
+        format!(
+            "  {} rooms · {} projects — /mempalace to open full view",
+            app.mempalace.rooms.len(),
+            count
+        )
     } else {
         "  Loading workspace map...".into()
     };
@@ -41,12 +44,12 @@ pub fn render_mempalace_view(frame: &mut Frame, app: &App) {
     .areas(area);
 
     // ── Header ───────────────────────────────────────────────────────────────
-    let total_projects: usize = app.mp_rooms.iter().map(|r| r.projects.len()).sum();
-    let filter_hint = if app.mp_filter.is_empty() {
+    let total_projects: usize = app.mempalace.rooms.iter().map(|r| r.projects.len()).sum();
+    let filter_hint = if app.mempalace.filter.is_empty() {
         Span::styled("", Style::new())
     } else {
         Span::styled(
-            format!("  filter: {}", app.mp_filter),
+            format!("  filter: {}", app.mempalace.filter),
             Style::new().fg(AMBER).bold(),
         )
     };
@@ -56,7 +59,11 @@ pub fn render_mempalace_view(frame: &mut Frame, app: &App) {
             Span::styled("  MEM", Style::new().fg(RED).bold()),
             Span::styled("PALACE", Style::new().fg(MID).bold()),
             Span::styled(
-                format!("  {} rooms  ·  {} projects", app.mp_rooms.len(), total_projects),
+                format!(
+                    "  {} rooms  ·  {} projects",
+                    app.mempalace.rooms.len(),
+                    total_projects
+                ),
                 Style::new().fg(DIM),
             ),
             filter_hint,
@@ -66,33 +73,36 @@ pub fn render_mempalace_view(frame: &mut Frame, app: &App) {
             Style::new().fg(DIM),
         )),
     ])
-    .block(Block::new().borders(Borders::BOTTOM).border_style(Style::new().fg(DIM)));
+    .block(
+        Block::new()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::new().fg(DIM)),
+    );
     frame.render_widget(header, header_area);
 
     // ── Content — two columns ────────────────────────────────────────────────
-    let [left_area, right_area] = Layout::horizontal([
-        Constraint::Percentage(48),
-        Constraint::Percentage(52),
-    ])
-    .areas(content_area);
+    let [left_area, right_area] =
+        Layout::horizontal([Constraint::Percentage(48), Constraint::Percentage(52)])
+            .areas(content_area);
 
-    // Build visible room/project rows, filtering by mp_filter
-    let filter = app.mp_filter.to_lowercase();
+    // Build visible room/project rows, filtering by filter
+    let filter = app.mempalace.filter.to_lowercase();
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_line_idx = 0;
     let mut current_line_idx = 0;
 
-    for (ri, room) in app.mp_rooms.iter().enumerate() {
-        let is_room_selected = ri == app.mp_room_cursor && app.mp_proj_cursor.is_none();
+    for (ri, room) in app.mempalace.rooms.iter().enumerate() {
+        let is_room_selected = ri == app.mempalace.room_cursor && app.mempalace.proj_cursor.is_none();
         if is_room_selected {
             selected_line_idx = current_line_idx;
         }
-        let expanded = app.mp_expanded.get(ri).copied().unwrap_or(true);
+        let expanded = app.mempalace.expanded.get(ri).copied().unwrap_or(true);
 
         let proj_count = if filter.is_empty() {
             room.projects.len()
         } else {
-            room.projects.iter()
+            room.projects
+                .iter()
                 .filter(|p| p.name.to_lowercase().contains(&filter))
                 .count()
         };
@@ -110,11 +120,11 @@ pub fn render_mempalace_view(frame: &mut Frame, app: &App) {
             Span::styled(prefix, Style::new().fg(GREEN).bold()),
             Span::styled(room.icon, Style::new()),
             Span::styled(format!(" {} ", toggle), Style::new().fg(DIM)),
-            Span::styled(room.folder_name.as_str(), Style::new().fg(room_color).bold()),
             Span::styled(
-                format!("  ({} projects)", proj_count),
-                Style::new().fg(DIM),
+                room.folder_name.as_str(),
+                Style::new().fg(room_color).bold(),
             ),
+            Span::styled(format!("  ({} projects)", proj_count), Style::new().fg(DIM)),
         ]));
         current_line_idx += 1;
 
@@ -128,8 +138,7 @@ pub fn render_mempalace_view(frame: &mut Frame, app: &App) {
                 continue;
             }
 
-            let is_proj_selected = ri == app.mp_room_cursor
-                && app.mp_proj_cursor == Some(pi);
+            let is_proj_selected = ri == app.mempalace.room_cursor && app.mempalace.proj_cursor == Some(pi);
             if is_proj_selected {
                 selected_line_idx = current_line_idx;
             }
@@ -141,8 +150,16 @@ pub fn render_mempalace_view(frame: &mut Frame, app: &App) {
             };
 
             let proj_color = if is_proj_selected { GREEN } else { MID };
-            let proj_prefix = if is_proj_selected { "    ▶ " } else { "      " };
-            let date_str = if proj.date == "—" { "".to_string() } else { format!("  {}", proj.date) };
+            let proj_prefix = if is_proj_selected {
+                "    ▶ "
+            } else {
+                "      "
+            };
+            let date_str = if proj.date == "—" {
+                "".to_string()
+            } else {
+                format!("  {}", proj.date)
+            };
 
             lines.push(Line::from(vec![
                 Span::styled(proj_prefix, Style::new().fg(GREEN).bold()),
@@ -189,5 +206,3 @@ pub fn render_mempalace_view(frame: &mut Frame, app: &App) {
     .block(Block::new().borders(Borders::TOP).border_style(Style::new().fg(DIM)));
     frame.render_widget(footer, footer_area);
 }
-
-

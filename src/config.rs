@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Runtime config — loaded from ~/.config/raios/config.toml
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,17 +62,21 @@ impl Config {
         // ── vault_projects_path ──────────────────────────────────────────────
         let vault_projects = find_vault_projects(&home, master_md.as_ref());
 
-        DetectResult { dev_ops, master_md, skills, vault_projects }
+        DetectResult {
+            dev_ops,
+            master_md,
+            skills,
+            vault_projects,
+        }
     }
 }
 
 pub struct DetectResult {
-    pub dev_ops:   Option<PathBuf>,
+    pub dev_ops: Option<PathBuf>,
     pub master_md: Option<PathBuf>,
-    pub skills:    Option<PathBuf>,
+    pub skills: Option<PathBuf>,
     pub vault_projects: Option<PathBuf>,
 }
-
 
 // ─── Auto-detect helpers ──────────────────────────────────────────────────────
 
@@ -114,7 +118,9 @@ fn find_master_md(home: &PathBuf, dev_ops: Option<&PathBuf>) -> Option<PathBuf> 
 
     // 3. Home dir
     let h = home.join("MASTER.md");
-    if h.exists() { return Some(h); }
+    if h.exists() {
+        return Some(h);
+    }
 
     None
 }
@@ -134,7 +140,9 @@ fn find_skills(dev_ops: Option<&PathBuf>) -> Option<PathBuf> {
     // Try Antigravity/global skills
     let home = dirs::home_dir()?;
     let ag = home.join(".gemini").join("antigravity").join("skills");
-    if ag.is_dir() { return Some(ag); }
+    if ag.is_dir() {
+        return Some(ag);
+    }
 
     None
 }
@@ -143,11 +151,17 @@ fn find_vault_projects(home: &PathBuf, master_md: Option<&PathBuf>) -> Option<Pa
     if let Some(master) = master_md {
         if let Some(vault_root) = master.parent() {
             let candidate = vault_root.join("Projeler");
-            if candidate.is_dir() { return Some(candidate); }
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
             let candidate2 = vault_root.join("01_Projects");
-            if candidate2.is_dir() { return Some(candidate2); }
+            if candidate2.is_dir() {
+                return Some(candidate2);
+            }
             let candidate3 = vault_root.join("Dev Ops Projeleri");
-            if candidate3.is_dir() { return Some(candidate3); }
+            if candidate3.is_dir() {
+                return Some(candidate3);
+            }
         }
     }
 
@@ -156,7 +170,9 @@ fn find_vault_projects(home: &PathBuf, master_md: Option<&PathBuf>) -> Option<Pa
         if let Ok(vaults) = std::fs::read_dir(&obsidian_root) {
             for vault in vaults.filter_map(|e| e.ok()) {
                 let candidate = vault.path().join("Projeler");
-                if candidate.is_dir() { return Some(candidate); }
+                if candidate.is_dir() {
+                    return Some(candidate);
+                }
             }
         }
     }

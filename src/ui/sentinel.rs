@@ -1,3 +1,5 @@
+use crate::app::App;
+use crate::sentinel::SentinelState;
 use ratatui::{
     layout::Rect,
     style::{Color, Style, Stylize},
@@ -5,19 +7,17 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem},
     Frame,
 };
-use crate::app::App;
-use crate::sentinel::SentinelState;
 
 pub fn render_sentinel_hub(frame: &mut Frame, area: Rect, app: &App) {
     let mut items = Vec::new();
 
-    if app.sentinel_files.is_empty() {
+    if app.system.sentinel_files.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
             "  Sentinel is watching... No files reported yet.",
             Style::new().fg(Color::Rgb(80, 80, 80)).italic(),
         ))));
     } else {
-        for file in &app.sentinel_files {
+        for file in &app.system.sentinel_files {
             let (icon, color) = match file.state {
                 SentinelState::Clean => ("○", Color::Rgb(100, 100, 100)),
                 SentinelState::Dirty => ("🔵", Color::Rgb(0, 150, 255)),
@@ -45,13 +45,16 @@ pub fn render_sentinel_hub(frame: &mut Frame, area: Rect, app: &App) {
             }
 
             items.push(ListItem::new(Line::from(line_spans)));
-            
+
             // Show errors if failed
             if file.state == SentinelState::Failed {
                 for err in &file.errors {
                     items.push(ListItem::new(Line::from(vec![
                         Span::styled("      ! ", Style::new().fg(Color::Rgb(255, 80, 80))),
-                        Span::styled(format!("Line {}: {}", err.line.unwrap_or(0), err.message), Style::new().fg(Color::Rgb(150, 150, 150))),
+                        Span::styled(
+                            format!("Line {}: {}", err.line.unwrap_or(0), err.message),
+                            Style::new().fg(Color::Rgb(150, 150, 150)),
+                        ),
                     ])));
                 }
             }

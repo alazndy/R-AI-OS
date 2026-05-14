@@ -1,75 +1,117 @@
-# R-AI-OS
+# ⚡ Raios: The AI OS Kernel
 
-**The Agentic Operating System Control Center**
+<p align="center">
+  <img src="https://raw.githubusercontent.com/alazndy/r-ai-os/master/assets/raios-logo.png" width="220" alt="Raios Logo">
+</p>
 
-Built with **Rust** and [Ratatui](https://ratatui.rs), R-AI-OS is a high-performance terminal interface designed for orchestrating autonomous AI agents, managing complex file systems, and providing real-time system health metrics.
+<p align="center">
+  <strong>The First High-Performance, LLM-Native Operating System Kernel for Autonomous Swarms</strong>
+</p>
 
----
+<p align="center">
+  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/github/v/release/alazndy/r-ai-os?style=for-the-badge&color=blue" alt="Version"></a>
+  <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
+  <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
+</p>
 
-## 🚀 The Vision
-
-Moving beyond the limitations of legacy terminal tools, R-AI-OS (Rust AI OS) is engineered for the future of "Agentic Computing." It provides a bridge between human intent and AI execution through a secure, high-speed, and beautifully crafted TUI.
-
-- **Rust-Powered:** Memory safety and zero-cost abstractions ensure R-AI-OS runs with minimal overhead.
-- **Agent-First:** Native support for agent configurations, memory management, and automated rule compliance.
-- **Performance-Driven:** Designed to handle 40+ concurrent projects with sub-millisecond status updates.
-
----
-
-## 🛠️ Key Pillars
-
-### 🖥️ TUI Mastery
-- **Interactive Dashboard:** 6-module control panel with real-time project health scores.
-- **Advanced File Explorer:** Integrated file viewer with syntax awareness and line-by-line scrolling.
-- **In-Terminal Editor:** Custom-built line editor with `Ctrl+S` saving and seamless agent interaction.
-
-### 🧠 Cortex & Daemon Intelligence
-- **aiosd (Daemon):** An invisible background service that handles state synchronization and project discovery.
-- **Cortex Engine:** Vector-ready architecture for RAG (Retrieval-Augmented Generation) workflows.
-- **Hybrid Search:** Combines keyword search with vector retrieval for pinpoint accuracy across your codebase.
-
-### 🛡️ Security & Compliance
-- **MCP Server Integration:** Built-in Model Context Protocol server for secure tool-sharing with LLMs.
-- **Compliance Engine:** Automatic scanning of project rules (e.g., `GEMINI.md`, `hardware-rules.md`) to ensure architectural integrity.
+<p align="center">
+  <a href="#-the-vision">Vision</a> •
+  <a href="#-core-modules">Core Modules</a> •
+  <a href="#-technical-specifications">Technical Specs</a> •
+  <a href="#-get-started">Get Started</a> •
+  <a href="#-cli-reference">CLI</a> •
+  <a href="#-roadmap">Roadmap</a>
+</p>
 
 ---
 
-## ⌨️ Quick Usage
+## 🔭 The Vision
 
-### Launch the TUI
+Raios is not just a CLI tool; it is a **Kernel**. While traditional Operating Systems (Windows, macOS, Linux) were designed to manage hardware resources (CPU, RAM, Disk), Raios is designed for the **AI Era**. 
+
+It serves as the **Intelligence Orchestration Layer** that sits between the human user and a decentralized swarm of 90+ autonomous specialists. Raios handles the complexity of **Context Economics, Semantic Routing, and Zero-Trust Agent Security**, allowing you to focus on high-level architecture while your "factory" does the heavy lifting.
+
+---
+
+## 🧠 Core Kernel Modules
+
+### 🎯 1. Unified Agent Router (The Brain)
+The Router solves the "Over-Agenting" problem. With 90+ specialists available from Maestro and ECC ecosystems, selecting the right one is impossible for humans. 
+- **Semantic Dispatch:** Uses the local `Cortex` engine to map task descriptions to agent metadata.
+- **Dynamic Delegation:** `raios task "Fix this Rust bug"` automatically initializes a `rust-build-resolver` followed by a `tester`.
+- **Maestro & ECC Bridge:** Native integration with both major agentic frameworks.
+
+### 🛡️ 2. Universal AgentShield (The Guard)
+In an autonomous world, safety is non-negotiable. AgentShield acts as a low-level syscall filter.
+- **Command Interception:** Pre-scans every command an agent attempts to run. Blocks destructive actions (`rm -rf /`, `mkfs`, etc.).
+- **Secret Leak Protection:** Identifies and sanitizes `.env`, `.pem`, and API keys before they are exposed to the agent's context.
+- **Pre-flight Health Checks:** Scans project directories for security vulnerabilities before any agent is allowed to start.
+
+### 📉 3. Token Budgeter & Context Manager (The Economist)
+Context is the new currency. Raios ensures you don't go bankrupt.
+- **Automatic Compaction:** If a project directory exceeds **300KB**, Raios prevents raw file ingestion.
+- **Sigmap Sinerjisi:** Automatically runs `Sigmap` to generate a lightweight signature map (up to **97% token reduction**).
+- **Neural Budgeting:** Injects `RAIOS_CONTEXT_MODE=compact` into agent environments, forcing them to use high-density summaries.
+
+### 🧬 4. Autonomous Instinct Engine (The Memory)
+Memory should not be static. It should be evolutionary.
+- **Behavioral Persistence:** Raios learns your coding style, favorite libraries, and project-specific quirks.
+- **Cross-Session Injection:** Learned "Instincts" are stored in a global `instincts.json` and automatically injected into future sessions.
+- **Seamless Continuity:** Gemini or Claude will remember how you prefer error handling even if you switch projects.
+
+---
+
+## 🛠️ Technical Specifications
+
+| Component | Technology | Benefit |
+| :--- | :--- | :--- |
+| **Language** | 🦀 Pure Rust | Memory safety, zero-cost abstractions, extreme speed. |
+| **Vector Engine** | 🧬 Cortex (HNSW) | Privacy-first local embeddings (MiniLM) for agent discovery. |
+| **Search** | 🔗 Hybrid (BM25 + Vector) | Combines keyword precision with semantic understanding. |
+| **Deployment** | 🪄 Universal Bootstrap | Cross-platform (Win/Mac/Linux) deployment in seconds. |
+| **Security** | 🛡️ OWASP-Mapped Scans | Static analysis for hardcoded secrets and injection risks. |
+| **Architecture** | 🧊 Modular State | Namespaced domain sub-structs for high-performance TUI updates. |
+
+---
+
+## 🚀 Get Started
+
+### Quick Install
+Ensure you have Rust installed, then:
 ```bash
-cargo run --release
-# Or run the pre-built binary
-./raios
+git clone https://github.com/alazndy/r-ai-os.git
+cd r-ai-os
+cargo install --path . --force
 ```
 
-### Agent CLI Mode (Headless)
-R-AI-OS can be used by AI agents as a command-line tool:
+### The "One-Touch" Setup
+Replicate your entire AI software factory (90+ agents, 182 skills) on any machine:
 ```bash
-raios rules                   # List all system rules
-raios memory aios             # Fetch specific project memory
-raios projects --json         # Get full project inventory in JSON
-raios view MASTER.md          # Print any file content for context
+raios bootstrap
 ```
+
+---
+
+## 💻 CLI Reference
+
+| Command | Usage | Description |
+| :--- | :--- | :--- |
+| **`task`** | `raios task "optimize db"` | **[NEW]** Routes to the best specialist (e.g., `database_admin`). |
+| **`bootstrap`** | `raios bootstrap` | **[NEW]** Installs Maestro, ECC, Sigmap, and all configs. |
+| **`health`** | `raios health <project>` | Scans for MASTER.md compliance and security leaks. |
+| **`search`** | `raios search "auth logic"` | Semantic search across your entire workspace portfolio. |
+| **`commit`** | `raios commit --push` | Intelligent bulk commit/push for all dirty projects. |
+| **`new`** | `raios new "MyProject"` | Scaffolds a new project following the official anayasa. |
 
 ---
 
 ## 🗺️ Roadmap
 
-- [ ] **Ghost Protocol Integration:** Advanced proxy isolation for agent execution.
-- [ ] **SQLite Migration:** Transitioning from flat JSON files to a robust SQLite backend.
-- [ ] **Visual Telemetry:** Real-time resource usage graphs via `ratatui-widgets`.
+- [x] **Phase 1: Core Evolution** (v1.0 - v1.1) - Workspace mapping and health.
+- [x] **Phase 2: AI OS Kernel** (v1.2.0) - Router, Shield, Instincts, Universal Bootstrap, Modular Namespaced State.
+- [ ] **Phase 3: TUI Mission Control** (v1.3.0) - Real-time visual monitoring (State-synchronized TUI).
+- [ ] **Phase 4: Agent Swarm Mesh** (v1.4.0) - Distributed kernel support for multi-node agent orchestration.
 
 ---
 
-## 📦 Installation
-
-```bash
-# Ensure Rust is installed (https://rustup.rs)
-git clone https://github.com/alazndy/R-AI-OS.git
-cd R-AI-OS
-cargo build --release
-```
-
-**License:** MIT  
-**Author:** alazndy <goktugturhan74@gmail.com>
+**Raios is the bridge between human creativity and autonomous execution.** 🦾🛡️⚔️

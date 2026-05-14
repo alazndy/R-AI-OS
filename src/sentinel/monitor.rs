@@ -1,8 +1,7 @@
-use notify::{Watcher, RecursiveMode, Config, Event};
+use anyhow::Result;
+use notify::{Event, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
-use std::time::Duration;
-use anyhow::Result;
 
 pub struct FileMonitor {
     pub project_path: PathBuf,
@@ -25,10 +24,10 @@ impl FileMonitor {
         })?;
 
         watcher.watch(&self.project_path, RecursiveMode::Recursive)?;
-        
+
         // Note: In a real implementation, the watcher needs to be kept alive.
         // For aiosd integration, we'll store this in the daemon's state.
-        
+
         Ok(rx)
     }
 }

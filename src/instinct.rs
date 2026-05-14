@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct InstinctData {
@@ -18,7 +18,7 @@ impl InstinctEngine {
     pub fn init() -> Self {
         let home = dirs::home_dir().expect("Home dir not found");
         let path = home.join(".agents").join("instincts.json");
-        
+
         let data = if path.exists() {
             let content = std::fs::read_to_string(&path).unwrap_or_default();
             serde_json::from_str(&content).unwrap_or_default()

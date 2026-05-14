@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -11,7 +11,9 @@ pub struct CacheDir {
 }
 
 impl CacheDir {
-    pub fn mb(&self) -> f64 { self.bytes as f64 / 1_048_576.0 }
+    pub fn mb(&self) -> f64 {
+        self.bytes as f64 / 1_048_576.0
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,9 +28,15 @@ pub struct DiskReport {
 }
 
 impl DiskReport {
-    pub fn total_mb(&self)  -> f64 { self.total_bytes  as f64 / 1_048_576.0 }
-    pub fn source_mb(&self) -> f64 { self.source_bytes as f64 / 1_048_576.0 }
-    pub fn cache_mb(&self)  -> f64 { self.cache_bytes  as f64 / 1_048_576.0 }
+    pub fn total_mb(&self) -> f64 {
+        self.total_bytes as f64 / 1_048_576.0
+    }
+    pub fn source_mb(&self) -> f64 {
+        self.source_bytes as f64 / 1_048_576.0
+    }
+    pub fn cache_mb(&self) -> f64 {
+        self.cache_bytes as f64 / 1_048_576.0
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,25 +47,27 @@ pub struct CleanResult {
 }
 
 impl CleanResult {
-    pub fn freed_mb(&self) -> f64 { self.freed_bytes as f64 / 1_048_576.0 }
+    pub fn freed_mb(&self) -> f64 {
+        self.freed_bytes as f64 / 1_048_576.0
+    }
 }
 
 // ─── Cache dir patterns ───────────────────────────────────────────────────────
 
 const CACHE_DIRS: &[(&str, &str)] = &[
-    ("target",           "Rust build"),
-    ("node_modules",     "Node deps"),
-    (".next",            "Next.js cache"),
-    ("dist",             "Build output"),
-    ("build",            "Build output"),
-    (".cache",           "Tool cache"),
-    ("__pycache__",      "Python cache"),
-    (".pytest_cache",    "Pytest cache"),
-    (".mypy_cache",      "Mypy cache"),
-    (".ruff_cache",      "Ruff cache"),
-    (".gradle",          "Gradle cache"),
-    (".kotlin",          "Kotlin cache"),
-    ("vendor",           "Go/PHP vendor"),
+    ("target", "Rust build"),
+    ("node_modules", "Node deps"),
+    (".next", "Next.js cache"),
+    ("dist", "Build output"),
+    ("build", "Build output"),
+    (".cache", "Tool cache"),
+    ("__pycache__", "Python cache"),
+    (".pytest_cache", "Pytest cache"),
+    (".mypy_cache", "Mypy cache"),
+    (".ruff_cache", "Ruff cache"),
+    (".gradle", "Gradle cache"),
+    (".kotlin", "Kotlin cache"),
+    ("vendor", "Go/PHP vendor"),
 ];
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -105,7 +115,8 @@ pub fn analyze(dir: &Path) -> DiskReport {
 pub fn analyze_all(dev_ops: &Path) -> Vec<DiskReport> {
     if let Ok(conn) = crate::db::open_db() {
         if let Ok(projects) = crate::db::load_all_projects(&conn) {
-            let mut reports: Vec<DiskReport> = projects.iter()
+            let mut reports: Vec<DiskReport> = projects
+                .iter()
                 .map(|p| std::path::Path::new(&p.path))
                 .filter(|p| p.exists())
                 .map(analyze)
@@ -121,7 +132,11 @@ pub fn analyze_all(dev_ops: &Path) -> Vec<DiskReport> {
 /// Remove all detected cache directories. Returns what was freed.
 pub fn clean(dir: &Path, dry_run: bool) -> CleanResult {
     let report = analyze(dir);
-    let mut result = CleanResult { cleaned_dirs: vec![], freed_bytes: 0, errors: vec![] };
+    let mut result = CleanResult {
+        cleaned_dirs: vec![],
+        freed_bytes: 0,
+        errors: vec![],
+    };
 
     for cache in &report.cache_dirs {
         if dry_run {
@@ -133,7 +148,9 @@ pub fn clean(dir: &Path, dry_run: bool) -> CleanResult {
                     result.cleaned_dirs.push(cache.path.clone());
                     result.freed_bytes += cache.bytes;
                 }
-                Err(e) => result.errors.push(format!("{}: {}", cache.path.display(), e)),
+                Err(e) => result
+                    .errors
+                    .push(format!("{}: {}", cache.path.display(), e)),
             }
         }
     }
@@ -144,41 +161,56 @@ pub fn clean(dir: &Path, dry_run: bool) -> CleanResult {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 pub fn dir_size(path: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
-    entries.flatten().map(|e| {
-        let p = e.path();
-        if p.is_dir() { dir_size(&p) }
-        else { e.metadata().map(|m| m.len()).unwrap_or(0) }
-    }).sum()
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| {
+            let p = e.path();
+            if p.is_dir() {
+                dir_size(&p)
+            } else {
+                e.metadata().map(|m| m.len()).unwrap_or(0)
+            }
+        })
+        .sum()
 }
 
 const SOURCE_EXTS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "py", "kt", "swift",
-    "go", "java", "cpp", "c", "h", "md", "toml", "yaml", "json",
+    "rs", "ts", "tsx", "js", "jsx", "py", "kt", "swift", "go", "java", "cpp", "c", "h", "md",
+    "toml", "yaml", "json",
 ];
 
 fn walk_source(dir: &Path, largest: &mut Vec<(PathBuf, u64)>, count: &mut usize, bytes: &mut u64) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        if name_str.starts_with('.') { continue; }
-        if CACHE_DIRS.iter().any(|(n, _)| *n == name_str.as_ref()) { continue; }
+        if name_str.starts_with('.') {
+            continue;
+        }
+        if CACHE_DIRS.iter().any(|(n, _)| *n == name_str.as_ref()) {
+            continue;
+        }
 
         if path.is_dir() {
             walk_source(&path, largest, count, bytes);
         } else {
-            let is_source = path.extension()
+            let is_source = path
+                .extension()
                 .and_then(|e| e.to_str())
                 .map(|e| SOURCE_EXTS.contains(&e))
                 .unwrap_or(false);
 
             if is_source {
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                *count  += 1;
-                *bytes  += size;
+                *count += 1;
+                *bytes += size;
                 largest.push((path, size));
             }
         }
@@ -188,9 +220,9 @@ fn walk_source(dir: &Path, largest: &mut Vec<(PathBuf, u64)>, count: &mut usize,
 pub fn human_size(bytes: u64) -> String {
     match bytes {
         b if b >= 1_073_741_824 => format!("{:.1} GB", b as f64 / 1_073_741_824.0),
-        b if b >= 1_048_576     => format!("{:.1} MB", b as f64 / 1_048_576.0),
-        b if b >= 1_024         => format!("{:.0} KB", b as f64 / 1_024.0),
-        b                       => format!("{} B",  b),
+        b if b >= 1_048_576 => format!("{:.1} MB", b as f64 / 1_048_576.0),
+        b if b >= 1_024 => format!("{:.0} KB", b as f64 / 1_024.0),
+        b => format!("{} B", b),
     }
 }
 
@@ -208,8 +240,8 @@ mod tests {
 
     #[test]
     fn human_size_formats() {
-        assert_eq!(human_size(500),           "500 B");
-        assert_eq!(human_size(2048),          "2 KB");
+        assert_eq!(human_size(500), "500 B");
+        assert_eq!(human_size(2048), "2 KB");
         assert_eq!(human_size(2 * 1_048_576), "2.0 MB");
         assert_eq!(human_size(3 * 1_073_741_824), "3.0 GB");
     }
