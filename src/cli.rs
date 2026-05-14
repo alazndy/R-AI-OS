@@ -112,6 +112,9 @@ pub enum Commands {
         /// Scan only the given directory (bypass entities.json)
         #[arg(long)]
         path: Option<String>,
+        /// Watch mode — monitor file changes continuously (Ctrl+C to stop)
+        #[arg(short, long)]
+        watch: bool,
     },
     /// Scaffold a new project following MASTER.md rules
     New {
@@ -364,8 +367,9 @@ pub fn run(cli: Cli) {
             project,
             full,
             path,
+            watch,
         } => {
-            cmd_security(project, full, path, &cfg.dev_ops_path, cli.json);
+            cmd_security(project, full, path, watch, &cfg.dev_ops_path, cli.json);
         }
         Commands::New {
             name,
@@ -972,9 +976,25 @@ fn cmd_security(
     project: Option<String>,
     full: bool,
     scan_path: Option<String>,
+    watch: bool,
     dev_ops: &std::path::Path,
     json: bool,
 ) {
+    // Watch mode: guard a single directory for file changes
+    if watch {
+        let target = scan_path
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        if !target.exists() {
+            eprintln!("Path does not exist: {}", target.display());
+            std::process::exit(1);
+        }
+        if let Err(e) = cmd_security_watch(&target, json) {
+            eprintln!("Guard error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     use crate::security::{scan_project, Severity};
 
     // Collect targets
@@ -1129,6 +1149,126 @@ fn cmd_security(
 
     if !full && all_reports.iter().any(|(_, _, r)| !r.issues.is_empty()) {
         println!("\nUse --full to see individual issues.");
+    }
+}
+
+fn cmd_security_watch(path: &std::path::Path, json: bool) -> anyhow::Result<()> {
+    use crate::security::{scan_file, WATCHED_EXTS};
+    use notify::{RecursiveMode, Watcher};
+    use std::sync::mpsc::channel;
+
+    let (tx, rx) = channel();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        let _ = tx.send(res);
+    })?;
+    watcher.watch(path, RecursiveMode::Recursive)?;
+
+    eprintln!("Guard watching {} (Ctrl+C to stop)", path.display());
+
+    loop {
+        match rx.recv() {
+            Ok(Ok(event)) => {
+                use notify::EventKind;
+                let is_relevant = matches!(
+                    event.kind,
+                    EventKind::Modify(_) | EventKind::Create(_)
+                );
+                if !is_relevant {
+                    continue;
+                }
+                for file_path in &event.paths {
+                    let ext = file_path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("");
+                    if !WATCHED_EXTS.contains(&ext) {
+                        continue;
+                    }
+                    let issues = scan_file(file_path);
+                    print_guard_result(file_path, &issues, json);
+                    if !issues.is_empty() {
+                        send_guard_toast(file_path, &issues);
+                    }
+                }
+            }
+            Ok(Err(e)) => eprintln!("[guard] watcher error: {e}"),
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
+fn print_guard_result(
+    path: &std::path::Path,
+    issues: &[crate::security::SecurityIssue],
+    json: bool,
+) {
+    if json {
+        if issues.is_empty() {
+            return;
+        }
+        let out: Vec<serde_json::Value> = issues
+            .iter()
+            .map(|i| {
+                serde_json::json!({
+                    "file": path.display().to_string(),
+                    "line": i.line,
+                    "owasp": i.owasp,
+                    "severity": i.severity.label(),
+                    "title": i.title,
+                    "snippet": i.snippet
+                })
+            })
+            .collect();
+        match serde_json::to_string_pretty(&out) {
+            Ok(j) => println!("{j}"),
+            Err(e) => eprintln!("JSON error: {e}"),
+        }
+        return;
+    }
+    if issues.is_empty() {
+        eprintln!("  {} clean", path.display());
+        return;
+    }
+    for issue in issues {
+        eprintln!(
+            "⚠ {} [{}] {} — {}:{}",
+            issue.severity.label(),
+            issue.owasp,
+            issue.title,
+            path.display(),
+            issue.line.unwrap_or(0)
+        );
+        if let Some(ref s) = issue.snippet {
+            eprintln!("   \"{}\"", s);
+        }
+    }
+}
+
+fn send_guard_toast(path: &std::path::Path, issues: &[crate::security::SecurityIssue]) {
+    let top = match issues.first() {
+        Some(i) => i,
+        None => return,
+    };
+    let filename = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let body = format!(
+        "{} · {} in {}:{}",
+        top.owasp,
+        top.title,
+        filename,
+        top.line.unwrap_or(0)
+    );
+    let summary = format!("[RAIOS GUARD] {}", top.severity.label());
+
+    if let Err(e) = notify_rust::Notification::new()
+        .summary(&summary)
+        .body(&body)
+        .show()
+    {
+        eprintln!("[guard] toast failed (non-fatal): {e}");
     }
 }
 
