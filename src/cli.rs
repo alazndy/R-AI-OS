@@ -28,10 +28,16 @@ pub enum Commands {
         /// Filter by name
         name: Option<String>,
     },
-    /// Print project memory.md files
+    /// Semantic search or print project memory.md files
     Memory {
-        /// Project name filter
+        /// Project name filter (omit to list all)
         project: Option<String>,
+        /// Semantic search query across all memory/AGENTS/MASTER/CLAUDE files
+        #[arg(short, long)]
+        query: Option<String>,
+        /// Number of results to show
+        #[arg(short = 'n', long, default_value = "5")]
+        top: usize,
     },
     /// Print mempalace.yaml
     Mempalace,
@@ -310,7 +316,9 @@ pub fn run(cli: Cli) {
     let cmd = cli.command.expect("Subcommand missing");
     match cmd {
         Commands::Rules { name } => cmd_rules(name, &cfg.master_md_path, cli.json),
-        Commands::Memory { project } => cmd_memory(project, &cfg.dev_ops_path, cli.json),
+        Commands::Memory { project, query, top } => {
+            cmd_memory(project, query, top, &cfg.dev_ops_path, cli.json);
+        }
         Commands::Mempalace => cmd_mempalace(&cfg.dev_ops_path, cli.json),
         Commands::Projects => cmd_projects(&cfg.dev_ops_path, cli.json),
         Commands::Agents => cmd_agents(cli.json),
@@ -456,14 +464,25 @@ fn cmd_rules(filter: Option<String>, master_md: &Path, json: bool) {
     }
 }
 
-fn cmd_memory(project: Option<String>, dev_ops: &std::path::Path, json: bool) {
+fn cmd_memory(
+    project: Option<String>,
+    query: Option<String>,
+    top: usize,
+    dev_ops: &std::path::Path,
+    json: bool,
+) {
+    if let Some(q) = query {
+        cmd_memory_search(&q, top, dev_ops, json);
+        return;
+    }
+
     let files = discover_memory_files(dev_ops, 100);
     let mut results = Vec::new();
 
-    if let Some(query) = project {
-        let q = query.to_lowercase();
+    if let Some(filter) = project {
+        let f = filter.to_lowercase();
         for m in files {
-            if m.name.to_lowercase().contains(&q) {
+            if m.name.to_lowercase().contains(&f) {
                 if json {
                     results.push(m);
                 } else {
@@ -487,6 +506,86 @@ fn cmd_memory(project: Option<String>, dev_ops: &std::path::Path, json: bool) {
 
     if json {
         println!("{}", serde_json::to_string_pretty(&results).unwrap());
+    }
+}
+
+fn cmd_memory_search(query: &str, top: usize, dev_ops: &std::path::Path, json: bool) {
+    use crate::cortex::{Cortex, MEMORY_PATTERNS};
+
+    let mut cortex = match Cortex::init() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Cortex init failed: {e}. Falling back to plain listing.");
+            return;
+        }
+    };
+
+    if cortex.chunk_count() == 0 {
+        eprintln!("Cortex index is empty — indexing memory files first…");
+        match cortex.index_memory_files(dev_ops) {
+            Ok(n) => eprintln!("Indexed {n} memory file(s)."),
+            Err(e) => eprintln!("Index error: {e}"),
+        }
+    }
+
+    let results = match cortex.search_with_filter(query, top, MEMORY_PATTERNS) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Search error: {e}");
+            return;
+        }
+    };
+
+    if results.is_empty() {
+        eprintln!("No memory entries found for query. Try: raios cortex index");
+        return;
+    }
+
+    if json {
+        let json_out: Vec<serde_json::Value> = results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let project = std::path::Path::new(&r.path)
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                serde_json::json!({
+                    "rank": i + 1,
+                    "score": r.score,
+                    "project": project,
+                    "file": r.path,
+                    "line": r.start_line,
+                    "snippet": r.text.trim()
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json_out).unwrap());
+    } else {
+        for (i, r) in results.iter().enumerate() {
+            let score_pct = (r.score * 100.0) as u32;
+            let filename = std::path::Path::new(&r.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let project = std::path::Path::new(&r.path)
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let snippet = r.text
+                .trim()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(120)
+                .collect::<String>();
+            println!("[{}] {}%  {} / {}:{}", i + 1, score_pct, project, filename, r.start_line);
+            println!("    \"{}\"", snippet);
+            println!();
+        }
     }
 }
 
@@ -1027,19 +1126,32 @@ fn cmd_security(
     }
 }
 
-fn cmd_search(query: &str, top_k: usize, _reindex: bool, dev_ops: &Path, json: bool) {
-    if !json {
-        println!("🧠 Cortex: Indexing workspace...");
+fn cmd_search(query: &str, top_k: usize, reindex: bool, dev_ops: &Path, json: bool) {
+    // 1. Initialise Cortex (loads persisted store from disk)
+    let mut cortex = crate::cortex::Cortex::init().unwrap();
+
+    let needs_index = reindex || cortex.chunk_count() == 0;
+
+    if needs_index {
+        if !json {
+            if reindex {
+                println!("🧠 Cortex: Re-indexing workspace (forced)...");
+            } else {
+                println!("🧠 Cortex: First run — building index (this may take a minute)...");
+            }
+        }
+        let indexed = cortex.index_workspace(dev_ops).unwrap_or(0);
+        if !json {
+            println!("✅ Indexed {} chunks. Searching...\n", indexed);
+        }
+    } else if !json {
+        println!("🧠 Cortex: {} chunks loaded from cache. Searching...\n", cortex.chunk_count());
     }
 
-    // 1. Initialise & Index
-    let mut cortex = crate::cortex::Cortex::init().unwrap();
-    let _ = cortex.index_workspace(dev_ops);
-
-    // 2. Semantic Hits
+    // 2. Semantic Hits (vector search)
     let vector_hits = cortex.search(query, top_k).unwrap_or_default();
 
-    // 3. BM25 Hits
+    // 3. BM25 Hits (keyword search)
     let bm25_hits = {
         let idx = crate::indexer::ProjectIndex::build(dev_ops).unwrap();
         idx.search(query)
