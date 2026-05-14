@@ -30,6 +30,8 @@ const INDEXED_EXTS: &[&str] = &[
     "md", "rs", "ts", "tsx", "js", "jsx", "py", "toml", "json", "yaml", "yml", "go",
 ];
 
+/// File name patterns used for memory-targeted indexing and search.
+/// Exact filename match (case-sensitive). Used by `index_memory_files` and `search_with_filter`.
 pub const MEMORY_PATTERNS: &[&str] = &["memory.md", "AGENTS.md", "MASTER.md", "CLAUDE.md"];
 
 /// Hard cap: never index more than this many files in one call.
@@ -224,8 +226,10 @@ impl Cortex {
         for entry in walker {
             let name = entry.file_name().to_string_lossy();
             if MEMORY_PATTERNS.iter().any(|p| name == *p) {
-                if self.index_file(entry.path()).unwrap_or(false) {
-                    indexed += 1;
+                match self.index_file(entry.path()) {
+                    Ok(true) => indexed += 1,
+                    Ok(false) => {}
+                    Err(e) => eprintln!("[cortex] failed to index {}: {e}", entry.path().display()),
                 }
             }
         }
@@ -246,17 +250,17 @@ impl Cortex {
         filename_patterns: &[&str],
     ) -> Result<Vec<VectorResult>> {
         let emb = self.embedder.embed_one(query)?;
-        let candidates = self.engine.query(&emb, top_k * 10);
+        let candidates = self.engine.query(&emb, top_k.saturating_mul(10));
         let mut filtered: Vec<VectorResult> = candidates
             .into_iter()
             .filter(|r| filename_patterns.iter().any(|pat| r.path.ends_with(pat)))
-            .take(top_k)
             .collect();
         filtered.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        filtered.truncate(top_k);
         Ok(filtered)
     }
 
