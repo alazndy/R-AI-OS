@@ -494,14 +494,14 @@ fn static_scan(root: &Path, issues: &mut Vec<SecurityIssue>, checks_run: &mut us
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file());
 
+    let compiled = compiled_pattern_regexes();
+
     for entry in walker {
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-        let patterns_for_ext: Vec<&Pattern> =
-            PATTERNS.iter().filter(|p| p.exts.contains(&ext)).collect();
-
-        if patterns_for_ext.is_empty() {
+        let has_patterns = PATTERNS.iter().any(|p| p.exts.contains(&ext));
+        if !has_patterns {
             continue;
         }
 
@@ -512,10 +512,13 @@ fn static_scan(root: &Path, issues: &mut Vec<SecurityIssue>, checks_run: &mut us
 
         *checks_run += 1;
 
-        for pattern in &patterns_for_ext {
-            let re = match regex_lite::Regex::new(pattern.pattern) {
-                Ok(r) => r,
-                Err(_) => continue,
+        for (pattern, re_opt) in PATTERNS.iter().zip(compiled.iter()) {
+            if !pattern.exts.contains(&ext) {
+                continue;
+            }
+            let re = match re_opt {
+                Some(r) => r,
+                None => continue,
             };
 
             for (line_no, line) in content.lines().enumerate() {

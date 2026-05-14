@@ -319,7 +319,11 @@ pub fn run(cli: Cli) {
     let cmd = cli.command.expect("Subcommand missing");
     match cmd {
         Commands::Rules { name } => cmd_rules(name, &cfg.master_md_path, cli.json),
-        Commands::Memory { project, query, top } => {
+        Commands::Memory {
+            project,
+            query,
+            top,
+        } => {
             cmd_memory(project, query, top, &cfg.dev_ops_path, cli.json);
         }
         Commands::Mempalace => cmd_mempalace(&cfg.dev_ops_path, cli.json),
@@ -584,7 +588,8 @@ fn cmd_memory_search(query: &str, top: usize, dev_ops: &std::path::Path, json: b
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let snippet = r.text
+            let snippet = r
+                .text
                 .trim()
                 .lines()
                 .next()
@@ -592,7 +597,14 @@ fn cmd_memory_search(query: &str, top: usize, dev_ops: &std::path::Path, json: b
                 .chars()
                 .take(120)
                 .collect::<String>();
-            println!("[{}] {}%  {} / {}:{}", i + 1, score_pct, project, filename, r.start_line);
+            println!(
+                "[{}] {}%  {} / {}:{}",
+                i + 1,
+                score_pct,
+                project,
+                filename,
+                r.start_line
+            );
             println!("    \"{}\"", snippet);
             println!();
         }
@@ -1151,18 +1163,12 @@ fn cmd_security_watch(path: &std::path::Path, json: bool) -> anyhow::Result<()> 
         match rx.recv() {
             Ok(Ok(event)) => {
                 use notify::EventKind;
-                let is_relevant = matches!(
-                    event.kind,
-                    EventKind::Modify(_) | EventKind::Create(_)
-                );
+                let is_relevant = matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_));
                 if !is_relevant {
                     continue;
                 }
                 for file_path in &event.paths {
-                    let ext = file_path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("");
+                    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
                     if !WATCHED_EXTS.contains(&ext) {
                         continue;
                     }
@@ -1182,32 +1188,47 @@ fn cmd_security_watch(path: &std::path::Path, json: bool) -> anyhow::Result<()> 
 
 fn print_security_report(report: &crate::security::SecurityReport, json: bool) {
     if json {
-        let issues: Vec<serde_json::Value> = report.issues.iter().map(|i| {
-            serde_json::json!({
-                "owasp": i.owasp,
-                "severity": i.severity.label(),
-                "title": i.title,
-                "file": i.file.as_ref().map(|p| p.display().to_string()),
-                "line": i.line,
-                "snippet": i.snippet
+        let issues: Vec<serde_json::Value> = report
+            .issues
+            .iter()
+            .map(|i| {
+                serde_json::json!({
+                    "owasp": i.owasp,
+                    "severity": i.severity.label(),
+                    "title": i.title,
+                    "file": i.file.as_ref().map(|p| p.display().to_string()),
+                    "line": i.line,
+                    "snippet": i.snippet
+                })
             })
-        }).collect();
+            .collect();
         match serde_json::to_string_pretty(&issues) {
             Ok(j) => println!("{j}"),
             Err(e) => eprintln!("JSON error: {e}"),
         }
         return;
     }
-    println!("Security scan: score={}/100 grade={}", report.score, report.grade);
+    println!(
+        "Security scan: score={}/100 grade={}",
+        report.score, report.grade
+    );
     if report.issues.is_empty() {
         println!("No issues found");
         return;
     }
     for issue in &report.issues {
-        let file_info = issue.file.as_ref()
+        let file_info = issue
+            .file
+            .as_ref()
             .map(|p| format!(" — {}:{}", p.display(), issue.line.unwrap_or(0)))
             .unwrap_or_default();
-        println!("⚠ {} [{}] {}{}", issue.severity.label(), issue.owasp, issue.title, file_info);
+        println!(
+            "⚠ {} [{}] {}{}",
+            issue.severity.label(),
+            issue.owasp,
+            issue.title,
+            file_info
+        );
         if let Some(ref s) = issue.snippet {
             println!("   \"{}\"", s);
         }
@@ -1307,7 +1328,10 @@ fn cmd_search(query: &str, top_k: usize, reindex: bool, dev_ops: &Path, json: bo
             println!("✅ Indexed {} chunks. Searching...\n", indexed);
         }
     } else if !json {
-        println!("🧠 Cortex: {} chunks loaded from cache. Searching...\n", cortex.chunk_count());
+        println!(
+            "🧠 Cortex: {} chunks loaded from cache. Searching...\n",
+            cortex.chunk_count()
+        );
     }
 
     // 2. Semantic Hits (vector search)
