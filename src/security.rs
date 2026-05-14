@@ -270,6 +270,11 @@ const SKIP_DIRS: &[&str] = &[
     ".turbo",
 ];
 
+/// File extensions monitored in `--watch` mode.
+pub const WATCHED_EXTS: &[&str] = &[
+    "rs", "ts", "js", "tsx", "jsx", "py", "env", "json", "toml", "yaml", "yml",
+];
+
 // ─── semgrep tool dispatch ────────────────────────────────────────────────────
 
 /// Run semgrep if available. Returns true if it ran (even with 0 findings).
@@ -367,6 +372,46 @@ pub fn scan_project(path: &Path) -> SecurityReport {
         project_type,
         checks_run,
     }
+}
+
+/// Scan a single file for OWASP security patterns.
+/// Returns empty Vec if the extension is not in WATCHED_EXTS or file cannot be read.
+pub fn scan_file(path: &Path) -> Vec<SecurityIssue> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if !WATCHED_EXTS.contains(&ext) {
+        return vec![];
+    }
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    let patterns_for_ext: Vec<&Pattern> =
+        PATTERNS.iter().filter(|p| p.exts.contains(&ext)).collect();
+
+    let mut issues = Vec::new();
+    for pattern in &patterns_for_ext {
+        let re = match regex_lite::Regex::new(pattern.pattern) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for (line_no, line) in content.lines().enumerate() {
+            if re.is_match(line) {
+                let snippet = line.trim().chars().take(80).collect::<String>();
+                issues.push(SecurityIssue {
+                    owasp: pattern.owasp,
+                    title: pattern.title,
+                    severity: pattern.severity.clone(),
+                    file: Some(path.to_path_buf()),
+                    line: Some(line_no + 1),
+                    snippet: Some(snippet),
+                });
+                break;
+            }
+        }
+    }
+    issues
 }
 
 // ─── Detection ────────────────────────────────────────────────────────────────
@@ -794,5 +839,40 @@ mod tests {
             ProjectType::Python,
             "Manifest should override heuristic"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_scan_file {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn watched_exts_contains_expected() {
+        assert!(WATCHED_EXTS.contains(&"rs"));
+        assert!(WATCHED_EXTS.contains(&"env"));
+        assert!(WATCHED_EXTS.contains(&"ts"));
+        assert!(WATCHED_EXTS.contains(&"py"));
+        assert!(!WATCHED_EXTS.contains(&"png"));
+    }
+
+    #[test]
+    fn scan_file_detects_hardcoded_secret() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".env").unwrap();
+        writeln!(f, r#"api_key = "sk-abc123456789abcdef""#).unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            !issues.is_empty(),
+            "Expected at least one issue for hardcoded api_key"
+        );
+        assert!(issues.iter().any(|i| i.owasp == "A02"));
+    }
+
+    #[test]
+    fn scan_file_clean_file_returns_empty() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
+        writeln!(f, "fn main() {{ println!(\"hello\"); }}").unwrap();
+        let issues = scan_file(f.path());
+        assert!(issues.is_empty(), "Expected no issues for clean file");
     }
 }
