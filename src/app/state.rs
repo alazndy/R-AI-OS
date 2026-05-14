@@ -76,6 +76,7 @@ pub enum BgMsg {
     AgentStatusReady(AgentStatus),
     WizardActions(Vec<WizardAction>),
     WizardDone,
+    GitActionDone { project: String, action: String, ok: bool, message: String },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -162,7 +163,8 @@ pub struct PortfolioStats {
     pub archived: usize,
     pub dirty: usize,
     pub no_memory: usize,
-    pub local_only: usize,
+    pub no_sigmap: usize,
+    pub no_github: usize,
     pub grade_a: usize,
     pub grade_b: usize,
     pub grade_c: usize,

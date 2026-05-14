@@ -184,7 +184,7 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     let git_color = if app.project_panel_focus { GREEN } else { DIM };
     let [git_area, stats_area] = Layout::vertical([
         Constraint::Min(0),
-        Constraint::Length(6),
+        Constraint::Length(14),
     ])
     .areas(right_area);
 
@@ -229,34 +229,96 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
         version_text.push_str(&format!(" ({})", nick));
     }
 
-    let stats = vec![
+    let health = app.health_report.iter().find(|h| h.name == proj.name);
+
+    let grade_color = |g: &str| match g {
+        "A" => GREEN, "B" => CYAN, "C" => AMBER, _ => RED,
+    };
+
+    let comp_span = health.map(|h| {
+        let label = format!("{} ({}/100)", h.compliance_grade,
+            h.compliance_score.unwrap_or(0));
+        Span::styled(label, Style::new().fg(grade_color(&h.compliance_grade)).bold())
+    }).unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
+
+    let sec_span = health.map(|h| {
+        let g = h.security_grade.as_deref().unwrap_or("-");
+        let label = if h.security_issue_count > 0 {
+            format!("{} ({} issues)", g, h.security_issue_count)
+        } else {
+            format!("{} ✓", g)
+        };
+        Span::styled(label, Style::new().fg(grade_color(g)))
+    }).unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
+
+    let rf_span = health.map(|h| {
+        let label = if h.refactor_high_count > 0 {
+            format!("{} (⚠ {} HIGH)", h.refactor_grade, h.refactor_high_count)
+        } else {
+            format!("{} ✓", h.refactor_grade)
+        };
+        Span::styled(label, Style::new().fg(grade_color(&h.refactor_grade)))
+    }).unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
+
+    let mem_color  = if health.map(|h| h.has_memory).unwrap_or(false)  { GREEN } else { RED };
+    let sig_color  = if health.map(|h| h.has_sigmap).unwrap_or(false)  { GREEN } else { AMBER };
+    let mem_text   = if health.map(|h| h.has_memory).unwrap_or(false)  { "✓ memory.md" } else { "✗ memory.md" };
+    let sig_text   = if health.map(|h| h.has_sigmap).unwrap_or(false)  { "✓ SIGMAP.md" } else { "✗ SIGMAP.md" };
+
+    let mut stats = vec![
         Line::from(vec![
             Span::styled(" Status  ", Style::new().fg(DIM)),
             Span::styled(proj.status.as_str(), Style::new().fg(sc).bold()),
-            Span::styled("  Ver ", Style::new().fg(DIM)),
+            Span::styled("  ", Style::new()),
             Span::styled(version_text, Style::new().fg(CYAN).bold()),
         ]),
         Line::from(vec![
-            Span::styled(" Cat     ", Style::new().fg(DIM)),
-            Span::styled(cat, Style::new().fg(MID)),
+            Span::styled(" GitHub  ", Style::new().fg(DIM)),
+            Span::styled(format!("⭐{}  ", proj.stars.unwrap_or(0)), Style::new().fg(AMBER)),
+            Span::styled(proj.last_commit.as_deref().unwrap_or("no commits"), Style::new().fg(DIM)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Comp    ", Style::new().fg(DIM)),
+            comp_span,
+        ]),
+        Line::from(vec![
+            Span::styled(" Sec     ", Style::new().fg(DIM)),
+            sec_span,
+        ]),
+        Line::from(vec![
+            Span::styled(" Refactor", Style::new().fg(DIM)),
+            rf_span,
         ]),
         Line::from(vec![
             Span::styled(" Graph   ", Style::new().fg(DIM)),
             graph_status,
         ]),
+        Line::from(""),
         Line::from(vec![
-            Span::styled(" GitHub  ", Style::new().fg(DIM)),
-            Span::styled(format!("⭐ {}  ", proj.stars.unwrap_or(0)), Style::new().fg(AMBER)),
-            Span::styled(proj.last_commit.as_deref().unwrap_or("never"), Style::new().fg(DIM)),
-        ]),
-        Line::from(vec![
-            Span::styled(" Path    ", Style::new().fg(DIM)),
-            Span::styled(
-                proj.local_path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
-                Style::new().fg(DIM),
-            ),
+            Span::styled(format!(" {:<8} ", mem_text), Style::new().fg(mem_color)),
+            Span::styled(sig_text, Style::new().fg(sig_color)),
         ]),
     ];
+
+    // Constitution issues (first 2)
+    if let Some(h) = health {
+        if !h.constitution_issues.is_empty() {
+            stats.push(Line::from(Span::styled(" Constitution issues:", Style::new().fg(AMBER))));
+            for issue in h.constitution_issues.iter().take(2) {
+                stats.push(Line::from(Span::styled(
+                    format!("  ⚠ {}", issue),
+                    Style::new().fg(AMBER),
+                )));
+            }
+            if h.constitution_issues.len() > 2 {
+                stats.push(Line::from(Span::styled(
+                    format!("  +{} more", h.constitution_issues.len() - 2),
+                    Style::new().fg(DIM),
+                )));
+            }
+        }
+    }
     frame.render_widget(Paragraph::new(Text::from(stats)), stats_area);
 
     // Footer

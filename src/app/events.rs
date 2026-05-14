@@ -119,6 +119,44 @@ impl App {
                     self.add_activity("System", "Manual health refresh requested", "Info");
                 }
             }
+            KeyCode::Char('c') => {
+                if let Some(h) = self.health_report.get(self.health_cursor).cloned() {
+                    if h.git_dirty == Some(true) {
+                        let tx   = self.tx.clone();
+                        let path = h.path.clone();
+                        let name = h.name.clone();
+                        self.sync_status = Some(format!("Committing {}...", name));
+                        thread::spawn(move || {
+                            let r = crate::core::git::commit(&path, "chore: raios update", true);
+                            tx.send(BgMsg::GitActionDone {
+                                project: name,
+                                action:  "commit".into(),
+                                ok:      r.ok,
+                                message: r.message,
+                            }).ok();
+                        });
+                    } else {
+                        self.sync_status = Some("Nothing to commit (working tree clean)".into());
+                    }
+                }
+            }
+            KeyCode::Char('p') => {
+                if let Some(h) = self.health_report.get(self.health_cursor).cloned() {
+                    let tx   = self.tx.clone();
+                    let path = h.path.clone();
+                    let name = h.name.clone();
+                    self.sync_status = Some(format!("Pushing {}...", name));
+                    thread::spawn(move || {
+                        let r = crate::core::git::push(&path);
+                        tx.send(BgMsg::GitActionDone {
+                            project: name,
+                            action:  "push".into(),
+                            ok:      r.ok,
+                            message: r.message,
+                        }).ok();
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -324,8 +362,9 @@ impl App {
                             "archived" | "legacy" => stats.archived += 1,
                             _ => stats.active += 1,
                         }
-                        if p.github.is_none() { stats.local_only += 1; }
+                        if p.github.is_none() { stats.no_github += 1; }
                         if !p.local_path.join("memory.md").exists() { stats.no_memory += 1; }
+                        if !p.local_path.join("SIGMAP.md").exists() { stats.no_sigmap += 1; }
                         if crate::filebrowser::git_is_dirty(&p.local_path) == Some(true) {
                             stats.dirty += 1;
                             *cat_dirty.entry(p.category.clone()).or_insert(0) += 1;
@@ -499,6 +538,19 @@ impl App {
                 self.wizard_running = false;
                 self.wizard_step = crate::setup_wizard::WizardStep::Done;
             }
+            BgMsg::GitActionDone { project, action, ok, message } => {
+                let status = if ok {
+                    format!("✓ {} {} — {}", action, project, message)
+                } else {
+                    format!("✗ {} {} failed: {}", action, project, message)
+                };
+                self.sync_status = Some(status.clone());
+                self.add_activity(
+                    "Git",
+                    &status,
+                    if ok { "Info" } else { "Warning" },
+                );
+            }
             BgMsg::FileChanged(path) => {
                 // Bouncing Limit takibi: _session_notes.md değiştiğinde ardışık HANDOVER kontrolü yap
                 if path.file_name().and_then(|n| n.to_str()) == Some("_session_notes.md") {
@@ -608,20 +660,6 @@ impl App {
             }
         }
 
-        if self.state == AppState::Dashboard && self.menu_cursor == 2 && key.code == KeyCode::Char('f') {
-            if let Some(ref report) = self.compliance {
-                if !report.violations.is_empty() && !self.is_fixing {
-                    self.is_fixing = true;
-                    self.fix_status = Some("Claude fixing issues...".into());
-                    self.add_activity("Agent", "Initiating Auto-Fix with Claude Code", "Warning");
-                    let tx = self.tx.clone();
-                    thread::spawn(move || {
-                        thread::sleep(std::time::Duration::from_secs(3));
-                        tx.send(BgMsg::SyncDone("Auto-Fix Complete: Issues resolved".into())).ok();
-                    });
-                }
-            }
-        }
 
         match self.state {
             AppState::Search => self.handle_key_search(key),

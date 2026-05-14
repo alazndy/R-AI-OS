@@ -196,7 +196,7 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
             format!(" ♻ high:{} ", rf_high_total),
             Style::new().fg(if rf_high_total > 0 { AMBER } else { GREEN }),
         ),
-        Span::styled("  [↑↓] nav  [r] refresh  [Esc] back", Style::new().fg(DIM)),
+        Span::styled("  [↑↓] nav  [Enter] detail  [c] commit  [p] push  [r] refresh  [Esc] back", Style::new().fg(DIM)),
     ]))
     .block(Block::new().borders(Borders::TOP).border_style(Style::new().fg(DIM)));
     frame.render_widget(footer, footer_area);
