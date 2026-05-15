@@ -250,37 +250,71 @@ fn extract_date(content: &str) -> String {
     "—".into()
 }
 
+fn normalize_status(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    if lower.contains("production") {
+        return "production".into();
+    }
+    if lower.contains("active") || lower.contains("aktif") {
+        return "active".into();
+    }
+    if lower.contains("early") || lower.contains("erken") {
+        return "early".into();
+    }
+    if lower.contains("legacy") {
+        return "legacy".into();
+    }
+    "—".into()
+}
+
 fn extract_status(content: &str) -> String {
     let mut in_recent = false;
     for line in content.lines() {
         let t = line.trim();
 
-        // Find "Son Durum", "Yaptıkları", "Aktif" sections
-        if t.contains("Son Durum") || t.starts_with("## Son") {
+        // Turkish: "Son Durum" / English: "Current Status"
+        if t.contains("Son Durum")
+            || t.starts_with("## Son")
+            || t.contains("Current Status")
+            || t.starts_with("## Current")
+        {
             in_recent = true;
             continue;
         }
-        // Stop at next section
         if in_recent && (t.starts_with("## ") || t.starts_with("# ")) {
             break;
         }
-        if in_recent && (t.starts_with("- ") || t.starts_with("* ")) {
-            let s = t[2..].trim().to_string();
-            if !s.is_empty() && s != "—" {
-                let truncated: String = s.chars().take(80).collect();
-                return truncated;
+        if in_recent {
+            // English: "- Status: production" or Turkish: "- Durum: active"
+            if let Some(val) = t
+                .strip_prefix("- Status:")
+                .or_else(|| t.strip_prefix("- Durum:"))
+            {
+                let normalized = normalize_status(val.trim());
+                if normalized != "—" {
+                    return normalized;
+                }
+            }
+            // Bullet containing a bare status keyword
+            if t.starts_with("- ") || t.starts_with("* ") {
+                let normalized = normalize_status(t[2..].trim());
+                if normalized != "—" {
+                    return normalized;
+                }
             }
         }
     }
 
-    // Fallback: first bullet anywhere
+    // Fallback: scan entire file for "- Status:" line
     for line in content.lines() {
         let t = line.trim();
-        if t.starts_with("- ") && !t.contains("Tarih") && !t.contains("agent") {
-            let s = t[2..].trim();
-            if !s.is_empty() && s.len() > 3 {
-                let truncated: String = s.chars().take(80).collect();
-                return truncated;
+        if let Some(val) = t
+            .strip_prefix("- Status:")
+            .or_else(|| t.strip_prefix("Status:"))
+        {
+            let normalized = normalize_status(val.trim());
+            if normalized != "—" {
+                return normalized;
             }
         }
     }
@@ -408,5 +442,34 @@ mod tests {
         tmp_proj(&dir, &["memory.md"]);
         fs::create_dir_all(dir.join("src")).unwrap();
         assert!(is_project_root(&dir));
+    }
+
+    #[test]
+    fn normalize_status_english_format() {
+        assert_eq!(normalize_status("production"), "production");
+        assert_eq!(normalize_status("**Production-ready.** 7 modules"), "production");
+        assert_eq!(normalize_status("active development"), "active");
+        assert_eq!(normalize_status("early stage"), "early");
+        assert_eq!(normalize_status("legacy system"), "legacy");
+        assert_eq!(normalize_status("Date: 2026-05-15"), "—");
+        assert_eq!(normalize_status("Active agent: Claude"), "active");
+    }
+
+    #[test]
+    fn extract_status_english_current_status() {
+        let content = "# R-AI-OS Memory\n\n## Current Status\n- Date: 2026-05-15\n- Status: **Production-ready.** blah\n";
+        assert_eq!(extract_status(content), "production");
+    }
+
+    #[test]
+    fn extract_status_turkish_son_durum() {
+        let content = "# Proje\n\n## Son Durum\n- Tarih: 2026-05-15\n- production\n";
+        assert_eq!(extract_status(content), "production");
+    }
+
+    #[test]
+    fn extract_status_garbage_returns_dash() {
+        let content = "# Proje\n\n## Notes\n- Some note about the project\n";
+        assert_eq!(extract_status(content), "—");
     }
 }

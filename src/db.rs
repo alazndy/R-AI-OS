@@ -201,7 +201,7 @@ pub fn upsert_project(
          ON CONFLICT(path) DO UPDATE SET
              name=excluded.name, category=excluded.category,
              github=COALESCE(excluded.github, github),
-             status=excluded.status,
+             status=CASE WHEN excluded.status IN ('production','active','early','legacy') THEN excluded.status ELSE status END,
              stars=COALESCE(excluded.stars, stars),
              last_commit=COALESCE(excluded.last_commit, last_commit),
              version=COALESCE(excluded.version, version),
