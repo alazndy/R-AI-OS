@@ -253,6 +253,11 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: InstinctCmd,
     },
+    /// Show GitHub Actions CI/CD status for a project
+    Ci {
+        /// Project name or path (default: current directory)
+        project: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -476,6 +481,9 @@ pub fn run(cli: Cli) {
         Commands::Instinct { cmd } => {
             cmd_instinct(cmd, &cfg.dev_ops_path, cli.json);
         }
+        Commands::Ci { project } => {
+            cmd_ci(project, &cfg.dev_ops_path, cli.json);
+        }
     }
 }
 
@@ -556,13 +564,15 @@ fn cmd_instinct_list(path: Option<std::path::PathBuf>, json: bool) {
 }
 
 fn cmd_instinct_suggest(project: Option<String>, dev_ops: &std::path::Path, _json: bool) {
-    use crate::instinct::{append_to_memory_md, suggest_from_health, InstinctEngine};
     use crate::health::check_project;
+    use crate::instinct::{append_to_memory_md, suggest_from_health, InstinctEngine};
 
     let projects = crate::entities::load_entities(dev_ops);
     let target = if let Some(ref name) = project {
         let n = name.to_lowercase();
-        projects.into_iter().find(|p| p.name.to_lowercase().contains(&n))
+        projects
+            .into_iter()
+            .find(|p| p.name.to_lowercase().contains(&n))
     } else {
         let cwd = std::env::current_dir().unwrap_or_default();
         projects.into_iter().find(|p| p.local_path == cwd)
@@ -2605,5 +2615,98 @@ fn cmd_git(cmd: GitCommands, dev_ops: &Path, json: bool) {
                 eprintln!("✗ {}", r.message);
             }
         }
+    }
+}
+
+fn cmd_ci(project: Option<String>, dev_ops: &std::path::Path, json: bool) {
+    use crate::core::ci::get_ci_status;
+
+    let project_path = if let Some(ref name) = project {
+        let projects = crate::entities::load_entities(dev_ops);
+        let n = name.to_lowercase();
+        let found = projects.into_iter().find(|p| {
+            p.name.to_lowercase().contains(&n)
+                || p.local_path.to_string_lossy().to_lowercase().contains(&n)
+        });
+        match found {
+            Some(p) => p.local_path,
+            None => {
+                eprintln!("Project not found: {}", name);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        std::env::current_dir().unwrap_or_default()
+    };
+
+    match get_ci_status(&project_path) {
+        Ok(report) => print_ci_report(&report, json),
+        Err(e) => eprintln!("CI error: {e}"),
+    }
+}
+
+fn print_ci_report(report: &crate::core::ci::CiReport, json: bool) {
+    if json {
+        let out = serde_json::json!({
+            "run": {
+                "id": report.run.id,
+                "workflow": report.run.workflow_name,
+                "status": report.run.status,
+                "conclusion": report.run.conclusion,
+                "branch": report.run.branch,
+                "created_at": report.run.created_at,
+                "url": report.run.html_url
+            },
+            "jobs": report.jobs.iter().map(|j| serde_json::json!({
+                "name": j.name,
+                "status": j.status,
+                "conclusion": j.conclusion,
+                "duration_secs": j.duration_secs
+            })).collect::<Vec<_>>()
+        });
+        match serde_json::to_string_pretty(&out) {
+            Ok(s) => println!("{s}"),
+            Err(e) => eprintln!("JSON error: {e}"),
+        }
+        return;
+    }
+
+    let status_icon = match report.run.conclusion.as_deref() {
+        Some("success") => "✓",
+        Some("failure") => "✗",
+        Some("cancelled") => "○",
+        _ => "…",
+    };
+
+    println!(
+        "CI: {} @ {} — {} {}  ({})",
+        report.run.workflow_name,
+        report.run.branch,
+        status_icon,
+        report.run.conclusion.as_deref().unwrap_or(&report.run.status),
+        &report.run.created_at.get(..10).unwrap_or(&report.run.created_at)
+    );
+
+    for job in &report.jobs {
+        let icon = match job.conclusion.as_deref() {
+            Some("success") => "✓",
+            Some("failure") => "✗",
+            Some("skipped") => "-",
+            _ => "…",
+        };
+        let dur = match job.duration_secs {
+            Some(s) if s >= 60 => format!("{}m {}s", s / 60, s % 60),
+            Some(s) => format!("{}s", s),
+            None => String::new(),
+        };
+        if matches!(job.conclusion.as_deref(), Some("failure")) {
+            println!("  {} {:<25} {}  ← FAILED", icon, job.name, dur);
+        } else {
+            println!("  {} {:<25} {}", icon, job.name, dur);
+        }
+    }
+
+    if !report.run.html_url.is_empty() {
+        println!("\n  {}", report.run.html_url);
     }
 }
