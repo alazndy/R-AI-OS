@@ -1,92 +1,100 @@
 # R-AI-OS Memory
 
-## Son Durum
-- Tarih: 2026-05-14
-- Aktif agent: Claude (v1.2.0 tamamlandı, E2E testler geçti)
-- Sürüm: v1.2.0
-- Sürüm Adı: Core Toolkit
-- Durum: **Production-ready.** 7 core modül, 32 CLI komutu, 23 MCP tool, 66 unit test — hepsi yeşil. TUI zenginleştirildi, health view'dan git commit/push yapılabiliyor. `raios_project_info` aggregate MCP tool hazır.
+## Current Status
+- Date: 2026-05-15
+- Active agent: Claude (v1.3.0 — AI Intelligence Layer tamamlandı)
+- Version: v1.3.0
+- Version Name: AI Intelligence Layer
+- Status: **Production-ready.** 35 CLI commands, 23 MCP tools, 75 unit tests — all green. 3 yeni özellik: Hybrid Memory Search, Sentinel Guard Watch, Instinct Automation.
 
 ## Claude
-### Yaptıkları
-- **Faz 1A: SQLite Migration:** `entities.json` yapısı tamamen `rusqlite` tabanlı SQLite veritabanına taşındı.
-- **Faz 1B: Manifest System:** `.raios.yaml` manifest desteği eklendi.
-- **Faz 2: Embedded Workers:** `workers.rs` modülü ile daemon olmadan standalone çalışma sağlandı.
-- **Faz 3A: Event-driven Sentinel:** `notify` kütüphanesiyle olay güdümlü yapıya geçildi.
-- **Faz 4: Security & Testing:** Semgrep + 22 unit test.
-- **Refactor Scanner:** `src/refactor_scan.rs` — satır sayısı, unwrap zinciri, nesting derinliği tespiti. Health view'a REFACTOR kolonu, dashboard'a uyarı eklendi.
-- **Core Toolkit (v1.2.0):** `src/core/` katmanı — 7 modül, tümü CLI + MCP tool olarak erişilebilir:
-  - `git.rs` — status, log, diff, commit, push, pull, branch, checkout (9 CLI, 4 MCP tool)
-  - `build.rs` — Rust/Node/Python/Go build + test runner (2 CLI, 2 MCP tool)
-  - `deps.rs` — outdated + CVE taraması, cargo audit / npm audit (1 CLI, 1 MCP tool)
-  - `env.rs` — .env vs .env.example diff, eksik/boş key tespiti (1 CLI, 1 MCP tool)
-  - `version.rs` — semver bump, CHANGELOG.md üretimi, git tag (2 CLI, 2 MCP tool)
-  - `process.rs` — port listesi, process listesi, kill-port (2 CLI, 1 MCP tool)
-  - `disk.rs` — proje boyut analizi, cache temizleme (2 CLI, 1 MCP tool)
-- **Aggregate MCP Tools:** `project_info` (tek çağrıda git+health+version+env+disk) + `portfolio_status` (42 proje özet tablosu). Önceki 5-8 tool çağrısı → 1 çağrıya düştü.
-- **TUI Enhancements:** Proje detay paneli health grades + constitution issues + env flags gösteriyor. Health view'da `[c]` commit / `[p]` push kısayolları eklendi.
-- **E2E Test:** 66/66 unit test yeşil. CLI smoke tests geçti. 23 MCP tool doğrulandı.
-- **Toplam:** 32 CLI komutu, 23 MCP tool, 66 unit test
+### Achievements
+- **Phase 1A: SQLite Migration:** `entities.json` structure fully migrated to `rusqlite` based SQLite database.
+- **Phase 1B: Manifest System:** `.raios.yaml` manifest support added.
+- **Phase 2: Embedded Workers:** Standalone operation achieved without daemon via `workers.rs` module.
+- **Phase 3A: Event-driven Sentinel:** Switched to event-driven structure with `notify` library.
+- **Phase 4: Security & Testing:** Semgrep + 22 unit tests.
+- **Refactor Scanner:** `src/refactor_scan.rs` — detection of line count, unwrap chains, nesting depth. REFACTOR column added to health view, warning added to dashboard.
+- **Core Toolkit (v1.2.0):** `src/core/` layer — 7 modules, all accessible via CLI + MCP tool:
+  - `git.rs` — status, log, diff, commit, push, pull, branch, checkout (9 CLI, 4 MCP tools)
+  - `build.rs` — Rust/Node/Python/Go build + test runner (2 CLI, 2 MCP tools)
+  - `deps.rs` — outdated + CVE scanning, cargo audit / npm audit (1 CLI, 1 MCP tool)
+  - `env.rs` — .env vs .env.example diff, missing/empty key detection (1 CLI, 1 MCP tool)
+  - `version.rs` — semver bump, CHANGELOG.md generation, git tag (2 CLI, 2 MCP tools)
+  - `process.rs` — port list, process list, kill-port (2 CLI, 1 MCP tool)
+  - `disk.rs` — project size analysis, cache cleaning (2 CLI, 1 MCP tool)
+- **Aggregate MCP Tools:** `project_info` (git+health+version+env+disk in one call) + `portfolio_status` (summary table for 42 projects). Reduced 5-8 tool calls to 1.
+- **TUI Enhancements:** Project detail panel shows health grades + constitution issues + env flags. Added `[c]` commit / `[p]` push shortcuts in health view.
+- **E2E Test:** 66/66 unit tests green. CLI smoke tests passed. 23 MCP tools verified.
+- **Total:** 32 CLI commands, 23 MCP tools, 66 unit tests
+- **v1.3.0 — AI Intelligence Layer (2026-05-15):**
+  - **Faz 1 — Hybrid Memory Search:** `raios memory --query "<text>" --top N` — tüm projelerin memory/AGENTS/MASTER/CLAUDE.md dosyalarında semantic arama. `Cortex`'e `search_with_filter()` + `index_memory_files()` + `MEMORY_PATTERNS` eklendi. Auto-index, JSON çıktı desteği. OnceLock ile regex önbelleği.
+  - **Faz 2 — Sentinel Guard Watch:** `raios security [--watch] [--json]` — tek seferlik OWASP taraması veya sürekli dosya izleme. `notify-rust` ile Windows toast bildirimi. `scan_file()` + `WATCHED_EXTS` + `compiled_pattern_regexes()` (OnceLock). 11 uzantı izleniyor.
+  - **Faz 3 — Instinct Automation:** `raios instinct add/list/suggest` — manuel + otomatik instinct yönetimi. `suggest_from_health()` 6 pattern analizi. `append_to_memory_md()` duplicate-safe. Global `~/.agents/instincts.json` + per-project `memory.md ## Instincts`. Health footer.
+  - **Toplam:** 35 CLI commands, 75 unit tests, 14 yeni commit.
 
 ## Gemini
-### Yaptıkları
-- **SIGMAP Tracking:** R-AI-OS Health Dashboard'a ve SQLite (`health_cache`) veritabanına `has_sigmap` kolonları eklenerek tüm projelerin `sigmap` (imza haritası) durumu merkezi olarak takip edilebilir hale getirildi.
-- **Project Versioning:** Projelere `memory.md` üzerinden otomatik sürüm ve nickname takibi desteği eklendi.
-- **Self-Healing Loop:** `aiosd` üzerine `ValidationWorker` eklendi. `cargo check` ve compliance sonuçları MCP üzerinden raporlanabiliyor.
-- **Architectural Memory:** `ask_architect` MCP aracı ile RAG tabanlı mimari danışmanlık katmanı eklendi.
-- **Workspace Sync:** MASTER.md ve yollar `Dev_Ops_New` yapısına göre güncellendi.
-- **UI Performance Fix:** All Projects ekranındaki takılma, senkronize I/O kaldırılarak ve cache kullanılarak giderildi.
-- **Visual Grid Refactor:** All Projects ekranı modern bir `Table` yapısına kavuşturuldu.
+### Achievements
+- **SIGMAP Tracking:** `has_sigmap` columns added to R-AI-OS Health Dashboard and SQLite (`health_cache`) database to centrally track the `sigmap` status of all projects.
+- **Project Versioning:** Added support for automatic version and nickname tracking via `memory.md`.
+- **Self-Healing Loop:** Added `ValidationWorker` to `aiosd`. `cargo check` and compliance results can be reported via MCP.
+- **Architectural Memory:** Added RAG-based architectural consultancy layer with `ask_architect` MCP tool.
+- **Workspace Sync:** MASTER.md and paths updated according to `Dev_Ops_New` structure.
+- **UI Performance Fix:** Lag in the All Projects screen resolved by removing synchronous I/O and using cache.
+- **Visual Grid Refactor:** All Projects screen upgraded to a modern `Table` structure.
 
 ## Antigravity
-### Yaptıkları
-- **Table-Based Health UI:** Dashboard listesi `ratatui::Table` ile yenilendi.
-- **Binary Recovery:** Windows üzerindeki dosya kilitlenme sorunları süreç yönetimiyle çözüldü.
+### Achievements
+- **Table-Based Health UI:** Dashboard list refreshed with `ratatui::Table`.
+- **Binary Recovery:** File locking issues on Windows resolved via process management.
 - **Refactor (High Priority):** 
-  - `app/events.rs` içerisindeki kopya kod (dead code) temizlendi.
-  - `daemon/server.rs` içerisindeki `Cortex::init().unwrap()` asenkron panik riski giderildi (hata yönetimi eklendi).
-  - `app/mod.rs` içerisindeki `run_graphify` metodunda shell command injection zafiyeti giderildi.
-  - `app/mod.rs` içerisindeki proje sıralama işlemlerindeki O(n²) filesystem I/O operasyonu engellenip cache üzerinden okunması sağlandı.
-- **Events Monolith Modularization:** `src/app/events.rs` (1700+ satır) parçalanarak `src/app/events/` modülüne taşındı. `actions`, `bg_messages`, `commands`, `keyboard` ve `helpers` olarak ayrıştırıldı. SRP uyumu sağlandı.
-- **UI Component Extraction:** `src/ui/dashboard.rs` (900+ satır) parçalanarak `src/ui/panels/` altına 13 ayrı modüle ayrıştırıldı. Dashboard orkestrasyonu komponent tabanlı hale getirildi.
-- **Clippy Cleanup:** Toplamda 140+ linter uyarısı ve teknik borç temizlendi.
-
+  - Duplicate code (dead code) in `app/events.rs` cleaned up.
+  - Async panic risk in `daemon/server.rs` (`Cortex::init().unwrap()`) resolved (error handling added).
+  - Shell command injection vulnerability in `run_graphify` method in `app/mod.rs` resolved.
+  - O(n²) filesystem I/O operations in project sorting in `app/mod.rs` prevented and switched to reading from cache.
+- **Events Monolith Modularization:** `src/app/events.rs` (1700+ lines) broken down and moved to `src/app/events/` module. Separated into `actions`, `bg_messages`, `commands`, `keyboard`, and `helpers`. SRP compliance achieved.
+- **UI Component Extraction:** `src/ui/dashboard.rs` (900+ lines) broken down into 13 separate modules under `src/ui/panels/`. Dashboard orchestration made component-based.
+- **Clippy Cleanup:** Total of 140+ linter warnings and technical debt cleared.
 
 ## Plan
-### Tamamlananlar
-- [x] SQLite Geçişi (Phase 1A).
-- [x] Manifest Sistemi (Phase 1B).
+### Completed
+- [x] SQLite Transition (Phase 1A).
+- [x] Manifest System (Phase 1B).
 - [x] Embedded Workers (Phase 2).
 - [x] Event-driven Sentinel (Phase 3A).
 - [x] Security + 22 Unit Tests (Phase 4).
 - [x] v1.1.6 Visual Grid (Enhanced).
-- [x] Refactor Scanner — health entegrasyonu.
-- [x] v1.2.0 Core Toolkit — 7 modül, 32 CLI, 23 MCP tool.
+- [x] Refactor Scanner — health integration.
+- [x] v1.2.0 Core Toolkit — 7 modules, 32 CLI, 23 MCP tools.
 - [x] project_info + portfolio_status aggregate MCP tools.
-- [x] TUI — proje detay zenginleştirildi, health view git actions.
-- [x] E2E test — 66/66 unit test, CLI smoke, 23 MCP tool.
+- [x] TUI — project detail enriched, health view git actions.
+- [x] E2E test — 66/66 unit tests, CLI smoke, 23 MCP tools.
 - [x] Phase 1 Refactor: `events.rs` monolith modularization.
 - [x] Phase 2 Refactor: `dashboard.rs` UI panel modularization.
 
-### Devam Edenler
+### In Progress
 - [ ] 83-field AppState refactor (Phase 3B — Sub-states).
-- [ ] portfolio_status status kolonunu DB'den düzgün çek (bazı projelerde memory.md içeriği karışıyor).
-### Sıradakiler
-- [ ] CI/CD durum takibi (GitHub Actions API).
-- [ ] Health view'da build/test/deps kolonları.
-- [ ] Proje detay görünümünde bağımlılık grafiği.
+- [ ] Pull portfolio_status status column correctly from DB (memory.md content getting mixed up in some projects).
 
-## Karar Günlüğü
+### Next Steps
+- [ ] CI/CD status tracking (GitHub Actions API).
+- [ ] build/test/deps columns in health view.
+- [ ] Dependency graph in project detail view.
 
-| Tarih | Agent | Karar | Neden |
+## Decision Log
+
+| Date | Agent | Decision | Rationale |
 |-------|-------|-------|-------|
-| 2026-05-08 | Claude | SQLite Persistence | JSON dosya yazımındaki race condition'ları önlemek ve O(1) sorgu performansı için. |
-| 2026-05-08 | Claude | Embedded Workers | Uygulamanın daemon olmadan standalone çalışabilmesi için. |
-| 2026-05-08 | Gemini | Non-blocking Render | UI thread'inin disk I/O bekleyerek donmasını engellemek için. |
-| 2026-05-08 | Claude | Event-driven Sentinel | CPU yükünü azaltmak ve anlık tepki için. |
-| 2026-05-14 | Claude | AI-free Core Toolkit | Raios'un AI API'sine bağımlı olmaması; her feature CLI + MCP olarak erişilebilir olsun diye. |
-| 2026-05-14 | Claude | project_info aggregate tool | Agent'ların 5-8 tool yerine 1 çağrıyla tüm proje bilgisine erişmesi için (~5x token tasarrufu). |
-| 2026-05-14 | Claude | 66 unit test baseline | Her modülün izole test edilebilmesi; regresyon tespiti için CI hazırlığı. |
+| 2026-05-08 | Claude | SQLite Persistence | To prevent race conditions in JSON file writing and for O(1) query performance. |
+| 2026-05-08 | Claude | Embedded Workers | For the application to run standalone without a daemon. |
+| 2026-05-08 | Gemini | Non-blocking Render | To prevent UI thread from freezing while waiting for disk I/O. |
+| 2026-05-08 | Claude | Event-driven Sentinel | To reduce CPU load and for instant response. |
+| 2026-05-14 | Claude | AI-free Core Toolkit | Raios should not depend on AI API; every feature should be accessible as CLI + MCP. |
+| 2026-05-14 | Claude | project_info aggregate tool | For agents to access all project info in 1 call instead of 5-8 (~5x token savings). |
+| 2026-05-14 | Claude | 66 unit test baseline | Each module should be isolated for testing; CI preparation for regression detection. |
+| 2026-05-15 | Claude | OnceLock regex cache | Regex'leri hot-path'te her seferinde compile etmemek için OnceLock ile tek seferlik derleme. |
+| 2026-05-15 | Claude | Hybrid Memory = Cortex filter | Ayrı indeks yerine mevcut Cortex'e search_with_filter() eklendi — tek indeks, minimal diff. |
+| 2026-05-15 | Claude | Instinct dual storage | Global JSON (hızlı erişim) + memory.md ## Instincts (okunabilirlik) — her ikisine de yaz. |
 
 <!-- MCP update by antigravity at 2026-05-14 15:55 -->
 - [2026-05-14 15:55] **Refactoring & Modularization Phase 1 Completed**: Successfully refactored the monolithic `src/app/events.rs` (1700+ lines) into a modular directory structure under `src/app/events/`.
@@ -107,16 +115,21 @@
 - UI architecture is now component-based, significantly improving maintainability.
 
 <!-- MCP update by antigravity at 2026-05-14 16:46 -->
-- [2026-05-14 16:46] **R-AI-OS State Architecture Modularization Completed**: Sistem çapında state mimarisi refactor'ı başarıyla tamamlandı. Artık tüm uygulama durumu 'App' struct'ı altında isim alanlarına (ui, system, projects, health, inventory, tasks, editor) ayrılmış durumda.
+- [2026-05-14 16:46] **R-AI-OS State Architecture Modularization Completed**: System-wide state architecture refactor successfully completed. Application state is now compartmentalized under the 'App' struct in namespaces (ui, system, projects, health, inventory, tasks, editor).
 
-Yapılanlar:
-1. `src/app/state.rs` üzerinde devasa bir yapısal değişiklik yapıldı. Global field'lar mantıksal sub-struct'lara taşındı.
-2. `src/app/mod.rs`, `src/app/events/keyboard.rs`, `src/app/events/commands.rs`, `src/app/events/bg_messages.rs` ve `src/app/events/actions.rs` dosyaları yeni mimariye göre tamamen güncellendi.
-3. Tüm UI panelleri (`src/ui/panels/*.rs`) ve ana UI bileşenleri (`projects.rs`, `search.rs`) isim alanlı erişimlere geçirildi.
-4. `cargo check` ile tüm tip uyumsuzlukları ve path hataları giderildi.
-5. `Editor` ve `RuleCategory` struct'larına `Debug` trait'leri eklendi, `Editor` için `Default` implemente edildi.
+Actions:
+1. Significant structural changes made to `src/app/state.rs`. Global fields moved to logical sub-structs.
+2. `src/app/mod.rs`, `src/app/events/keyboard.rs`, `src/app/events/commands.rs`, `src/app/events/bg_messages.rs`, and `src/app/events/actions.rs` fully updated according to the new architecture.
+3. All UI panels (`src/ui/panels/*.rs`) and main UI components (`projects.rs`, `search.rs`) transitioned to namespaced access.
+4. All type mismatches and path errors resolved with `cargo check`.
+5. `Debug` traits added to `Editor` and `RuleCategory` structs, `Default` implemented for `Editor`.
 
-Sonuç: Daha temiz, modüler ve yönetilebilir bir codebase. Tüm özellikler (Project Detail, Health Check, Git Diff Approval, Task Dispatch) yeni yapı üzerinde sorunsuz çalışır hale getirildi.
+Result: A cleaner, modular, and more manageable codebase. All features (Project Detail, Health Check, Git Diff Approval, Task Dispatch) are running smoothly on the new structure.
 
 <!-- MCP update by antigravity at 2026-05-14 16:50 -->
-- [2026-05-14 16:50] **Final Validation & Documentation Update Completed**: Tüm testler (66/66) başarıyla geçti. README.md yeni modüler mimari bilgileriyle güncellendi. State refactor'ı sonrası sistemin tam stabiliteye ulaştığı doğrulandı. Değişiklikler Git'e gönderilmeye hazır.
+- [2026-05-14 16:50] **Final Validation & Documentation Update Completed**: All tests (66/66) passed successfully. README.md updated with new modular architecture details. Full stability achieved post-state refactor. Changes ready for Git push.
+## Instincts
+- OnceLock ile regex'leri bir kez compile et — scan_file hot-path'te her event'te yeniden derleme yapma
+- search_with_filter'da önce tüm filtered sonuçları topla, sort et, sonra truncate et — take(top_k) sort'tan önce kullanma
+- Yeni CLI komutları eklerken JSON serialization'da unwrap() kullanma — match + eprintln kullan
+- GateGuard hook her Bash/Write/Edit öncesi facts gerektiriyor — her tool call öncesi 4 fact sun
