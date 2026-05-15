@@ -22,6 +22,29 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+pub enum InstinctCmd {
+    /// Add a rule manually to global instincts + project memory.md
+    Add {
+        /// The rule text
+        rule: String,
+        /// Project path (default: current dir)
+        #[arg(short, long)]
+        path: Option<std::path::PathBuf>,
+    },
+    /// List all instincts (global + current project)
+    List {
+        /// Project path (default: current dir)
+        #[arg(short, long)]
+        path: Option<std::path::PathBuf>,
+    },
+    /// Suggest instincts from health analysis with interactive approval
+    Suggest {
+        /// Project name
+        project: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum Commands {
     /// Print master rule files
     Rules {
@@ -224,6 +247,11 @@ pub enum Commands {
     Git {
         #[command(subcommand)]
         cmd: GitCommands,
+    },
+    /// Manage project instincts (learned rules)
+    Instinct {
+        #[command(subcommand)]
+        cmd: InstinctCmd,
     },
 }
 
@@ -445,6 +473,165 @@ pub fn run(cli: Cli) {
         Commands::Git { cmd } => {
             cmd_git(cmd, &cfg.dev_ops_path, cli.json);
         }
+        Commands::Instinct { cmd } => {
+            cmd_instinct(cmd, &cfg.dev_ops_path, cli.json);
+        }
+    }
+}
+
+fn cmd_instinct(cmd: InstinctCmd, dev_ops: &std::path::Path, json: bool) {
+    match cmd {
+        InstinctCmd::Add { rule, path } => cmd_instinct_add(&rule, path, json),
+        InstinctCmd::List { path } => cmd_instinct_list(path, json),
+        InstinctCmd::Suggest { project } => cmd_instinct_suggest(project, dev_ops, json),
+    }
+}
+
+fn cmd_instinct_add(rule: &str, path: Option<std::path::PathBuf>, json: bool) {
+    use crate::instinct::{append_to_memory_md, InstinctEngine};
+
+    let mut engine = InstinctEngine::init();
+    engine.add_rule(rule.to_string());
+    if let Err(e) = engine.save() {
+        eprintln!("Failed to save instinct: {e}");
+        return;
+    }
+
+    let project_path = path.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let memory_ok = match append_to_memory_md(&project_path, rule) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("Warning: memory.md write failed: {e}");
+            false
+        }
+    };
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"status":"ok","rule":rule,"memory_written":memory_ok})
+        );
+    } else if memory_ok {
+        println!("Saved to ~/.agents/instincts.json");
+        println!("Appended to {}/memory.md", project_path.display());
+    } else {
+        println!("Saved to ~/.agents/instincts.json only");
+    }
+}
+
+fn cmd_instinct_list(path: Option<std::path::PathBuf>, json: bool) {
+    use crate::instinct::{load_project_rules, InstinctEngine};
+
+    let engine = InstinctEngine::init();
+    let global = &engine.data.learned_rules;
+    let project_path = path.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let project = load_project_rules(&project_path);
+
+    if json {
+        let out = serde_json::json!({"global": global, "project": project});
+        match serde_json::to_string_pretty(&out) {
+            Ok(j) => println!("{j}"),
+            Err(e) => eprintln!("JSON error: {e}"),
+        }
+        return;
+    }
+
+    println!("Global instincts ({}):", global.len());
+    if global.is_empty() {
+        println!("  (none)");
+    } else {
+        for r in global {
+            println!("  - {r}");
+        }
+    }
+
+    println!("\nProject instincts ({}):", project.len());
+    if project.is_empty() {
+        println!("  (none)");
+    } else {
+        for r in &project {
+            println!("  - {r}");
+        }
+    }
+}
+
+fn cmd_instinct_suggest(project: Option<String>, dev_ops: &std::path::Path, _json: bool) {
+    use crate::instinct::{append_to_memory_md, suggest_from_health, InstinctEngine};
+    use crate::health::check_project;
+
+    let projects = crate::entities::load_entities(dev_ops);
+    let target = if let Some(ref name) = project {
+        let n = name.to_lowercase();
+        projects.into_iter().find(|p| p.name.to_lowercase().contains(&n))
+    } else {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        projects.into_iter().find(|p| p.local_path == cwd)
+    };
+
+    let proj = match target {
+        Some(p) => p,
+        None => {
+            eprintln!("Project not found. Try: raios instinct suggest <project-name>");
+            std::process::exit(1);
+        }
+    };
+
+    println!("Analyzing project: {}...", proj.name);
+    let health = check_project(&proj);
+    let suggestions = suggest_from_health(&health);
+
+    if suggestions.is_empty() {
+        println!("No suggestions — project looks healthy!");
+        return;
+    }
+
+    println!("\nSuggested instincts:");
+    for (i, s) in suggestions.iter().enumerate() {
+        println!("  [{}] {}", i + 1, s);
+    }
+
+    print!("\nAccept? (y=all / 1,2=specific / n=none): ");
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        eprintln!("Could not read input");
+        return;
+    }
+    let input = input.trim().to_lowercase();
+
+    let accepted: Vec<&String> = if input == "y" {
+        suggestions.iter().collect()
+    } else if input == "n" || input.is_empty() {
+        vec![]
+    } else {
+        input
+            .split(',')
+            .filter_map(|s| s.trim().parse::<usize>().ok())
+            .filter(|&i| i >= 1 && i <= suggestions.len())
+            .map(|i| &suggestions[i - 1])
+            .collect()
+    };
+
+    if accepted.is_empty() {
+        println!("No instincts added.");
+        return;
+    }
+
+    let mut engine = InstinctEngine::init();
+    for rule in &accepted {
+        engine.add_rule((*rule).clone());
+        match append_to_memory_md(&proj.local_path, rule) {
+            Ok(()) => println!("Saved: \"{}\"", rule),
+            Err(e) => {
+                eprintln!("Warning: memory.md: {e}");
+                println!("JSON only: \"{}\"", rule);
+            }
+        }
+    }
+    if let Err(e) = engine.save() {
+        eprintln!("Failed to save instincts.json: {e}");
     }
 }
 
@@ -701,19 +888,30 @@ fn cmd_health(project: Option<String>, dev_ops: &std::path::Path, json: bool) {
     }
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&results).unwrap());
+        match serde_json::to_string_pretty(&results) {
+            Ok(j) => println!("{j}"),
+            Err(e) => eprintln!("JSON error: {e}"),
+        }
     } else {
-        for r in results {
+        for r in &results {
             let dirty = match r.git_dirty {
                 Some(true) => "DIRTY",
                 Some(false) => "CLEAN",
                 None => "N/A",
             };
-            let remote = r.remote_url.unwrap_or_else(|| "N/A".to_string());
+            let remote = r.remote_url.as_deref().unwrap_or("N/A");
             println!(
                 "Project: {:<20} | Status: {:<10} | Git: {:<5} | Grade: {} | URL: {}",
                 r.name, r.status, dirty, r.compliance_grade, remote
             );
+            let suggestions = crate::instinct::suggest_from_health(r);
+            if !suggestions.is_empty() {
+                println!(
+                    "  \u{1f4a1} {} instinct suggestion(s) — run: raios instinct suggest {}",
+                    suggestions.len(),
+                    r.name
+                );
+            }
         }
     }
 }
