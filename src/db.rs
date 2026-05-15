@@ -26,6 +26,10 @@ fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "ALTER TABLE health_cache ADD COLUMN refactor_grade TEXT NOT NULL DEFAULT '-'",
     );
+    // Normalize any legacy garbage status values → 'active' (idempotent)
+    let _ = conn.execute_batch(
+        "UPDATE projects SET status = 'active' WHERE status NOT IN ('production','active','early','legacy')",
+    );
     let _ = conn.execute_batch("ALTER TABLE health_cache ADD COLUMN refactor_score INTEGER");
     let _ = conn.execute_batch(
         "ALTER TABLE health_cache ADD COLUMN refactor_high INTEGER NOT NULL DEFAULT 0",

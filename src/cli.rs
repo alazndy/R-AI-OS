@@ -258,6 +258,12 @@ pub enum Commands {
         /// Project name or path (default: current directory)
         project: Option<String>,
     },
+    /// Index or re-index the Cortex semantic memory store
+    CortexIndex {
+        /// Force full re-index even if already indexed
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -483,6 +489,9 @@ pub fn run(cli: Cli) {
         }
         Commands::Ci { project } => {
             cmd_ci(project, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::CortexIndex { force } => {
+            cmd_cortex_index(force, &cfg.dev_ops_path, cli.json);
         }
     }
 }
@@ -2615,6 +2624,40 @@ fn cmd_git(cmd: GitCommands, dev_ops: &Path, json: bool) {
                 eprintln!("✗ {}", r.message);
             }
         }
+    }
+}
+
+fn cmd_cortex_index(force: bool, dev_ops: &std::path::Path, json: bool) {
+    let mut cortex = match crate::cortex::Cortex::init() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Cortex init failed: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if !force && cortex.chunk_count() > 0 {
+        if json {
+            println!("{}", serde_json::json!({"status":"already_indexed","chunks":cortex.chunk_count()}));
+        } else {
+            println!("Cortex already indexed ({} chunks). Use --force to re-index.", cortex.chunk_count());
+        }
+        return;
+    }
+
+    if !json {
+        println!("Indexing workspace… (this may take a minute on first run)");
+    }
+
+    match cortex.index_workspace(dev_ops) {
+        Ok(n) => {
+            if json {
+                println!("{}", serde_json::json!({"status":"ok","indexed":n,"total_chunks":cortex.chunk_count()}));
+            } else {
+                println!("✓ Indexed {} files ({} chunks total)", n, cortex.chunk_count());
+            }
+        }
+        Err(e) => eprintln!("Indexing failed: {e}"),
     }
 }
 
