@@ -34,6 +34,7 @@ const DIM: Color = Color::Rgb(80, 80, 80);
 const MID: Color = Color::Rgb(170, 170, 170);
 const AMBER: Color = Color::Rgb(255, 170, 0);
 const RED: Color = Color::Rgb(255, 80, 80);
+const MAGENTA: Color = Color::Rgb(255, 100, 255);
 const PANEL_BG: Color = Color::Rgb(8, 12, 16);
 const HEADER_BG: Color = Color::Rgb(0, 20, 12);
 

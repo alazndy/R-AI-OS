@@ -160,6 +160,9 @@ pub enum Commands {
         /// Project directory (optional)
         #[arg(short, long)]
         project: Option<String>,
+        /// Force a specific agent (claude, gemini, codex, etc.)
+        #[arg(short, long)]
+        agent: Option<String>,
     },
     /// Install/Bootstrap the entire ECC, Maestro, and system architecture (90+ Agents)
     Bootstrap,
@@ -432,8 +435,9 @@ pub fn run(cli: Cli) {
         Commands::Task {
             description,
             project,
+            agent,
         } => {
-            cmd_task(&description, project);
+            cmd_task(&description, project, agent);
         }
         Commands::Bootstrap => {
             cmd_bootstrap();
@@ -1885,31 +1889,35 @@ The following rule directories complete MASTER.md and apply to all agents:
 **What is best for Goktug is always the newest and fastest.**"#
 }
 
-fn cmd_task(description: &str, project_dir: Option<String>) {
+fn cmd_task(description: &str, project_dir: Option<String>, force_agent: Option<String>) {
     use crate::router::AgentRouter;
-    println!("?? Routing task: {}", description);
+    println!("🔍 Routing task: {}", description);
 
-    let mut router = AgentRouter::init().expect("Failed to init AgentRouter");
-    match router.route(description) {
-        Ok(Some(agent)) => {
-            println!("?? Best specialist found: {}", agent);
-            println!("?? Invoking agent with the task...");
+    let agent = if let Some(a) = force_agent {
+        println!("🎯 Manual agent override: {}", a);
+        a
+    } else {
+        let mut router = AgentRouter::init().expect("Failed to init AgentRouter");
+        match router.route(description) {
+            Ok(Some(a)) => {
+                println!("🤖 Best specialist found: {}", a);
+                a
+            }
+            Ok(None) => {
+                println!("❓ No specific specialist found. Defaulting to gemini.");
+                "gemini".to_string()
+            }
+            Err(e) => {
+                eprintln!("⚠️ Routing error: {}. Defaulting to gemini.", e);
+                "gemini".to_string()
+            }
+        }
+    };
 
-            // Execute the agent via the runner
-            // Note: We use 'gemini' or 'claude' as the base runner and pass the subagent name in the prompt
-            let _prompt = format!(
-                "Use your specialist subagent '{}' to solve this task: {}",
-                agent, description
-            );
-            let _ = crate::agent_runner::run_agent("gemini", project_dir, None);
-            // In a real implementation, we'd pass the prompt to the process stdin or as an argument.
-            // For now, we've identified the agent and started the platform.
-        }
-        Ok(None) => {
-            println!("?? No specific specialist found for this task. Try being more descriptive.")
-        }
-        Err(e) => eprintln!("? Routing error: {}", e),
-    }
+    println!("🚀 Invoking {} with the task...", agent);
+
+    // Execute the agent via the runner
+    let _ = crate::agent_runner::run_agent(&agent, project_dir, None);
 }
 
 // ─── Disk commands ───────────────────────────────────────────────────────────

@@ -23,6 +23,7 @@ impl Task {
         match self.agent.as_deref() {
             Some("claude") => Some("◆C"),
             Some("gemini") => Some("◈G"),
+            Some("codex") => Some("⬣X"),
             Some("antigravity") => Some("⬡A"),
             _ => None,
         }
@@ -64,11 +65,11 @@ fn parse_line(line: &str) -> Option<Task> {
     for word in rest.split_whitespace() {
         if let Some(a) = word.strip_prefix('@') {
             let a_lower = a.to_lowercase();
-            if matches!(a_lower.as_str(), "claude" | "gemini" | "antigravity" | "ag") {
-                agent = Some(if a_lower == "ag" {
-                    "antigravity".into()
-                } else {
-                    a_lower
+            if matches!(a_lower.as_str(), "claude" | "gemini" | "antigravity" | "ag" | "codex" | "cx") {
+                agent = Some(match a_lower.as_str() {
+                    "ag" => "antigravity".into(),
+                    "cx" => "codex".into(),
+                    _ => a_lower,
                 });
             } else {
                 text_parts.push(word); // Unknown @ tag, keep in text
@@ -154,6 +155,7 @@ pub fn dispatch_to_agent(
     // Build the agent command
     let agent_cmd = match agent {
         "gemini" => "gemini",
+        "codex" => "codex",
         "antigravity" => "antigravity",
         _ => "claude",
     };

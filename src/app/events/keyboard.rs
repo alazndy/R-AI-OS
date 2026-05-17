@@ -66,6 +66,13 @@ impl App {
                     }
                     self.ui.show_launcher = false;
                 }
+                KeyCode::Char('x') | KeyCode::Char('X') => {
+                    if let Some(ref proj) = self.projects.active.clone() {
+                        let msg = launch_agent("codex", &proj.local_path);
+                        self.system.sync_status = Some(msg);
+                    }
+                    self.ui.show_launcher = false;
+                }
                 _ => {}
             }
             return Ok(());
@@ -919,7 +926,7 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') => {
                 self.ui.right_panel_focus = false;
             }
-            KeyCode::Char(' ') | KeyCode::Char('x') | KeyCode::Char('X')
+            KeyCode::Char(' ') | KeyCode::Char('v') | KeyCode::Char('V')
                 if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
                     if let Some(task) = self.tasks.list.get_mut(self.tasks.cursor) {
                         task.completed = !task.completed;
@@ -935,6 +942,10 @@ impl App {
             KeyCode::Char('g')
                 if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
                     self.dispatch_task("gemini");
+                }
+            KeyCode::Char('x')
+                if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
+                    self.dispatch_task("codex");
                 }
             KeyCode::Char('a')
                 if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {

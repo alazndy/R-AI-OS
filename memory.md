@@ -39,7 +39,12 @@
 - **Project Versioning:** Added support for automatic version and nickname tracking via `memory.md`.
 - **Self-Healing Loop:** Added `ValidationWorker` to `aiosd`. `cargo check` and compliance results can be reported via MCP.
 - **Architectural Memory:** Added RAG-based architectural consultancy layer with `ask_architect` MCP tool.
-- **Manual Agent Selection:** Enhanced `task` command with `--agent` flag, allowing users to explicitly route tasks to Claude, Gemini, or Codex, bypassing the auto-router when needed.
+- **Manual Agent Selection (Full Integration):**
+  - **CLI:** Added `--agent` flag to `raios task` for explicit routing to Claude, Gemini, or Codex.
+  - **TUI:** Integrated **Codex** into Task Panel `[x]` and Launcher Modal `[X]`.
+  - **TUI Fix:** Toggling task completion moved to `[v]` to resolve shortcut conflict with Codex.
+  - **Backend:** Updated `Task` parser and `dispatch_to_agent` in `src/tasks.rs` to support multi-model workflows.
+  - **Visuals:** Added `MAGENTA` color and `⬣X` badge for Codex identification.
 - **Workspace Sync:** MASTER.md and paths updated according to `Dev_Ops_New` structure.
 - **UI Performance Fix:** Lag in the All Projects screen resolved by removing synchronous I/O and using cache.
 - **Visual Grid Refactor:** All Projects screen upgraded to a modern `Table` structure.
