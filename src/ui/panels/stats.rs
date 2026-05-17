@@ -18,19 +18,22 @@ pub fn render_quick_stats(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(block, area);
 
     let rf_high_total: usize = app
-        .health.report
+        .health
+        .report
         .iter()
         .map(|h| h.refactor_high_count)
         .sum();
     let rf_projects_with_issues: Vec<&str> = app
-        .health.report
+        .health
+        .report
         .iter()
         .filter(|h| h.refactor_high_count > 0)
         .map(|h| h.name.as_str())
         .take(3)
         .collect();
     let rf_projects_total = app
-        .health.report
+        .health
+        .report
         .iter()
         .filter(|h| h.refactor_high_count > 0)
         .count();

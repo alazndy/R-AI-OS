@@ -92,7 +92,8 @@ pub fn render_mempalace_view(frame: &mut Frame, app: &App) {
     let mut current_line_idx = 0;
 
     for (ri, room) in app.mempalace.rooms.iter().enumerate() {
-        let is_room_selected = ri == app.mempalace.room_cursor && app.mempalace.proj_cursor.is_none();
+        let is_room_selected =
+            ri == app.mempalace.room_cursor && app.mempalace.proj_cursor.is_none();
         if is_room_selected {
             selected_line_idx = current_line_idx;
         }
@@ -138,7 +139,8 @@ pub fn render_mempalace_view(frame: &mut Frame, app: &App) {
                 continue;
             }
 
-            let is_proj_selected = ri == app.mempalace.room_cursor && app.mempalace.proj_cursor == Some(pi);
+            let is_proj_selected =
+                ri == app.mempalace.room_cursor && app.mempalace.proj_cursor == Some(pi);
             if is_proj_selected {
                 selected_line_idx = current_line_idx;
             }

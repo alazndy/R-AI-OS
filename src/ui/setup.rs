@@ -68,11 +68,13 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
             app,
             "CLAUDE CODE",
             app.wizard.skip_claude,
-            app.wizard.agent_status
+            app.wizard
+                .agent_status
                 .as_ref()
                 .map(|s| s.claude_installed)
                 .unwrap_or(false),
-            app.wizard.agent_status
+            app.wizard
+                .agent_status
                 .as_ref()
                 .map(|s| s.claude_version.as_str())
                 .unwrap_or(""),
@@ -90,11 +92,13 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
             app,
             "GEMINI CLI",
             app.wizard.skip_gemini,
-            app.wizard.agent_status
+            app.wizard
+                .agent_status
                 .as_ref()
                 .map(|s| s.gemini_installed)
                 .unwrap_or(false),
-            app.wizard.agent_status
+            app.wizard
+                .agent_status
                 .as_ref()
                 .map(|s| s.gemini_version.as_str())
                 .unwrap_or(""),
@@ -107,11 +111,13 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
             app,
             "ANTIGRAVITY",
             app.wizard.skip_antigravity,
-            app.wizard.agent_status
+            app.wizard
+                .agent_status
                 .as_ref()
                 .map(|s| s.antigravity_installed)
                 .unwrap_or(false),
-            app.wizard.agent_status
+            app.wizard
+                .agent_status
                 .as_ref()
                 .map(|s| s.antigravity_version.as_str())
                 .unwrap_or(""),
@@ -326,7 +332,8 @@ fn render_workspace(frame: &mut Frame, area: Rect, app: &App) {
     let base = if app.wizard.dev_ops.is_empty() {
         "Dev_Ops"
     } else {
-        app.wizard.dev_ops
+        app.wizard
+            .dev_ops
             .split(['/', '\\'])
             .next_back()
             .unwrap_or("Dev_Ops")

@@ -42,6 +42,13 @@
 - **Workspace Sync:** MASTER.md and paths updated according to `Dev_Ops_New` structure.
 - **UI Performance Fix:** Lag in the All Projects screen resolved by removing synchronous I/O and using cache.
 - **Visual Grid Refactor:** All Projects screen upgraded to a modern `Table` structure.
+- **Project Documentation Suite:**
+  - **Root README:** Rewrote `README.md` as "The AI OS Kernel" with professional branding, visual badges, and Aura Hardened Edition (v1.3.0) highlights.
+  - **Official Wiki:** Established `docs/WIKI/` structure with `Home.md` index and 4 technical deep-dives:
+    - `01-Architecture-Deep-Dive.md`: Daemon-centric design and Aura Hardened IPC.
+    - `02-Security-Model.md`: Zero-Trust, AgentShield Guard, and Token Auth.
+    - `03-Hybrid-Memory-and-Context.md`: Cortex Engine, BM25 Hybrid Search, and Sigmap Economics.
+    - `04-Async-Workflow-and-Inbox.md`: Non-Blocking philosophy and Diff Inbox Pattern.
 
 ## Antigravity
 ### Achievements
@@ -71,6 +78,7 @@
 - [x] E2E test — 66/66 unit tests, CLI smoke, 23 MCP tools.
 - [x] Phase 1 Refactor: `events.rs` monolith modularization.
 - [x] Phase 2 Refactor: `dashboard.rs` UI panel modularization.
+- [x] Security Model Documentation (`docs/WIKI/02-Security-Model.md`).
 
 ### In Progress
 - [ ] 83-field AppState refactor (Phase 3B — Sub-states).
@@ -133,3 +141,10 @@ Result: A cleaner, modular, and more manageable codebase. All features (Project 
 - search_with_filter'da önce tüm filtered sonuçları topla, sort et, sonra truncate et — take(top_k) sort'tan önce kullanma
 - Yeni CLI komutları eklerken JSON serialization'da unwrap() kullanma — match + eprintln kullan
 - GateGuard hook her Bash/Write/Edit öncesi facts gerektiriyor — her tool call öncesi 4 fact sun
+
+<!-- MCP update by antigravity at 2026-05-17 16:27 -->
+- [2026-05-17 16:27] **Enflow Orchestrator Script Integration**: - Created run.js, run.sh, and run.bat to orchestrate both the frontend and backend.
+- Added auto-restart mechanism that automatically kills processes on ports 3000 and 3002.
+- Colored process logging (green/cyan prefixing) for clean console observation.
+- Added dev/start scripts to backend package.json.
+- Updated memory.md and pushed all changes safely to git origin.

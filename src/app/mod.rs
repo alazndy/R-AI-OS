@@ -137,10 +137,8 @@ pub struct App {
     // Editor & File View
     pub editor: EditorState,
 
-
     // Health Dashboard
     pub health: HealthState,
-
 
     // Projects
     pub projects: ProjectState,
@@ -155,7 +153,6 @@ pub struct App {
 
     pub timeline: TimelineState,
 
-
     // MemPalace
     pub mempalace: MempalaceState,
 
@@ -164,14 +161,6 @@ pub struct App {
 
     // File Watcher
     pub _watcher: Option<Box<dyn Watcher>>,
-
-
-
-
-
-
-
-
 
     // Setup Wizard
     pub wizard: WizardState,
@@ -337,7 +326,8 @@ impl App {
             }),
             SortMode::Grade => indices.sort_by(|&a, &b| {
                 let get_grade = |p: &crate::entities::EntityProject| {
-                    self.health.report
+                    self.health
+                        .report
                         .iter()
                         .find(|h| h.name == p.name)
                         .map(|h| h.compliance_grade.as_str())
@@ -347,7 +337,8 @@ impl App {
             }),
             SortMode::GitDirty => indices.sort_by(|&a, &b| {
                 let get_dirty = |p: &crate::entities::EntityProject| {
-                    self.health.report
+                    self.health
+                        .report
                         .iter()
                         .find(|h| h.name == p.name)
                         .and_then(|h| h.git_dirty)
@@ -355,12 +346,16 @@ impl App {
                 };
                 get_dirty(&self.projects.list[b]).cmp(&get_dirty(&self.projects.list[a]))
             }),
-            SortMode::Category => {
-                indices.sort_by(|&a, &b| self.projects.list[a].category.cmp(&self.projects.list[b].category))
-            }
-            SortMode::Status => {
-                indices.sort_by(|&a, &b| self.projects.list[a].status.cmp(&self.projects.list[b].status))
-            }
+            SortMode::Category => indices.sort_by(|&a, &b| {
+                self.projects.list[a]
+                    .category
+                    .cmp(&self.projects.list[b].category)
+            }),
+            SortMode::Status => indices.sort_by(|&a, &b| {
+                self.projects.list[a]
+                    .status
+                    .cmp(&self.projects.list[b].status)
+            }),
         }
         indices
     }
@@ -374,7 +369,8 @@ impl App {
 
     fn find_project_path_by_name(&self, name: &str) -> Option<PathBuf> {
         let q = name.to_lowercase();
-        self.projects.list
+        self.projects
+            .list
             .iter()
             .find(|p| p.name.to_lowercase() == q || p.name.to_lowercase().contains(&q))
             .map(|p| p.local_path.clone())
@@ -445,7 +441,8 @@ impl App {
 
     pub(crate) fn get_selected_mempalace_project(&self) -> Option<crate::mempalace::MemProject> {
         let pi = self.mempalace.proj_cursor?;
-        self.mempalace.rooms
+        self.mempalace
+            .rooms
             .get(self.mempalace.room_cursor)?
             .projects
             .get(pi)

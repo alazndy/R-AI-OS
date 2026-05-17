@@ -51,7 +51,12 @@ pub fn render_git_diff_view(frame: &mut Frame, app: &App) {
 
     // Diff Content
     let mut lines = Vec::new();
-    for line in app.projects.git_diff_lines.iter().skip(app.projects.git_diff_scroll as usize) {
+    for line in app
+        .projects
+        .git_diff_lines
+        .iter()
+        .skip(app.projects.git_diff_scroll as usize)
+    {
         if line.starts_with('+') {
             lines.push(Line::from(Span::styled(line, Style::new().fg(GREEN))));
         } else if line.starts_with('-') {

@@ -216,7 +216,8 @@ impl App {
                 self.inventory.agent_rule_groups = groups;
                 // Flatten into agent_files so the file panel still works
                 self.inventory.agent_files = self
-                    .inventory.agent_rule_groups
+                    .inventory
+                    .agent_rule_groups
                     .iter()
                     .flat_map(|g| g.files.iter().cloned())
                     .collect();
@@ -259,7 +260,8 @@ impl App {
             }
             BgMsg::FileChangeRequested { approval } => {
                 self.system.pending_file_changes.push(approval.clone());
-                self.system.pending_change_cursor = self.system.pending_file_changes.len().saturating_sub(1);
+                self.system.pending_change_cursor =
+                    self.system.pending_file_changes.len().saturating_sub(1);
                 self.projects.git_diff_lines = crate::app::editor::simple_diff(
                     &approval.original_content,
                     &approval.new_content,

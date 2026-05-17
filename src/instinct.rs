@@ -110,9 +110,17 @@ pub fn append_to_memory_md(project_path: &std::path::Path, rule: &str) -> anyhow
             .unwrap_or(lines.len());
         lines.insert(insert_pos, format!("- {}", rule));
         let joined = lines.join("\n");
-        if content.ends_with('\n') { format!("{}\n", joined) } else { joined }
+        if content.ends_with('\n') {
+            format!("{}\n", joined)
+        } else {
+            joined
+        }
     } else {
-        format!("{}\n## Instincts\n- {}\n", content.trim_end_matches('\n'), rule)
+        format!(
+            "{}\n## Instincts\n- {}\n",
+            content.trim_end_matches('\n'),
+            rule
+        )
     };
 
     std::fs::write(&memory_path, new_content)?;
@@ -134,7 +142,9 @@ pub fn load_project_rules(project_path: &std::path::Path) -> Vec<String> {
             continue;
         }
         if in_section {
-            if line.starts_with("## ") { break; }
+            if line.starts_with("## ") {
+                break;
+            }
             if let Some(rule) = line.trim().strip_prefix("- ") {
                 rules.push(rule.to_string());
             }
@@ -179,7 +189,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let health = make_bad_health(&tmp);
         let suggestions = suggest_from_health(&health);
-        assert!(!suggestions.is_empty(), "Expected suggestions for bad project");
+        assert!(
+            !suggestions.is_empty(),
+            "Expected suggestions for bad project"
+        );
         assert!(suggestions.iter().any(|s| s.contains("Refactor")));
     }
 
@@ -189,7 +202,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("memory.md"),
             "# Project Memory\n\n## Notes\n- note\n",
-        ).unwrap();
+        )
+        .unwrap();
         append_to_memory_md(tmp.path(), "Never use malloc here").unwrap();
         let content = std::fs::read_to_string(tmp.path().join("memory.md")).unwrap();
         assert!(content.contains("## Instincts"));

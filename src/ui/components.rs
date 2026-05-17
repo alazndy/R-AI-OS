@@ -47,7 +47,8 @@ pub fn render_boot(frame: &mut Frame, app: &App) {
     frame.render_widget(gauge, rows[2]);
 
     let items: Vec<ListItem> = app
-        .system.boot_results
+        .system
+        .boot_results
         .iter()
         .map(|(name, pass)| {
             let (mark, color) = if *pass { ("✓", GREEN) } else { ("✗", RED) };

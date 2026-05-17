@@ -297,7 +297,12 @@ mod tests {
     use crate::cortex::store::VectorResult;
 
     fn make_result(path: &str, score: f32) -> VectorResult {
-        VectorResult { path: path.to_string(), start_line: 1, text: "x".into(), score }
+        VectorResult {
+            path: path.to_string(),
+            start_line: 1,
+            text: "x".into(),
+            score,
+        }
     }
 
     fn filter_by_patterns(results: Vec<VectorResult>, patterns: &[&str]) -> Vec<VectorResult> {
@@ -317,9 +322,9 @@ mod tests {
         ];
         let filtered = filter_by_patterns(results, &["memory.md", "CLAUDE.md"]);
         assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().all(|r| {
-            r.path.ends_with("memory.md") || r.path.ends_with("CLAUDE.md")
-        }));
+        assert!(filtered
+            .iter()
+            .all(|r| { r.path.ends_with("memory.md") || r.path.ends_with("CLAUDE.md") }));
     }
 
     #[test]

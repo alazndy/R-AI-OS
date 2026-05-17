@@ -294,7 +294,8 @@ impl App {
                             .ok();
                         });
                     } else {
-                        self.system.sync_status = Some("Nothing to commit (working tree clean)".into());
+                        self.system.sync_status =
+                            Some("Nothing to commit (working tree clean)".into());
                     }
                 }
             }
@@ -375,17 +376,23 @@ impl App {
                 self.projects.graph_report_scroll -= 1;
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let max = (self.projects.graph_report_lines.len() as u16).saturating_sub(self.height - 6);
+                let max =
+                    (self.projects.graph_report_lines.len() as u16).saturating_sub(self.height - 6);
                 if self.projects.graph_report_scroll < max {
                     self.projects.graph_report_scroll += 1;
                 }
             }
             KeyCode::PageUp => {
-                self.projects.graph_report_scroll = self.projects.graph_report_scroll.saturating_sub(self.height / 2);
+                self.projects.graph_report_scroll = self
+                    .projects
+                    .graph_report_scroll
+                    .saturating_sub(self.height / 2);
             }
             KeyCode::PageDown => {
-                let max = (self.projects.graph_report_lines.len() as u16).saturating_sub(self.height - 6);
-                self.projects.graph_report_scroll = (self.projects.graph_report_scroll + self.height / 2).min(max);
+                let max =
+                    (self.projects.graph_report_lines.len() as u16).saturating_sub(self.height - 6);
+                self.projects.graph_report_scroll =
+                    (self.projects.graph_report_scroll + self.height / 2).min(max);
             }
             _ => {}
         }
@@ -395,7 +402,8 @@ impl App {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 if let Some(pending) = self
-                    .system.pending_file_changes
+                    .system
+                    .pending_file_changes
                     .get(self.system.pending_change_cursor)
                     .cloned()
                 {
@@ -413,11 +421,14 @@ impl App {
                             "Info",
                         );
                     }
-                    self.system.pending_file_changes.remove(self.system.pending_change_cursor);
+                    self.system
+                        .pending_file_changes
+                        .remove(self.system.pending_change_cursor);
                     if self.system.pending_change_cursor >= self.system.pending_file_changes.len()
                         && !self.system.pending_file_changes.is_empty()
                     {
-                        self.system.pending_change_cursor = self.system.pending_file_changes.len() - 1;
+                        self.system.pending_change_cursor =
+                            self.system.pending_file_changes.len() - 1;
                     }
                 }
                 if self.system.pending_file_changes.is_empty() {
@@ -431,7 +442,8 @@ impl App {
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 if let Some(pending) = self
-                    .system.pending_file_changes
+                    .system
+                    .pending_file_changes
                     .get(self.system.pending_change_cursor)
                     .cloned()
                 {
@@ -449,11 +461,14 @@ impl App {
                             "Warning",
                         );
                     }
-                    self.system.pending_file_changes.remove(self.system.pending_change_cursor);
+                    self.system
+                        .pending_file_changes
+                        .remove(self.system.pending_change_cursor);
                     if self.system.pending_change_cursor >= self.system.pending_file_changes.len()
                         && !self.system.pending_file_changes.is_empty()
                     {
-                        self.system.pending_change_cursor = self.system.pending_file_changes.len() - 1;
+                        self.system.pending_change_cursor =
+                            self.system.pending_file_changes.len() - 1;
                     }
                 }
                 if self.system.pending_file_changes.is_empty() {
@@ -472,7 +487,8 @@ impl App {
                 self.projects.git_diff_scroll -= 1;
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let max = (self.projects.git_diff_lines.len() as u16).saturating_sub(self.height - 6);
+                let max =
+                    (self.projects.git_diff_lines.len() as u16).saturating_sub(self.height - 6);
                 if self.projects.git_diff_scroll < max {
                     self.projects.git_diff_scroll += 1;
                 }
@@ -484,7 +500,8 @@ impl App {
                     crate::app::editor::simple_diff(&next.original_content, &next.new_content);
             }
             KeyCode::Right | KeyCode::Char('l')
-                if self.system.pending_change_cursor + 1 < self.system.pending_file_changes.len() =>
+                if self.system.pending_change_cursor + 1
+                    < self.system.pending_file_changes.len() =>
             {
                 self.system.pending_change_cursor += 1;
                 let next = &self.system.pending_file_changes[self.system.pending_change_cursor];
@@ -555,7 +572,9 @@ impl App {
 
             KeyCode::Enter => {
                 if let Some(pi) = self.mempalace.proj_cursor {
-                    let proj_path = self.mempalace.rooms[self.mempalace.room_cursor].projects[pi].path.clone();
+                    let proj_path = self.mempalace.rooms[self.mempalace.room_cursor].projects[pi]
+                        .path
+                        .clone();
                     // Find matching entities project, else create a stub
                     let proj = self
                         .projects
@@ -567,7 +586,9 @@ impl App {
                             let mp = &self.mempalace.rooms[self.mempalace.room_cursor].projects[pi];
                             crate::entities::EntityProject {
                                 name: mp.name.clone(),
-                                category: self.mempalace.rooms[self.mempalace.room_cursor].folder_name.clone(),
+                                category: self.mempalace.rooms[self.mempalace.room_cursor]
+                                    .folder_name
+                                    .clone(),
                                 local_path: proj_path,
                                 github: None,
                                 status: mp.status.clone(),
@@ -605,7 +626,7 @@ impl App {
                         &format!("Launching {} from MemPalace", agent),
                         "Info",
                     );
-                        self.system.sync_status = Some(launch_agent(agent, &proj.path));
+                    self.system.sync_status = Some(launch_agent(agent, &proj.path));
                 }
             }
             _ => {}
@@ -748,7 +769,9 @@ impl App {
             }
 
             KeyCode::Down => {
-                let max = filtered_palette(&self.ui.command_buf).len().saturating_sub(1);
+                let max = filtered_palette(&self.ui.command_buf)
+                    .len()
+                    .saturating_sub(1);
                 if self.ui.palette_cursor < max {
                     self.ui.palette_cursor += 1;
                 }

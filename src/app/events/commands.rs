@@ -36,7 +36,8 @@ impl App {
                 self.projects.list = projects.clone();
                 match crate::entities::save_entities(&self.config.dev_ops_path, projects) {
                     Ok(_) => {
-                        self.system.sync_status = Some("Discovery complete: entities.json updated".into())
+                        self.system.sync_status =
+                            Some("Discovery complete: entities.json updated".into())
                     }
                     Err(e) => self.system.sync_status = Some(format!("Discovery error: {}", e)),
                 }
@@ -110,7 +111,8 @@ impl App {
                 if !arg.is_empty() {
                     let q = arg.to_lowercase();
                     if let Some(proj) = self
-                        .projects.list
+                        .projects
+                        .list
                         .iter()
                         .find(|p| p.name.to_lowercase().contains(&q))
                         .cloned()
@@ -153,7 +155,8 @@ impl App {
                     });
                     let agent_hint = new_task.agent.as_deref().unwrap_or("-");
                     let proj_hint = new_task.project.as_deref().unwrap_or("-");
-                    self.system.sync_status = Some(format!("Task added [{}→{}]", agent_hint, proj_hint));
+                    self.system.sync_status =
+                        Some(format!("Task added [{}→{}]", agent_hint, proj_hint));
                     self.tasks.list.push(new_task);
                     let _ = crate::tasks::save_tasks(&self.config.dev_ops_path, &self.tasks.list);
                 } else if let Some(agent) = arg.strip_prefix("send ") {
@@ -161,7 +164,8 @@ impl App {
                 } else if arg == "load" {
                     if let Ok(tasks) = crate::tasks::load_tasks(&self.config.dev_ops_path) {
                         self.tasks.list = tasks;
-                        self.system.sync_status = Some(format!("{} tasks loaded", self.tasks.list.len()));
+                        self.system.sync_status =
+                            Some(format!("{} tasks loaded", self.tasks.list.len()));
                     }
                 }
             }
@@ -185,7 +189,8 @@ impl App {
                             );
                             if std::fs::write(&vault_file, content).is_ok() {
                                 self.system.vault_projects.push(p.name.clone());
-                                self.system.sync_status = Some(format!("Vault note created: {}", p.name));
+                                self.system.sync_status =
+                                    Some(format!("Vault note created: {}", p.name));
                                 self.add_activity(
                                     "System",
                                     &format!("Created vault note for {}", p.name),
@@ -231,7 +236,8 @@ impl App {
                     let msg = self.run_graphify(&proj.local_path);
                     self.system.sync_status = Some(msg);
                 } else {
-                    self.system.sync_status = Some("Open a project detail first to run graphify".into());
+                    self.system.sync_status =
+                        Some("Open a project detail first to run graphify".into());
                 }
             }
             "/heal" => {
@@ -275,7 +281,8 @@ impl App {
                         self.add_activity("Sentinel", "Self-Correction cycle triggered", "Warning");
                     }
                 } else {
-                    self.system.sync_status = Some("Open a project detail first to run /heal".into());
+                    self.system.sync_status =
+                        Some("Open a project detail first to run /heal".into());
                 }
             }
             _ => {}

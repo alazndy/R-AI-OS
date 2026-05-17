@@ -100,7 +100,8 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
     let selected_style = Style::new().bg(Color::Rgb(0, 40, 30)).fg(GREEN).bold();
 
     let rows: Vec<Row> = app
-        .health.report
+        .health
+        .report
         .iter()
         .enumerate()
         .map(|(i, h)| {
@@ -214,12 +215,14 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
     // --- Footer ---
     let total = app.health.report.len();
     let dirty = app
-        .health.report
+        .health
+        .report
         .iter()
         .filter(|h| h.git_dirty == Some(true))
         .count();
     let avg_score = if total > 0 {
-        app.health.report
+        app.health
+            .report
             .iter()
             .filter_map(|h| h.compliance_score)
             .map(|s| s as usize)
@@ -230,17 +233,20 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
     };
 
     let sec_scanned = app
-        .health.report
+        .health
+        .report
         .iter()
         .filter(|h| h.security_score.is_some())
         .count();
     let sec_critical = app
-        .health.report
+        .health
+        .report
         .iter()
         .map(|h| h.security_critical)
         .sum::<usize>();
     let rf_high_total = app
-        .health.report
+        .health
+        .report
         .iter()
         .map(|h| h.refactor_high_count)
         .sum::<usize>();

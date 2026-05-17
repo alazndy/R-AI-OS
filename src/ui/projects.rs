@@ -160,7 +160,11 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
             .areas(main_area);
 
     // ── Left: memory.md ──────────────────────────────────────────────────────
-    let mem_color = if !app.projects.panel_focus { GREEN } else { DIM };
+    let mem_color = if !app.projects.panel_focus {
+        GREEN
+    } else {
+        DIM
+    };
     let mem_block = Block::new()
         .borders(Borders::RIGHT)
         .border_style(Style::new().fg(mem_color))
@@ -205,7 +209,8 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
             Style::new().fg(DIM),
         ))]
     } else {
-        app.projects.git_log
+        app.projects
+            .git_log
             .iter()
             .map(|entry| {
                 if let Some(sp) = entry.find(' ') {
