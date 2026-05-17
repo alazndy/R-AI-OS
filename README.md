@@ -126,6 +126,7 @@ raios bootstrap
 - [ ] **Phase 6: Edge-Intelligence & Local Routing** - Integration of **Needle** for ultra-fast, zero-cost local function calling.
 - [ ] **Phase 7: Evolutionary Intelligence (Experimental)** - Self-evolving skills and autonomous instinct refinement based on task success/failure (Inspired by **OpenSpace**).
 - [ ] **Phase 8: Recursive Reasoning (Experimental)** - Deep task decomposition and recursive logic flows for complex architectural problems (Inspired by **RLM**).
+- [ ] **Phase 9: IDE Symbiosis** - Native VS Code extension acting as a "Thin Client" to bridge the terminal TUI with rich IDE features (Status bar, Diff overlays).
 
 ---
 

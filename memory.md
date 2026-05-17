@@ -99,6 +99,7 @@
 - [ ] **Edge-Intelligence:** Integrate **Needle** (or similar tiny model) into `aiosd` for local fast-path routing of system commands.
 - [ ] **Evolutionary Intelligence:** Implement autonomous skill/instinct refinement loops where agents learn from task outcomes (Researching **OpenSpace** approach).
 - [ ] **Recursive Reasoning:** Implement deep task decomposition and recursive logic flows for complex architectural problems (Researching **RLM** approach).
+- [ ] **IDE Symbiosis:** Develop a VS Code extension acting as a "Thin Client" to bridge the `aiosd` daemon with rich IDE features (Status bar, Diff inbox).
 
 ## Research References
 - **Agent Discipline:** [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills)
