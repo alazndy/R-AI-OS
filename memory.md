@@ -89,7 +89,7 @@
 ### Next Steps
 - [ ] CI/CD status tracking (GitHub Actions API).
 - [ ] build/test/deps columns in health view.
-- [ ] Dependency graph in project detail view.
+- [ ] **Phase 5: Agent Swarm Mesh** - Multi-node agent orchestration support with **Git Worktree Isolation** (Inspired by **Tessera**) for conflict-free parallel development.
 - [ ] **Edge-Intelligence:** Integrate **Needle** (or similar tiny model) into `aiosd` for local fast-path routing of system commands.
 - [ ] **Evolutionary Intelligence:** Implement autonomous skill/instinct refinement loops where agents learn from task outcomes (Researching **OpenSpace** approach).
 - [ ] **Recursive Reasoning:** Implement deep task decomposition and recursive logic flows for complex architectural problems (Researching **RLM** approach).
@@ -99,6 +99,7 @@
 - **Local Routing:** [cactus-compute/needle](https://github.com/cactus-compute/needle)
 - **Skill Evolution:** [HKUDS/OpenSpace](https://github.com/HKUDS/OpenSpace)
 - **Deep Logic:** [alexzhang13/rlm](https://github.com/alexzhang13/rlm)
+- **Workspace Mgmt:** [horang-labs/tessera](https://github.com/horang-labs/tessera)
 
 ## Decision Log
 
