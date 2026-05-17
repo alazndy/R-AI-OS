@@ -18,6 +18,15 @@ Dive into the brain of R-AI-OS. Discover how the **Cortex Engine** combines Vect
 ### 📥 [04. Async Workflow & Inbox](04-Async-Workflow-and-Inbox.md)
 See how R-AI-OS maintains a non-blocking UI. Learn about the **Diff Inbox Pattern**, the approval workflow, and the semantic routing of tasks between specialists.
 
+### ⚙️ [05. Installation and Setup](05-Installation-and-Setup.md)
+A comprehensive guide to setting up R-AI-OS, from Rust toolchain prerequisites to the `bootstrap` command and security token configuration.
+
+### ⌨️ [06. CLI Commands Reference](06-CLI-Commands-Reference.md)
+A comprehensive guide to the `raios` CLI, including core commands, examples, and advanced flags.
+
+### 🤝 [07. Contributing](07-Contributing.md)
+Guidelines for contributors, including the "Anayasa" (Constitution), agent compliance, memory formats, and PR rules.
+
 ---
 
 ### 🚀 Getting Started
