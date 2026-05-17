@@ -1,11 +1,11 @@
 # R-AI-OS Memory
 
 ## Current Status
-- Date: 2026-05-15
-- Active agent: Claude (v1.3.0 — AI Intelligence Layer tamamlandı)
+- Date: 2026-05-16
+- Active agent: Claude (v1.3.0 — production, tüm eksikler tamamlandı)
 - Version: v1.3.0
 - Version Name: AI Intelligence Layer
-- Status: **Production-ready.** 35 CLI commands, 23 MCP tools, 75 unit tests — all green. 3 yeni özellik: Hybrid Memory Search, Sentinel Guard Watch, Instinct Automation.
+- Status: **Production-ready.** 37 CLI commands, 23 MCP tools, 83 unit tests — all green. Global binary kurulu (`~/.cargo/bin/raios.exe`). OpenCode MCP uyumlu.
 
 ## Claude
 ### Achievements
