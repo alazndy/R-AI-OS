@@ -39,6 +39,7 @@
 - **Project Versioning:** Added support for automatic version and nickname tracking via `memory.md`.
 - **Self-Healing Loop:** Added `ValidationWorker` to `aiosd`. `cargo check` and compliance results can be reported via MCP.
 - **Architectural Memory:** Added RAG-based architectural consultancy layer with `ask_architect` MCP tool.
+- **Manual Agent Selection:** Enhanced `task` command with `--agent` flag, allowing users to explicitly route tasks to Claude, Gemini, or Codex, bypassing the auto-router when needed.
 - **Workspace Sync:** MASTER.md and paths updated according to `Dev_Ops_New` structure.
 - **UI Performance Fix:** Lag in the All Projects screen resolved by removing synchronous I/O and using cache.
 - **Visual Grid Refactor:** All Projects screen upgraded to a modern `Table` structure.

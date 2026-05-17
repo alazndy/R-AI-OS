@@ -108,7 +108,7 @@ raios bootstrap
 | Command | Usage | Description |
 | :--- | :--- | :--- |
 | **`rbj`** | `raios rbj --project <name>` | **[NEW]** Runs a Red-Blue-Judge audit cycle on any project. |
-| **`task`** | `raios task "optimize db"` | Routes to the best specialist agent. |
+| **`task`** | `raios task "optimize db" [--agent <name>]` | Routes to best agent or specific one (Claude, Gemini, Codex). |
 | **`health`** | `raios health <project>` | Scans for compliance and security leaks. |
 | **`search`** | `raios search "auth logic"` | Semantic search across your portfolio. |
 | **`commit`** | `raios commit --push` | Intelligent bulk commit for dirty projects. |
