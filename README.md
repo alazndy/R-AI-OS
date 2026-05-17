@@ -17,6 +17,7 @@
 
 <p align="center">
   <a href="#-the-vision">Vision</a> •
+  <a href="docs/WIKI/Home.md">Documentation</a> •
   <a href="#-core-kernel-modules">Core Modules</a> •
   <a href="#-aura-hardened-edition-v130">Aura Hardened</a> •
   <a href="#-quick-start">Quick Start</a> •
@@ -30,7 +31,16 @@
 
 R-AI-OS is not just a CLI tool; it is a **Kernel**. While traditional Operating Systems manage hardware (CPU, RAM, Disk), R-AI-OS is designed for the **AI Era**. 
 
-It serves as the **Intelligence Orchestration Layer** that sits between the human user and a decentralized swarm of 90+ autonomous specialists. R-AI-OS handles the complexity of **Context Economics, Semantic Routing, and Zero-Trust Agent Security**, allowing you to focus on high-level architecture while your "factory" does the heavy lifting.
+It serves as the **Intelligence Orchestration Layer** that sits between the human user and a decentralized swarm of 90+ autonomous specialists. R-AI-OS handles the complexity of **Context Economics, Semantic Routing, and Zero-Zero-Trust Agent Security**, allowing you to focus on high-level architecture while your "factory" does the heavy lifting.
+
+## 📖 Deep Dive Documentation
+
+For detailed technical guides, architectural maps, and security protocols, visit our **[Official Wiki](docs/WIKI/Home.md)**:
+
+*   🏛️ **[Architecture](docs/WIKI/01-Architecture-Deep-Dive.md)** - Daemon/Client design.
+*   🛡️ **[Security](docs/WIKI/02-Security-Model.md)** - AgentShield & Token Auth.
+*   🧠 **[Memory & Context](docs/WIKI/03-Hybrid-Memory-and-Context.md)** - Cortex & Sigmap.
+*   ⌨️ **[CLI Reference](docs/WIKI/06-CLI-Commands-Reference.md)** - Detailed command guide.
 
 ---
 
