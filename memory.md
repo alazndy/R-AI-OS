@@ -92,6 +92,13 @@
 - [ ] Dependency graph in project detail view.
 - [ ] **Edge-Intelligence:** Integrate **Needle** (or similar tiny model) into `aiosd` for local fast-path routing of system commands.
 - [ ] **Evolutionary Intelligence:** Implement autonomous skill/instinct refinement loops where agents learn from task outcomes (Researching **OpenSpace** approach).
+- [ ] **Recursive Reasoning:** Implement deep task decomposition and recursive logic flows for complex architectural problems (Researching **RLM** approach).
+
+## Research References
+- **Agent Discipline:** [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills)
+- **Local Routing:** [cactus-compute/needle](https://github.com/cactus-compute/needle)
+- **Skill Evolution:** [HKUDS/OpenSpace](https://github.com/HKUDS/OpenSpace)
+- **Deep Logic:** [alexzhang13/rlm](https://github.com/alexzhang13/rlm)
 
 ## Decision Log
 

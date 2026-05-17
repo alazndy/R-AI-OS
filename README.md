@@ -118,6 +118,18 @@ raios bootstrap
 - [ ] **Phase 5: Agent Swarm Mesh** - Multi-node agent orchestration support.
 - [ ] **Phase 6: Edge-Intelligence & Local Routing** - Integration of **Needle** for ultra-fast, zero-cost local function calling.
 - [ ] **Phase 7: Evolutionary Intelligence (Experimental)** - Self-evolving skills and autonomous instinct refinement based on task success/failure (Inspired by **OpenSpace**).
+- [ ] **Phase 8: Recursive Reasoning (Experimental)** - Deep task decomposition and recursive logic flows for complex architectural problems (Inspired by **RLM**).
+
+---
+
+## 🔗 Research References
+
+These projects are foundational references for the future evolution of R-AI-OS:
+
+*   **[agent-skills](https://github.com/addyosmani/agent-skills):** Engineering discipline and agent verification protocols.
+*   **[needle](https://github.com/cactus-compute/needle):** Ultra-fast local function calling and edge-intelligence.
+*   **[OpenSpace](https://github.com/HKUDS/OpenSpace):** Self-evolving skills and spatial intelligence.
+*   **[rlm](https://github.com/alexzhang13/rlm):** Recursive language models for deep logical reasoning.
 
 ---
 
