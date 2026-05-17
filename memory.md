@@ -90,6 +90,7 @@
 - [ ] CI/CD status tracking (GitHub Actions API).
 - [ ] build/test/deps columns in health view.
 - [ ] Dependency graph in project detail view.
+- [ ] **Edge-Intelligence:** Integrate **Needle** (or similar tiny model) into `aiosd` for local fast-path routing of system commands.
 
 ## Decision Log
 

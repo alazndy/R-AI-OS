@@ -116,6 +116,7 @@ raios bootstrap
 - [x] **Phase 3: TUI Mission Control** - Aura Hardened IPC & Diff Inbox.
 - [ ] **Phase 4: SQLite Migration** - High-concurrency state management.
 - [ ] **Phase 5: Agent Swarm Mesh** - Multi-node agent orchestration support.
+- [ ] **Phase 6: Edge-Intelligence & Local Routing** - Integration of **Needle** for ultra-fast, zero-cost local function calling.
 
 ---
 
