@@ -49,6 +49,8 @@
     - `02-Security-Model.md`: Zero-Trust, AgentShield Guard, and Token Auth.
     - `03-Hybrid-Memory-and-Context.md`: Cortex Engine, BM25 Hybrid Search, and Sigmap Economics.
     - `04-Async-Workflow-and-Inbox.md`: Non-Blocking philosophy and Diff Inbox Pattern.
+    - `05-Installation-and-Setup.md`: Prerequisites, global installation, bootstrap command, and IPC token security.
+    - `06-CLI-Commands-Reference.md`: Comprehensive guide to the `raios` CLI, including core commands, examples, and advanced flags.
 
 ## Antigravity
 ### Achievements
