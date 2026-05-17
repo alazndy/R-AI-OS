@@ -66,6 +66,12 @@ Memory is not static; it is evolutionary.
 - **Behavioral Persistence:** Learns your style, favorite libraries, and project-specific quirks.
 - **Cross-Session Injection:** Learned "Instincts" follow you across projects and sessions.
 
+### ⚖️ 5. RBJ Stratejik Analiz Modülü (The Judge)
+Engineering rigor is maintained through a mandatory **Red-Blue-Judge** cycle.
+- **Red Team:** Aggressively critiques architecture and code for flaws.
+- **Blue Team:** Defends with technical rationale and architectural integrity.
+- **The Judge:** Reaches a final, actionable verdict to guide implementation.
+
 ---
 
 ## 🦾 Aura Hardened Edition (v1.3.0)
@@ -101,6 +107,7 @@ raios bootstrap
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
+| **`rbj`** | `raios rbj --project <name>` | **[NEW]** Runs a Red-Blue-Judge audit cycle on any project. |
 | **`task`** | `raios task "optimize db"` | Routes to the best specialist agent. |
 | **`health`** | `raios health <project>` | Scans for compliance and security leaks. |
 | **`search`** | `raios search "auth logic"` | Semantic search across your portfolio. |
