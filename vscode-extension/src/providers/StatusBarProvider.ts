@@ -50,8 +50,9 @@ export class StatusBarProvider implements vscode.Disposable {
       return;
     }
 
-    cp.exec(
-      `raios --json health "${projectName}"`,
+    cp.execFile(
+      "raios",
+      ["--json", "health", projectName],
       { timeout: 10000 },
       (err, stdout) => {
         if (err || !stdout.trim()) {
