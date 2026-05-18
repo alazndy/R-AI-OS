@@ -992,6 +992,16 @@ impl App {
                     let files = self.current_menu_files();
                     if let Some(entry) = files.into_iter().nth(self.ui.right_file_cursor) {
                         let _ = crate::discovery::open_in_editor(&entry.path);
+                        if let Some(ref tx) = self.tx_daemon {
+                            let line = (self.editor.scroll as u64) + 1;
+                            let msg = serde_json::json!({
+                                "event": "OpenFile",
+                                "path": entry.path.to_string_lossy(),
+                                "line": line,
+                                "col": 1
+                            });
+                            let _ = tx.send(msg.to_string());
+                        }
                     }
                 }
             KeyCode::Char('C') | KeyCode::Char('G') | KeyCode::Char('A')
