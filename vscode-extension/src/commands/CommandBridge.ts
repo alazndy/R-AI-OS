@@ -84,7 +84,8 @@ export class CommandBridge {
     const terminal = vscode.window.createTerminal("R-AI-OS Task");
     terminal.show();
     if (projectPath) terminal.sendText(`cd "${projectPath}"`);
-    terminal.sendText(`raios task "${task.trim()}"`);
+    const safeTask = task.trim().replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    terminal.sendText(`raios task "${safeTask}"`);
   }
 
   private currentProjectPath(): string | null {
