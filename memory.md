@@ -87,11 +87,11 @@
 - [x] E2E test — 66/66 unit tests, CLI smoke, 23 MCP tools.
 - [x] Phase 1 Refactor: `events.rs` monolith modularization.
 - [x] Phase 2 Refactor: `dashboard.rs` UI panel modularization.
+- [x] Phase 3B Refactor: 83-field `AppState` compartmentalized into sub-states (ui, system, projects, health, etc.).
+- [x] Database Data Integrity: Fixed `portfolio_status` column pulling `memory.md` contents by applying strict prefix/keyword matching in `extract_status`.
 - [x] Security Model Documentation (`docs/WIKI/02-Security-Model.md`).
 
 ### In Progress
-- [ ] 83-field AppState refactor (Phase 3B — Sub-states).
-- [ ] Pull portfolio_status status column correctly from DB (memory.md content getting mixed up in some projects).
 
 ### Next Steps
 - [ ] CI/CD status tracking (GitHub Actions API).

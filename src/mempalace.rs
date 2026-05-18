@@ -289,17 +289,22 @@ fn extract_status(content: &str) -> String {
             if let Some(val) = t
                 .strip_prefix("- Status:")
                 .or_else(|| t.strip_prefix("- Durum:"))
+                .or_else(|| t.strip_prefix("Status:"))
+                .or_else(|| t.strip_prefix("Durum:"))
             {
                 let normalized = normalize_status(val.trim());
                 if normalized != "—" {
                     return normalized;
                 }
             }
-            // Bullet containing a bare status keyword
+            // Strict bare status keyword
             if t.starts_with("- ") || t.starts_with("* ") {
-                let normalized = normalize_status(t[2..].trim());
-                if normalized != "—" {
-                    return normalized;
+                let val = t[2..].trim().to_lowercase();
+                if ["production", "active", "aktif", "early", "erken", "legacy"].contains(&val.as_str()) {
+                    let normalized = normalize_status(&val);
+                    if normalized != "—" {
+                        return normalized;
+                    }
                 }
             }
         }
@@ -311,6 +316,8 @@ fn extract_status(content: &str) -> String {
         if let Some(val) = t
             .strip_prefix("- Status:")
             .or_else(|| t.strip_prefix("Status:"))
+            .or_else(|| t.strip_prefix("- Durum:"))
+            .or_else(|| t.strip_prefix("Durum:"))
         {
             let normalized = normalize_status(val.trim());
             if normalized != "—" {
