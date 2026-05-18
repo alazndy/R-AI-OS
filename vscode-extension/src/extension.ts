@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { DaemonClient } from "./ipc/DaemonClient";
 import { StatusBarProvider } from "./providers/StatusBarProvider";
 import { CommandBridge } from "./commands/CommandBridge";
+import { DiffInboxProvider } from "./providers/DiffInboxProvider";
 
 let client: DaemonClient;
 let statusBar: StatusBarProvider;
@@ -17,6 +18,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   statusBar.activate(context);
   bridge.register(context);
+  const diffInbox = new DiffInboxProvider(client);
+  diffInbox.activate(context);
   client.connect();
 
   context.subscriptions.push({

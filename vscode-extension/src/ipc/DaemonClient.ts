@@ -82,6 +82,11 @@ export class DaemonClient {
     this.socket.write(msg + "\n");
   }
 
+  sendRaw(payload: Record<string, unknown>): void {
+    if (!this.socket || !this.connected) return;
+    this.socket.write(JSON.stringify(payload) + "\n");
+  }
+
   disconnect(): void {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.connecting = false;
