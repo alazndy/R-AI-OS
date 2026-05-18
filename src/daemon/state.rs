@@ -2,6 +2,7 @@ use crate::entities::EntityProject;
 use crate::health::ProjectHealth;
 use crate::indexer::ProjectIndex;
 use crate::sentinel::SentinelState;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -31,6 +32,18 @@ pub struct ValidationError {
     pub source: String, // "cargo check", "compliance", "security"
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PendingDiff {
+    pub id: String,
+    pub project: String,
+    pub file_path: String,
+    pub original: String,
+    pub proposed: String,
+    pub agent: String,
+    pub description: String,
+    pub created_at: String,
+}
+
 /// Represents the shared state managed by the daemon.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct DaemonState {
@@ -44,6 +57,7 @@ pub struct DaemonState {
     pub needs_human_approval: bool,
     pub latest_errors: Vec<ValidationError>,
     pub sentinel_files: Vec<SentinelFileStatus>,
+    pub pending_diffs: VecDeque<PendingDiff>,
 }
 
 impl DaemonState {

@@ -38,6 +38,7 @@ uuid = { version = "1.23.1", features = ["v4", "serde"] }
 regex-lite = "0.1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 which = "6"
+base64 = "0.22"
 # Cortex / Vector Engine — optional (enable with --features cortex)
 fastembed = { version = "3", features = ["online"], optional = true }
 instant-distance = "0.6"

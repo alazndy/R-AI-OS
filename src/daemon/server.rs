@@ -304,6 +304,91 @@ impl Server {
                                             let _ = writer.write_all(response.as_bytes()).await;
                                         }
                                     }
+                                } else if v["command"] == "GetPendingDiffs" {
+                                    let s = state_for_client.read().await;
+                                    let diffs: Vec<&crate::daemon::state::PendingDiff> =
+                                        s.pending_diffs.iter().collect();
+                                    let response = serde_json::json!({
+                                        "event": "PendingDiffs",
+                                        "diffs": diffs
+                                    });
+                                    let _ = writer
+                                        .write_all(format!("{}\n", response).as_bytes())
+                                        .await;
+                                } else if v["command"] == "ApproveDiff" {
+                                    let diff_id = v["id"].as_str().unwrap_or("").to_string();
+                                    let mut s = state_for_client.write().await;
+                                    if let Some(pos) =
+                                        s.pending_diffs.iter().position(|d| d.id == diff_id)
+                                    {
+                                        let diff = s.pending_diffs.remove(pos).unwrap();
+                                        drop(s);
+                                        match decode_base64(&diff.proposed) {
+                                            Ok(content) => {
+                                                match std::fs::write(&diff.file_path, &content) {
+                                                    Ok(_) => {
+                                                        let response = serde_json::json!({
+                                                            "event": "DiffApproved",
+                                                            "id": diff_id
+                                                        });
+                                                        let _ = writer
+                                                            .write_all(
+                                                                format!("{}\n", response)
+                                                                    .as_bytes(),
+                                                            )
+                                                            .await;
+                                                    }
+                                                    Err(e) => {
+                                                        let response = serde_json::json!({
+                                                            "event": "DiffError",
+                                                            "id": diff_id,
+                                                            "error": format!("write failed: {e}")
+                                                        });
+                                                        let _ = writer
+                                                            .write_all(
+                                                                format!("{}\n", response)
+                                                                    .as_bytes(),
+                                                            )
+                                                            .await;
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                let response = serde_json::json!({
+                                                    "event": "DiffError",
+                                                    "id": diff_id,
+                                                    "error": format!("base64 decode failed: {e}")
+                                                });
+                                                let _ = writer
+                                                    .write_all(
+                                                        format!("{}\n", response).as_bytes(),
+                                                    )
+                                                    .await;
+                                            }
+                                        }
+                                    } else {
+                                        drop(s);
+                                        let response = serde_json::json!({
+                                            "event": "DiffError",
+                                            "id": diff_id,
+                                            "error": format!("diff {} not found", diff_id)
+                                        });
+                                        let _ = writer
+                                            .write_all(format!("{}\n", response).as_bytes())
+                                            .await;
+                                    }
+                                } else if v["command"] == "RejectDiff" {
+                                    let diff_id = v["id"].as_str().unwrap_or("").to_string();
+                                    let mut s = state_for_client.write().await;
+                                    s.pending_diffs.retain(|d| d.id != diff_id);
+                                    drop(s);
+                                    let response = serde_json::json!({
+                                        "event": "DiffRejected",
+                                        "id": diff_id
+                                    });
+                                    let _ = writer
+                                        .write_all(format!("{}\n", response).as_bytes())
+                                        .await;
                                 }
                             }
                             line.clear();
@@ -324,4 +409,11 @@ impl Server {
             });
         }
     }
+}
+
+fn decode_base64(s: &str) -> anyhow::Result<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .map_err(Into::into)
 }
