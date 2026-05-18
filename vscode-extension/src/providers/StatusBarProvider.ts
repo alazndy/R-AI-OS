@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as cp from "child_process";
 import { DaemonClient } from "../ipc/DaemonClient";
+import { resolveRaiosBinary } from "../utils/raiosBinary";
 
 interface HealthEntry {
   name: string;
@@ -51,7 +52,7 @@ export class StatusBarProvider implements vscode.Disposable {
     }
 
     cp.execFile(
-      "raios",
+      resolveRaiosBinary(),
       ["--json", "health", projectName],
       { timeout: 10000 },
       (err, stdout) => {

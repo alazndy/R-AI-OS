@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as cp from "child_process";
 import { DaemonClient } from "../ipc/DaemonClient";
+import { resolveRaiosBinary } from "../utils/raiosBinary";
 
 export class CommandBridge {
   constructor(private readonly client: DaemonClient) {}
@@ -37,7 +38,7 @@ export class CommandBridge {
       () =>
         new Promise<void>((resolve) => {
           cp.execFile(
-            "raios",
+            resolveRaiosBinary(),
             args,
             { cwd: projectPath ?? undefined, timeout: 60000 },
             (err, _stdout, stderr) => {
