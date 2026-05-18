@@ -1,5 +1,6 @@
 {
   "name": "raios",
+  "publisher": "alazndy",
   "displayName": "R-AI-OS",
   "description": "R-AI-OS Kernel integration for VS Code",
   "version": "0.1.0",
