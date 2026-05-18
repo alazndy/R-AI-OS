@@ -325,7 +325,61 @@ impl Server {
                                         drop(s);
                                         match decode_base64(&diff.proposed) {
                                             Ok(content) => {
-                                                match std::fs::write(&diff.file_path, &content) {
+                                                // Path traversal guard
+                                                let file_path = std::path::Path::new(&diff.file_path);
+                                                let config = Config::load().unwrap_or_else(|| Config {
+                                                    dev_ops_path: PathBuf::from(""),
+                                                    master_md_path: PathBuf::from(""),
+                                                    skills_path: PathBuf::from(""),
+                                                    vault_projects_path: PathBuf::from(""),
+                                                });
+                                                let allowed_base = match config.dev_ops_path.canonicalize() {
+                                                    Ok(p) => p,
+                                                    Err(_) => {
+                                                        let response = serde_json::json!({
+                                                            "event": "DiffError",
+                                                            "id": diff_id,
+                                                            "error": "could not resolve allowed base path"
+                                                        });
+                                                        let _ = writer
+                                                            .write_all(format!("{}\n", response).as_bytes())
+                                                            .await;
+                                                        return;
+                                                    }
+                                                };
+                                                let canonical_target = match file_path.canonicalize() {
+                                                    Ok(p) => p,
+                                                    Err(_) => {
+                                                        // File doesn't exist yet — use parent directory check
+                                                        match file_path.parent().and_then(|p| p.canonicalize().ok()) {
+                                                            Some(parent) if parent.starts_with(&allowed_base) => file_path.to_path_buf(),
+                                                            _ => {
+                                                                let response = serde_json::json!({
+                                                                    "event": "DiffError",
+                                                                    "id": diff_id,
+                                                                    "error": "file path is outside workspace"
+                                                                });
+                                                                let _ = writer
+                                                                    .write_all(format!("{}\n", response).as_bytes())
+                                                                    .await;
+                                                                return;
+                                                            }
+                                                        }
+                                                    }
+                                                };
+                                                if !canonical_target.starts_with(&allowed_base) {
+                                                    let response = serde_json::json!({
+                                                        "event": "DiffError",
+                                                        "id": diff_id,
+                                                        "error": "file path is outside workspace"
+                                                    });
+                                                    let _ = writer
+                                                        .write_all(format!("{}\n", response).as_bytes())
+                                                        .await;
+                                                    return;
+                                                }
+                                                // Safe to write
+                                                match std::fs::write(file_path, &content) {
                                                     Ok(_) => {
                                                         let response = serde_json::json!({
                                                             "event": "DiffApproved",
