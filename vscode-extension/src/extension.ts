@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { DaemonClient } from "./ipc/DaemonClient";
 import { StatusBarProvider } from "./providers/StatusBarProvider";
+import { CommandBridge } from "./commands/CommandBridge";
 
 let client: DaemonClient;
 let statusBar: StatusBarProvider;
@@ -12,8 +13,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   client = new DaemonClient(port);
   statusBar = new StatusBarProvider(client, pollInterval);
+  const bridge = new CommandBridge(client);
 
   statusBar.activate(context);
+  bridge.register(context);
   client.connect();
 
   context.subscriptions.push({
