@@ -10,6 +10,7 @@ export class DaemonClient {
   private buffer = "";
   private handlers: MessageHandler[] = [];
   private connected = false;
+  private connecting = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -22,11 +23,13 @@ export class DaemonClient {
   }
 
   connect(): void {
-    if (this.connected) return;
+    if (this.connected || this.connecting) return;
+    this.connecting = true;
 
     const token = this.readToken();
     if (!token) {
       console.error("[R-AI-OS] IPC token not found — is aiosd running?");
+      this.connecting = false;
       this.scheduleReconnect();
       return;
     }
@@ -34,8 +37,12 @@ export class DaemonClient {
     this.socket = new net.Socket();
 
     this.socket.connect(this.port, this.host, () => {
+      this.connecting = false;
       this.connected = true;
-      this.socket!.write(`AUTH ${token}\n`);
+      const sock = this.socket;
+      if (sock) {
+        sock.write(`AUTH ${token}\n`);
+      }
       console.log("[R-AI-OS] Connected to aiosd");
     });
 
@@ -49,17 +56,21 @@ export class DaemonClient {
           const msg = JSON.parse(line) as Record<string, unknown>;
           this.handlers.forEach((h) => h(msg));
         } catch {
-          // Ignore malformed JSON
+          console.warn("[R-AI-OS] Received malformed JSON from daemon:", line.slice(0, 100));
         }
       }
     });
 
     this.socket.on("error", (err) => {
       console.error("[R-AI-OS] IPC error:", err.message);
+      this.connecting = false;
+      this.socket?.destroy();
+      this.socket = null;
     });
 
     this.socket.on("close", () => {
       this.connected = false;
+      this.connecting = false;
       this.socket = null;
       this.scheduleReconnect();
     });
@@ -73,6 +84,7 @@ export class DaemonClient {
 
   disconnect(): void {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.connecting = false;
     this.socket?.destroy();
     this.connected = false;
   }
