@@ -66,12 +66,26 @@ export class DiffInboxProvider implements vscode.Disposable {
   }
 
   private async openDiffEditor(diff: PendingDiff): Promise<void> {
-    const original = Buffer.from(diff.original, "base64").toString("utf-8");
-    const proposed = Buffer.from(diff.proposed, "base64").toString("utf-8");
+    let original: string;
+    let proposed: string;
+    try {
+      original = Buffer.from(diff.original, "base64").toString("utf-8");
+      proposed = Buffer.from(diff.proposed, "base64").toString("utf-8");
+      if (!original && !proposed) {
+        throw new Error("decoded content is empty");
+      }
+    } catch (err) {
+      this.processingIds.delete(diff.id);
+      vscode.window.showErrorMessage(
+        `R-AI-OS: Failed to decode diff content — ${err instanceof Error ? err.message : String(err)}`
+      );
+      return;
+    }
 
     const tmpDir = os.tmpdir();
-    const origPath = path.join(tmpDir, `raios-orig-${diff.id}.tmp`);
-    const propPath = path.join(tmpDir, `raios-prop-${diff.id}.tmp`);
+    const rnd = Math.random().toString(36).slice(2, 9);
+    const origPath = path.join(tmpDir, `raios-orig-${diff.id}-${rnd}.tmp`);
+    const propPath = path.join(tmpDir, `raios-prop-${diff.id}-${rnd}.tmp`);
 
     try {
       fs.writeFileSync(origPath, original, "utf-8");
