@@ -1,45 +1,19 @@
 # Plan 3: Edge-Intelligence — Local Fast-Path Routing
 
-> **Subagent-Driven Development** ile execute et. Cactus-Compute/Needle'dan ilham alındı.
+> **For agentic workers:** Use superpowers:subagent-driven-development to execute task-by-task.
 
-**Goal:** `aiosd` içine küçük bir local model entegre ederek basit sistem komutları (port kill, file search, health check) için LLM API'ye gitmeden anında cevap ver.
+**Goal:** `raios ask "3000 portunu kapat"` → yerel intent classifier → doğrudan CLI execute veya agent dispatch. LLM API'ye gitmeden basit komutlar anında çalışır.
 
-**Philosophy:** "Düşün → Yönlendir → Çalıştır" — Basit niyetler yerel, karmaşık niyetler Claude/Gemini'ye.
+**Architecture:** Phase 1: Rule-based classifier (regex/keyword). Phase 2: GGUF model (opsiyonel feature flag).
 
-**Architecture:** `raios ask "3000 portunu kapat"` → `EdgeRouter` → intent classification → local executekuyruk (basit) veya agent dispatch (karmaşık).
+**Tech Stack:** Rust, mevcut `core/process.rs`, `core/git.rs`, `health.rs`, `tasks.rs`, `entities.rs`
 
-**Tech Stack:** Rust, `llama-cpp-2` crate (GGUF model) veya `candle` + küçük model (Phi-3 mini / TinyLlama), mevcut CLI komut sistemi.
-
----
-
-## Model Seçimi
-
-| Model | Boyut | Hız | Yeterlilik |
-|-------|-------|-----|-----------|
-| Phi-3 mini (Q4) | ~2GB | ~50 tok/s CPU | Komut routing için yeterli |
-| TinyLlama 1.1B (Q4) | ~700MB | ~80 tok/s CPU | Daha hızlı, daha az akıllı |
-| Gemma 2B (Q4) | ~1.5GB | ~60 tok/s CPU | İyi denge |
-
-**Tavsiye:** TinyLlama 1.1B başlangıç için — küçük, hızlı, Rust `llama-cpp-2` ile çalışır.
-
----
-
-## Intent Taxonomy
-
-```
-SIMPLE (local execute):
-  - port_kill: "3000 portunu kapat"
-  - file_find: "src'de AuthError araştır"
-  - health_check: "R-AI-OS'un sağlığına bak"
-  - git_status: "değişiklikleri göster"
-  - process_list: "hangi portlar açık"
-
-COMPLEX (agent dispatch):
-  - code_change: "auth bug'ını düzelt"
-  - feature_request: "dark mode ekle"
-  - refactor: "services.rs'i temizle"
-  - unknown: fallback to Claude
-```
+**Mevcut durum:**
+- `core/process::kill_port(port: u16)` var
+- `core/process::list_ports()` var  
+- `core/git::status(dir: &Path) -> Result<String>` var
+- `health::check_project(proj)` var
+- `tasks::dispatch_to_agent(task, agent, path, errors)` var
 
 ---
 
@@ -47,84 +21,193 @@ COMPLEX (agent dispatch):
 
 | Dosya | Değişiklik |
 |-------|-----------|
-| `src/edge/mod.rs` | Yeni — `EdgeRouter` |
-| `src/edge/classifier.rs` | Yeni — intent classification |
-| `src/edge/executor.rs` | Yeni — simple intent executor |
-| `src/edge/model.rs` | Yeni — GGUF model loader |
-| `src/cli.rs` | `Commands::Ask` |
 | `src/lib.rs` | `pub mod edge;` |
-| `Cargo.toml` | `llama-cpp-2` veya `candle-core` |
+| `src/edge/mod.rs` | `Intent` enum, `pub use` |
+| `src/edge/classifier.rs` | rule-based classify() + helpers |
+| `src/edge/executor.rs` | execute(intent) → ExecutionResult |
+| `src/cli.rs` | `Commands::Ask` + `cmd_ask()` |
 
 ---
 
-## Task 1: Intent Classifier (rule-based MVP)
+## Task 1: `Intent` Enum + Module Scaffold
 
-**Strategy:** Model entegrasyonundan önce rule-based classifier ile başla. Model çalışmıyorsa graceful fallback.
+**Files:** `src/lib.rs`, `src/edge/mod.rs`
+
+- [ ] **Step 1.1: `src/lib.rs`'e modül ekle**
+
+Mevcut `pub mod` listesine (alfabetik sıraya göre):
+```rust
+pub mod edge;
+```
+
+- [ ] **Step 1.2: `src/edge/mod.rs` oluştur**
+
+```rust
+pub mod classifier;
+pub mod executor;
+
+pub use classifier::Intent;
+pub use executor::{execute, ExecutionResult};
+```
+
+- [ ] **Step 1.3: `cargo check`**
+
+```bash
+cargo check 2>&1 | head -10
+```
+
+- [ ] **Step 1.4: Commit**
+
+```bash
+git add src/lib.rs src/edge/mod.rs
+git commit -m "feat(edge): module scaffold"
+```
+
+---
+
+## Task 2: Rule-Based Intent Classifier
 
 **Files:** `src/edge/classifier.rs`
 
-- [ ] Oluştur:
+- [ ] **Step 2.1: Failing tests yaz**
+
+`src/edge/classifier.rs` dosyası oluştur:
+
 ```rust
 #[derive(Debug, Clone, PartialEq)]
 pub enum Intent {
     PortKill(u16),
+    ProcessList,
     FileFind { query: String },
     HealthCheck { project: Option<String> },
     GitStatus { project: Option<String> },
-    ProcessList,
     Complex,
 }
 
 pub fn classify(input: &str) -> Intent {
+    todo!()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_port_kill_turkish() {
+        assert_eq!(classify("3000 portunu kapat"), Intent::PortKill(3000));
+    }
+
+    #[test]
+    fn detects_port_kill_english() {
+        assert_eq!(classify("kill port 8080"), Intent::PortKill(8080));
+    }
+
+    #[test]
+    fn detects_process_list() {
+        assert_eq!(classify("hangi portlar açık"), Intent::ProcessList);
+        assert_eq!(classify("list open ports"), Intent::ProcessList);
+    }
+
+    #[test]
+    fn detects_health_check() {
+        assert_eq!(
+            classify("R-AI-OS'un sağlığına bak"),
+            Intent::HealthCheck { project: Some("R-AI-OS".to_string()) }
+        );
+    }
+
+    #[test]
+    fn detects_git_status() {
+        assert_eq!(
+            classify("git status göster"),
+            Intent::GitStatus { project: None }
+        );
+    }
+
+    #[test]
+    fn complex_fallback() {
+        assert_eq!(classify("auth bug'ını düzelt"), Intent::Complex);
+    }
+}
+```
+
+- [ ] **Step 2.2: Testleri çalıştır — FAIL beklenir**
+
+```bash
+cargo test --lib edge::classifier::tests -- --nocapture 2>&1 | head -10
+```
+
+- [ ] **Step 2.3: `classify()` implementasyonunu yaz**
+
+`todo!()` yerine:
+
+```rust
+pub fn classify(input: &str) -> Intent {
     let lower = input.to_lowercase();
 
-    // Port kill patterns
-    if let Some(port) = extract_port(&lower, &["kapat", "kill", "close", "stop"]) {
+    // Port kill: "3000 kapat", "kill port 8080", "8080 durdur"
+    let kill_keywords = ["kapat", "kill", "durdur", "close", "stop", "öldür"];
+    if let Some(port) = extract_port_near_keyword(&lower, &kill_keywords) {
         return Intent::PortKill(port);
     }
 
-    // File search
-    if lower.contains("araştır") || lower.contains("bul") || lower.contains("find") || lower.contains("search") {
-        let query = extract_search_term(input);
-        return Intent::FileFind { query };
+    // Process list: "hangi portlar", "list ports", "açık portlar"
+    let list_keywords = ["hangi port", "list port", "açık port", "open port",
+                         "aktif port", "active port", "port listesi"];
+    if list_keywords.iter().any(|k| lower.contains(k)) {
+        return Intent::ProcessList;
     }
 
-    // Health
-    if lower.contains("sağlık") || lower.contains("health") || lower.contains("durum") {
+    // Health check: "sağlık", "health", "durum"
+    let health_keywords = ["sağlık", "health check", "sağlığı", "durumu", "health"];
+    if health_keywords.iter().any(|k| lower.contains(k)) {
         let project = extract_project_name(input);
         return Intent::HealthCheck { project };
     }
 
-    // Git
-    if lower.contains("değişiklik") || lower.contains("status") || lower.contains("git") {
+    // Git status
+    let git_keywords = ["git status", "değişiklik", "degisiklik", "dirty", "uncommitted"];
+    if git_keywords.iter().any(|k| lower.contains(k)) {
         let project = extract_project_name(input);
         return Intent::GitStatus { project };
     }
 
-    // Process list
-    if lower.contains("port") && (lower.contains("liste") || lower.contains("açık") || lower.contains("open")) {
-        return Intent::ProcessList;
+    // File find
+    let find_keywords = ["bul", "ara ", "araştır", "find ", "search ", "where is"];
+    if find_keywords.iter().any(|k| lower.contains(k)) {
+        let query = extract_search_term(input);
+        return Intent::FileFind { query };
     }
 
     Intent::Complex
 }
 
-fn extract_port(s: &str, keywords: &[&str]) -> Option<u16> {
-    let words: Vec<&str> = s.split_whitespace().collect();
+fn extract_port_near_keyword(lower: &str, keywords: &[&str]) -> Option<u16> {
+    let words: Vec<&str> = lower.split_whitespace().collect();
     for (i, word) in words.iter().enumerate() {
-        if keywords.iter().any(|k| word.contains(k)) {
-            // Look for number near keyword
-            for j in i.saturating_sub(2)..=(i + 2).min(words.len() - 1) {
-                if let Ok(port) = words[j].parse::<u16>() {
-                    return Some(port);
+        // Number before keyword: "3000 kapat"
+        if keywords.iter().any(|k| word.starts_with(k)) && i > 0 {
+            if let Ok(port) = words[i - 1].parse::<u16>() {
+                if port > 0 { return Some(port); }
+            }
+        }
+        // Keyword before number: "kill port 8080"
+        if keywords.iter().any(|k| word.starts_with(k)) && i + 1 < words.len() {
+            // skip "port" word if present
+            let next_idx = if words.get(i + 1).map(|w| *w == "port").unwrap_or(false) {
+                i + 2
+            } else {
+                i + 1
+            };
+            if let Some(num_word) = words.get(next_idx) {
+                if let Ok(port) = num_word.parse::<u16>() {
+                    if port > 0 { return Some(port); }
                 }
             }
         }
-    }
-    // Also: number before keyword
-    for window in words.windows(2) {
-        if let Ok(port) = window[0].parse::<u16>() {
-            if keywords.iter().any(|k| window[1].contains(k)) {
+        // Number in word list near a kill keyword anywhere
+        if let Ok(port) = word.parse::<u16>() {
+            if port > 0 && keywords.iter().any(|k| lower.contains(k)) {
                 return Some(port);
             }
         }
@@ -132,181 +215,360 @@ fn extract_port(s: &str, keywords: &[&str]) -> Option<u16> {
     None
 }
 
-fn extract_search_term(input: &str) -> String {
-    // Return words after search keywords
-    let lower = input.to_lowercase();
-    for kw in ["araştır", "bul", "find", "search", "için"] {
-        if let Some(pos) = lower.find(kw) {
-            let before = input[..pos].trim().split_whitespace().last().unwrap_or("").to_string();
-            if !before.is_empty() {
-                return before;
+fn extract_project_name(input: &str) -> Option<String> {
+    // Look for quoted project name: 'R-AI-OS', "project-name"
+    for ch in ['\'', '"'] {
+        if let Some(start) = input.find(ch) {
+            if let Some(end) = input[start + 1..].find(ch) {
+                let name = &input[start + 1..start + 1 + end];
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
             }
-            let after = input[pos + kw.len()..].trim().to_string();
+        }
+    }
+    // Look for "X'in", "X'un", "X'ın" patterns (Turkish genitive)
+    let words: Vec<&str> = input.split_whitespace().collect();
+    for word in &words {
+        if word.contains("'i") || word.contains("'ı") || word.contains("'u") || word.contains("'ü") {
+            let base = word.split('\'').next().unwrap_or("");
+            if base.len() > 2 && base.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                return Some(base.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn extract_search_term(input: &str) -> String {
+    let lower = input.to_lowercase();
+    let search_prefixes = ["bul ", "ara ", "araştır ", "find ", "search ", "where is "];
+    for prefix in &search_prefixes {
+        if let Some(pos) = lower.find(prefix) {
+            let after = input[pos + prefix.len()..].trim();
             if !after.is_empty() {
-                return after.split_whitespace().next().unwrap_or("").to_string();
+                return after.split_whitespace().next().unwrap_or(after).to_string();
             }
         }
     }
     input.split_whitespace().last().unwrap_or(input).to_string()
 }
-
-fn extract_project_name(_input: &str) -> Option<String> {
-    // Future: NER — for now return None (use current dir)
-    None
-}
 ```
 
-- [ ] Unit tests: 10 test case (Türkçe + İngilizce patterns)
+- [ ] **Step 2.4: Testleri çalıştır — PASS beklenir**
 
-- [ ] Commit: `feat(edge): rule-based intent classifier with Turkish/English support`
+```bash
+cargo test --lib edge::classifier::tests -- --nocapture
+```
+
+Beklenen: `test result: ok. 6 passed`
+
+- [ ] **Step 2.5: Commit**
+
+```bash
+git add src/edge/classifier.rs
+git commit -m "feat(edge): rule-based intent classifier — Turkish/English support, 6 tests"
+```
 
 ---
 
-## Task 2: Simple Intent Executor
+## Task 3: Intent Executor
 
 **Files:** `src/edge/executor.rs`
 
-- [ ] Oluştur:
+- [ ] **Step 3.1: `src/edge/executor.rs` oluştur**
+
 ```rust
 use crate::edge::classifier::Intent;
 use anyhow::Result;
+use std::path::Path;
 
+#[derive(Debug)]
 pub struct ExecutionResult {
     pub output: String,
     pub success: bool,
 }
 
-pub fn execute(intent: Intent, dev_ops: &std::path::Path) -> Result<ExecutionResult> {
+/// Execute a classified intent. Returns DISPATCH_TO_AGENT for Complex intents.
+pub fn execute(intent: Intent, dev_ops: &Path) -> Result<ExecutionResult> {
     match intent {
         Intent::PortKill(port) => {
-            let result = crate::core::process::kill_port(port)?;
-            Ok(ExecutionResult {
-                output: if result { format!("✓ Port {} kapatıldı", port) }
-                        else { format!("Port {} zaten kapalı veya bulunamadı", port) },
-                success: true,
-            })
+            match crate::core::process::kill_port(port) {
+                Ok(true) => Ok(ExecutionResult {
+                    output: format!("✓ Port {} kapatıldı", port),
+                    success: true,
+                }),
+                Ok(false) => Ok(ExecutionResult {
+                    output: format!("Port {} zaten kapalı veya bulunamadı", port),
+                    success: true,
+                }),
+                Err(e) => Ok(ExecutionResult {
+                    output: format!("Port {} kapatılamadı: {}", port, e),
+                    success: false,
+                }),
+            }
         }
+
         Intent::ProcessList => {
-            let ports = crate::core::process::list_ports()?;
-            let output = ports.iter()
-                .map(|p| format!("  :{} — {} ({})", p.port, p.name, p.pid))
-                .collect::<Vec<_>>().join("\n");
-            Ok(ExecutionResult { output, success: true })
+            match crate::core::process::list_ports() {
+                Ok(ports) if ports.is_empty() => Ok(ExecutionResult {
+                    output: "Açık port bulunamadı".into(),
+                    success: true,
+                }),
+                Ok(ports) => {
+                    let lines: Vec<String> = ports
+                        .iter()
+                        .map(|p| format!("  :{:<5} {} (PID {})", p.port, p.name, p.pid))
+                        .collect();
+                    Ok(ExecutionResult {
+                        output: format!("Açık portlar ({}):\n{}", ports.len(), lines.join("\n")),
+                        success: true,
+                    })
+                }
+                Err(e) => Ok(ExecutionResult {
+                    output: format!("Port listesi alınamadı: {}", e),
+                    success: false,
+                }),
+            }
         }
+
         Intent::HealthCheck { project } => {
             let projects = crate::entities::load_entities(dev_ops);
-            let proj = if let Some(name) = project {
-                projects.into_iter().find(|p| p.name.to_lowercase().contains(&name.to_lowercase()))
+            let proj = if let Some(ref name) = project {
+                let n = name.to_lowercase();
+                projects.into_iter().find(|p| p.name.to_lowercase().contains(&n))
             } else {
                 let cwd = std::env::current_dir().unwrap_or_default();
                 projects.into_iter().find(|p| p.local_path == cwd)
             };
+
             match proj {
                 Some(p) => {
                     let h = crate::health::check_project(&p);
+                    let git = match h.git_dirty {
+                        Some(true) => "dirty", Some(false) => "clean", None => "?",
+                    };
                     Ok(ExecutionResult {
-                        output: format!("{}: {}/100 ({}) | Security: {} | Refactor: {}",
-                            h.name, h.compliance_score.unwrap_or(0),
-                            h.compliance_grade, h.security_grade.as_deref().unwrap_or("-"),
-                            h.refactor_grade),
+                        output: format!(
+                            "{}: {}/100 ({}) | Security:{} | Refactor:{} | Git:{}",
+                            h.name,
+                            h.compliance_score.unwrap_or(0),
+                            h.compliance_grade,
+                            h.security_grade.as_deref().unwrap_or("-"),
+                            h.refactor_grade,
+                            git,
+                        ),
                         success: true,
                     })
                 }
                 None => Ok(ExecutionResult {
-                    output: "Proje bulunamadı".into(),
+                    output: format!(
+                        "Proje bulunamadı{}. Try: raios ask \"<proje adı> health\"",
+                        project.map(|p| format!(": {}", p)).unwrap_or_default()
+                    ),
                     success: false,
-                })
+                }),
             }
         }
+
         Intent::GitStatus { project } => {
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let path = project.map(|_| cwd.clone()).unwrap_or(cwd);
-            let status = crate::core::git::status(&path)?;
-            Ok(ExecutionResult { output: status, success: true })
+            let path = if let Some(ref name) = project {
+                let projects = crate::entities::load_entities(dev_ops);
+                let n = name.to_lowercase();
+                projects
+                    .into_iter()
+                    .find(|p| p.name.to_lowercase().contains(&n))
+                    .map(|p| p.local_path)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+            } else {
+                std::env::current_dir().unwrap_or_default()
+            };
+
+            match crate::core::git::status(&path) {
+                Ok(s) if s.trim().is_empty() => Ok(ExecutionResult {
+                    output: "✓ Working tree clean".into(),
+                    success: true,
+                }),
+                Ok(s) => Ok(ExecutionResult { output: s, success: true }),
+                Err(e) => Ok(ExecutionResult {
+                    output: format!("git status failed: {}", e),
+                    success: false,
+                }),
+            }
         }
+
         Intent::FileFind { query } => {
-            let cwd = std::env::current_dir().unwrap_or_default();
-            // Use existing cortex search
-            let output = format!("raios search \"{}\" komutu çalıştırılıyor...", query);
-            Ok(ExecutionResult { output, success: true })
+            // Delegate to raios search
+            Ok(ExecutionResult {
+                output: format!(
+                    "Aranıyor: '{}'\nHint: raios search \"{}\" komutu ile daha kapsamlı arama yapabilirsin.",
+                    query, query
+                ),
+                success: true,
+            })
         }
+
         Intent::Complex => Ok(ExecutionResult {
             output: "DISPATCH_TO_AGENT".into(),
             success: false,
-        })
+        }),
     }
 }
 ```
 
-- [ ] `cargo check` → temiz
+- [ ] **Step 3.2: `cargo check`**
 
-- [ ] Commit: `feat(edge): simple intent executor — port kill, health, git, process list`
+```bash
+cargo check 2>&1 | head -20
+```
+
+- [ ] **Step 3.3: Commit**
+
+```bash
+git add src/edge/executor.rs
+git commit -m "feat(edge): intent executor — port kill, process list, health, git status"
+```
 
 ---
 
-## Task 3: `raios ask` CLI komutu
+## Task 4: `raios ask` CLI Komutu
 
 **Files:** `src/cli.rs`
 
-- [ ] `Commands::Ask` ekle:
+- [ ] **Step 4.1: `Commands::Ask` varyantı ekle**
+
+Mevcut son varyanttan sonra:
+
 ```rust
 /// Natural language command routing (Edge-Intelligence)
+/// Examples: "3000 portunu kapat", "R-AI-OS health", "git status göster"
 Ask {
-    /// Natural language query (Turkish or English)
+    /// Natural language query in Turkish or English
     query: String,
-    /// Force agent dispatch even for simple intents
+    /// Force dispatch to agent even for simple intents
     #[arg(long)]
     force_agent: bool,
+    /// Show detected intent without executing
+    #[arg(long)]
+    dry_run: bool,
 },
 ```
 
-- [ ] `cmd_ask()`:
+- [ ] **Step 4.2: Match arm ekle**
+
 ```rust
-fn cmd_ask(query: &str, force_agent: bool, dev_ops: &Path, json: bool) {
-    use crate::edge::{classifier, executor};
+Commands::Ask { query, force_agent, dry_run } => {
+    cmd_ask(&query, force_agent, dry_run, &cfg.dev_ops_path, cli.json);
+}
+```
+
+- [ ] **Step 4.3: `cmd_ask()` fonksiyonu ekle**
+
+```rust
+fn cmd_ask(query: &str, force_agent: bool, dry_run: bool, dev_ops: &std::path::Path, json: bool) {
+    use crate::edge::{classifier, executor, Intent};
 
     let intent = if force_agent {
-        classifier::Intent::Complex
+        Intent::Complex
     } else {
         classifier::classify(query)
     };
 
-    println!("Intent: {:?}", intent);
+    if dry_run {
+        println!("Query:  {}", query);
+        println!("Intent: {:?}", intent);
+        println!("(Dry run — use without --dry-run to execute)");
+        return;
+    }
 
-    let result = executor::execute(intent.clone(), dev_ops);
-    match result {
-        Ok(r) if r.success => println!("{}", r.output),
-        Ok(_) => {
-            // Complex — dispatch to task router
-            println!("Ajan'a yönlendiriliyor: {}", query);
-            cmd_task(Some(query.to_string()), None, dev_ops, json);
+    if !json {
+        println!("→ {:?}", intent);
+    }
+
+    match executor::execute(intent.clone(), dev_ops) {
+        Ok(result) if result.success => {
+            if json {
+                println!("{}", serde_json::json!({"output": result.output, "success": true}));
+            } else {
+                println!("{}", result.output);
+            }
+        }
+        Ok(_) if matches!(intent, Intent::Complex) => {
+            // Dispatch to task router
+            if !json { println!("Ajan'a yönlendiriliyor..."); }
+            let task = crate::tasks::Task {
+                text: query.to_string(),
+                completed: false,
+                agent: Some("claude".to_string()),
+                project: None,
+            };
+            let result = crate::tasks::dispatch_to_agent(&task, "claude", None, None);
+            if json {
+                println!("{}", serde_json::json!({"dispatched": true, "result": result}));
+            } else {
+                println!("{}", result);
+            }
+        }
+        Ok(result) => {
+            if json {
+                println!("{}", serde_json::json!({"output": result.output, "success": false}));
+            } else {
+                eprintln!("⚠ {}", result.output);
+            }
         }
         Err(e) => eprintln!("Hata: {e}"),
     }
 }
 ```
 
-- [ ] Smoke test: `raios ask "3000 portunu kapat"` → port kill
+- [ ] **Step 4.4: `cargo build --bin raios`**
 
-- [ ] Commit: `feat(cli): raios ask — edge-intelligence natural language routing`
+```bash
+cargo build --bin raios 2>&1 | tail -5
+```
 
----
+- [ ] **Step 4.5: Smoke testler**
 
-## Task 4: GGUF Model Integration (Phase 2 — Opsiyonel)
+```bash
+cargo run --bin raios -- ask "hangi portlar açık" --dry-run
+```
 
-**Prerequisite:** Rule-based sistem production'da stabil olduktan sonra.
+Beklenen çıktı:
+```
+Query:  hangi portlar açık
+Intent: ProcessList
+(Dry run — use without --dry-run to execute)
+```
 
-- [ ] `Cargo.toml`'a: `llama-cpp-2 = { version = "0.1", optional = true }` (feature flag: `edge-llm`)
+```bash
+cargo run --bin raios -- ask "R-AI-OS health" --dry-run
+```
 
-- [ ] `src/edge/model.rs` — model loader + inference:
-  - Model path: `~/.raios/models/tinyllama.gguf`
-  - Download on first use (progress bar)
-  - Inference timeout: 3s (fallback to rule-based if exceeded)
+Beklenen:
+```
+Query:  R-AI-OS health
+Intent: HealthCheck { project: Some("R-AI-OS") }
+```
 
-- [ ] `classifier.rs`'de model-based sınıflandırma:
-  - Prompt: `"Classify this command: {input}\nCategories: port_kill|file_find|health_check|git_status|process_list|complex\nAnswer:"`
-  - Parse ilk token → intent mapping
+```bash
+cargo run --bin raios -- ask "auth bug'ını düzelt" --dry-run
+```
 
-- [ ] Feature flag ile aktive et: `cargo build --features edge-llm`
+Beklenen:
+```
+Query:  auth bug'ını düzelt
+Intent: Complex
+```
 
-- [ ] Commit: `feat(edge): GGUF model integration for LLM-based intent classification`
+- [ ] **Step 4.6: Tüm testleri çalıştır**
+
+```bash
+cargo test --lib 2>&1 | grep "test result"
+```
+
+- [ ] **Step 4.7: Final commit**
+
+```bash
+git add src/cli.rs
+git commit -m "feat(cli): raios ask — edge-intelligence NL routing with dry-run support"
+```
