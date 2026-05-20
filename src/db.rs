@@ -108,6 +108,28 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_bm25_token ON bm25_postings(token);
         ",
     )?;
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS sessions (
+            id          TEXT PRIMARY KEY,
+            agent       TEXT NOT NULL,
+            project     TEXT,
+            started_at  TEXT NOT NULL,
+            ended_at    TEXT,
+            summary     TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS session_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            event_type  TEXT NOT NULL,
+            data        TEXT NOT NULL DEFAULT '',
+            timestamp   TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_se_session ON session_events(session_id);
+        ",
+    )?;
     Ok(())
 }
 
@@ -583,6 +605,15 @@ mod tests {
         let conn = in_memory();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM bm25_files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn sessions_table_exists_after_migrate() {
+        let conn = in_memory();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
     }
