@@ -300,7 +300,9 @@ fn extract_status(content: &str) -> String {
             // Strict bare status keyword
             if t.starts_with("- ") || t.starts_with("* ") {
                 let val = t[2..].trim().to_lowercase();
-                if ["production", "active", "aktif", "early", "erken", "legacy"].contains(&val.as_str()) {
+                if ["production", "active", "aktif", "early", "erken", "legacy"]
+                    .contains(&val.as_str())
+                {
                     let normalized = normalize_status(&val);
                     if normalized != "—" {
                         return normalized;
@@ -454,7 +456,10 @@ mod tests {
     #[test]
     fn normalize_status_english_format() {
         assert_eq!(normalize_status("production"), "production");
-        assert_eq!(normalize_status("**Production-ready.** 7 modules"), "production");
+        assert_eq!(
+            normalize_status("**Production-ready.** 7 modules"),
+            "production"
+        );
         assert_eq!(normalize_status("active development"), "active");
         assert_eq!(normalize_status("early stage"), "early");
         assert_eq!(normalize_status("legacy system"), "legacy");

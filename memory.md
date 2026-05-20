@@ -90,11 +90,12 @@
 - [x] Phase 3B Refactor: 83-field `AppState` compartmentalized into sub-states (ui, system, projects, health, etc.).
 - [x] Database Data Integrity: Fixed `portfolio_status` column pulling `memory.md` contents by applying strict prefix/keyword matching in `extract_status`.
 - [x] Security Model Documentation (`docs/WIKI/02-Security-Model.md`).
+- [x] Phase 9: IDE Symbiosis (MVP + Full Integration) — VS Code extension, Daemon IPC bridge, Jump-to-Code.
+- [x] CI/CD status tracking (GitHub Actions API) integrated into TUI.
 
 ### In Progress
 
 ### Next Steps
-- [ ] CI/CD status tracking (GitHub Actions API).
 - [ ] build/test/deps columns in health view.
 - [ ] **Phase 5: Agent Swarm Mesh** - Multi-node agent orchestration support with **Git Worktree Isolation** (Inspired by **Tessera**) for conflict-free parallel development.
 - [ ] **Edge-Intelligence:** Integrate **Needle** (or similar tiny model) into `aiosd` for local fast-path routing of system commands.

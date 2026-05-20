@@ -93,6 +93,11 @@ impl Server {
             super::sentinel::start_sentinel_worker(sentinel_state, sentinel_tx).await;
         });
 
+        let evolution_rx = tx.subscribe();
+        tokio::spawn(async move {
+            crate::evolution::start_evolution_worker(evolution_rx).await;
+        });
+
         // Start file watcher
         let config = Config::load().unwrap_or_else(|| Config {
             dev_ops_path: PathBuf::from(""),
@@ -649,6 +654,36 @@ impl Server {
                                         "capabilities": caps
                                     });
                                     let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                } else if v["command"] == "ListInstinctCandidates" {
+                                    let limit = v["limit"].as_u64().unwrap_or(20) as usize;
+                                    let store = crate::evolution::CandidateStore::new(crate::evolution::CandidateStore::default_path());
+                                    let candidates = store.list_pending(limit);
+                                    let response = serde_json::json!({
+                                        "event": "InstinctCandidatesList",
+                                        "candidates": candidates
+                                    });
+                                    let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                } else if v["command"] == "PromoteInstinct" {
+                                    if let Some(rule) = v["rule"].as_str() {
+                                        let store = crate::evolution::CandidateStore::new(crate::evolution::CandidateStore::default_path());
+                                        store.promote(rule);
+
+                                        let mut engine = crate::instinct::InstinctEngine::init();
+                                        engine.add_rule(rule.to_string());
+                                        let _ = engine.save();
+
+                                        let response = serde_json::json!({
+                                            "event": "InstinctPromoted",
+                                            "rule": rule
+                                        });
+                                        let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                    } else {
+                                        let err = serde_json::json!({
+                                            "event": "PromoteError",
+                                            "error": "rule is required"
+                                        });
+                                        let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
+                                    }
                                 }
                             }
                             line.clear();

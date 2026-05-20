@@ -210,7 +210,12 @@ impl VectorEngine {
         self.rebuild_hnsw();
     }
 
-    fn write_to_db(&self, file_path: &str, mtime_secs: u64, pairs: &[(Embedding, ChunkMeta)]) -> bool {
+    fn write_to_db(
+        &self,
+        file_path: &str,
+        mtime_secs: u64,
+        pairs: &[(Embedding, ChunkMeta)],
+    ) -> bool {
         let Ok(conn) = open_conn(&self.db_path) else {
             eprintln!("[VectorEngine] failed to open DB connection");
             return false;

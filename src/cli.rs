@@ -2646,9 +2646,15 @@ fn cmd_cortex_index(force: bool, dev_ops: &std::path::Path, json: bool) {
 
     if !force && cortex.chunk_count() > 0 {
         if json {
-            println!("{}", serde_json::json!({"status":"already_indexed","chunks":cortex.chunk_count()}));
+            println!(
+                "{}",
+                serde_json::json!({"status":"already_indexed","chunks":cortex.chunk_count()})
+            );
         } else {
-            println!("Cortex already indexed ({} chunks). Use --force to re-index.", cortex.chunk_count());
+            println!(
+                "Cortex already indexed ({} chunks). Use --force to re-index.",
+                cortex.chunk_count()
+            );
         }
         return;
     }
@@ -2660,9 +2666,16 @@ fn cmd_cortex_index(force: bool, dev_ops: &std::path::Path, json: bool) {
     match cortex.index_workspace(dev_ops) {
         Ok(n) => {
             if json {
-                println!("{}", serde_json::json!({"status":"ok","indexed":n,"total_chunks":cortex.chunk_count()}));
+                println!(
+                    "{}",
+                    serde_json::json!({"status":"ok","indexed":n,"total_chunks":cortex.chunk_count()})
+                );
             } else {
-                println!("✓ Indexed {} files ({} chunks total)", n, cortex.chunk_count());
+                println!(
+                    "✓ Indexed {} files ({} chunks total)",
+                    n,
+                    cortex.chunk_count()
+                );
             }
         }
         Err(e) => eprintln!("Indexing failed: {e}"),
@@ -2734,8 +2747,16 @@ fn print_ci_report(report: &crate::core::ci::CiReport, json: bool) {
         report.run.workflow_name,
         report.run.branch,
         status_icon,
-        report.run.conclusion.as_deref().unwrap_or(&report.run.status),
-        &report.run.created_at.get(..10).unwrap_or(&report.run.created_at)
+        report
+            .run
+            .conclusion
+            .as_deref()
+            .unwrap_or(&report.run.status),
+        &report
+            .run
+            .created_at
+            .get(..10)
+            .unwrap_or(&report.run.created_at)
     );
 
     for job in &report.jobs {

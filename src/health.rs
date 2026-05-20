@@ -26,6 +26,9 @@ pub struct ProjectHealth {
     pub refactor_grade: String,
     pub refactor_high_count: usize,
     pub refactor_medium_count: usize,
+    // CI/CD
+    pub ci_status: Option<String>,
+    pub ci_url: Option<String>,
 }
 
 const CONSTITUTION_RULES: &[(&str, &str)] = &[
@@ -48,6 +51,19 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
     let constitution_issues = check_constitution(path);
     let (graphify_done, graph_report) = check_graphify(path);
     let refactor = crate::refactor_scan::scan_project(path);
+
+    // Fetch CI/CD status if remote is GitHub
+    let (ci_status, ci_url) = if remote_url.as_deref().unwrap_or("").contains("github.com") {
+        match crate::core::ci::get_ci_status(path) {
+            Ok(report) => {
+                let conclusion = report.run.conclusion.unwrap_or(report.run.status);
+                (Some(conclusion), Some(report.run.html_url))
+            }
+            Err(_) => (None, None),
+        }
+    } else {
+        (None, None)
+    };
 
     let health = ProjectHealth {
         name: proj.name.clone(),
@@ -73,6 +89,8 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
         refactor_grade: refactor.grade.clone(),
         refactor_high_count: refactor.high_count,
         refactor_medium_count: refactor.medium_count,
+        ci_status,
+        ci_url,
     };
 
     // Write to SQLite health_cache (best-effort, don't fail if DB unavailable)

@@ -210,10 +210,7 @@ impl SessionStore {
             .as_deref()
             .map(|p| format!("[{}] ", p))
             .unwrap_or_default();
-        let line = format!(
-            "\n- **{}** `{}` {}— {}\n",
-            ended, sess.agent, proj, summary
-        );
+        let line = format!("\n- **{}** `{}` {}— {}\n", ended, sess.agent, proj, summary);
         let _ = std::fs::OpenOptions::new()
             .append(true)
             .create(true)

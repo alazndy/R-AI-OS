@@ -47,9 +47,11 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let header = Row::new(vec!["  Name", "V", "Status", "Category", "Health", "Dirty"])
-        .style(Style::new().fg(DIM).bold())
-        .bottom_margin(1);
+    let header = Row::new(vec![
+        "  Name", "V", "Status", "Category", "Health", "Dirty", "CI",
+    ])
+    .style(Style::new().fg(DIM).bold())
+    .bottom_margin(1);
 
     let rows: Vec<Row> = indices
         .iter()
@@ -83,6 +85,18 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
                 None => Span::styled("?", Style::new().fg(DIM)),
             };
 
+            let ci_status = health.and_then(|h| h.ci_status.as_deref());
+            let ci = match ci_status {
+                Some("success") => Span::styled("✓ pass", Style::new().fg(GREEN)),
+                Some("failure") => Span::styled("✗ fail", Style::new().fg(RED).bold()),
+                Some("in_progress") | Some("queued") => {
+                    Span::styled("↻ sync", Style::new().fg(CYAN))
+                }
+                Some("cancelled") => Span::styled("○ canc", Style::new().fg(DIM)),
+                Some(other) => Span::styled(other, Style::new().fg(AMBER)),
+                None => Span::styled("-", Style::new().fg(DIM)),
+            };
+
             Row::new(vec![
                 Text::from(proj.name.clone()),
                 Text::from(vault_tag),
@@ -90,16 +104,18 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
                 Text::from(cat),
                 Text::from(Span::styled(grade, Style::new().fg(gc).bold())),
                 Text::from(dirty),
+                Text::from(ci),
             ])
         })
         .collect();
 
     let widths = [
-        Constraint::Percentage(25),
+        Constraint::Percentage(22),
         Constraint::Length(3),
-        Constraint::Percentage(15),
-        Constraint::Percentage(25),
+        Constraint::Percentage(13),
+        Constraint::Percentage(22),
         Constraint::Percentage(10),
+        Constraint::Percentage(15),
         Constraint::Percentage(15),
     ];
 
@@ -288,6 +304,17 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
         })
         .unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
 
+    let ci_span = health
+        .map(|h| match h.ci_status.as_deref() {
+            Some("success") => Span::styled("✓ pass", Style::new().fg(GREEN).bold()),
+            Some("failure") => Span::styled("✗ fail", Style::new().fg(RED).bold()),
+            Some("in_progress") | Some("queued") => Span::styled("↻ sync", Style::new().fg(CYAN)),
+            Some("cancelled") => Span::styled("○ canc", Style::new().fg(DIM)),
+            Some(other) => Span::styled(other, Style::new().fg(AMBER)),
+            None => Span::styled("—", Style::new().fg(DIM)),
+        })
+        .unwrap_or_else(|| Span::styled("—", Style::new().fg(DIM)));
+
     let mem_color = if health.map(|h| h.has_memory).unwrap_or(false) {
         GREEN
     } else {
@@ -328,6 +355,10 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
             ),
         ]),
         Line::from(""),
+        Line::from(vec![
+            Span::styled(" CI/CD   ", Style::new().fg(DIM)),
+            ci_span,
+        ]),
         Line::from(vec![
             Span::styled(" Comp    ", Style::new().fg(DIM)),
             comp_span,

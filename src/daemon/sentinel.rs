@@ -1,6 +1,8 @@
 use crate::daemon::state::{DaemonState, SentinelFileStatus};
+use crate::radar::{RadarChannel, Whisper};
 use crate::sentinel::compiler::run_cargo_check;
 use crate::sentinel::SentinelState;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
@@ -8,12 +10,11 @@ use tokio::time::sleep;
 
 pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>) {
     println!("[Sentinel] Worker started.");
+    let radar = RadarChannel::new(tx.clone());
 
-    // Simple loop to check for dirty files and run compiler
     loop {
         let dirty_projects = {
             let s = state.read().await;
-            // For now, let's assume we monitor the current active projects
             s.projects
                 .iter()
                 .filter(|p| p.status == "active")
@@ -25,7 +26,6 @@ pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcas
             if !proj_path.exists() {
                 continue;
             }
-            // Only scan Rust projects (Cargo.toml present)
             if !proj_path.join("Cargo.toml").exists() {
                 continue;
             }
@@ -35,7 +35,6 @@ pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcas
             match run_cargo_check(&proj_path) {
                 Ok(errors) => {
                     let mut s = state.write().await;
-
                     s.sentinel_files.retain(|f| !f.path.starts_with(&proj_str));
 
                     if errors.is_empty() {
@@ -45,6 +44,22 @@ pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcas
                             errors: Vec::new(),
                         });
                     } else {
+                        // Emit a structured whisper per compile error
+                        let whispers: Vec<Whisper> = errors
+                            .iter()
+                            .map(|e| {
+                                Whisper::compile_error(
+                                    &name,
+                                    PathBuf::from(&e.file),
+                                    e.line.unwrap_or(0) as u32,
+                                    &e.message,
+                                )
+                            })
+                            .collect();
+                        drop(s); // release write lock before emitting
+                        radar.emit_many(whispers);
+
+                        let mut s = state.write().await;
                         for err in &errors {
                             s.sentinel_files.push(SentinelFileStatus {
                                 path: format!("{}/{}", proj_str, err.file),
@@ -52,13 +67,22 @@ pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcas
                                 errors: vec![err.clone()],
                             });
                         }
+
+                        let sync_msg = serde_json::json!({
+                            "event": "SentinelUpdate",
+                            "project": name,
+                            "status": "Failed",
+                            "error_count": errors.len()
+                        });
+                        let _ = tx.send(sync_msg.to_string());
+                        continue;
                     }
 
                     let sync_msg = serde_json::json!({
                         "event": "SentinelUpdate",
                         "project": name,
-                        "status": if errors.is_empty() { "Compiled" } else { "Failed" },
-                        "error_count": errors.len()
+                        "status": "Compiled",
+                        "error_count": 0
                     });
                     let _ = tx.send(sync_msg.to_string());
                 }
@@ -68,6 +92,6 @@ pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcas
             }
         }
 
-        sleep(Duration::from_secs(30)).await; // Periodik check (MVP)
+        sleep(Duration::from_secs(30)).await;
     }
 }

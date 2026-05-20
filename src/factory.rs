@@ -54,7 +54,12 @@ pub struct Job {
 }
 
 impl Job {
-    pub fn new(description: &str, agent: &str, project: Option<&str>, webhook_url: Option<&str>) -> Self {
+    pub fn new(
+        description: &str,
+        agent: &str,
+        project: Option<&str>,
+        webhook_url: Option<&str>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             description: description.to_string(),
@@ -398,7 +403,11 @@ mod tests {
 
         let job = factory.get(&id).unwrap();
         assert_eq!(job.status, JobStatus::Failed);
-        assert!(job.error.as_deref().unwrap_or("").contains("something broke"));
+        assert!(job
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("something broke"));
     }
 
     #[tokio::test]
@@ -413,12 +422,7 @@ mod tests {
         factory.ensure_table();
 
         let job = Job::new("echo test", "claude", None, None);
-        let id = factory.submit(
-            job,
-            Box::pin(async {
-                Ok("hello from shell".to_string())
-            }),
-        );
+        let id = factory.submit(job, Box::pin(async { Ok("hello from shell".to_string()) }));
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let j = factory.get(&id).unwrap();

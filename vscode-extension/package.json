@@ -4,17 +4,37 @@
   "displayName": "R-AI-OS",
   "description": "R-AI-OS Kernel integration for VS Code",
   "version": "0.1.0",
+  "publisher": "alazndy",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alazndy/r-ai-os"
+  },
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "raios.healthCheck", "title": "R-AI-OS: Run Health Check" },
-      { "command": "raios.commitPush", "title": "R-AI-OS: Commit & Push (Intelligent)" },
-      { "command": "raios.dispatchTask", "title": "R-AI-OS: Dispatch Task to Agent..." },
-      { "command": "raios.cortexIndex", "title": "R-AI-OS: Re-index Cortex" },
-      { "command": "raios.securityScan", "title": "R-AI-OS: Security Scan" }
+      {
+        "command": "raios.healthCheck",
+        "title": "R-AI-OS: Run Health Check"
+      },
+      {
+        "command": "raios.commitPush",
+        "title": "R-AI-OS: Commit & Push (Intelligent)"
+      },
+      {
+        "command": "raios.dispatchTask",
+        "title": "R-AI-OS: Dispatch Task to Agent..."
+      },
+      {
+        "command": "raios.cortexIndex",
+        "title": "R-AI-OS: Re-index Cortex"
+      },
+      {
+        "command": "raios.securityScan",
+        "title": "R-AI-OS: Security Scan"
+      }
     ],
     "configuration": {
       "title": "R-AI-OS",
@@ -33,10 +53,11 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "compile": "npx tsc -p ./",
+    "watch": "npx tsc -watch -p ./",
     "package": "vsce package"
   },
+
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",

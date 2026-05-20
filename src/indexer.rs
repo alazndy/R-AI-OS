@@ -198,9 +198,9 @@ impl ProjectIndex {
                 idx.doc_count += 1;
             }
         }
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT token, file_id, line_no, snippet FROM bm25_postings",
-        ) {
+        if let Ok(mut stmt) =
+            conn.prepare("SELECT token, file_id, line_no, snippet FROM bm25_postings")
+        {
             let _ = stmt
                 .query_map([], |row| {
                     Ok((
@@ -214,10 +214,11 @@ impl ProjectIndex {
                     for row in rows.flatten() {
                         let (token, file_id, line_no, snippet) = row;
                         if let Some(&slot) = id_to_slot.get(&file_id) {
-                            idx.inverted
-                                .entry(token)
-                                .or_default()
-                                .push((slot, line_no as usize, snippet));
+                            idx.inverted.entry(token).or_default().push((
+                                slot,
+                                line_no as usize,
+                                snippet,
+                            ));
                         }
                     }
                 });
@@ -331,9 +332,7 @@ fn fs_mtimes(root: &Path) -> HashMap<String, u64> {
 
 fn load_cached_bm25_files(conn: &Connection) -> HashMap<String, (i64, u64, usize)> {
     let mut map = HashMap::new();
-    if let Ok(mut stmt) =
-        conn.prepare("SELECT id, path, mtime_secs, doc_length FROM bm25_files")
-    {
+    if let Ok(mut stmt) = conn.prepare("SELECT id, path, mtime_secs, doc_length FROM bm25_files") {
         let _ = stmt
             .query_map([], |row| {
                 Ok((
@@ -362,7 +361,11 @@ mod tests {
         let ws = tmp.path().join("ws");
         fs::create_dir_all(&ws).unwrap();
         fs::write(ws.join("main.rs"), "fn main() { println!(\"hello\"); }").unwrap();
-        fs::write(ws.join("lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }").unwrap();
+        fs::write(
+            ws.join("lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }",
+        )
+        .unwrap();
         ws
     }
 

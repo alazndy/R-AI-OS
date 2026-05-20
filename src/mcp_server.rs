@@ -224,9 +224,8 @@ impl McpServer {
                 }))
             }
             "raios://session/current" => {
-                let store = crate::session::SessionStore::new(
-                    crate::session::SessionStore::default_path()
-                );
+                let store =
+                    crate::session::SessionStore::new(crate::session::SessionStore::default_path());
                 match store.current_open() {
                     Some(sess) => {
                         let events = store.events(&sess.id);
@@ -237,13 +236,12 @@ impl McpServer {
                     }
                     None => Ok(json!({
                         "contents": [{ "uri": uri, "mimeType": "application/json", "text": json!({"session":null}).to_string() }]
-                    }))
+                    })),
                 }
             }
             "raios://session/recent" => {
-                let store = crate::session::SessionStore::new(
-                    crate::session::SessionStore::default_path()
-                );
+                let store =
+                    crate::session::SessionStore::new(crate::session::SessionStore::default_path());
                 let sessions = store.recent(10);
                 let payload = json!({ "sessions": sessions });
                 Ok(json!({
@@ -1557,10 +1555,9 @@ impl McpServer {
     fn tool_session_note(&self, args: &Value) -> Result<Value, String> {
         let note = args["note"].as_str().ok_or("missing note")?;
         let note_truncated = &note[..note.len().min(500)];
-        let store = crate::session::SessionStore::new(
-            crate::session::SessionStore::default_path()
-        );
-        let session_id = args["session_id"].as_str()
+        let store = crate::session::SessionStore::new(crate::session::SessionStore::default_path());
+        let session_id = args["session_id"]
+            .as_str()
             .map(|s| s.to_string())
             .or_else(|| store.current_open().map(|s| s.id));
         match session_id {

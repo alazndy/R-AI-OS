@@ -65,7 +65,10 @@ fn parse_line(line: &str) -> Option<Task> {
     for word in rest.split_whitespace() {
         if let Some(a) = word.strip_prefix('@') {
             let a_lower = a.to_lowercase();
-            if matches!(a_lower.as_str(), "claude" | "gemini" | "antigravity" | "ag" | "codex" | "cx") {
+            if matches!(
+                a_lower.as_str(),
+                "claude" | "gemini" | "antigravity" | "ag" | "codex" | "cx"
+            ) {
                 agent = Some(match a_lower.as_str() {
                     "ag" => "antigravity".into(),
                     "cx" => "codex".into(),
