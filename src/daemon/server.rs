@@ -214,10 +214,12 @@ impl Server {
                                         if let Ok(conn) = rusqlite::Connection::open(
                                             crate::session::SessionStore::default_path()
                                         ) {
-                                            let _ = conn.execute(
+                                            if let Err(e) = conn.execute(
                                                 "UPDATE sessions SET agent=?1, project=COALESCE(?2, project) WHERE id=?3",
                                                 rusqlite::params![agent, project, session_id],
-                                            );
+                                            ) {
+                                                eprintln!("[Daemon] AgentInfo DB update failed: {e}");
+                                            }
                                         }
                                         let _ = writer.write_all(b"{\"event\":\"AgentInfoAck\"}\n").await;
                                     }
