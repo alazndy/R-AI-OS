@@ -77,6 +77,16 @@ fn migrate(conn: &Connection) -> Result<()> {
             project    TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS cortex_chunks (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            path        TEXT    NOT NULL,
+            mtime_secs  INTEGER NOT NULL,
+            start_line  INTEGER NOT NULL,
+            chunk_text  TEXT    NOT NULL,
+            embedding   BLOB    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cortex_path ON cortex_chunks(path);
     ",
     )?;
     Ok(())
@@ -538,5 +548,14 @@ mod tests {
         toggle_task(&conn, id, true).unwrap();
         let tasks = load_tasks_db(&conn).unwrap();
         assert!(tasks[0].completed);
+    }
+
+    #[test]
+    fn cortex_table_exists_after_migrate() {
+        let conn = in_memory();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM cortex_chunks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
