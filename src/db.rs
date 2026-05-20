@@ -89,6 +89,25 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_cortex_path ON cortex_chunks(path);
     ",
     )?;
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS bm25_files (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            path       TEXT UNIQUE NOT NULL,
+            mtime_secs INTEGER NOT NULL,
+            doc_length INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS bm25_postings (
+            token   TEXT    NOT NULL,
+            file_id INTEGER NOT NULL REFERENCES bm25_files(id) ON DELETE CASCADE,
+            line_no INTEGER NOT NULL,
+            snippet TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_bm25_token ON bm25_postings(token);
+        ",
+    )?;
     Ok(())
 }
 
@@ -555,6 +574,15 @@ mod tests {
         let conn = in_memory();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM cortex_chunks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn bm25_tables_exist_after_migrate() {
+        let conn = in_memory();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM bm25_files", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
     }

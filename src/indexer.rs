@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -36,6 +37,7 @@ pub struct ProjectIndex {
     doc_lengths: Vec<usize>,
     inverted: HashMap<String, Vec<Posting>>,
     pub doc_count: usize,
+    db_path: Option<PathBuf>,
 }
 
 impl ProjectIndex {
@@ -45,6 +47,7 @@ impl ProjectIndex {
             doc_lengths: Vec::new(),
             inverted: HashMap::new(),
             doc_count: 0,
+            db_path: None,
         };
 
         let walker = WalkDir::new(root)
@@ -153,6 +156,103 @@ impl ProjectIndex {
         results.truncate(15);
         results
     }
+
+    pub fn load_or_build(root: &Path, db_path: &Path) -> Result<Self> {
+        let conn = open_bm25_db(db_path)?;
+        let fs = fs_mtimes(root);
+        let cached = load_cached_bm25_files(&conn);
+
+        let mut idx = Self {
+            files: Vec::new(),
+            doc_lengths: Vec::new(),
+            inverted: HashMap::new(),
+            doc_count: 0,
+            db_path: Some(db_path.to_path_buf()),
+        };
+
+        let mut stale_ids: Vec<i64> = Vec::new();
+        let mut warm_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for (path, (file_id, cached_mtime, _)) in &cached {
+            match fs.get(path.as_str()) {
+                Some(&fs_mtime) if fs_mtime == *cached_mtime => {
+                    warm_paths.insert(path.clone());
+                }
+                _ => {
+                    stale_ids.push(*file_id);
+                }
+            }
+        }
+
+        for id in &stale_ids {
+            let _ = conn.execute("DELETE FROM bm25_files WHERE id = ?1", params![id]);
+        }
+
+        let mut id_to_slot: HashMap<i64, usize> = HashMap::new();
+        for (path, (file_id, _, doc_len)) in &cached {
+            if warm_paths.contains(path) {
+                let slot = idx.files.len();
+                id_to_slot.insert(*file_id, slot);
+                idx.files.push(PathBuf::from(path));
+                idx.doc_lengths.push(*doc_len);
+                idx.doc_count += 1;
+            }
+        }
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT token, file_id, line_no, snippet FROM bm25_postings",
+        ) {
+            let _ = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map(|rows| {
+                    for row in rows.flatten() {
+                        let (token, file_id, line_no, snippet) = row;
+                        if let Some(&slot) = id_to_slot.get(&file_id) {
+                            idx.inverted
+                                .entry(token)
+                                .or_default()
+                                .push((slot, line_no as usize, snippet));
+                        }
+                    }
+                });
+        }
+
+        for (path_str, &fs_mtime) in &fs {
+            if warm_paths.contains(path_str) {
+                continue;
+            }
+            let path = PathBuf::from(path_str);
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let slot = idx.files.len();
+                idx.index_file(path.clone(), &content);
+                let doc_len = idx.doc_lengths.get(slot).copied().unwrap_or(1);
+
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO bm25_files (path, mtime_secs, doc_length) VALUES (?1,?2,?3)",
+                    params![path_str, fs_mtime as i64, doc_len as i64],
+                );
+                let file_id = conn.last_insert_rowid();
+                for (token, postings) in &idx.inverted {
+                    for &(posting_slot, line_no, ref snippet) in postings {
+                        if posting_slot == slot {
+                            let _ = conn.execute(
+                                "INSERT INTO bm25_postings (token, file_id, line_no, snippet) VALUES (?1,?2,?3,?4)",
+                                params![token, file_id, line_no as i64, snippet],
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(idx)
+    }
 }
 
 fn tokenize(text: &str) -> Vec<String> {
@@ -176,4 +276,128 @@ fn tokenize(text: &str) -> Vec<String> {
         tokens.push(current);
     }
     tokens
+}
+
+fn open_bm25_db(db_path: &Path) -> anyhow::Result<Connection> {
+    if let Some(p) = db_path.parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    let conn = Connection::open(db_path)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA foreign_keys=ON;
+         CREATE TABLE IF NOT EXISTS bm25_files (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             path TEXT UNIQUE NOT NULL,
+             mtime_secs INTEGER NOT NULL,
+             doc_length INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS bm25_postings (
+             token TEXT NOT NULL,
+             file_id INTEGER NOT NULL REFERENCES bm25_files(id) ON DELETE CASCADE,
+             line_no INTEGER NOT NULL,
+             snippet TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_bm25_token ON bm25_postings(token);",
+    )?;
+    Ok(conn)
+}
+
+fn fs_mtimes(root: &Path) -> HashMap<String, u64> {
+    let mut map = HashMap::new();
+    let walker = WalkDir::new(root)
+        .max_depth(6)
+        .into_iter()
+        .filter_entry(|e| !SKIP_DIRS.contains(&e.file_name().to_string_lossy().as_ref()))
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file());
+    for entry in walker {
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if !INDEXED_EXTS.contains(&ext) {
+            continue;
+        }
+        let mtime = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        map.insert(path.to_string_lossy().to_string(), mtime);
+    }
+    map
+}
+
+fn load_cached_bm25_files(conn: &Connection) -> HashMap<String, (i64, u64, usize)> {
+    let mut map = HashMap::new();
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT id, path, mtime_secs, doc_length FROM bm25_files")
+    {
+        let _ = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map(|rows| {
+                for row in rows.flatten() {
+                    map.insert(row.1, (row.0, row.2 as u64, row.3 as usize));
+                }
+            });
+    }
+    map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn make_workspace(tmp: &TempDir) -> PathBuf {
+        let ws = tmp.path().join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(ws.join("main.rs"), "fn main() { println!(\"hello\"); }").unwrap();
+        fs::write(ws.join("lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }").unwrap();
+        ws
+    }
+
+    #[test]
+    fn load_or_build_creates_index() {
+        let tmp = TempDir::new().unwrap();
+        let ws = make_workspace(&tmp);
+        let db = tmp.path().join("test.db");
+        let idx = ProjectIndex::load_or_build(&ws, &db).unwrap();
+        assert!(idx.doc_count >= 2);
+        let results = idx.search("println");
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn second_load_uses_cache() {
+        let tmp = TempDir::new().unwrap();
+        let ws = make_workspace(&tmp);
+        let db = tmp.path().join("test.db");
+        let idx1 = ProjectIndex::load_or_build(&ws, &db).unwrap();
+        let count1 = idx1.doc_count;
+        let idx2 = ProjectIndex::load_or_build(&ws, &db).unwrap();
+        assert_eq!(idx2.doc_count, count1);
+    }
+
+    #[test]
+    fn modified_file_triggers_reindex() {
+        let tmp = TempDir::new().unwrap();
+        let ws = make_workspace(&tmp);
+        let db = tmp.path().join("test.db");
+        ProjectIndex::load_or_build(&ws, &db).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        fs::write(ws.join("main.rs"), "fn main() { eprintln!(\"changed\"); }").unwrap();
+        let idx2 = ProjectIndex::load_or_build(&ws, &db).unwrap();
+        let results = idx2.search("changed");
+        assert!(!results.is_empty());
+    }
 }
