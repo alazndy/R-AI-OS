@@ -160,19 +160,20 @@ impl VectorEngine {
         mtime_secs: u64,
         pairs: Vec<(Embedding, ChunkMeta)>,
     ) {
-        if let Ok(conn) = open_conn(&self.db_path) {
-            let _ = conn.execute(
-                "DELETE FROM cortex_chunks WHERE path = ?1",
-                params![file_path],
-            );
+        // Write to SQLite first — if it fails, don't touch in-memory state.
+        if !self.write_to_db(file_path, mtime_secs, &pairs) {
+            eprintln!("[VectorEngine] DB write failed for {file_path}, skipping in-memory update");
+            return;
         }
 
+        // Remove old in-memory entries for this file.
         let mut keep = vec![true; self.metas.len()];
         for (i, meta) in self.metas.iter().enumerate() {
             if meta.path == file_path {
                 keep[i] = false;
             }
         }
+
         let mut new_metas = Vec::new();
         let mut new_embs: Vec<Embedding> = Vec::new();
         for (i, (meta, emb)) in self
@@ -187,24 +188,6 @@ impl VectorEngine {
             }
         }
 
-        if let Ok(conn) = open_conn(&self.db_path) {
-            for (emb, meta) in &pairs {
-                let blob = embedding_to_blob(emb);
-                let _ = conn.execute(
-                    "INSERT INTO cortex_chunks
-                         (path, mtime_secs, start_line, chunk_text, embedding)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![
-                        meta.path,
-                        mtime_secs as i64,
-                        meta.start_line as i64,
-                        meta.text,
-                        blob
-                    ],
-                );
-            }
-        }
-
         for (emb, meta) in pairs {
             new_metas.push(meta);
             new_embs.push(emb);
@@ -215,6 +198,56 @@ impl VectorEngine {
         self.indexed_files.insert(file_path.to_string(), mtime_secs);
         self.dirty = true;
         self.rebuild_hnsw();
+    }
+
+    fn write_to_db(&self, file_path: &str, mtime_secs: u64, pairs: &[(Embedding, ChunkMeta)]) -> bool {
+        let Ok(conn) = open_conn(&self.db_path) else {
+            eprintln!("[VectorEngine] failed to open DB connection");
+            return false;
+        };
+
+        let tx = match conn.unchecked_transaction() {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[VectorEngine] transaction start failed: {e}");
+                return false;
+            }
+        };
+
+        if let Err(e) = tx.execute(
+            "DELETE FROM cortex_chunks WHERE path = ?1",
+            params![file_path],
+        ) {
+            eprintln!("[VectorEngine] DELETE failed: {e}");
+            return false;
+        }
+
+        for (emb, meta) in pairs {
+            let blob = embedding_to_blob(emb);
+            if let Err(e) = tx.execute(
+                "INSERT INTO cortex_chunks
+                     (path, mtime_secs, start_line, chunk_text, embedding)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    meta.path,
+                    mtime_secs as i64,
+                    meta.start_line as i64,
+                    meta.text,
+                    blob
+                ],
+            ) {
+                eprintln!("[VectorEngine] INSERT failed: {e}");
+                return false;
+            }
+        }
+
+        match tx.commit() {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("[VectorEngine] commit failed: {e}");
+                false
+            }
+        }
     }
 
     /// Rebuild the HNSW in-memory index from current embeddings.
