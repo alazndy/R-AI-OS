@@ -497,6 +497,67 @@ impl Server {
                                     let _ = writer
                                         .write_all(format!("{}\n", response).as_bytes())
                                         .await;
+                                } else if v["command"] == "SubmitJob" {
+                                    let description = v["description"].as_str().unwrap_or("unnamed task").to_string();
+                                    let agent_name = v["agent"].as_str().unwrap_or("unknown").to_string();
+                                    let project = v["project"].as_str().map(|s| s.to_string());
+                                    let webhook_url = v["webhook_url"].as_str().map(|s| s.to_string());
+                                    let shell_cmd = v["shell_cmd"].as_str().unwrap_or("").to_string();
+
+                                    if shell_cmd.is_empty() {
+                                        let err = serde_json::json!({
+                                            "event": "JobError",
+                                            "error": "shell_cmd is required"
+                                        });
+                                        let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
+                                    } else {
+                                        let job = Job::new(
+                                            &description,
+                                            &agent_name,
+                                            project.as_deref(),
+                                            webhook_url.as_deref(),
+                                        );
+                                        let task = Box::pin(async move {
+                                            let output = tokio::process::Command::new("cmd")
+                                                .args(["/C", &shell_cmd])
+                                                .output()
+                                                .await?;
+                                            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                                            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                                            if output.status.success() {
+                                                Ok(stdout)
+                                            } else {
+                                                Err(anyhow::anyhow!("exit {}: {}", output.status, stderr))
+                                            }
+                                        });
+                                        let job_id = factory_for_client.submit(job, task);
+                                        let response = serde_json::json!({
+                                            "event": "JobSubmitted",
+                                            "job_id": job_id.to_string()
+                                        });
+                                        let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                    }
+                                } else if v["command"] == "GetJob" {
+                                    if let Some(id_str) = v["job_id"].as_str() {
+                                        if let Ok(id) = uuid::Uuid::parse_str(id_str) {
+                                            match factory_for_client.get(&id) {
+                                                Some(job) => {
+                                                    let response = serde_json::json!({
+                                                        "event": "JobInfo",
+                                                        "job": job
+                                                    });
+                                                    let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                                }
+                                                None => {
+                                                    let err = serde_json::json!({
+                                                        "event": "JobError",
+                                                        "error": format!("job {} not found", id_str)
+                                                    });
+                                                    let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             line.clear();
