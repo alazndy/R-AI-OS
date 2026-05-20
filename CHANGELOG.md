@@ -2,6 +2,36 @@
 
 All notable changes to the **R-AI-OS** project will be documented in this file.
 
+## [1.4.0] - 2026-05-20 (Universal Kernel Edition)
+
+### Added
+
+**Universal Agent Kernel (R-AI-OS 2.0):**
+- **Tri-Protocol Interface:** Daemon TCP (:42069), MCP-over-TCP (:42070) ve CLI aynı anda çalışıyor. Claude, Gemini, Codex ve Antigravity aynı event bus'ı paylaşıyor.
+- **Lock Manager:** Dosya ve task bazlı kilit yöneticisi — öncelik sistemi (User > Agent > Automation), 30s timeout, re-entrant kilitleme, deadlock önleme. 5 unit test.
+- **Radar Whisper Stream:** Compile hataları, security açıkları ve mimari ihlaller bağlı tüm ajanlara gerçek zamanlı `RadarWhisper` eventi olarak push ediliyor.
+- **Factory Mode:** Ağır görevler (refactor, test generation, build) arka planda kuyruklanıyor. Anında `job_id` dönüyor, tamamlanınca SQLite inbox + webhook notification. 4 unit test.
+- **Universal Proxy-Store:** Yeteneği isteyen ajan ile arka taraftaki backend'i (Rust internal / Python skill / Shell / MCP bridge) soyutlayan proxy katmanı. 5 unit test.
+
+**Storage Overhaul:**
+- **Cortex SQLite Store:** Vector embeddings `cortex_store.json`'dan SQLite BLOB'a taşındı. 384×f32 = 1536 byte/chunk little-endian BLOB. Upsert artık transaction-safe (split-brain fix). Legacy JSON otomatik siliniyor.
+- **BM25 Index Persistence:** Inverted index SQLite'a persist ediliyor. Restart'ta dosya mtime'larına göre sadece değişen dosyalar yeniden indexleniyor — büyük workspace'lerde soğuk başlangıç eliminasyonu.
+- **Session Memory System:** Her agent TCP bağlantısı otomatik session açıyor. Olaylar (`file_change_request`, `handover`, `note`) SQLite'a yazılıyor. Disconnect'te `memory.md`'ye özet satırı ekleniyor.
+
+**MCP Enhancements:**
+- `raios://session/current` — aktif session'ı events ile birlikte döndüren MCP resource.
+- `raios://session/recent` — son 10 tamamlanmış session.
+- `session_note` tool — agent'ın bir kararı veya tamamlanan görevi session memory'ye kaydetmesi için.
+
+### Fixed
+- `instinct.rs`: `ProjectHealth` struct'ında eksik `ci_status` / `ci_url` alanları düzeltildi.
+
+### Changed
+- `aiosd` daemon artık `Kernel::run()` üzerinden başlıyor — tüm protokoller paylaşılan broadcast channel üzerinde.
+- `Server::run()` → `run_inner(tx)` refactoru ile dışarıdan broadcast kanalı alabilir hale getirildi.
+
+---
+
 ## [1.3.0] - 2026-05-17 (AI Intelligence Layer)
 
 ### Added

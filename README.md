@@ -19,7 +19,7 @@
   <a href="#-the-vision">Vision</a> •
   <a href="docs/WIKI/Home.md">Documentation</a> •
   <a href="#-core-kernel-modules">Core Modules</a> •
-  <a href="#-aura-hardened-edition-v130">Aura Hardened</a> •
+  <a href="#-universal-kernel-edition-v140">Universal Kernel</a> •
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-cli-reference">CLI</a> •
   <a href="#-roadmap">Roadmap</a>
@@ -74,6 +74,19 @@ Engineering rigor is maintained through a mandatory **Red-Blue-Judge** cycle.
 
 ---
 
+## 🌐 Universal Kernel Edition (v1.4.0)
+
+R-AI-OS evolves from a CLI toolkit into a true **Universal Agent Operating System Kernel**:
+
+*   **🔌 Tri-Protocol Interface:** Daemon TCP (:42069) + MCP-over-TCP (:42070) + CLI — all concurrent, all sharing one event bus. Any agent ecosystem can connect natively.
+*   **🔒 Lock Manager:** File and task-level locks with priority levels (User > Agent > Automation), 30s timeout, and deadlock prevention. Multi-agent swarms can't corrupt each other's work.
+*   **📡 Radar Whisper Stream:** Real-time context hints pushed to every connected agent — compile errors, security vulnerabilities, architectural violations — as structured `RadarWhisper` events.
+*   **🏭 Factory Mode:** Submit heavy jobs (refactor, test gen, build) and get a `job_id` instantly. Jobs run async in SQLite-backed queue; completion fires broadcast + optional webhook.
+*   **🧩 Universal Proxy-Store:** One capability name, any backend — Rust internal, Python skill, shell command, or MCP bridge. Agents request generically; the kernel translates.
+*   **💾 Storage Overhaul:** Vector embeddings moved from JSON to binary SQLite BLOBs (transaction-safe), BM25 index now persisted (mtime-based invalidation), session memory tracked per-agent with `memory.md` auto-append.
+
+---
+
 ## 🦾 Aura Hardened Edition (v1.3.0)
 
 R-AI-OS has evolved into its most stable and secure version yet:
@@ -121,8 +134,8 @@ raios bootstrap
 - [x] **Phase 1: Core Evolution** - Workspace mapping and health.
 - [x] **Phase 2: AI OS Kernel** - Router, Shield, Instincts, Universal Bootstrap.
 - [x] **Phase 3: TUI Mission Control** - Aura Hardened IPC & Diff Inbox.
-- [ ] **Phase 4: SQLite Migration** - High-concurrency state management.
-- [ ] **Phase 5: Agent Swarm Mesh** - Multi-node agent orchestration support.
+- [x] **Phase 4: SQLite Migration** - Cortex BLOB store, BM25 persistence, session memory — all in SQLite.
+- [x] **Phase 5: Agent Swarm Mesh** - Lock Manager, Radar Whispers, Factory Mode, Universal Proxy-Store, Tri-Protocol Kernel.
 - [ ] **Phase 6: Edge-Intelligence & Local Routing** - Integration of **Needle** for ultra-fast, zero-cost local function calling.
 - [ ] **Phase 7: Evolutionary Intelligence (Experimental)** - Self-evolving skills and autonomous instinct refinement based on task success/failure (Inspired by **OpenSpace**).
 - [ ] **Phase 8: Recursive Reasoning (Experimental)** - Deep task decomposition and recursive logic flows for complex architectural problems (Inspired by **RLM**).
