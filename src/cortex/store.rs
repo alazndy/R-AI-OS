@@ -1,28 +1,57 @@
-//! Cortex — Vector Store
-//!
-//! Maintains an in-memory HNSW index over chunk embeddings and persists
-//! chunk metadata + raw embeddings to `~/.config/raios/cortex_store.json`.
-//! On load the HNSW graph is rebuilt from the stored embeddings.
-//!
-//! Retrieval returns the top-K most similar chunks by cosine similarity
-//! (dot-product of L2-normalised vectors).
-
 use super::embedder::{Embedding, EMBEDDING_DIM};
 use instant_distance::{Builder, HnswMap, Point, Search};
-use serde::{Deserialize, Serialize};
+use rusqlite::{params, Connection};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-// ─── Index persistence path ───────────────────────────────────────────────────
+// ─── DB helpers ───────────────────────────────────────────────────────────────
 
-fn store_path() -> PathBuf {
+fn default_db_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("raios")
-        .join("cortex_store.json")
+        .join("workspace.db")
 }
 
-// ─── Point wrapper ────────────────────────────────────────────────────────────
+fn open_conn(db_path: &Path) -> anyhow::Result<Connection> {
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let conn = Connection::open(db_path)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         CREATE TABLE IF NOT EXISTS cortex_chunks (
+             id         INTEGER PRIMARY KEY AUTOINCREMENT,
+             path       TEXT    NOT NULL,
+             mtime_secs INTEGER NOT NULL,
+             start_line INTEGER NOT NULL,
+             chunk_text TEXT    NOT NULL,
+             embedding  BLOB    NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_cortex_path ON cortex_chunks(path);",
+    )?;
+    Ok(conn)
+}
+
+// ─── Public types ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct ChunkMeta {
+    pub path: String,
+    pub start_line: usize,
+    pub text: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct VectorResult {
+    pub path: String,
+    pub start_line: usize,
+    pub text: String,
+    /// Cosine similarity in [0, 1].
+    pub score: f32,
+}
+
+// ─── HNSW point ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 struct EmbPoint(Embedding);
@@ -34,69 +63,78 @@ impl Point for EmbPoint {
     }
 }
 
-// ─── Chunk metadata ───────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkMeta {
-    pub path: String,
-    pub start_line: usize,
-    pub text: String,
-}
-
-/// Result returned by `VectorEngine::query`.
-#[derive(Debug, Clone)]
-pub struct VectorResult {
-    pub path: String,
-    pub start_line: usize,
-    pub text: String,
-    /// Cosine similarity in [0, 1].
-    pub score: f32,
-}
-
-// ─── Persisted data (what we serialize to disk) ───────────────────────────────
-
-#[derive(Serialize, Deserialize, Default)]
-struct PersistedStore {
-    metas: Vec<ChunkMeta>,
-    /// Raw embeddings, parallel to `metas`. Stored as Vec<Vec<f32>> for JSON.
-    embeddings: Vec<Vec<f32>>,
-    /// Maps file path → mtime seconds (for incremental indexing).
-    indexed_files: HashMap<String, u64>,
-}
-
 // ─── VectorEngine ─────────────────────────────────────────────────────────────
 
 pub struct VectorEngine {
+    db_path: PathBuf,
     metas: Vec<ChunkMeta>,
     embeddings: Vec<Embedding>,
     indexed_files: HashMap<String, u64>,
-    /// The HNSW graph — rebuilt on load and after every upsert.
     hnsw: Option<HnswMap<EmbPoint, usize>>,
     dirty: bool,
 }
 
 impl VectorEngine {
-    /// Load from disk or create empty.
+    /// Load from the default workspace database or create empty.
     pub fn load() -> Self {
-        let path = store_path();
-        if let Ok(bytes) = std::fs::read(&path) {
-            if let Ok(ps) = serde_json::from_slice::<PersistedStore>(&bytes) {
-                let embeddings: Vec<Embedding> =
-                    ps.embeddings.iter().map(|v| vec_to_array(v)).collect();
+        Self::load_from(&default_db_path())
+    }
 
-                let mut engine = Self {
-                    metas: ps.metas,
-                    embeddings,
-                    indexed_files: ps.indexed_files,
-                    hnsw: None,
-                    dirty: false,
-                };
-                engine.rebuild_hnsw();
-                return engine;
-            }
+    /// Load from an explicit database path (primarily for testing).
+    pub fn load_from(db_path: &Path) -> Self {
+        let db_path = db_path.to_path_buf();
+        let Ok(conn) = open_conn(&db_path) else {
+            return Self::empty(db_path);
+        };
+
+        let mut metas = Vec::new();
+        let mut embeddings = Vec::new();
+        let mut indexed_files: HashMap<String, u64> = HashMap::new();
+
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT path, mtime_secs, start_line, chunk_text, embedding
+             FROM cortex_chunks
+             ORDER BY id",
+        ) {
+            let _ = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Vec<u8>>(4)?,
+                    ))
+                })
+                .map(|rows| {
+                    for row in rows.flatten() {
+                        let (path, mtime, start_line, text, blob) = row;
+                        indexed_files.insert(path.clone(), mtime as u64);
+                        metas.push(ChunkMeta {
+                            path,
+                            start_line: start_line as usize,
+                            text,
+                        });
+                        embeddings.push(blob_to_embedding(&blob));
+                    }
+                });
         }
 
+        let mut engine = Self {
+            db_path,
+            metas,
+            embeddings,
+            indexed_files,
+            hnsw: None,
+            dirty: false,
+        };
+        engine.rebuild_hnsw();
+        engine
+    }
+
+    fn empty(db_path: PathBuf) -> Self {
         Self {
+            db_path,
             metas: Vec::new(),
             embeddings: Vec::new(),
             indexed_files: HashMap::new(),
@@ -105,24 +143,9 @@ impl VectorEngine {
         }
     }
 
-    /// Persist to disk if dirty.
+    /// No-op: writes are committed immediately in `upsert_file`.
     pub fn save(&mut self) {
-        if !self.dirty {
-            return;
-        }
-        let path = store_path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let ps = PersistedStore {
-            metas: self.metas.clone(),
-            embeddings: self.embeddings.iter().map(|e| e.to_vec()).collect(),
-            indexed_files: self.indexed_files.clone(),
-        };
-        if let Ok(json) = serde_json::to_string(&ps) {
-            let _ = std::fs::write(&path, json);
-            self.dirty = false;
-        }
+        self.dirty = false;
     }
 
     /// Returns true if the file (by mtime) is already indexed and up-to-date.
@@ -137,7 +160,13 @@ impl VectorEngine {
         mtime_secs: u64,
         pairs: Vec<(Embedding, ChunkMeta)>,
     ) {
-        // Remove old entries for this file
+        if let Ok(conn) = open_conn(&self.db_path) {
+            let _ = conn.execute(
+                "DELETE FROM cortex_chunks WHERE path = ?1",
+                params![file_path],
+            );
+        }
+
         let mut keep = vec![true; self.metas.len()];
         for (i, meta) in self.metas.iter().enumerate() {
             if meta.path == file_path {
@@ -158,7 +187,24 @@ impl VectorEngine {
             }
         }
 
-        // Append new chunks
+        if let Ok(conn) = open_conn(&self.db_path) {
+            for (emb, meta) in &pairs {
+                let blob = embedding_to_blob(emb);
+                let _ = conn.execute(
+                    "INSERT INTO cortex_chunks
+                         (path, mtime_secs, start_line, chunk_text, embedding)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        meta.path,
+                        mtime_secs as i64,
+                        meta.start_line as i64,
+                        meta.text,
+                        blob
+                    ],
+                );
+            }
+        }
+
         for (emb, meta) in pairs {
             new_metas.push(meta);
             new_embs.push(emb);
@@ -168,8 +214,10 @@ impl VectorEngine {
         self.embeddings = new_embs;
         self.indexed_files.insert(file_path.to_string(), mtime_secs);
         self.dirty = true;
+        self.rebuild_hnsw();
     }
 
+    /// Rebuild the HNSW in-memory index from current embeddings.
     pub fn rebuild_hnsw(&mut self) {
         if self.embeddings.is_empty() {
             self.hnsw = None;
@@ -193,7 +241,6 @@ impl VectorEngine {
         for item in hnsw.search(&point, &mut search) {
             let idx: usize = *item.value;
             if let Some(meta) = self.metas.get(idx) {
-                // item.point is the neighbour; compute distance via Point trait
                 let dist = point.distance(item.point);
                 let score = (1.0 - dist).clamp(0.0, 1.0);
                 results.push(VectorResult {
@@ -219,16 +266,130 @@ impl VectorEngine {
     pub fn chunk_count(&self) -> usize {
         self.metas.len()
     }
+
     pub fn file_count(&self) -> usize {
         self.indexed_files.len()
     }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── BLOB encoding (little-endian f32) ───────────────────────────────────────
 
-fn vec_to_array(v: &[f32]) -> Embedding {
+fn embedding_to_blob(emb: &Embedding) -> Vec<u8> {
+    let mut out = Vec::with_capacity(EMBEDDING_DIM * 4);
+    for &f in emb.iter() {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    out
+}
+
+fn blob_to_embedding(blob: &[u8]) -> Embedding {
     let mut arr = [0.0f32; EMBEDDING_DIM];
-    let len = v.len().min(EMBEDDING_DIM);
-    arr[..len].copy_from_slice(&v[..len]);
+    for (i, chunk) in blob.chunks_exact(4).take(EMBEDDING_DIM).enumerate() {
+        arr[i] = f32::from_le_bytes(chunk.try_into().unwrap_or([0u8; 4]));
+    }
     arr
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_engine_with_db(db_path: &std::path::Path) -> VectorEngine {
+        VectorEngine::load_from(db_path)
+    }
+
+    #[test]
+    fn round_trip_upsert_and_query() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("test.db");
+
+        let emb: Embedding = {
+            let mut e = [0.0f32; EMBEDDING_DIM];
+            e[0] = 1.0;
+            e
+        };
+
+        let mut engine = make_engine_with_db(&db);
+        engine.upsert_file(
+            "src/main.rs",
+            12345,
+            vec![(
+                emb,
+                ChunkMeta {
+                    path: "src/main.rs".into(),
+                    start_line: 1,
+                    text: "fn main() {}".into(),
+                },
+            )],
+        );
+        engine.save();
+
+        let engine2 = make_engine_with_db(&db);
+        assert_eq!(engine2.chunk_count(), 1);
+        assert_eq!(engine2.file_count(), 1);
+    }
+
+    #[test]
+    fn upsert_replaces_old_chunks_for_same_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("test.db");
+
+        let emb = [0.0f32; EMBEDDING_DIM];
+        let mut engine = make_engine_with_db(&db);
+
+        engine.upsert_file(
+            "a.rs",
+            1,
+            vec![(
+                emb,
+                ChunkMeta {
+                    path: "a.rs".into(),
+                    start_line: 1,
+                    text: "old".into(),
+                },
+            )],
+        );
+        engine.save();
+        engine.upsert_file(
+            "a.rs",
+            2,
+            vec![(
+                emb,
+                ChunkMeta {
+                    path: "a.rs".into(),
+                    start_line: 1,
+                    text: "new".into(),
+                },
+            )],
+        );
+        engine.save();
+
+        let engine2 = make_engine_with_db(&db);
+        assert_eq!(engine2.chunk_count(), 1);
+    }
+
+    #[test]
+    fn is_indexed_uses_mtime() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("test.db");
+        let emb = [0.0f32; EMBEDDING_DIM];
+        let mut engine = make_engine_with_db(&db);
+        engine.upsert_file(
+            "x.rs",
+            999,
+            vec![(
+                emb,
+                ChunkMeta {
+                    path: "x.rs".into(),
+                    start_line: 1,
+                    text: "x".into(),
+                },
+            )],
+        );
+        engine.save();
+        assert!(engine.is_indexed("x.rs", 999));
+        assert!(!engine.is_indexed("x.rs", 1000));
+    }
 }
