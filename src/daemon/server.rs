@@ -496,6 +496,18 @@ impl Server {
                 }
 
                 sessions_for_client.end(&session_id, None);
+
+                // Auto-append to memory.md if we know the project
+                if let Some(sess) = sessions_for_client.get(&session_id) {
+                    if let Some(proj) = &sess.project {
+                        if let Some(config) = Config::load() {
+                            let mem_path = config.dev_ops_path.join(proj).join("memory.md");
+                            if mem_path.exists() {
+                                sessions_for_client.append_to_memory(&session_id, &mem_path);
+                            }
+                        }
+                    }
+                }
                 println!("[Daemon] Session {} ended for client {}", session_id, addr);
             });
         }
