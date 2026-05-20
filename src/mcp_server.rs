@@ -145,6 +145,18 @@ impl McpServer {
                     "name": "MASTER Rules",
                     "description": "MASTER.md — agent constitution and mandatory rules",
                     "mimeType": "text/markdown"
+                },
+                {
+                    "uri": "raios://session/current",
+                    "name": "Current Session",
+                    "description": "Most recent open agent session — events, notes, context",
+                    "mimeType": "application/json"
+                },
+                {
+                    "uri": "raios://session/recent",
+                    "name": "Recent Sessions",
+                    "description": "Last 10 completed sessions",
+                    "mimeType": "application/json"
                 }
             ]
         }))
@@ -153,35 +165,93 @@ impl McpServer {
     fn handle_resources_read(&self, params: &Value) -> Result<Value, String> {
         let uri = params["uri"].as_str().ok_or("missing uri")?;
 
-        let (path, name) = match uri {
+        match uri {
             "raios://memory" => {
                 // Find the most recent memory.md in dev_ops
-                let mem = crate::filebrowser::discover_memory_files(&self.config.dev_ops_path, 1)
+                let path = crate::filebrowser::discover_memory_files(&self.config.dev_ops_path, 1)
                     .into_iter()
                     .next()
                     .map(|e| e.path)
                     .unwrap_or_else(|| self.config.dev_ops_path.join("memory.md"));
-                (mem, "Agent Memory")
+
+                let content = if path.exists() {
+                    std::fs::read_to_string(&path)
+                        .unwrap_or_else(|e| format!("# Error reading file\n{}", e))
+                } else {
+                    format!("# Memory not found\nPath: {}", path.display())
+                };
+
+                Ok(json!({
+                    "contents": [{
+                        "uri": uri,
+                        "mimeType": "text/markdown",
+                        "text": content
+                    }]
+                }))
             }
-            "raios://tasks" => (self.config.dev_ops_path.join("tasks.md"), "Tasks"),
-            "raios://master" => (self.config.master_md_path.clone(), "MASTER Rules"),
-            _ => return Err(format!("Unknown resource: {}", uri)),
-        };
+            "raios://tasks" => {
+                let path = self.config.dev_ops_path.join("tasks.md");
+                let content = if path.exists() {
+                    std::fs::read_to_string(&path)
+                        .unwrap_or_else(|e| format!("# Error reading file\n{}", e))
+                } else {
+                    format!("# Tasks not found\nPath: {}", path.display())
+                };
 
-        let content = if path.exists() {
-            std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| format!("# Error reading file\n{}", e))
-        } else {
-            format!("# {} not found\nPath: {}", name, path.display())
-        };
+                Ok(json!({
+                    "contents": [{
+                        "uri": uri,
+                        "mimeType": "text/markdown",
+                        "text": content
+                    }]
+                }))
+            }
+            "raios://master" => {
+                let path = self.config.master_md_path.clone();
+                let content = if path.exists() {
+                    std::fs::read_to_string(&path)
+                        .unwrap_or_else(|e| format!("# Error reading file\n{}", e))
+                } else {
+                    format!("# MASTER Rules not found\nPath: {}", path.display())
+                };
 
-        Ok(json!({
-            "contents": [{
-                "uri": uri,
-                "mimeType": "text/markdown",
-                "text": content
-            }]
-        }))
+                Ok(json!({
+                    "contents": [{
+                        "uri": uri,
+                        "mimeType": "text/markdown",
+                        "text": content
+                    }]
+                }))
+            }
+            "raios://session/current" => {
+                let store = crate::session::SessionStore::new(
+                    crate::session::SessionStore::default_path()
+                );
+                match store.current_open() {
+                    Some(sess) => {
+                        let events = store.events(&sess.id);
+                        let payload = json!({ "session": sess, "events": events });
+                        Ok(json!({
+                            "contents": [{ "uri": uri, "mimeType": "application/json", "text": payload.to_string() }]
+                        }))
+                    }
+                    None => Ok(json!({
+                        "contents": [{ "uri": uri, "mimeType": "application/json", "text": json!({"session":null}).to_string() }]
+                    }))
+                }
+            }
+            "raios://session/recent" => {
+                let store = crate::session::SessionStore::new(
+                    crate::session::SessionStore::default_path()
+                );
+                let sessions = store.recent(10);
+                let payload = json!({ "sessions": sessions });
+                Ok(json!({
+                    "contents": [{ "uri": uri, "mimeType": "application/json", "text": payload.to_string() }]
+                }))
+            }
+            _ => Err(format!("Unknown resource: {}", uri)),
+        }
     }
 
     fn handle_tools_list(&self) -> Result<Value, String> {
@@ -452,6 +522,18 @@ impl McpServer {
                             "project": { "type": "string", "description": "Project name (optional)" }
                         }
                     }
+                },
+                {
+                    "name": "session_note",
+                    "description": "Write a structured note to the current session memory. Call this when you make a decision, complete a task, or want to remember context for the next session.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["note"],
+                        "properties": {
+                            "note": { "type": "string", "description": "The note to record (max 500 chars)" },
+                            "session_id": { "type": "string", "description": "Session ID (omit to use current open session)" }
+                        }
+                    }
                 }
             ]
         }))
@@ -485,6 +567,7 @@ impl McpServer {
             "git_log" => self.tool_git_log(args),
             "git_diff" => self.tool_git_diff(args),
             "git_commit" => self.tool_git_commit(args),
+            "session_note" => self.tool_session_note(args),
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
@@ -1469,6 +1552,31 @@ impl McpServer {
             "content": [{ "type": "text", "text": text }],
             "ok": true
         }))
+    }
+
+    fn tool_session_note(&self, args: &Value) -> Result<Value, String> {
+        let note = args["note"].as_str().ok_or("missing note")?;
+        let note_truncated = &note[..note.len().min(500)];
+        let store = crate::session::SessionStore::new(
+            crate::session::SessionStore::default_path()
+        );
+        let session_id = args["session_id"].as_str()
+            .map(|s| s.to_string())
+            .or_else(|| store.current_open().map(|s| s.id));
+        match session_id {
+            Some(id) => {
+                store.record_event(&id, "note", note_truncated);
+                Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": format!("Note recorded to session {}", id)
+                    }],
+                    "recorded": true,
+                    "session_id": id
+                }))
+            }
+            None => Err("no active session".to_string()),
+        }
     }
 }
 
