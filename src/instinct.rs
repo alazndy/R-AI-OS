@@ -90,6 +90,99 @@ pub fn suggest_from_health(health: &crate::health::ProjectHealth) -> Vec<String>
     suggestions
 }
 
+/// Generate instinct suggestions from a SUCCESSFUL Factory job.
+/// Returns 0-2 short rule strings based on heuristic pattern matching.
+pub fn suggest_from_outcome(description: &str, command: &str, result: &str) -> Vec<String> {
+    if result.trim().is_empty() {
+        return vec![];
+    }
+
+    let desc_lower = description.to_lowercase();
+    let result_lower = result.to_lowercase();
+    let mut suggestions = Vec::new();
+
+    // Test pass pattern
+    if command.contains("test") || desc_lower.contains("test") {
+        let has_failures = result_lower.contains("failed") && !result_lower.contains("0 failed");
+        if result_lower.contains("passed") && !has_failures {
+            suggestions.push(format!(
+                "Test suite passes for '{}' — keep TDD discipline before adding features",
+                truncate(&desc_lower, 40)
+            ));
+        }
+    }
+
+    // Build success pattern
+    if command.contains("build") || command.contains("cargo build") || command.contains("cargo check") {
+        if !result_lower.contains("error") {
+            suggestions.push(format!(
+                "'{}' builds cleanly — run `cargo check` before submitting PRs",
+                truncate(&desc_lower, 40)
+            ));
+        }
+    }
+
+    // Security scan pattern
+    if desc_lower.contains("security") || command.contains("security") {
+        suggestions.push(
+            "Security scan succeeded — run `raios security` before every commit".to_string()
+        );
+    }
+
+    suggestions.truncate(2);
+    suggestions
+}
+
+/// Generate instinct suggestions from a FAILED Factory job.
+pub fn suggest_from_failure(description: &str, _command: &str, error: &str) -> Vec<String> {
+    if error.trim().is_empty() {
+        return vec![];
+    }
+
+    let error_lower = error.to_lowercase();
+    let desc_lower = description.to_lowercase();
+    let mut suggestions = Vec::new();
+
+    if error_lower.contains("mismatched types") || error_lower.contains("e0308") {
+        suggestions.push(
+            "Type mismatch errors — run `cargo check` after every refactor, not just at the end"
+                .to_string(),
+        );
+    }
+
+    if error_lower.contains("borrow") || error_lower.contains("lifetime") {
+        suggestions.push(
+            "Borrow checker failure — prefer cloning over fighting the borrow checker in hot paths"
+                .to_string(),
+        );
+    }
+
+    if error_lower.contains("permission denied") || error_lower.contains("access is denied") {
+        suggestions.push(format!(
+            "'{}' failed with permission error — check file locks before running shell commands",
+            truncate(&desc_lower, 40)
+        ));
+    }
+
+    if error_lower.contains("connection refused") || error_lower.contains("failed to connect") {
+        suggestions.push(
+            "Connection failure — ensure aiosd daemon is running before agent-to-daemon tasks"
+                .to_string(),
+        );
+    }
+
+    suggestions.truncate(2);
+    suggestions
+}
+
+fn truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        s
+    } else {
+        &s[..max]
+    }
+}
+
 pub fn append_to_memory_md(project_path: &std::path::Path, rule: &str) -> anyhow::Result<()> {
     let memory_path = project_path.join("memory.md");
     if !memory_path.exists() {
@@ -181,6 +274,8 @@ mod tests {
             refactor_grade: "F".into(),
             refactor_high_count: 5,
             refactor_medium_count: 3,
+            ci_status: None,
+            ci_url: None,
         }
     }
 
@@ -218,5 +313,35 @@ mod tests {
         append_to_memory_md(tmp.path(), "No duplicates rule").unwrap();
         let content = std::fs::read_to_string(tmp.path().join("memory.md")).unwrap();
         assert_eq!(content.matches("No duplicates rule").count(), 1);
+    }
+
+    #[test]
+    fn successful_cargo_test_job_suggests_tdd_rule() {
+        let suggestions = suggest_from_outcome(
+            "run tests for auth module",
+            "cargo test",
+            "117 passed; 0 failed",
+        );
+        assert!(!suggestions.is_empty());
+        let combined = suggestions.join(" ").to_lowercase();
+        assert!(combined.contains("test") || combined.contains("pass"));
+    }
+
+    #[test]
+    fn failed_job_suggests_investigation_rule() {
+        let suggestions = suggest_from_failure(
+            "refactor auth module",
+            "cargo check",
+            "error[E0308]: mismatched types",
+        );
+        assert!(!suggestions.is_empty());
+        let combined = suggestions.join(" ").to_lowercase();
+        assert!(combined.contains("type") || combined.contains("error") || combined.contains("check"));
+    }
+
+    #[test]
+    fn empty_result_produces_no_suggestions() {
+        let suggestions = suggest_from_outcome("task", "cmd", "");
+        assert!(suggestions.is_empty());
     }
 }
