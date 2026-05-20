@@ -194,7 +194,9 @@ impl Server {
                     "event": "SessionStarted",
                     "session_id": session_id
                 });
-                let _ = writer.write_all(format!("{}\n", session_msg).as_bytes()).await;
+                let _ = writer
+                    .write_all(format!("{}\n", session_msg).as_bytes())
+                    .await;
 
                 loop {
                     tokio::select! {
@@ -596,6 +598,35 @@ impl Server {
                                                 let err = serde_json::json!({
                                                     "event": "CapabilityError",
                                                     "capability": capability,
+                                                    "error": e.to_string()
+                                                });
+                                                let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
+                                            }
+                                        }
+                                    }
+                                } else if v["command"] == "RouteCapability" {
+                                    let query = v["query"].as_str().unwrap_or("").to_string();
+                                    let input = v["input"].as_str().unwrap_or("").to_string();
+                                    if query.is_empty() {
+                                        let err = serde_json::json!({
+                                            "event": "RouteError",
+                                            "error": "query is required"
+                                        });
+                                        let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
+                                    } else {
+                                        match proxy_for_client_cap.route(&query, &input) {
+                                            Ok(result) => {
+                                                let response = serde_json::json!({
+                                                    "event": "RouteResult",
+                                                    "query": query,
+                                                    "result": result
+                                                });
+                                                let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                            }
+                                            Err(e) => {
+                                                let err = serde_json::json!({
+                                                    "event": "RouteError",
+                                                    "query": query,
                                                     "error": e.to_string()
                                                 });
                                                 let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
