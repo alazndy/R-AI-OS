@@ -210,6 +210,15 @@ impl Server {
                                             "agent_info",
                                             &format!("agent={} project={}", agent, project.unwrap_or("-")),
                                         );
+                                        // Update sessions table with actual agent and project names
+                                        if let Ok(conn) = rusqlite::Connection::open(
+                                            crate::session::SessionStore::default_path()
+                                        ) {
+                                            let _ = conn.execute(
+                                                "UPDATE sessions SET agent=?1, project=COALESCE(?2, project) WHERE id=?3",
+                                                rusqlite::params![agent, project, session_id],
+                                            );
+                                        }
                                         let _ = writer.write_all(b"{\"event\":\"AgentInfoAck\"}\n").await;
                                     }
                                 } else if v["command"] == "Search" {
