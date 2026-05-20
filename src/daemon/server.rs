@@ -558,6 +558,66 @@ impl Server {
                                             }
                                         }
                                     }
+                                } else if v["command"] == "ListInbox" {
+                                    let limit = v["limit"].as_u64().unwrap_or(20) as usize;
+                                    let jobs = factory_for_client.list_inbox(limit);
+                                    let response = serde_json::json!({
+                                        "event": "InboxList",
+                                        "jobs": jobs
+                                    });
+                                    let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                } else if v["command"] == "ListRunning" {
+                                    let jobs = factory_for_client.list_running();
+                                    let response = serde_json::json!({
+                                        "event": "RunningList",
+                                        "jobs": jobs
+                                    });
+                                    let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                } else if v["command"] == "ExecuteCapability" {
+                                    let capability = v["capability"].as_str().unwrap_or("").to_string();
+                                    let input = v["input"].as_str().unwrap_or("").to_string();
+                                    if capability.is_empty() {
+                                        let err = serde_json::json!({
+                                            "event": "CapabilityError",
+                                            "error": "capability name is required"
+                                        });
+                                        let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
+                                    } else {
+                                        match proxy_for_client_cap.execute(&capability, &input) {
+                                            Ok(result) => {
+                                                let response = serde_json::json!({
+                                                    "event": "CapabilityResult",
+                                                    "capability": capability,
+                                                    "result": result
+                                                });
+                                                let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                            }
+                                            Err(e) => {
+                                                let err = serde_json::json!({
+                                                    "event": "CapabilityError",
+                                                    "capability": capability,
+                                                    "error": e.to_string()
+                                                });
+                                                let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
+                                            }
+                                        }
+                                    }
+                                } else if v["command"] == "ListCapabilities" {
+                                    let caps: Vec<serde_json::Value> = proxy_for_client_cap
+                                        .store()
+                                        .list()
+                                        .iter()
+                                        .map(|c| serde_json::json!({
+                                            "name": c.name,
+                                            "description": c.description,
+                                            "platforms": c.platforms
+                                        }))
+                                        .collect();
+                                    let response = serde_json::json!({
+                                        "event": "CapabilityList",
+                                        "capabilities": caps
+                                    });
+                                    let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
                                 }
                             }
                             line.clear();
