@@ -130,6 +130,41 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_se_session ON session_events(session_id);
         ",
     )?;
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS instinct_candidates (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_name TEXT NOT NULL,
+            command      TEXT NOT NULL,
+            outcome      TEXT NOT NULL,
+            suggestion   TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'pending',
+            created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS task_graphs (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'pending',
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS task_graph_nodes (
+            id           TEXT NOT NULL,
+            graph_id     TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+            description  TEXT NOT NULL,
+            shell_cmd    TEXT NOT NULL,
+            agent        TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'pending',
+            dependencies TEXT NOT NULL DEFAULT '[]',
+            started_at   TEXT,
+            completed_at TEXT,
+            error        TEXT,
+            PRIMARY KEY (id, graph_id)
+        );
+        ",
+    )?;
     Ok(())
 }
 
@@ -616,5 +651,27 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn instinct_candidates_table_exists() {
+        let conn = in_memory();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM instinct_candidates", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn task_graph_tables_exist() {
+        let conn = in_memory();
+        let count_graphs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM task_graphs", [], |r| r.get(0))
+            .unwrap();
+        let count_nodes: i64 = conn
+            .query_row("SELECT COUNT(*) FROM task_graph_nodes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count_graphs, 0);
+        assert_eq!(count_nodes, 0);
     }
 }
