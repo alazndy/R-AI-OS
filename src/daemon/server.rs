@@ -1,5 +1,7 @@
 use super::state::DaemonState;
 use crate::config::Config;
+use crate::factory::{Factory, Job};
+use crate::proxy_store::{CapabilityProxy, CapabilityStore};
 use crate::session::SessionStore;
 use notify::{RecursiveMode, Watcher};
 use std::path::PathBuf;
@@ -12,16 +14,19 @@ pub struct Server {
     state: Arc<RwLock<DaemonState>>,
     execution_proxy: super::proxy::ExecutionProxy,
     sessions: Arc<SessionStore>,
+    proxy: Arc<CapabilityProxy>,
 }
 
 impl Server {
     pub fn new(state: Arc<RwLock<DaemonState>>) -> Self {
         let execution_proxy = super::proxy::ExecutionProxy::new(state.clone());
         let sessions = Arc::new(SessionStore::new(SessionStore::default_path()));
+        let proxy = Arc::new(CapabilityProxy::new(CapabilityStore::new()));
         Self {
             state,
             execution_proxy,
             sessions,
+            proxy,
         }
     }
 
@@ -48,6 +53,8 @@ impl Server {
 
         println!("Server is listening on 127.0.0.1:42069...");
         let listener = TcpListener::bind("127.0.0.1:42069").await?;
+
+        let factory = Arc::new(Factory::new(tx.clone()));
 
         // ... (workers spawn logic unchanged)
         let health_state = self.state.clone();
@@ -149,6 +156,8 @@ impl Server {
             let _tx_sender = tx.clone();
             let server_token = token.clone();
             let sessions_for_client = self.sessions.clone();
+            let factory_for_client = factory.clone();
+            let proxy_for_client_cap = self.proxy.clone();
 
             tokio::spawn(async move {
                 use tokio::io::{AsyncBufReadExt, BufReader};
