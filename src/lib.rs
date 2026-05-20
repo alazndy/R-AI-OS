@@ -9,6 +9,7 @@ pub mod daemon;
 pub mod db;
 pub mod discovery;
 pub mod edge;
+pub mod evolution;
 pub mod entities;
 pub mod factory;
 pub mod filebrowser;
