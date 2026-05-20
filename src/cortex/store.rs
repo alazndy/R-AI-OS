@@ -83,6 +83,16 @@ impl VectorEngine {
     /// Load from an explicit database path (primarily for testing).
     pub fn load_from(db_path: &Path) -> Self {
         let db_path = db_path.to_path_buf();
+
+        // One-time migration: remove legacy JSON store
+        let old_json = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("raios")
+            .join("cortex_store.json");
+        if old_json.exists() {
+            let _ = std::fs::remove_file(&old_json);
+        }
+
         let Ok(conn) = open_conn(&db_path) else {
             return Self::empty(db_path);
         };
