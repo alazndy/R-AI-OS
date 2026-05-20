@@ -37,5 +37,6 @@ pub mod swarm;
 pub mod sync;
 pub mod system_scan;
 pub mod tasks;
+pub mod task_graph;
 pub mod ui;
 pub mod workers;

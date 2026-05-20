@@ -145,24 +145,26 @@ fn migrate(conn: &Connection) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS task_graphs (
             id          TEXT PRIMARY KEY,
-            name        TEXT NOT NULL,
+            goal        TEXT NOT NULL,
+            agent       TEXT NOT NULL,
             status      TEXT NOT NULL DEFAULT 'pending',
-            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            completed_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS task_graph_nodes (
-            id           TEXT NOT NULL,
-            graph_id     TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
-            description  TEXT NOT NULL,
-            shell_cmd    TEXT NOT NULL,
-            agent        TEXT NOT NULL,
-            status       TEXT NOT NULL DEFAULT 'pending',
-            dependencies TEXT NOT NULL DEFAULT '[]',
-            started_at   TEXT,
-            completed_at TEXT,
-            error        TEXT,
-            PRIMARY KEY (id, graph_id)
+            id          TEXT NOT NULL,
+            graph_id    TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+            description TEXT NOT NULL,
+            shell_cmd   TEXT NOT NULL,
+            deps        TEXT NOT NULL DEFAULT '[]',
+            status      TEXT NOT NULL DEFAULT 'pending',
+            factory_job_id TEXT,
+            result      TEXT,
+            error       TEXT,
+            PRIMARY KEY (graph_id, id)
         );
+        CREATE INDEX IF NOT EXISTS idx_tgn_graph ON task_graph_nodes(graph_id);
         ",
     )?;
     Ok(())
