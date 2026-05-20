@@ -1,5 +1,6 @@
 use super::state::DaemonState;
 use crate::config::Config;
+use crate::session::SessionStore;
 use notify::{RecursiveMode, Watcher};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,18 +11,32 @@ use tokio::sync::{broadcast, RwLock};
 pub struct Server {
     state: Arc<RwLock<DaemonState>>,
     execution_proxy: super::proxy::ExecutionProxy,
+    sessions: Arc<SessionStore>,
 }
 
 impl Server {
     pub fn new(state: Arc<RwLock<DaemonState>>) -> Self {
         let execution_proxy = super::proxy::ExecutionProxy::new(state.clone());
+        let sessions = Arc::new(SessionStore::new(SessionStore::default_path()));
         Self {
             state,
             execution_proxy,
+            sessions,
         }
     }
 
+    /// Run with an externally-provided broadcast channel (used by the Kernel
+    /// so all protocols share the same event bus).
+    pub async fn run_with_tx(&self, tx: broadcast::Sender<String>) -> anyhow::Result<()> {
+        self.run_inner(tx).await
+    }
+
     pub async fn run(&self) -> anyhow::Result<()> {
+        let (tx, _) = broadcast::channel::<String>(256);
+        self.run_inner(tx).await
+    }
+
+    async fn run_inner(&self, tx: broadcast::Sender<String>) -> anyhow::Result<()> {
         // 1. Generate and save IPC token for security
         let token = uuid::Uuid::new_v4().to_string();
         let token_path = Config::config_file().parent().unwrap().join(".ipc_token");
@@ -33,8 +48,6 @@ impl Server {
 
         println!("Server is listening on 127.0.0.1:42069...");
         let listener = TcpListener::bind("127.0.0.1:42069").await?;
-
-        let (tx, _) = broadcast::channel::<String>(100);
 
         // ... (workers spawn logic unchanged)
         let health_state = self.state.clone();
@@ -135,6 +148,7 @@ impl Server {
             let proxy_for_client = self.execution_proxy.clone();
             let _tx_sender = tx.clone();
             let server_token = token.clone();
+            let sessions_for_client = self.sessions.clone();
 
             tokio::spawn(async move {
                 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -165,13 +179,31 @@ impl Server {
                 }
                 line.clear();
 
+                // Auto-start session after successful auth
+                let session_id = sessions_for_client.start("daemon-client", None);
+                let session_msg = serde_json::json!({
+                    "event": "SessionStarted",
+                    "session_id": session_id
+                });
+                let _ = writer.write_all(format!("{}\n", session_msg).as_bytes()).await;
+
                 loop {
                     tokio::select! {
                         // Read from socket
                         res = reader.read_line(&mut line) => {
                             if res.unwrap_or(0) == 0 { break; }
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
-                                if v["command"] == "Search" {
+                                if v["command"] == "AgentInfo" {
+                                    if let Some(agent) = v["agent"].as_str() {
+                                        let project = v["project"].as_str();
+                                        sessions_for_client.record_event(
+                                            &session_id,
+                                            "agent_info",
+                                            &format!("agent={} project={}", agent, project.unwrap_or("-")),
+                                        );
+                                        let _ = writer.write_all(b"{\"event\":\"AgentInfoAck\"}\n").await;
+                                    }
+                                } else if v["command"] == "Search" {
                                     if let Some(query) = v["query"].as_str() {
                                         let s = state_for_client.read().await;
                                         if let Some(ref idx) = s.index {
@@ -245,6 +277,7 @@ impl Server {
                                             let _ = proxy.spawn_agent(&target_str, &path_str, 3600).await;
                                         });
                                     }
+                                    sessions_for_client.record_event(&session_id, "handover", &format!("target={target}"));
                                 } else if v["command"] == "HealthScan" {
                                     let s = state_for_client.read().await;
                                     let response = format!("{{\"event\":\"HealthReport\",\"report\":{}}}\n",
@@ -271,6 +304,7 @@ impl Server {
                                         new_content: v["new"].as_str().unwrap_or("").to_string(),
                                         agent_name: v["agent"].as_str().unwrap_or("unknown").to_string(),
                                     };
+                                    sessions_for_client.record_event(&session_id, "file_change_request", &format!("path={}", approval.path));
                                     s.pending_file_changes.push(approval.clone());
 
                                     // Notify TUI to show diff
@@ -460,6 +494,9 @@ impl Server {
                         }
                     }
                 }
+
+                sessions_for_client.end(&session_id, None);
+                println!("[Daemon] Session {} ended for client {}", session_id, addr);
             });
         }
     }
