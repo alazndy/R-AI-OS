@@ -34,7 +34,7 @@ pub enum InstinctCmd {
     },
     /// List all instincts (global + current project)
     List {
-        #[arg(short, long)]
+        /// Project path or name (optional)
         path: Option<PathBuf>,
     },
     /// Suggest instincts from health analysis with interactive approval

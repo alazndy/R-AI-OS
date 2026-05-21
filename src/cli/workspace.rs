@@ -45,6 +45,30 @@ pub(super) fn cmd_memory(
     let mut results = Vec::new();
 
     if let Some(filter) = project {
+        // If filter is an existing directory, read its memory.md directly
+        let direct = std::path::PathBuf::from(&filter);
+        if direct.is_dir() {
+            let mem = direct.join("memory.md");
+            if mem.exists() {
+                let name = direct
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| filter.clone());
+                if json {
+                    if let Ok(content) = std::fs::read_to_string(&mem) {
+                        let entry = serde_json::json!({ "name": name, "content": content });
+                        println!("{}", serde_json::to_string_pretty(&entry).unwrap_or_default());
+                    }
+                } else {
+                    println!("=== {} ===", name);
+                    println!("{}", load_file_content(&mem));
+                }
+            } else {
+                eprintln!("No memory.md found in {}", direct.display());
+            }
+            return;
+        }
+        // Otherwise search by project name substring
         let f = filter.to_lowercase();
         for m in files {
             if m.name.to_lowercase().contains(&f) {
