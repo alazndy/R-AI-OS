@@ -163,6 +163,9 @@ impl Server {
             let sessions_for_client = self.sessions.clone();
             let factory_for_client = factory.clone();
             let proxy_for_client_cap = self.proxy.clone();
+            let graph_store_for_client = Arc::new(
+                crate::task_graph::GraphStore::new(crate::task_graph::GraphStore::default_path())
+            );
 
             tokio::spawn(async move {
                 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -684,6 +687,72 @@ impl Server {
                                         });
                                         let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
                                     }
+                                } else if v["command"] == "CreateTaskGraph" {
+                                    let goal = v["goal"].as_str().unwrap_or("unnamed goal").to_string();
+                                    let agent_name = v["agent"].as_str().unwrap_or("unknown").to_string();
+                                    let nodes_val = v["nodes"].as_array().cloned().unwrap_or_default();
+                                    let nodes: Vec<crate::task_graph::NodeSpec> = nodes_val
+                                        .iter()
+                                        .filter_map(|n| {
+                                            Some(crate::task_graph::NodeSpec {
+                                                id: n["id"].as_str()?.to_string(),
+                                                description: n["description"].as_str()?.to_string(),
+                                                shell_cmd: n["shell_cmd"].as_str()?.to_string(),
+                                                deps: n["deps"].as_array()
+                                                    .map(|arr| arr.iter().filter_map(|d| d.as_str().map(ToOwned::to_owned)).collect())
+                                                    .unwrap_or_default(),
+                                            })
+                                        })
+                                        .collect();
+                                    match graph_store_for_client.create(&goal, &agent_name, nodes) {
+                                        Ok(graph_id) => {
+                                            let response = serde_json::json!({
+                                                "event": "TaskGraphCreated",
+                                                "graph_id": graph_id
+                                            });
+                                            let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                        }
+                                        Err(e) => {
+                                            let err = serde_json::json!({
+                                                "event": "TaskGraphError",
+                                                "error": e.to_string()
+                                            });
+                                            let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
+                                        }
+                                    }
+                                } else if v["command"] == "ExecuteTaskGraph" {
+                                    if let Some(graph_id) = v["graph_id"].as_str().map(|s| s.to_string()) {
+                                        let store = graph_store_for_client.clone();
+                                        let factory = factory_for_client.clone();
+                                        let gid = graph_id.clone();
+                                        tokio::spawn(async move {
+                                            execute_graph_async(store, factory, gid).await;
+                                        });
+                                        let response = serde_json::json!({
+                                            "event": "TaskGraphExecuting",
+                                            "graph_id": graph_id
+                                        });
+                                        let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                    }
+                                } else if v["command"] == "GetTaskGraph" {
+                                    if let Some(graph_id) = v["graph_id"].as_str() {
+                                        match graph_store_for_client.get(graph_id) {
+                                            Some(graph) => {
+                                                let response = serde_json::json!({
+                                                    "event": "TaskGraphState",
+                                                    "graph": graph
+                                                });
+                                                let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                            }
+                                            None => {
+                                                let err = serde_json::json!({
+                                                    "event": "TaskGraphError",
+                                                    "error": format!("graph {} not found", graph_id)
+                                                });
+                                                let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             line.clear();
@@ -726,4 +795,69 @@ fn decode_base64(s: &str) -> anyhow::Result<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
         .decode(s)
         .map_err(Into::into)
+}
+
+async fn execute_graph_async(
+    store: std::sync::Arc<crate::task_graph::GraphStore>,
+    factory: std::sync::Arc<crate::factory::Factory>,
+    graph_id: String,
+) {
+    let timeout = std::time::Duration::from_secs(600);
+    let start = std::time::Instant::now();
+
+    loop {
+        if start.elapsed() > timeout {
+            eprintln!("[TaskGraph] Execution timeout for graph {}", graph_id);
+            break;
+        }
+
+        let ready = store.ready_nodes(&graph_id);
+        if ready.is_empty() {
+            if let Some(graph) = store.get(&graph_id) {
+                if graph.status != "pending" && graph.status != "running" {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            continue;
+        }
+
+        for node in ready {
+            let store2 = store.clone();
+            let factory2 = factory.clone();
+            let gid = graph_id.clone();
+            let nid = node.id.clone();
+            let cmd = node.shell_cmd.clone();
+            let desc = node.description.clone();
+
+            let job = crate::factory::Job::new(&desc, "graph-executor", None, None);
+            let job_id = job.id;
+
+            store2.mark_node_running(&gid, &nid, &job_id.to_string());
+
+            factory2.submit(
+                job,
+                Box::pin(async move {
+                    let output = tokio::process::Command::new("cmd")
+                        .args(["/C", &cmd])
+                        .output()
+                        .await?;
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    let result = if output.status.success() {
+                        Ok(stdout)
+                    } else {
+                        Err(anyhow::anyhow!("exit {}: {}", output.status, stderr))
+                    };
+                    match &result {
+                        Ok(r) => store2.mark_node_complete(&gid, &nid, r, &job_id.to_string()),
+                        Err(e) => store2.mark_node_failed(&gid, &nid, &e.to_string()),
+                    }
+                    result
+                }),
+            );
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
 }
