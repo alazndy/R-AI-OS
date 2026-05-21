@@ -1,3 +1,5 @@
+#![allow(clippy::vec_init_then_push)]
+
 use crate::app::{filtered_palette, App};
 use crate::ui::*;
 use ratatui::{
@@ -14,6 +16,7 @@ pub fn render_boot(frame: &mut Frame, app: &App) {
 
     let total = 5u16;
     let done = app.system.boot_results.len() as u16;
+    #[allow(clippy::manual_checked_ops)]
     let progress = if total > 0 {
         (done * 100 / total).min(100)
     } else {

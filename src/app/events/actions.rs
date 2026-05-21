@@ -70,7 +70,7 @@ impl App {
 
     pub(crate) fn save_file(&mut self) {
         if let Some(ref file) = self.editor.active_file.clone() {
-            let content = self.editor.editor.to_string();
+            let content = self.editor.editor.content();
             match save_file_content(&file.path, &content) {
                 Ok(()) => {
                     self.editor.lines = content.lines().map(str::to_owned).collect();

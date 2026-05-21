@@ -27,25 +27,14 @@ pub struct AiAuditReport {
 }
 
 pub fn scan_system() -> AiAuditReport {
-    let mut tools = Vec::new();
-
-    // 1. Check Ollama
-    tools.push(check_ollama());
-
-    // 2. Check Claude Code
-    tools.push(check_npm_tool("claude", "Claude Code"));
-
-    // 3. Check Gemini CLI
-    tools.push(check_npm_tool("gemini", "Gemini CLI"));
-
-    // 4. Check Cursor
-    tools.push(check_cursor());
-
-    // 5. Check LM Studio (Common paths)
-    tools.push(check_lm_studio());
-
-    // 6. Check Antigravity (Assistant)
-    tools.push(check_antigravity());
+    let tools = vec![
+        check_ollama(),
+        check_npm_tool("claude", "Claude Code"),
+        check_npm_tool("gemini", "Gemini CLI"),
+        check_cursor(),
+        check_lm_studio(),
+        check_antigravity(),
+    ];
 
     AiAuditReport {
         tools,

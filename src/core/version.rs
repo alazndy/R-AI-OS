@@ -12,7 +12,7 @@ pub enum BumpType {
 }
 
 impl BumpType {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "major" => Some(Self::Major),
             "minor" => Some(Self::Minor),
@@ -284,7 +284,7 @@ fn prepend_changelog(dir: &Path, entry: &str) {
     let path = dir.join("CHANGELOG.md");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let updated = if existing.starts_with("# Changelog") {
-        let rest = existing["# Changelog".len()..].trim_start();
+        let rest = existing.strip_prefix("# Changelog").unwrap_or(&existing).trim_start();
         format!("# Changelog\n\n{}\n{}", entry, rest)
     } else {
         format!("# Changelog\n\n{}\n{}", entry, existing)
@@ -397,9 +397,9 @@ mod tests {
     }
 
     #[test]
-    fn bump_type_from_str() {
-        assert_eq!(BumpType::from_str("patch"), Some(BumpType::Patch));
-        assert_eq!(BumpType::from_str("MINOR"), Some(BumpType::Minor));
-        assert_eq!(BumpType::from_str("xyz"), None);
+    fn bump_type_parse() {
+        assert_eq!(BumpType::parse("patch"), Some(BumpType::Patch));
+        assert_eq!(BumpType::parse("MINOR"), Some(BumpType::Minor));
+        assert_eq!(BumpType::parse("xyz"), None);
     }
 }

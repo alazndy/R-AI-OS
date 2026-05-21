@@ -446,6 +446,7 @@ fn render_master(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(r)), right);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_agent(
     frame: &mut Frame,
     area: Rect,

@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use crate::config::Config;
 use crate::filebrowser::{
     discover_all_agent_rules, get_agent_config_files, get_master_rule_files, get_mempalace_files,
@@ -133,6 +135,7 @@ impl App {
 
                     // Compute portfolio stats in background
                     let projects = crate::entities::load_entities(&cfg.dev_ops_path);
+                    #[allow(clippy::field_reassign_with_default)]
                     let mut stats = crate::app::state::PortfolioStats::default();
                     stats.total = projects.len();
                     let mut cat_dirty: std::collections::HashMap<String, usize> =

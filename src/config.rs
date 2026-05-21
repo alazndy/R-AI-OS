@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Runtime config — loaded from ~/.config/raios/config.toml
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,13 +54,13 @@ impl Config {
         let dev_ops = find_dev_ops(&desktop, &home);
 
         // ── master_md_path ────────────────────────────────────────────────────
-        let master_md = find_master_md(&home, dev_ops.as_ref());
+        let master_md = find_master_md(&home, dev_ops.as_deref());
 
         // ── skills_path ───────────────────────────────────────────────────────
-        let skills = find_skills(dev_ops.as_ref());
+        let skills = find_skills(dev_ops.as_deref());
 
         // ── vault_projects_path ──────────────────────────────────────────────
-        let vault_projects = find_vault_projects(&home, master_md.as_ref());
+        let vault_projects = find_vault_projects(&home, master_md.as_deref());
 
         DetectResult {
             dev_ops,
@@ -80,7 +80,7 @@ pub struct DetectResult {
 
 // ─── Auto-detect helpers ──────────────────────────────────────────────────────
 
-fn find_dev_ops(desktop: &PathBuf, home: &PathBuf) -> Option<PathBuf> {
+fn find_dev_ops(desktop: &Path, home: &Path) -> Option<PathBuf> {
     // Common names for the workspace root
     let candidates = [
         desktop.join("Dev Ops"),
@@ -94,7 +94,7 @@ fn find_dev_ops(desktop: &PathBuf, home: &PathBuf) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_dir())
 }
 
-fn find_master_md(home: &PathBuf, dev_ops: Option<&PathBuf>) -> Option<PathBuf> {
+fn find_master_md(home: &Path, dev_ops: Option<&Path>) -> Option<PathBuf> {
     // 1. Search Obsidian vaults
     let obsidian_root = home.join("Documents").join("Obsidian Vaults");
     if obsidian_root.is_dir() {
@@ -125,7 +125,7 @@ fn find_master_md(home: &PathBuf, dev_ops: Option<&PathBuf>) -> Option<PathBuf> 
     None
 }
 
-fn find_skills(dev_ops: Option<&PathBuf>) -> Option<PathBuf> {
+fn find_skills(dev_ops: Option<&Path>) -> Option<PathBuf> {
     // Common locations under dev_ops and home
     if let Some(base) = dev_ops {
         let candidate = base
@@ -147,7 +147,7 @@ fn find_skills(dev_ops: Option<&PathBuf>) -> Option<PathBuf> {
     None
 }
 
-fn find_vault_projects(home: &PathBuf, master_md: Option<&PathBuf>) -> Option<PathBuf> {
+fn find_vault_projects(home: &Path, master_md: Option<&Path>) -> Option<PathBuf> {
     if let Some(master) = master_md {
         if let Some(vault_root) = master.parent() {
             let candidate = vault_root.join("Projeler");

@@ -413,7 +413,7 @@ pub fn discover_memory_files(base: &Path, limit: usize) -> Vec<FileEntry> {
         }
     }
 
-    found.sort_by(|a, b| b.1.cmp(&a.1));
+    found.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     found
         .into_iter()
@@ -464,7 +464,7 @@ pub fn load_recent_projects(base: &Path) -> Vec<RecentProject> {
         }
     }
 
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     files
         .into_iter()

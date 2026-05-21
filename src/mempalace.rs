@@ -55,7 +55,7 @@ fn scan_projects(room_path: &Path) -> Vec<MemProject> {
     let mut projects: Vec<(MemProject, SystemTime)> = Vec::new();
     recursive_scan(room_path, &mut projects, 0);
 
-    projects.sort_by(|a, b| b.1.cmp(&a.1));
+    projects.sort_by_key(|a| std::cmp::Reverse(a.1));
     projects.into_iter().map(|(p, _)| p).collect()
 }
 

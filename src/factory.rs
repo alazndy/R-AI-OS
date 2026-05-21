@@ -85,7 +85,7 @@ pub type TaskFn = Pin<Box<dyn Future<Output = Result<String>> + Send + 'static>>
 pub struct Factory {
     db_path: Arc<PathBuf>,
     tx: broadcast::Sender<String>,
-    /// Mutex protects concurrent SQLite writes (WAL mode handles reads).
+    #[allow(dead_code)]
     write_lock: Arc<Mutex<()>>,
 }
 

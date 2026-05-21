@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -97,7 +98,7 @@ pub fn analyze(dir: &Path) -> DiskReport {
 
     // Walk source files for LOC / largest
     walk_source(dir, &mut largest, &mut file_count, &mut source_bytes);
-    largest.sort_by(|a, b| b.1.cmp(&a.1));
+    largest.sort_by_key(|a| std::cmp::Reverse(a.1));
     largest.truncate(10);
 
     DiskReport {
@@ -121,7 +122,7 @@ pub fn analyze_all(dev_ops: &Path) -> Vec<DiskReport> {
                 .filter(|p| p.exists())
                 .map(analyze)
                 .collect();
-            reports.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
+            reports.sort_by_key(|a| Reverse(a.total_bytes));
             return reports;
         }
     }

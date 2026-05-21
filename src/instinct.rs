@@ -113,14 +113,13 @@ pub fn suggest_from_outcome(description: &str, command: &str, result: &str) -> V
     }
 
     // Build success pattern
-    if command.contains("build") || command.contains("cargo build") || command.contains("cargo check") {
-        if !result_lower.contains("error") {
+    if (command.contains("build") || command.contains("cargo build") || command.contains("cargo check"))
+        && !result_lower.contains("error") {
             suggestions.push(format!(
                 "'{}' builds cleanly — run `cargo check` before submitting PRs",
                 truncate(&desc_lower, 40)
             ));
         }
-    }
 
     // Security scan pattern
     if desc_lower.contains("security") || command.contains("security") {

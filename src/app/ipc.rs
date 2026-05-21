@@ -77,7 +77,7 @@ pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
                     let tx_read = tx.clone();
                     let reader_handle = thread::spawn(move || {
                         let reader = BufReader::new(stream_clone);
-                        for line in reader.lines().flatten() {
+                        for line in reader.lines().map_while(|r| r.ok()) {
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
                                 dispatch_event(&tx_read, &v);
                             }

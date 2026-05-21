@@ -289,6 +289,7 @@ pub fn load_all_projects(conn: &Connection) -> Result<Vec<DbProject>> {
     rows.collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_project(
     conn: &Connection,
     name: &str,
@@ -329,6 +330,7 @@ pub fn project_id_for_path(conn: &Connection, path: &str) -> Option<i64> {
 
 // ─── Health cache ─────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_health(
     conn: &Connection,
     project_id: i64,

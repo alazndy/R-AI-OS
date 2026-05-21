@@ -169,13 +169,8 @@ fn spawn_sentinel_worker(tx: Sender<BgMsg>, dev_ops: PathBuf) {
 
         loop {
             // Drain incoming events into debounce map
-            loop {
-                match notify_rx.try_recv() {
-                    Ok(path) => {
-                        pending.insert(path, Instant::now());
-                    }
-                    Err(_) => break,
-                }
+            while let Ok(path) = notify_rx.try_recv() {
+                pending.insert(path, Instant::now());
             }
 
             // Find paths whose debounce window has elapsed

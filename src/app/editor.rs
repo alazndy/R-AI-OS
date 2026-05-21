@@ -60,7 +60,7 @@ impl Editor {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn content(&self) -> String {
         self.lines.join("\n")
     }
 

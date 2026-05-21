@@ -62,9 +62,9 @@ pub fn fuse(
     top_n: usize,
 ) -> Vec<HybridResult> {
     // key: canonical path string
-    let mut scores: HashMap<String, (f64, Option<f32>, Option<f32>, usize, String, String)> =
-        HashMap::new();
-    //                              rrf   bm25       vec      line   snippet  project
+    // (rrf_score, bm25_score, vec_score, line_no, snippet, project)
+    type ScoreEntry = (f64, Option<f32>, Option<f32>, usize, String, String);
+    let mut scores: HashMap<String, ScoreEntry> = HashMap::new();
 
     // Incorporate BM25 rankings
     for (rank, r) in bm25_results.iter().enumerate() {

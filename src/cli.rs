@@ -2182,7 +2182,7 @@ fn cmd_version_bump(
     dev_ops: &Path,
     json: bool,
 ) {
-    let bump_type = match crate::core::version::BumpType::from_str(level) {
+    let bump_type = match crate::core::version::BumpType::parse(level) {
         Some(b) => b,
         None => {
             eprintln!(
@@ -2868,8 +2868,8 @@ fn cmd_swarm(action: SwarmAction, json: bool) {
                 println!("No active swarm tasks.");
                 return;
             }
-            println!("{:<36}  {:<12}  {:<8}  {}", "ID", "STATUS", "AGENT", "DESCRIPTION");
-            println!("{}", "-".repeat(80));
+            println!("{:<36}  {:<12}  {:<8}  DESCRIPTION", "ID", "STATUS", "AGENT");
+            println!("{}", "-".repeat(80_usize));
             for t in &tasks {
                 let status = match &t.status {
                     SwarmStatus::Initializing => "init",

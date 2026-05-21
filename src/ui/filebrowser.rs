@@ -20,11 +20,7 @@ pub fn render_file_panel(frame: &mut Frame, area: Rect, app: &App, files: &[File
 
     let mut lines = vec![Line::from(vec![
         Span::styled(
-            if app.ui.right_panel_focus {
-                " FILES "
-            } else {
-                " FILES "
-            },
+            " FILES ",
             Style::new()
                 .fg(if app.ui.right_panel_focus { GREEN } else { DIM })
                 .bold(),
@@ -160,6 +156,7 @@ pub fn render_file_view(frame: &mut Frame, app: &App) {
 
     // Footer
     let total = app.editor.lines.len();
+    #[allow(clippy::manual_checked_ops)]
     let pct = if total > 0 {
         ((scroll + visible_h).min(total) * 100 / total).min(100)
     } else {

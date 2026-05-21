@@ -1318,7 +1318,7 @@ impl McpServer {
     fn tool_version_bump(&self, args: &Value) -> Result<Value, String> {
         let path = self.resolve_git_path(args)?;
         let level = args["level"].as_str().ok_or("missing level")?;
-        let bump_type = crate::core::version::BumpType::from_str(level)
+        let bump_type = crate::core::version::BumpType::parse(level)
             .ok_or_else(|| format!("Invalid level '{}' — use patch | minor | major", level))?;
         let changelog = args["changelog"].as_bool().unwrap_or(false);
         let tag = args["tag"].as_bool().unwrap_or(false);

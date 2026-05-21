@@ -45,6 +45,7 @@ pub fn render_quick_stats(frame: &mut Frame, area: Rect, app: &App) {
         ))]
     } else if let Some(ref s) = app.system.stats_cache {
         let total = s.total;
+        #[allow(clippy::manual_checked_ops)]
         let grade_pct = |n: usize| if total > 0 { n * 100 / total } else { 0 };
 
         let mut result = vec![

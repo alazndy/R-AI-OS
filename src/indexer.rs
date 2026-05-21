@@ -37,6 +37,7 @@ pub struct ProjectIndex {
     doc_lengths: Vec<usize>,
     inverted: HashMap<String, Vec<Posting>>,
     pub doc_count: usize,
+    #[allow(dead_code)]
     db_path: Option<PathBuf>,
 }
 

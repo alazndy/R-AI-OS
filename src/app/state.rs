@@ -284,6 +284,7 @@ pub struct SystemState {
 // ─── Setup Wizard State ──────────────────────────────────────────────────────
 
 #[derive(Debug)]
+#[derive(Default)]
 pub struct WizardState {
     pub step: crate::setup_wizard::WizardStep,
     pub dev_ops: String,
@@ -301,26 +302,6 @@ pub struct WizardState {
     pub running: bool,
 }
 
-impl Default for WizardState {
-    fn default() -> Self {
-        Self {
-            step: crate::setup_wizard::WizardStep::default(),
-            dev_ops: String::new(),
-            master: String::new(),
-            github: String::new(),
-            vault: String::new(),
-            field_cursor: 0,
-            editing: false,
-            input: String::new(),
-            agent_status: None,
-            action_log: Vec::new(),
-            skip_claude: false,
-            skip_gemini: false,
-            skip_antigravity: false,
-            running: false,
-        }
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct SetupState {
