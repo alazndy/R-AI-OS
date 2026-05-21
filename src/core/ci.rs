@@ -111,8 +111,20 @@ fn get_remote_url(project_path: &Path) -> Option<String> {
     }
 }
 
+/// Resolve the `gh` binary: PATH first, then common Windows install location.
+fn gh_bin() -> std::path::PathBuf {
+    if which::which("gh").is_ok() {
+        return std::path::PathBuf::from("gh");
+    }
+    let win_default = std::path::Path::new("C:\\Program Files\\GitHub CLI\\gh.exe");
+    if win_default.exists() {
+        return win_default.to_path_buf();
+    }
+    std::path::PathBuf::from("gh")
+}
+
 fn gh_api(endpoint: &str) -> Result<serde_json::Value> {
-    let out = std::process::Command::new("gh")
+    let out = std::process::Command::new(gh_bin())
         .args(["api", endpoint])
         .output()
         .map_err(|e| {
