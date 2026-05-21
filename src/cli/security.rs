@@ -1,22 +1,34 @@
 use std::path::Path;
 
 pub(super) fn cmd_security(
-    project: Option<String>,
+    target: Option<String>,
     full: bool,
-    scan_path: Option<String>,
     watch: bool,
     dev_ops: &Path,
     json: bool,
 ) {
+    // Resolve target: existing filesystem path takes priority, else treat as project name filter
+    let (scan_path, project_filter): (Option<std::path::PathBuf>, Option<String>) =
+        match &target {
+            None => (None, None),
+            Some(t) => {
+                let p = std::path::PathBuf::from(t);
+                if p.exists() {
+                    (Some(p), None)
+                } else {
+                    (None, Some(t.clone()))
+                }
+            }
+        };
+
     if watch {
-        let target = scan_path
-            .map(std::path::PathBuf::from)
+        let watch_target = scan_path
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        if !target.exists() {
-            eprintln!("Path does not exist: {}", target.display());
+        if !watch_target.exists() {
+            eprintln!("Path does not exist: {}", watch_target.display());
             std::process::exit(1);
         }
-        if let Err(e) = cmd_security_watch(&target, json) {
+        if let Err(e) = cmd_security_watch(&watch_target, json) {
             eprintln!("Guard error: {e}");
             std::process::exit(1);
         }
@@ -24,16 +36,11 @@ pub(super) fn cmd_security(
     }
     use crate::security::{scan_project, Severity};
 
-    let targets: Vec<(String, std::path::PathBuf)> = if let Some(p) = scan_path {
-        let target = std::path::PathBuf::from(&p);
-        if !target.exists() {
-            eprintln!("Path does not exist: {}", target.display());
-            std::process::exit(1);
-        }
-        vec![("custom".into(), target)]
+    let targets: Vec<(String, std::path::PathBuf)> = if let Some(path) = scan_path {
+        vec![("custom".into(), path)]
     } else {
         let projects = crate::entities::load_entities(dev_ops);
-        if let Some(q) = project {
+        if let Some(ref q) = project_filter {
             let q = q.to_lowercase();
             projects.into_iter()
                 .filter(|p| p.name.to_lowercase().contains(&q))

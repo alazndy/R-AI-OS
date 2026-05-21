@@ -93,11 +93,11 @@ pub enum Commands {
         #[arg(short, long, default_value = "8")] top_k: usize,
         #[arg(long)] reindex: bool,
     },
-    /// Run OWASP security scan on one or all projects
+    /// Run OWASP security scan — pass a path or project name, or omit for all projects
     Security {
-        #[arg(short, long)] project: Option<String>,
+        /// Project name filter or absolute path (omit to scan all)
+        target: Option<String>,
         #[arg(long)] full: bool,
-        #[arg(long)] path: Option<String>,
         #[arg(short, long)] watch: bool,
     },
     /// Scaffold a new project following MASTER.md rules
@@ -317,7 +317,7 @@ pub fn run(cli: Cli) {
         Commands::Commit { project, message, push, dry_run } => health::cmd_commit(project, message, push, dry_run, &cfg.dev_ops_path, cli.json),
         Commands::Stats => health::cmd_stats(&cfg.dev_ops_path, cli.json),
         Commands::Search { query, top_k, reindex } => search::cmd_search(&query, top_k, reindex, &cfg.dev_ops_path, cli.json),
-        Commands::Security { project, full, path, watch } => security::cmd_security(project, full, path, watch, &cfg.dev_ops_path, cli.json),
+        Commands::Security { target, full, watch } => security::cmd_security(target, full, watch, &cfg.dev_ops_path, cli.json),
         Commands::New { name, category, github, no_vault } => new::cmd_new(&name, &category, github, no_vault, &cfg.dev_ops_path, cli.json),
         Commands::Task { description, project, agent } => new::cmd_task(&description, project, agent),
         Commands::Bootstrap => new::cmd_bootstrap(),
