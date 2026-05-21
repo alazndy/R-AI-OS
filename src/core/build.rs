@@ -462,13 +462,13 @@ fn parse_rust_test_output(output: &str) -> (usize, usize, usize, Vec<String>) {
             for part in line.split(';') {
                 let part = part.trim();
                 if let Some(n) = extract_num(part, "passed") {
-                    passed = n;
+                    passed += n;
                 }
                 if let Some(n) = extract_num(part, "failed") {
-                    failed = n;
+                    failed += n;
                 }
                 if let Some(n) = extract_num(part, "ignored") {
-                    ignored = n;
+                    ignored += n;
                 }
             }
         }
@@ -566,6 +566,15 @@ mod tests {
         let (p, f, i, _) = parse_rust_test_output(output);
         assert_eq!(p, 22);
         assert_eq!(f, 0);
+        assert_eq!(i, 1);
+    }
+
+    #[test]
+    fn parse_rust_test_output_sums_multiple_binaries() {
+        let output = "test result: ok. 143 passed; 3 failed; 0 ignored; 0 measured\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured";
+        let (p, f, i, _) = parse_rust_test_output(output);
+        assert_eq!(p, 143);
+        assert_eq!(f, 3);
         assert_eq!(i, 1);
     }
 
