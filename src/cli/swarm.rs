@@ -76,25 +76,7 @@ pub(super) fn cmd_swarm(action: SwarmAction, json: bool) {
 }
 
 pub(super) fn cmd_route(query: &str, json: bool) {
-    let descriptions = vec![
-        ("health_check".to_string(), "Run health scan and grade on a project".to_string()),
-        ("search_memory".to_string(), "Semantic search across all project memory files".to_string()),
-        ("run_sentinel".to_string(), "Compile and lint check a project".to_string()),
-        ("list_projects".to_string(), "List all known projects in workspace".to_string()),
-        ("git_status".to_string(), "Show git status for a project".to_string()),
-        ("git_commit".to_string(), "Create a git commit with a message".to_string()),
-        ("git_push".to_string(), "Push commits to remote".to_string()),
-        ("run_build".to_string(), "Run the project build command".to_string()),
-        ("run_tests".to_string(), "Run the project test suite".to_string()),
-        ("check_deps".to_string(), "Check for outdated dependencies and CVEs".to_string()),
-        ("bump_version".to_string(), "Bump semver version and update CHANGELOG".to_string()),
-        ("create_swarm_task".to_string(), "Start a parallel agent task in an isolated git worktree".to_string()),
-        ("list_swarm_tasks".to_string(), "List all active swarm tasks".to_string()),
-        ("create_task_graph".to_string(), "Submit a DAG of dependent tasks for execution".to_string()),
-        ("list_evolution_candidates".to_string(), "List pending instinct candidates from job outcomes".to_string()),
-    ];
-    let router = crate::edge::EdgeRouter::new(descriptions);
-    match router.route(query) {
+    match crate::intelligence::router::route_capability(query) {
         Some(capability) => {
             if json { println!("{}", serde_json::json!({"capability": capability, "query": query})); }
             else { println!("→ {capability}"); }

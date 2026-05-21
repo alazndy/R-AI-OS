@@ -34,7 +34,7 @@ pub(super) fn cmd_task(description: &str, project_dir: Option<String>, force_age
         println!("Manual agent override: {}", a);
         a
     } else {
-        let mut router = AgentRouter::init().expect("Failed to init AgentRouter");
+        let router = AgentRouter::init().expect("Failed to init AgentRouter");
         match router.route(description) {
             Ok(Some(a)) => { println!("Best specialist found: {}", a); a }
             Ok(None) => { println!("No specific specialist found. Defaulting to gemini."); "gemini".to_string() }
