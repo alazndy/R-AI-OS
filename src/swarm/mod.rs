@@ -1,4 +1,5 @@
 pub mod merge;
+pub mod store;
 pub mod worktree;
 
 use serde::{Deserialize, Serialize};
