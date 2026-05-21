@@ -97,10 +97,10 @@
 
 ### Next Steps
 - [ ] build/test/deps columns in health view.
-- [ ] **Phase 5: Agent Swarm Mesh** - Multi-node agent orchestration support with **Git Worktree Isolation** (Inspired by **Tessera**) for conflict-free parallel development.
-- [ ] **Edge-Intelligence:** Integrate **Needle** (or similar tiny model) into `aiosd` for local fast-path routing of system commands.
-- [ ] **Evolutionary Intelligence:** Implement autonomous skill/instinct refinement loops where agents learn from task outcomes (Researching **OpenSpace** approach).
-- [ ] **Recursive Reasoning:** Implement deep task decomposition and recursive logic flows for complex architectural problems (Researching **RLM** approach).
+- [x] **Phase 8: Recursive Reasoning** — TaskGraph DAG, SQLite persistence, TCP commands (CreateTaskGraph/ExecuteTaskGraph/GetTaskGraph). ✅ 2026-05-21
+- [x] **Phase 5: Agent Swarm Mesh** — SwarmStore, 5 TCP commands, `raios swarm` CLI, 3 MCP tools. ✅ 2026-05-21
+- [x] **Phase 6: Edge Intelligence** — `raios route` CLI, `route_capability` MCP tool. ✅ 2026-05-21
+- [x] **Phase 7: Evolutionary Intelligence** — Evolution TCP commands (List/Promote/Prune), `raios evolve` CLI, 2 MCP tools. ✅ 2026-05-21
 
 ## Research References
 - **Agent Discipline:** [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills)
