@@ -2,6 +2,51 @@
 
 All notable changes to the **R-AI-OS** project will be documented in this file.
 
+## [1.5.0] - 2026-05-21 (Intelligence & Architecture Edition)
+
+### Added
+
+**Phase 5 — Agent Swarm Mesh:**
+- `SwarmStore` — SQLite-backed worktree lifecycle management.
+- 5 TCP commands: `CreateSwarmTask`, `GetSwarmTask`, `ListSwarmTasks`, `ApproveSwarmTask`, `RejectSwarmTask`.
+- `raios swarm start|list|approve|reject` CLI subcommand.
+- 3 MCP tools: `create_swarm_task`, `list_swarm_tasks`, `approve_swarm_task`.
+
+**Phase 6 — Edge Intelligence:**
+- `EdgeRouter` — cosine-similarity semantic routing of natural-language queries to capability names.
+- `raios route "<query>"` CLI command.
+- `route_capability` MCP tool.
+
+**Phase 7 — Evolutionary Intelligence:**
+- `CandidateStore` — learns instinct candidates from job success/failure outcomes.
+- `start_evolution_worker` subscribes to daemon broadcast and auto-generates instinct candidates.
+- TCP commands: `ListEvolutionCandidates`, `PromoteEvolutionCandidate`, `PruneExpiredCandidates`.
+- `raios evolve list|promote|prune` CLI subcommand.
+- MCP tools: `list_evolution_candidates`, `promote_evolution_candidate`.
+
+**Phase 8 — Recursive Reasoning (Task DAG):**
+- `TaskGraph` module — directed acyclic graph (DAG) of dependent shell commands.
+- SQLite persistence with cycle detection, depth validation (max 50 nodes), 10-min timeout.
+- TCP commands: `CreateTaskGraph`, `ExecuteTaskGraph`, `GetTaskGraph`.
+- `execute_graph_async` — parallel execution of independent nodes via Factory Mode.
+- 5 unit tests: create, ready_nodes, max_limit, mark_complete, cycle detection.
+
+### Refactored
+
+**Codebase Architecture (3-phase refactor):**
+- `src/cli.rs` (3001 lines) split into `src/cli/` — 11 submodules, max 329 lines each (`dev`, `git`, `health`, `instinct`, `new`, `search`, `security`, `swarm`, `version`, `workspace`).
+- `src/mcp_server.rs` (1667 lines) split into `src/mcp/` — 7 submodules: `mod`, `resources`, `tools`, `tools_workspace`, `tools_dev`, `tools_git`, `tools_swarm`.
+- `hybrid_search.rs` + `indexer.rs` → `src/search/` module with backwards-compat re-exports.
+- `edge.rs` + `evolution.rs` + `instinct.rs` + `router.rs` → `src/intelligence/` module.
+
+**Code Quality:**
+- 33 clippy warnings → 0 (`sort_by_key`, `&Path`, `strip_prefix`, `while_let`, dead fields, `flatten`, identical blocks, manual division).
+- Risky `unwrap()` calls replaced in production paths (`daemon/server.rs`, `cli/search.rs`, `cli/health.rs`, `cli/new.rs`).
+
+### Changed
+- `lib.rs`: 42 top-level modules → logical groupings with backwards-compatible `pub use` aliases.
+- All previously scattered `crate::hybrid_search`, `crate::indexer`, `crate::edge`, `crate::evolution`, `crate::instinct`, `crate::router`, `crate::mcp_server` paths continue to work unchanged.
+
 ## [1.4.0] - 2026-05-20 (Universal Kernel Edition)
 
 ### Added

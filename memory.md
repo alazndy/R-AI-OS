@@ -1,11 +1,11 @@
 # R-AI-OS Memory
 
 ## Current Status
-- Date: 2026-05-16
-- Active agent: Claude (v1.3.0 — production, tüm eksikler tamamlandı)
-- Version: v1.3.0
-- Version Name: AI Intelligence Layer
-- Status: **Production-ready.** 37 CLI commands, 23 MCP tools, 83 unit tests — all green. Global binary kurulu (`~/.cargo/bin/raios.exe`). OpenCode MCP uyumlu.
+- Date: 2026-05-21
+- Active agent: Claude (v1.5.0 — production)
+- Version: v1.5.0
+- Version Name: Intelligence & Architecture Edition
+- Status: **Production-ready.** Phase 5-8 complete (Swarm Mesh, Edge Intelligence, Evolutionary Intelligence, Recursive Reasoning). Full codebase refactor: 3001-line cli.rs → 11 modules, 1667-line mcp_server.rs → 7 modules, new `search/` + `intelligence/` module groups. 143/146 tests green. 0 clippy warnings.
 
 ## Claude
 ### Achievements
@@ -96,11 +96,14 @@
 ### In Progress
 
 ### Next Steps
-- [ ] build/test/deps columns in health view.
-- [x] **Phase 8: Recursive Reasoning** — TaskGraph DAG, SQLite persistence, TCP commands (CreateTaskGraph/ExecuteTaskGraph/GetTaskGraph). ✅ 2026-05-21
-- [x] **Phase 5: Agent Swarm Mesh** — SwarmStore, 5 TCP commands, `raios swarm` CLI, 3 MCP tools. ✅ 2026-05-21
-- [x] **Phase 6: Edge Intelligence** — `raios route` CLI, `route_capability` MCP tool. ✅ 2026-05-21
-- [x] **Phase 7: Evolutionary Intelligence** — Evolution TCP commands (List/Promote/Prune), `raios evolve` CLI, 2 MCP tools. ✅ 2026-05-21
+- [ ] build/test/deps columns in health view (TUI).
+- [ ] Faz B: `analysis/` + `projects/` module grouping (keyboard.rs 987, security.rs 831 split).
+- [x] **v1.5.0 Release** — Intelligence & Architecture Edition. ✅ 2026-05-21
+- [x] **Codebase Refactor** — cli/ (11 modules), mcp/ (7 modules), search/, intelligence/. 0 clippy warnings. ✅ 2026-05-21
+- [x] **Phase 8: Recursive Reasoning** — TaskGraph DAG. ✅ 2026-05-21
+- [x] **Phase 5: Agent Swarm Mesh** — SwarmStore, 5 TCP, CLI, 3 MCP tools. ✅ 2026-05-21
+- [x] **Phase 6: Edge Intelligence** — EdgeRouter, route CLI, MCP tool. ✅ 2026-05-21
+- [x] **Phase 7: Evolutionary Intelligence** — CandidateStore, evolve CLI, 2 MCP tools. ✅ 2026-05-21
 
 ## Research References
 - **Agent Discipline:** [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills)
