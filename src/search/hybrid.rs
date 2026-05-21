@@ -11,7 +11,7 @@
 //! Vector results are retrieved from the `Cortex` engine (blocking call).
 
 use crate::cortex::store::VectorResult;
-use crate::indexer::SearchResult as BM25Result;
+use crate::search::indexer::SearchResult as BM25Result;
 use std::collections::HashMap;
 
 /// Combined search result after RRF fusion.
@@ -149,9 +149,9 @@ pub fn fuse(
 
 /// Convert a `HybridResult` back to the `SearchResult` type used by the TUI,
 /// so existing UI code works without modification.
-impl From<HybridResult> for crate::indexer::SearchResult {
+impl From<HybridResult> for crate::search::indexer::SearchResult {
     fn from(h: HybridResult) -> Self {
-        crate::indexer::SearchResult {
+        crate::search::indexer::SearchResult {
             path: h.path,
             project: h.project,
             snippet: h.snippet,
