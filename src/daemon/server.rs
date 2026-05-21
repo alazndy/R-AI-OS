@@ -44,7 +44,10 @@ impl Server {
     async fn run_inner(&self, tx: broadcast::Sender<String>) -> anyhow::Result<()> {
         // 1. Generate and save IPC token for security
         let token = uuid::Uuid::new_v4().to_string();
-        let token_path = Config::config_file().parent().unwrap().join(".ipc_token");
+        let config_dir = Config::config_file().parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let token_path = config_dir.join(".ipc_token");
         std::fs::write(&token_path, &token)?;
         println!(
             "[Daemon] Security: IPC Token generated and saved to {:?}",

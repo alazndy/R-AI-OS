@@ -58,15 +58,12 @@ pub(super) fn cmd_stats(_dev_ops: &Path, json: bool) {
         Err(e) => { eprintln!("Stats query failed: {}", e); return; }
     };
 
-    let top_cats: Vec<(String, i64)> = {
-        let mut stmt = conn.prepare(
-            "SELECT category, COUNT(*) AS n FROM projects GROUP BY category ORDER BY n DESC LIMIT 8"
-        ).unwrap();
-        stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
-    };
+    let top_cats: Vec<(String, i64)> = conn.prepare(
+        "SELECT category, COUNT(*) AS n FROM projects GROUP BY category ORDER BY n DESC LIMIT 8"
+    ).ok()
+    .and_then(|mut stmt| stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).ok()
+        .map(|rows| rows.filter_map(|r| r.ok()).collect()))
+    .unwrap_or_default();
 
     if json {
         let out = serde_json::json!({

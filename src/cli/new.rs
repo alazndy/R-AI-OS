@@ -98,7 +98,7 @@ pub(super) fn cmd_bootstrap() {
     let ecc_temp_path = temp_dir.join("ecc-master");
     if !ecc_temp_path.exists() {
         let _ = std::process::Command::new("git")
-            .args(["clone", "--depth", "1", "https://github.com/affaan-m/everything-claude-code.git", ecc_temp_path.to_str().unwrap()])
+            .args(["clone", "--depth", "1", "https://github.com/affaan-m/everything-claude-code.git", ecc_temp_path.to_string_lossy().as_ref()])
             .status();
     } else {
         let _ = std::process::Command::new("git").current_dir(&ecc_temp_path).args(["pull"]).status();

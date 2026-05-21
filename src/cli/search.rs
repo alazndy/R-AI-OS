@@ -1,7 +1,10 @@
 use std::path::Path;
 
 pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, dev_ops: &Path, json: bool) {
-    let mut cortex = crate::cortex::Cortex::init().unwrap();
+    let mut cortex = match crate::cortex::Cortex::init() {
+        Ok(c) => c,
+        Err(e) => { eprintln!("Cortex init failed: {e}"); return; }
+    };
     let needs_index = reindex || cortex.chunk_count() == 0;
 
     if needs_index {
@@ -16,7 +19,10 @@ pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, dev_ops: &Pat
     }
 
     let vector_hits = cortex.search(query, top_k).unwrap_or_default();
-    let bm25_hits = crate::indexer::ProjectIndex::build(dev_ops).unwrap().search(query);
+    let bm25_hits = match crate::indexer::ProjectIndex::build(dev_ops) {
+        Ok(idx) => idx.search(query),
+        Err(e) => { eprintln!("Index build failed: {e}"); vec![] }
+    };
     let fused = crate::hybrid_search::fuse(bm25_hits, vector_hits, top_k);
 
     if json {
@@ -24,7 +30,7 @@ pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, dev_ops: &Pat
             "path": r.path.to_string_lossy(), "project": r.project, "snippet": r.snippet,
             "line": r.start_line, "score": r.rrf_score, "source": r.source.label()
         })).collect();
-        println!("{}", serde_json::to_string_pretty(&results).unwrap());
+        println!("{}", serde_json::to_string_pretty(&results).unwrap_or_default());
         return;
     }
 
