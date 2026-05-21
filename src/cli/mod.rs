@@ -1,0 +1,342 @@
+mod dev;
+mod git;
+mod health;
+mod instinct;
+mod new;
+mod search;
+mod security;
+mod swarm;
+mod version;
+mod workspace;
+
+use crate::config::Config;
+use clap::{Parser, Subcommand};
+use std::path::{Path, PathBuf};
+
+// ─── CLI types ────────────────────────────────────────────────────────────────
+
+#[derive(Parser)]
+#[command(name = "raios", about = "AI OS Terminal Control Center — Rust Edition", version)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+    #[arg(short, long, global = true)]
+    pub json: bool,
+}
+
+#[derive(Subcommand)]
+pub enum InstinctCmd {
+    /// Add a rule manually to global instincts + project memory.md
+    Add {
+        rule: String,
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+    },
+    /// List all instincts (global + current project)
+    List {
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+    },
+    /// Suggest instincts from health analysis with interactive approval
+    Suggest { project: Option<String> },
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Print master rule files
+    Rules { name: Option<String> },
+    /// Semantic search or print project memory.md files
+    Memory {
+        project: Option<String>,
+        #[arg(short, long)]
+        query: Option<String>,
+        #[arg(short = 'n', long, default_value = "5")]
+        top: usize,
+    },
+    /// Print mempalace.yaml
+    Mempalace,
+    /// List all projects with memory.md
+    Projects,
+    /// List agent config files and their status
+    Agents,
+    /// View any known file by name or path
+    View { name: String },
+    /// Run discovery engine to find new projects
+    Discover,
+    /// Get health report for a project (dirty, compliance, etc.)
+    Health { project: Option<String> },
+    /// Print current version
+    Version,
+    /// Run as MCP server (stdio transport)
+    #[command(name = "mcp-server")]
+    McpServer,
+    /// Run an agent as a child process with execution proxy
+    Run {
+        agent: String,
+        #[arg(short, long)]
+        project: Option<String>,
+        #[arg(short, long)]
+        timeout: Option<u64>,
+    },
+    /// Commit dirty projects in bulk (optionally push)
+    Commit {
+        #[arg(short, long)] project: Option<String>,
+        #[arg(short, long)] message: Option<String>,
+        #[arg(long)] push: bool,
+        #[arg(long)] dry_run: bool,
+    },
+    /// Show workspace portfolio statistics
+    Stats,
+    /// Search across the entire Dev Ops workspace (Semantic + BM25)
+    Search {
+        query: String,
+        #[arg(short, long, default_value = "8")] top_k: usize,
+        #[arg(long)] reindex: bool,
+    },
+    /// Run OWASP security scan on one or all projects
+    Security {
+        #[arg(short, long)] project: Option<String>,
+        #[arg(long)] full: bool,
+        #[arg(long)] path: Option<String>,
+        #[arg(short, long)] watch: bool,
+    },
+    /// Scaffold a new project following MASTER.md rules
+    New {
+        name: String,
+        #[arg(short, long, default_value = "")] category: String,
+        #[arg(long)] github: bool,
+        #[arg(long)] no_vault: bool,
+    },
+    /// Automatically route a task to the best specialist agent
+    Task {
+        description: String,
+        #[arg(short, long)] project: Option<String>,
+        #[arg(short, long)] agent: Option<String>,
+    },
+    /// Install/Bootstrap the entire ECC, Maestro, and system architecture
+    Bootstrap,
+    /// Bump project version (semver) and optionally update CHANGELOG
+    VersionBump {
+        level: String,
+        project: Option<String>,
+        #[arg(long)] changelog: bool,
+        #[arg(long)] tag: bool,
+    },
+    /// Show current version and changelog since last tag
+    VersionInfo { project: Option<String> },
+    /// Analyze disk usage of a project or all projects
+    Disk { project: Option<String> },
+    /// Remove build artifacts (target/, node_modules/, __pycache__, etc.)
+    Clean {
+        project: Option<String>,
+        #[arg(long)] dry_run: bool,
+        #[arg(long)] all: bool,
+    },
+    /// List all listening ports with PID and process name
+    Ps {
+        #[arg(short, long)] procs: bool,
+        #[arg(short, long, default_value = "15")] top: usize,
+    },
+    /// Kill a process by port number
+    KillPort { port: u16 },
+    /// Check .env files: missing keys, empty values, undocumented secrets
+    Env {
+        project: Option<String>,
+        #[arg(long)] all: bool,
+    },
+    /// Check dependencies: outdated packages and CVE vulnerabilities
+    Deps {
+        project: Option<String>,
+        #[arg(long)] audit: bool,
+        #[arg(long)] all: bool,
+    },
+    /// Build a project (auto-detects Rust/Node/Python/Go)
+    Build { project: Option<String> },
+    /// Run tests for a project (auto-detects test runner)
+    Test {
+        project: Option<String>,
+        #[arg(long)] all: bool,
+    },
+    /// Git operations on any project
+    Git {
+        #[command(subcommand)]
+        cmd: GitCommands,
+    },
+    /// Manage project instincts (learned rules)
+    Instinct {
+        #[command(subcommand)]
+        cmd: InstinctCmd,
+    },
+    /// Show GitHub Actions CI/CD status for a project
+    Ci { project: Option<String> },
+    /// Index or re-index the Cortex semantic memory store
+    CortexIndex {
+        #[arg(long)] force: bool,
+    },
+    /// Manage parallel swarm tasks in isolated git worktrees
+    Swarm {
+        #[command(subcommand)]
+        action: SwarmAction,
+    },
+    /// Semantically route a query to the best matching raios capability
+    Route { query: String },
+    /// Manage evolutionary instinct candidates learned from job outcomes
+    Evolve {
+        #[command(subcommand)]
+        action: EvolveAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SwarmAction {
+    /// Start a new swarm task in an isolated git worktree
+    Start {
+        #[arg(long)] project: String,
+        #[arg(long)] path: String,
+        #[arg(long)] description: String,
+        #[arg(long, default_value = "claude")] agent: String,
+    },
+    /// List all active swarm tasks
+    List,
+    /// Approve and merge a completed swarm task
+    Approve { task_id: String },
+    /// Reject and discard a swarm task
+    Reject { task_id: String },
+}
+
+#[derive(Subcommand)]
+pub enum EvolveAction {
+    /// List pending instinct candidates
+    List {
+        #[arg(long, default_value = "20")] limit: u64,
+    },
+    /// Promote a candidate rule to active instincts
+    Promote { rule: String },
+    /// Prune expired candidates
+    Prune,
+}
+
+#[derive(Subcommand)]
+pub enum GitCommands {
+    /// Show working tree status
+    Status { project: Option<String> },
+    /// Show commit log
+    Log {
+        project: Option<String>,
+        #[arg(short, long, default_value = "10")] count: usize,
+    },
+    /// Show diff
+    Diff {
+        project: Option<String>,
+        #[arg(long)] staged: bool,
+    },
+    /// Stage all changes and commit
+    Commit {
+        message: String,
+        project: Option<String>,
+        #[arg(long)] push: bool,
+    },
+    /// Push commits to remote
+    Push { project: Option<String> },
+    /// Pull from remote
+    Pull { project: Option<String> },
+    /// List branches
+    Branches { project: Option<String> },
+    /// Checkout a branch
+    Checkout {
+        branch: String,
+        project: Option<String>,
+    },
+    /// Create and checkout a new branch
+    Branch {
+        name: String,
+        project: Option<String>,
+    },
+}
+
+// ─── Config helper ────────────────────────────────────────────────────────────
+
+fn load_cfg() -> Config {
+    if let Some(cfg) = Config::load() {
+        return cfg;
+    }
+    let detected = Config::auto_detect();
+    Config {
+        dev_ops_path: detected.dev_ops.unwrap_or_else(|| dirs::desktop_dir().unwrap_or_default().join("Dev Ops")),
+        master_md_path: detected.master_md.unwrap_or_else(|| PathBuf::from("MASTER.md")),
+        skills_path: detected.skills.unwrap_or_else(|| PathBuf::from(".agents/skills")),
+        vault_projects_path: detected.vault_projects.unwrap_or_else(|| PathBuf::from("Projeler")),
+    }
+}
+
+pub(crate) fn resolve_project_path(project: Option<String>, dev_ops: &Path) -> PathBuf {
+    match project {
+        None => std::env::current_dir().unwrap_or_else(|_| dev_ops.to_path_buf()),
+        Some(ref p) => {
+            let direct = Path::new(p);
+            if direct.exists() { return direct.to_path_buf(); }
+            if let Ok(conn) = crate::db::open_db() {
+                if let Ok(projects) = crate::db::load_all_projects(&conn) {
+                    if let Some(found) = projects.iter().find(|pr| pr.name.to_lowercase().contains(&p.to_lowercase())) {
+                        return PathBuf::from(&found.path);
+                    }
+                }
+            }
+            direct.to_path_buf()
+        }
+    }
+}
+
+// ─── Entry point ─────────────────────────────────────────────────────────────
+
+pub fn run(cli: Cli) {
+    let cfg = load_cfg();
+    let cmd = cli.command.expect("Subcommand missing");
+    match cmd {
+        Commands::Rules { name } => workspace::cmd_rules(name, &cfg.master_md_path, cli.json),
+        Commands::Memory { project, query, top } => workspace::cmd_memory(project, query, top, &cfg.dev_ops_path, cli.json),
+        Commands::Mempalace => workspace::cmd_mempalace(&cfg.dev_ops_path, cli.json),
+        Commands::Projects => workspace::cmd_projects(&cfg.dev_ops_path, cli.json),
+        Commands::Agents => workspace::cmd_agents(cli.json),
+        Commands::View { name } => workspace::cmd_view(name, &cfg.master_md_path, cli.json),
+        Commands::Discover => workspace::cmd_discover(&cfg.dev_ops_path, cli.json),
+        Commands::Health { project } => health::cmd_health(project, &cfg.dev_ops_path, cli.json),
+        Commands::Version => println!("raios v{}", env!("CARGO_PKG_VERSION")),
+        Commands::McpServer => {
+            if let Err(e) = crate::mcp_server::run_stdio() {
+                eprintln!("MCP server error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Run { agent, project, timeout } => {
+            if let Err(e) = crate::agent_runner::run_agent(&agent, project, timeout) {
+                eprintln!("Agent Runner Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Commit { project, message, push, dry_run } => health::cmd_commit(project, message, push, dry_run, &cfg.dev_ops_path, cli.json),
+        Commands::Stats => health::cmd_stats(&cfg.dev_ops_path, cli.json),
+        Commands::Search { query, top_k, reindex } => search::cmd_search(&query, top_k, reindex, &cfg.dev_ops_path, cli.json),
+        Commands::Security { project, full, path, watch } => security::cmd_security(project, full, path, watch, &cfg.dev_ops_path, cli.json),
+        Commands::New { name, category, github, no_vault } => new::cmd_new(&name, &category, github, no_vault, &cfg.dev_ops_path, cli.json),
+        Commands::Task { description, project, agent } => new::cmd_task(&description, project, agent),
+        Commands::Bootstrap => new::cmd_bootstrap(),
+        Commands::VersionBump { level, project, changelog, tag } => version::cmd_version_bump(&level, project, changelog, tag, &cfg.dev_ops_path, cli.json),
+        Commands::VersionInfo { project } => version::cmd_version_info(project, &cfg.dev_ops_path, cli.json),
+        Commands::Disk { project } => dev::cmd_disk(project, &cfg.dev_ops_path, cli.json),
+        Commands::Clean { project, dry_run, all } => dev::cmd_clean(project, dry_run, all, &cfg.dev_ops_path, cli.json),
+        Commands::Ps { procs, top } => dev::cmd_ps(procs, top, cli.json),
+        Commands::KillPort { port } => dev::cmd_kill_port(port, cli.json),
+        Commands::Env { project, all } => dev::cmd_env(project, all, &cfg.dev_ops_path, cli.json),
+        Commands::Deps { project, audit, all } => dev::cmd_deps(project, audit, all, &cfg.dev_ops_path, cli.json),
+        Commands::Build { project } => dev::cmd_build(project, &cfg.dev_ops_path, cli.json),
+        Commands::Test { project, all } => dev::cmd_test(project, all, &cfg.dev_ops_path, cli.json),
+        Commands::Git { cmd } => git::cmd_git(cmd, &cfg.dev_ops_path, cli.json),
+        Commands::Instinct { cmd } => instinct::cmd_instinct(cmd, &cfg.dev_ops_path, cli.json),
+        Commands::Ci { project } => dev::cmd_ci(project, &cfg.dev_ops_path, cli.json),
+        Commands::CortexIndex { force } => search::cmd_cortex_index(force, &cfg.dev_ops_path, cli.json),
+        Commands::Swarm { action } => swarm::cmd_swarm(action, cli.json),
+        Commands::Route { query } => swarm::cmd_route(&query, cli.json),
+        Commands::Evolve { action } => swarm::cmd_evolve(action, cli.json),
+    }
+}
