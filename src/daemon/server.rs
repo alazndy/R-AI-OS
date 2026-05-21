@@ -166,6 +166,9 @@ impl Server {
             let graph_store_for_client = Arc::new(
                 crate::task_graph::GraphStore::new(crate::task_graph::GraphStore::default_path())
             );
+            let swarm_store_for_client = Arc::new(
+                crate::swarm::store::SwarmStore::new(crate::swarm::store::SwarmStore::default_path())
+            );
 
             tokio::spawn(async move {
                 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -751,6 +754,66 @@ impl Server {
                                                 });
                                                 let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
                                             }
+                                        }
+                                    }
+                                } else if v["command"] == "CreateSwarmTask" {
+                                    let project_name = v["project_name"].as_str().unwrap_or("unknown").to_string();
+                                    let project_path = v["project_path"].as_str().unwrap_or(".").to_string();
+                                    let description = v["description"].as_str().unwrap_or("").to_string();
+                                    let agent = v["agent"].as_str().unwrap_or("claude").to_string();
+                                    match swarm_store_for_client.create(
+                                        &project_name,
+                                        std::path::Path::new(&project_path),
+                                        &description,
+                                        &agent,
+                                    ) {
+                                        Ok(task) => {
+                                            let r = serde_json::json!({"event":"SwarmTaskCreated","task_id":task.id});
+                                            let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
+                                        }
+                                        Err(e) => {
+                                            let r = serde_json::json!({"event":"SwarmError","error":e.to_string()});
+                                            let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
+                                        }
+                                    }
+                                } else if v["command"] == "GetSwarmTask" {
+                                    if let Some(id) = v["task_id"].as_str() {
+                                        let r = match swarm_store_for_client.get(id) {
+                                            Some(task) => serde_json::json!({"event":"SwarmTaskState","task":task}),
+                                            None => serde_json::json!({"event":"SwarmError","error":format!("task {} not found", id)}),
+                                        };
+                                        let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
+                                    }
+                                } else if v["command"] == "ListSwarmTasks" {
+                                    let tasks = swarm_store_for_client.list_active();
+                                    let r = serde_json::json!({"event":"SwarmTaskList","tasks":tasks});
+                                    let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
+                                } else if v["command"] == "ApproveSwarmTask" {
+                                    if let Some(id) = v["task_id"].as_str() {
+                                        if let Some(task) = swarm_store_for_client.get(id) {
+                                            let msg = format!("swarm merge: {}", task.task_description);
+                                            match crate::swarm::merge::merge_branch(&task.project_path, &task.branch_name, &msg) {
+                                                Ok(_) => {
+                                                    let _ = crate::swarm::worktree::remove_worktree(&task.project_path, &task.worktree_path);
+                                                    swarm_store_for_client.set_status(id, crate::swarm::SwarmStatus::Merged);
+                                                    let r = serde_json::json!({"event":"SwarmTaskMerged","task_id":id});
+                                                    let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
+                                                }
+                                                Err(e) => {
+                                                    let r = serde_json::json!({"event":"SwarmError","error":e.to_string()});
+                                                    let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else if v["command"] == "RejectSwarmTask" {
+                                    if let Some(id) = v["task_id"].as_str() {
+                                        if let Some(task) = swarm_store_for_client.get(id) {
+                                            let _ = crate::swarm::worktree::remove_worktree(&task.project_path, &task.worktree_path);
+                                            let _ = crate::swarm::merge::delete_branch(&task.project_path, &task.branch_name);
+                                            swarm_store_for_client.set_status(id, crate::swarm::SwarmStatus::Rejected);
+                                            let r = serde_json::json!({"event":"SwarmTaskRejected","task_id":id});
+                                            let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
                                         }
                                     }
                                 }
