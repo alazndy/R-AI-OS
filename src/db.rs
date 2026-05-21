@@ -165,6 +165,20 @@ fn migrate(conn: &Connection) -> Result<()> {
             PRIMARY KEY (graph_id, id)
         );
         CREATE INDEX IF NOT EXISTS idx_tgn_graph ON task_graph_nodes(graph_id);
+
+        CREATE TABLE IF NOT EXISTS swarm_tasks (
+            id            TEXT PRIMARY KEY,
+            project_name  TEXT NOT NULL,
+            project_path  TEXT NOT NULL,
+            worktree_path TEXT NOT NULL,
+            branch_name   TEXT NOT NULL,
+            description   TEXT NOT NULL,
+            agent         TEXT NOT NULL,
+            status        TEXT NOT NULL DEFAULT 'initializing',
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            completed_at  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_swarm_status ON swarm_tasks(status);
         ",
     )?;
     Ok(())
@@ -675,5 +689,14 @@ mod tests {
             .unwrap();
         assert_eq!(count_graphs, 0);
         assert_eq!(count_nodes, 0);
+    }
+
+    #[test]
+    fn swarm_tasks_table_exists() {
+        let conn = in_memory();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM swarm_tasks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
