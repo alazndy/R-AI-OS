@@ -267,6 +267,50 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Manage parallel swarm tasks in isolated git worktrees
+    Swarm {
+        #[command(subcommand)]
+        action: SwarmAction,
+    },
+    /// Semantically route a query to the best matching raios capability
+    Route {
+        /// Natural language query (e.g. "check if my project builds")
+        query: String,
+    },
+    /// Manage evolutionary instinct candidates learned from job outcomes
+    Evolve {
+        #[command(subcommand)]
+        action: EvolveAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SwarmAction {
+    /// Start a new swarm task in an isolated git worktree
+    Start {
+        #[arg(long)] project: String,
+        #[arg(long)] path: String,
+        #[arg(long)] description: String,
+        #[arg(long, default_value = "claude")] agent: String,
+    },
+    /// List all active swarm tasks
+    List,
+    /// Approve and merge a completed swarm task
+    Approve { task_id: String },
+    /// Reject and discard a swarm task
+    Reject { task_id: String },
+}
+
+#[derive(Subcommand)]
+pub enum EvolveAction {
+    /// List pending instinct candidates
+    List {
+        #[arg(long, default_value = "20")] limit: u64,
+    },
+    /// Promote a candidate rule to active instincts
+    Promote { rule: String },
+    /// Prune expired candidates
+    Prune,
 }
 
 #[derive(Subcommand)]
@@ -496,6 +540,15 @@ pub fn run(cli: Cli) {
         }
         Commands::CortexIndex { force } => {
             cmd_cortex_index(force, &cfg.dev_ops_path, cli.json);
+        }
+        Commands::Swarm { action } => {
+            cmd_swarm(action, cli.json);
+        }
+        Commands::Route { query } => {
+            cmd_route(&query, cli.json);
+        }
+        Commands::Evolve { action } => {
+            cmd_evolve(action, cli.json);
         }
     }
 }
@@ -2780,5 +2833,169 @@ fn print_ci_report(report: &crate::core::ci::CiReport, json: bool) {
 
     if !report.run.html_url.is_empty() {
         println!("\n  {}", report.run.html_url);
+    }
+}
+
+fn cmd_swarm(action: SwarmAction, json: bool) {
+    use crate::swarm::store::SwarmStore;
+    use crate::swarm::SwarmStatus;
+
+    let store = SwarmStore::new(SwarmStore::default_path());
+
+    match action {
+        SwarmAction::Start { project, path, description, agent } => {
+            match store.create(&project, std::path::Path::new(&path), &description, &agent) {
+                Ok(task) => {
+                    if json {
+                        println!("{}", serde_json::json!({"status":"ok","task_id":task.id.to_string()}));
+                    } else {
+                        println!("✓ Swarm task created");
+                        println!("  id:     {}", task.id);
+                        println!("  branch: {}", task.branch_name);
+                        println!("  agent:  {}", task.agent);
+                    }
+                }
+                Err(e) => eprintln!("✗ Failed to create swarm task: {e}"),
+            }
+        }
+        SwarmAction::List => {
+            let tasks = store.list_active();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&tasks).unwrap_or_default());
+                return;
+            }
+            if tasks.is_empty() {
+                println!("No active swarm tasks.");
+                return;
+            }
+            println!("{:<36}  {:<12}  {:<8}  {}", "ID", "STATUS", "AGENT", "DESCRIPTION");
+            println!("{}", "-".repeat(80));
+            for t in &tasks {
+                let status = match &t.status {
+                    SwarmStatus::Initializing => "init",
+                    SwarmStatus::Running => "running",
+                    SwarmStatus::AwaitingReview => "review",
+                    SwarmStatus::Merged => "merged",
+                    SwarmStatus::Rejected => "rejected",
+                    SwarmStatus::Failed(_) => "failed",
+                };
+                println!("{:<36}  {:<12}  {:<8}  {}", t.id, status, t.agent, t.task_description);
+            }
+        }
+        SwarmAction::Approve { task_id } => {
+            match store.get(&task_id) {
+                Some(task) => {
+                    let msg = format!("swarm merge: {}", task.task_description);
+                    match crate::swarm::merge::merge_branch(&task.project_path, &task.branch_name, &msg) {
+                        Ok(_) => {
+                            let _ = crate::swarm::worktree::remove_worktree(&task.project_path, &task.worktree_path);
+                            store.set_status(&task_id, SwarmStatus::Merged);
+                            if json {
+                                println!("{}", serde_json::json!({"status":"ok","merged":task_id}));
+                            } else {
+                                println!("✓ Swarm task merged: {task_id}");
+                            }
+                        }
+                        Err(e) => eprintln!("✗ Merge failed: {e}"),
+                    }
+                }
+                None => eprintln!("✗ Task not found: {task_id}"),
+            }
+        }
+        SwarmAction::Reject { task_id } => {
+            match store.get(&task_id) {
+                Some(task) => {
+                    let _ = crate::swarm::worktree::remove_worktree(&task.project_path, &task.worktree_path);
+                    let _ = crate::swarm::merge::delete_branch(&task.project_path, &task.branch_name);
+                    store.set_status(&task_id, SwarmStatus::Rejected);
+                    if json {
+                        println!("{}", serde_json::json!({"status":"ok","rejected":task_id}));
+                    } else {
+                        println!("✓ Swarm task rejected: {task_id}");
+                    }
+                }
+                None => eprintln!("✗ Task not found: {task_id}"),
+            }
+        }
+    }
+}
+
+fn cmd_route(query: &str, json: bool) {
+    use crate::edge::EdgeRouter;
+
+    let descriptions = vec![
+        ("health_check".to_string(), "Run health scan and grade on a project".to_string()),
+        ("search_memory".to_string(), "Semantic search across all project memory files".to_string()),
+        ("run_sentinel".to_string(), "Compile and lint check a project".to_string()),
+        ("list_projects".to_string(), "List all known projects in workspace".to_string()),
+        ("git_status".to_string(), "Show git status for a project".to_string()),
+        ("git_commit".to_string(), "Create a git commit with a message".to_string()),
+        ("git_push".to_string(), "Push commits to remote".to_string()),
+        ("run_build".to_string(), "Run the project build command".to_string()),
+        ("run_tests".to_string(), "Run the project test suite".to_string()),
+        ("check_deps".to_string(), "Check for outdated dependencies and CVEs".to_string()),
+        ("bump_version".to_string(), "Bump semver version and update CHANGELOG".to_string()),
+        ("create_swarm_task".to_string(), "Start a parallel agent task in an isolated git worktree".to_string()),
+        ("list_swarm_tasks".to_string(), "List all active swarm tasks".to_string()),
+        ("create_task_graph".to_string(), "Submit a DAG of dependent tasks for execution".to_string()),
+        ("list_evolution_candidates".to_string(), "List pending instinct candidates from job outcomes".to_string()),
+    ];
+
+    let router = EdgeRouter::new(descriptions);
+    match router.route(query) {
+        Some(capability) => {
+            if json {
+                println!("{}", serde_json::json!({"capability": capability, "query": query}));
+            } else {
+                println!("→ {capability}");
+            }
+        }
+        None => {
+            if json {
+                println!("{}", serde_json::json!({"capability": null, "query": query}));
+            } else {
+                println!("No matching capability found for: {query}");
+            }
+        }
+    }
+}
+
+fn cmd_evolve(action: EvolveAction, json: bool) {
+    use crate::evolution::CandidateStore;
+
+    let store = CandidateStore::new(CandidateStore::default_path());
+
+    match action {
+        EvolveAction::List { limit } => {
+            let candidates = store.list_pending(limit as usize);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&candidates).unwrap_or_default());
+            } else if candidates.is_empty() {
+                println!("No pending instinct candidates.");
+            } else {
+                println!("Pending instinct candidates ({}):", candidates.len());
+                for (i, rule) in candidates.iter().enumerate() {
+                    println!("  {}. {}", i + 1, rule);
+                }
+            }
+        }
+        EvolveAction::Promote { rule } => {
+            store.promote(&rule);
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let _ = crate::instinct::append_to_memory_md(&cwd, &rule);
+            if json {
+                println!("{}", serde_json::json!({"status":"ok","promoted":rule}));
+            } else {
+                println!("✓ Promoted: {rule}");
+            }
+        }
+        EvolveAction::Prune => {
+            let removed = store.sweep_expired();
+            if json {
+                println!("{}", serde_json::json!({"status":"ok","removed":removed}));
+            } else {
+                println!("✓ Pruned {removed} expired candidate(s).");
+            }
+        }
     }
 }
