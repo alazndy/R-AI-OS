@@ -169,6 +169,9 @@ impl Server {
             let swarm_store_for_client = Arc::new(
                 crate::swarm::store::SwarmStore::new(crate::swarm::store::SwarmStore::default_path())
             );
+            let evolution_store_for_client = Arc::new(
+                crate::evolution::CandidateStore::new(crate::evolution::CandidateStore::default_path())
+            );
 
             tokio::spawn(async move {
                 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -806,6 +809,21 @@ impl Server {
                                             }
                                         }
                                     }
+                                } else if v["command"] == "ListEvolutionCandidates" {
+                                    let limit = v["limit"].as_u64().unwrap_or(20) as usize;
+                                    let candidates = evolution_store_for_client.list_pending(limit);
+                                    let r = serde_json::json!({"event":"EvolutionCandidates","candidates":candidates});
+                                    let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
+                                } else if v["command"] == "PromoteEvolutionCandidate" {
+                                    if let Some(rule) = v["rule"].as_str() {
+                                        evolution_store_for_client.promote(rule);
+                                        let r = serde_json::json!({"event":"EvolutionCandidatePromoted","rule":rule});
+                                        let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
+                                    }
+                                } else if v["command"] == "PruneExpiredCandidates" {
+                                    let removed = evolution_store_for_client.sweep_expired();
+                                    let r = serde_json::json!({"event":"EvolutionPruned","removed":removed});
+                                    let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
                                 } else if v["command"] == "RejectSwarmTask" {
                                     if let Some(id) = v["task_id"].as_str() {
                                         if let Some(task) = swarm_store_for_client.get(id) {

@@ -532,6 +532,68 @@ impl McpServer {
                             "session_id": { "type": "string", "description": "Session ID (omit to use current open session)" }
                         }
                     }
+                },
+                {
+                    "name": "create_swarm_task",
+                    "description": "Create an isolated swarm task in a new git worktree for parallel agent development.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["project_name", "project_path", "description"],
+                        "properties": {
+                            "project_name": { "type": "string" },
+                            "project_path": { "type": "string", "description": "Absolute path to the project" },
+                            "description":  { "type": "string", "description": "What the agent should do in this worktree" },
+                            "agent":        { "type": "string", "description": "Agent name (default: claude)" }
+                        }
+                    }
+                },
+                {
+                    "name": "list_swarm_tasks",
+                    "description": "List all active swarm tasks (excludes merged/rejected).",
+                    "inputSchema": { "type": "object", "properties": {} }
+                },
+                {
+                    "name": "approve_swarm_task",
+                    "description": "Approve and merge a completed swarm task into the main branch.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["task_id"],
+                        "properties": {
+                            "task_id": { "type": "string" }
+                        }
+                    }
+                },
+                {
+                    "name": "route_capability",
+                    "description": "Semantically route a natural language query to the best matching raios capability name.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {
+                            "query": { "type": "string", "description": "Natural language description of what you want to do" }
+                        }
+                    }
+                },
+                {
+                    "name": "list_evolution_candidates",
+                    "description": "List pending instinct candidates learned from agent job outcomes.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "limit": { "type": "integer", "description": "Max results (default: 20)" }
+                        }
+                    }
+                },
+                {
+                    "name": "promote_evolution_candidate",
+                    "description": "Promote a learned instinct candidate to active memory and the instinct store.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["rule"],
+                        "properties": {
+                            "rule": { "type": "string", "description": "The rule text to promote" }
+                        }
+                    }
                 }
             ]
         }))
@@ -566,6 +628,12 @@ impl McpServer {
             "git_diff" => self.tool_git_diff(args),
             "git_commit" => self.tool_git_commit(args),
             "session_note" => self.tool_session_note(args),
+            "create_swarm_task" => self.tool_create_swarm_task(args),
+            "list_swarm_tasks" => self.tool_list_swarm_tasks(),
+            "approve_swarm_task" => self.tool_approve_swarm_task(args),
+            "route_capability" => self.tool_route_capability(args),
+            "list_evolution_candidates" => self.tool_list_evolution_candidates(args),
+            "promote_evolution_candidate" => self.tool_promote_evolution_candidate(args),
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }
@@ -1574,6 +1642,135 @@ impl McpServer {
             }
             None => Err("no active session".to_string()),
         }
+    }
+
+    // ─── Swarm tools ─────────────────────────────────────────────────────────────
+
+    fn tool_create_swarm_task(&self, args: &Value) -> Result<Value, String> {
+        let project_name = args["project_name"].as_str().ok_or("missing project_name")?;
+        let project_path = args["project_path"].as_str().ok_or("missing project_path")?;
+        let description = args["description"].as_str().ok_or("missing description")?;
+        let agent = args["agent"].as_str().unwrap_or("claude");
+
+        let store = crate::swarm::store::SwarmStore::new(
+            crate::swarm::store::SwarmStore::default_path()
+        );
+        match store.create(project_name, std::path::Path::new(project_path), description, agent) {
+            Ok(task) => Ok(json!({
+                "content": [{ "type": "text", "text": format!("Swarm task created: {}\nbranch: {}", task.id, task.branch_name) }],
+                "task_id": task.id.to_string(),
+                "branch": task.branch_name
+            })),
+            Err(e) => Err(format!("Failed to create swarm task: {e}")),
+        }
+    }
+
+    fn tool_list_swarm_tasks(&self) -> Result<Value, String> {
+        let store = crate::swarm::store::SwarmStore::new(
+            crate::swarm::store::SwarmStore::default_path()
+        );
+        let tasks = store.list_active();
+        let text = if tasks.is_empty() {
+            "No active swarm tasks.".to_string()
+        } else {
+            tasks.iter().map(|t| format!("{} [{}] {} — {}", t.id, format!("{:?}", t.status).to_lowercase(), t.agent, t.task_description)).collect::<Vec<_>>().join("\n")
+        };
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "tasks": tasks
+        }))
+    }
+
+    fn tool_approve_swarm_task(&self, args: &Value) -> Result<Value, String> {
+        let task_id = args["task_id"].as_str().ok_or("missing task_id")?;
+        let store = crate::swarm::store::SwarmStore::new(
+            crate::swarm::store::SwarmStore::default_path()
+        );
+        match store.get(task_id) {
+            Some(task) => {
+                let msg = format!("swarm merge: {}", task.task_description);
+                match crate::swarm::merge::merge_branch(&task.project_path, &task.branch_name, &msg) {
+                    Ok(_) => {
+                        let _ = crate::swarm::worktree::remove_worktree(&task.project_path, &task.worktree_path);
+                        store.set_status(task_id, crate::swarm::SwarmStatus::Merged);
+                        Ok(json!({
+                            "content": [{ "type": "text", "text": format!("✓ Merged: {task_id}") }],
+                            "merged": true
+                        }))
+                    }
+                    Err(e) => Err(format!("Merge failed: {e}")),
+                }
+            }
+            None => Err(format!("Task not found: {task_id}")),
+        }
+    }
+
+    // ─── Edge Intelligence tool ───────────────────────────────────────────────────
+
+    fn tool_route_capability(&self, args: &Value) -> Result<Value, String> {
+        let query = args["query"].as_str().ok_or("missing query")?;
+        let descriptions = vec![
+            ("health_check".to_string(), "Run health scan and grade on a project".to_string()),
+            ("search_memory".to_string(), "Semantic search across all project memory files".to_string()),
+            ("run_sentinel".to_string(), "Compile and lint check a project".to_string()),
+            ("list_projects".to_string(), "List all known projects in workspace".to_string()),
+            ("git_status".to_string(), "Show git status for a project".to_string()),
+            ("git_commit".to_string(), "Create a git commit with a message".to_string()),
+            ("git_push".to_string(), "Push commits to remote".to_string()),
+            ("run_build".to_string(), "Run the project build command".to_string()),
+            ("run_tests".to_string(), "Run the project test suite".to_string()),
+            ("check_deps".to_string(), "Check for outdated dependencies and CVEs".to_string()),
+            ("bump_version".to_string(), "Bump semver version and update CHANGELOG".to_string()),
+            ("create_swarm_task".to_string(), "Start a parallel agent task in an isolated git worktree".to_string()),
+            ("list_swarm_tasks".to_string(), "List all active swarm tasks".to_string()),
+            ("create_task_graph".to_string(), "Submit a DAG of dependent tasks for execution".to_string()),
+            ("list_evolution_candidates".to_string(), "List pending instinct candidates from job outcomes".to_string()),
+        ];
+        let router = crate::edge::EdgeRouter::new(descriptions);
+        let capability = router.route(query);
+        let text = match capability {
+            Some(c) => format!("→ {c}"),
+            None => format!("No matching capability for: {query}"),
+        };
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "capability": capability
+        }))
+    }
+
+    // ─── Evolution tools ─────────────────────────────────────────────────────────
+
+    fn tool_list_evolution_candidates(&self, args: &Value) -> Result<Value, String> {
+        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+        let store = crate::evolution::CandidateStore::new(
+            crate::evolution::CandidateStore::default_path()
+        );
+        let candidates = store.list_pending(limit);
+        let text = if candidates.is_empty() {
+            "No pending instinct candidates.".to_string()
+        } else {
+            candidates.iter().enumerate()
+                .map(|(i, r)| format!("{}. {}", i + 1, r))
+                .collect::<Vec<_>>().join("\n")
+        };
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "candidates": candidates
+        }))
+    }
+
+    fn tool_promote_evolution_candidate(&self, args: &Value) -> Result<Value, String> {
+        let rule = args["rule"].as_str().ok_or("missing rule")?;
+        let store = crate::evolution::CandidateStore::new(
+            crate::evolution::CandidateStore::default_path()
+        );
+        store.promote(rule);
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let _ = crate::instinct::append_to_memory_md(&cwd, rule);
+        Ok(json!({
+            "content": [{ "type": "text", "text": format!("✓ Promoted: {rule}") }],
+            "promoted": rule
+        }))
     }
 }
 
