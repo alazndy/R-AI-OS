@@ -1,63 +1,24 @@
 # R-AI-OS Memory
 
 ## Current Status
-- Date: 2026-05-21
-- Active agent: Claude (v1.5.0 — production)
-- Version: v1.5.0
-- Version Name: Intelligence & Architecture Edition
-- Status: **Production-ready.** Phase 5-8 complete (Swarm Mesh, Edge Intelligence, Evolutionary Intelligence, Recursive Reasoning). Full codebase refactor: 3001-line cli.rs → 11 modules, 1667-line mcp_server.rs → 7 modules, new `search/` + `intelligence/` module groups. 143/146 tests green. 0 clippy warnings.
-
-## Claude
-### Achievements
-- **Phase 1A: SQLite Migration:** `entities.json` structure fully migrated to `rusqlite` based SQLite database.
-- **Phase 1B: Manifest System:** `.raios.yaml` manifest support added.
-- **Phase 2: Embedded Workers:** Standalone operation achieved without daemon via `workers.rs` module.
-- **Phase 3A: Event-driven Sentinel:** Switched to event-driven structure with `notify` library.
-- **Phase 4: Security & Testing:** Semgrep + 22 unit tests.
-- **Refactor Scanner:** `src/refactor_scan.rs` — detection of line count, unwrap chains, nesting depth. REFACTOR column added to health view, warning added to dashboard.
-- **Core Toolkit (v1.2.0):** `src/core/` layer — 7 modules, all accessible via CLI + MCP tool:
-  - `git.rs` — status, log, diff, commit, push, pull, branch, checkout (9 CLI, 4 MCP tools)
-  - `build.rs` — Rust/Node/Python/Go build + test runner (2 CLI, 2 MCP tools)
-  - `deps.rs` — outdated + CVE scanning, cargo audit / npm audit (1 CLI, 1 MCP tool)
-  - `env.rs` — .env vs .env.example diff, missing/empty key detection (1 CLI, 1 MCP tool)
-  - `version.rs` — semver bump, CHANGELOG.md generation, git tag (2 CLI, 2 MCP tools)
-  - `process.rs` — port list, process list, kill-port (2 CLI, 1 MCP tool)
-  - `disk.rs` — project size analysis, cache cleaning (2 CLI, 1 MCP tool)
-- **Aggregate MCP Tools:** `project_info` (git+health+version+env+disk in one call) + `portfolio_status` (summary table for 42 projects). Reduced 5-8 tool calls to 1.
-- **TUI Enhancements:** Project detail panel shows health grades + constitution issues + env flags. Added `[c]` commit / `[p]` push shortcuts in health view.
-- **E2E Test:** 66/66 unit tests green. CLI smoke tests passed. 23 MCP tools verified.
-- **Total:** 32 CLI commands, 23 MCP tools, 66 unit tests
-- **v1.3.0 — AI Intelligence Layer (2026-05-15):**
-  - **Faz 1 — Hybrid Memory Search:** `raios memory --query "<text>" --top N` — tüm projelerin memory/AGENTS/MASTER/CLAUDE.md dosyalarında semantic arama. `Cortex`'e `search_with_filter()` + `index_memory_files()` + `MEMORY_PATTERNS` eklendi. Auto-index, JSON çıktı desteği. OnceLock ile regex önbelleği.
-  - **Faz 2 — Sentinel Guard Watch:** `raios security [--watch] [--json]` — tek seferlik OWASP taraması veya sürekli dosya izleme. `notify-rust` ile Windows toast bildirimi. `scan_file()` + `WATCHED_EXTS` + `compiled_pattern_regexes()` (OnceLock). 11 uzantı izleniyor.
-  - **Faz 3 — Instinct Automation:** `raios instinct add/list/suggest` — manuel + otomatik instinct yönetimi. `suggest_from_health()` 6 pattern analizi. `append_to_memory_md()` duplicate-safe. Global `~/.agents/instincts.json` + per-project `memory.md ## Instincts`. Health footer.
-  - **Toplam:** 35 CLI commands, 75 unit tests, 14 yeni commit.
+- Date: 2026-05-22
+- Active agent: Gemini (v1.5.1 — production)
+- Version: v1.5.1
+- Version Name: Android Intelligence Edition
+- Status: **Production-ready.** Android/Gradle support fully integrated. Full test suite (170/170) green. 0 clippy warnings.
 
 ## Gemini
 ### Achievements
-- **SIGMAP Tracking:** `has_sigmap` columns added to R-AI-OS Health Dashboard and SQLite (`health_cache`) database to centrally track the `sigmap` status of all projects.
-- **Project Versioning:** Added support for automatic version and nickname tracking via `memory.md`.
-- **Self-Healing Loop:** Added `ValidationWorker` to `aiosd`. `cargo check` and compliance results can be reported via MCP.
-- **Architectural Memory:** Added RAG-based architectural consultancy layer with `ask_architect` MCP tool.
-- **Manual Agent Selection (Full Integration):**
-  - **CLI:** Added `--agent` flag to `raios task` for explicit routing to Claude, Gemini, or Codex.
-  - **TUI:** Integrated **Codex** into Task Panel `[x]` and Launcher Modal `[X]`.
-  - **TUI Fix:** Toggling task completion moved to `[v]` to resolve shortcut conflict with Codex.
-  - **Backend:** Updated `Task` parser and `dispatch_to_agent` in `src/tasks.rs` to support multi-model workflows.
-  - **Visuals:** Added `MAGENTA` color and `⬣X` badge for Codex identification.
-- **Phase 9 IDE Symbiosis (MVP):** Scaffolded and packaged the VS Code extension (`raios-0.1.0.vsix`) using `@vscode/vsce`. Created README, package.json, and basic structure for the Thin Client daemon integration.
-- **Workspace Sync:** MASTER.md and paths updated according to `Dev_Ops_New` structure.
-- **UI Performance Fix:** Lag in the All Projects screen resolved by removing synchronous I/O and using cache.
-- **Visual Grid Refactor:** All Projects screen upgraded to a modern `Table` structure.
-- **Project Documentation Suite:**
-  - **Root README:** Rewrote `README.md` as "The AI OS Kernel" with professional branding, visual badges, and Aura Hardened Edition (v1.3.0) highlights.
-  - **Official Wiki:** Established `docs/WIKI/` structure with `Home.md` index and 4 technical deep-dives:
-    - `01-Architecture-Deep-Dive.md`: Daemon-centric design and Aura Hardened IPC.
-    - `02-Security-Model.md`: Zero-Trust, AgentShield Guard, and Token Auth.
-    - `03-Hybrid-Memory-and-Context.md`: Cortex Engine, BM25 Hybrid Search, and Sigmap Economics.
-    - `04-Async-Workflow-and-Inbox.md`: Non-Blocking philosophy and Diff Inbox Pattern.
-    - `05-Installation-and-Setup.md`: Prerequisites, global installation, bootstrap command, and IPC token security.
-    - `06-CLI-Commands-Reference.md`: Comprehensive guide to the `raios` CLI, including core commands, examples, and advanced flags.
+- **Android/Gradle Support (v1.5.1):** Full lifecycle support for Android projects:
+  - **Detection:** `ProjectType::Android` logic in `build.rs` and `deps.rs`.
+  - **Build:** `gradlew assembleDebug/Release/compileDebugKotlin` with `--release` and `--check` flags.
+  - **Test:** Unit (`testDebugUnitTest`) and Instrumented (`connectedDebugAndroidTest`) runners.
+  - **Deps:** `libs.versions.toml` (Version Catalog) parsing and outdated detection.
+  - **Version:** Automatic `versionName` and `versionCode` read/write from `app/build.gradle`.
+- **Clippy Cleanup:** Resolved technical debt including `large_enum_variant` in `BgMsg` and `new_without_default` in `AgentRouter`.
+- **Final Validation:** Verified all features on `GT Launcher` (Android) and pushed to origin.
+- **SIGMAP Tracking:** `has_sigmap` columns added to R-AI-OS Health Dashboard.
+- **Project Documentation:** Official Wiki and README.md rewritten for "Aura Hardened Edition".
 
 ## Antigravity
 ### Achievements
