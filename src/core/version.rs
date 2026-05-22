@@ -167,6 +167,9 @@ fn read_version(dir: &Path) -> Option<(String, String, String)> {
     if let Some(v) = read_pyproject_version(dir) {
         return Some((v, "Python".into(), "pyproject.toml".into()));
     }
+    if let Some((name, _code)) = read_android_version(dir) {
+        return Some((name, "Android".into(), "app/build.gradle".into()));
+    }
     None
 }
 
@@ -204,7 +207,83 @@ fn read_pyproject_version(dir: &Path) -> Option<String> {
     None
 }
 
+/// Read (versionName, versionCode) from app/build.gradle (Groovy DSL).
+pub(crate) fn read_android_version(dir: &Path) -> Option<(String, u64)> {
+    let content = std::fs::read_to_string(dir.join("app").join("build.gradle")).ok()?;
+    let name = parse_version_name(&content)?;
+    let code = parse_version_code(&content)?;
+    Some((name, code))
+}
+
+fn parse_version_name(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("versionName") {
+            let val = trimmed
+                .trim_start_matches("versionName")
+                .trim()
+                .trim_matches(|c| c == '\'' || c == '"');
+            if looks_like_semver(val) {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn parse_version_code(content: &str) -> Option<u64> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("versionCode") {
+            let val = trimmed.trim_start_matches("versionCode").trim();
+            if let Ok(n) = val.parse::<u64>() {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Write new versionName and versionCode into app/build.gradle (line-by-line replacement).
+pub(crate) fn write_android_version(dir: &Path, new_name: &str, new_code: u64) -> Result<(), String> {
+    let path = dir.join("app").join("build.gradle");
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let updated: String = content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("versionName") {
+                let quote = if trimmed.contains('\'') { '\'' } else { '"' };
+                let indent = &line[..line.len() - line.trim_start().len()];
+                format!("{indent}versionName {quote}{new_name}{quote}")
+            } else if trimmed.starts_with("versionCode") {
+                let indent = &line[..line.len() - line.trim_start().len()];
+                format!("{indent}versionCode {new_code}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let final_content = if content.ends_with('\n') {
+        format!("{updated}\n")
+    } else {
+        updated
+    };
+    std::fs::write(&path, final_content).map_err(|e| e.to_string())
+}
+
 fn write_version(path: &Path, project_type: &str, old: &str, new: &str) -> Result<(), String> {
+    if project_type == "Android" {
+        // path is app/build.gradle; dir is path.parent().parent()
+        let dir = path
+            .parent()
+            .and_then(|p| p.parent())
+            .ok_or_else(|| "Cannot resolve project dir from app/build.gradle".to_string())?;
+        let (_, old_code) = read_android_version(dir)
+            .ok_or_else(|| "Cannot read current versionCode from app/build.gradle".to_string())?;
+        return write_android_version(dir, new, old_code + 1);
+    }
     let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let updated = if project_type == "Node" {
         let mut v: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
@@ -350,6 +429,60 @@ fn count_commits_since_tag(dir: &Path, tag: Option<&str>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    #[test]
+    fn read_android_version_parses_groovy_dsl() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("app")).unwrap();
+        fs::write(
+            tmp.path().join("app/build.gradle"),
+            "android {\n    defaultConfig {\n        versionCode 42\n        versionName '4.2.15'\n    }\n}\n",
+        )
+        .unwrap();
+        let (name, code) = read_android_version(tmp.path()).unwrap();
+        assert_eq!(name, "4.2.15");
+        assert_eq!(code, 42);
+    }
+
+    #[test]
+    fn read_android_version_returns_none_if_no_app_gradle() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(read_android_version(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn write_android_version_updates_both_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("app")).unwrap();
+        fs::write(
+            tmp.path().join("app/build.gradle"),
+            "    versionCode 42\n    versionName '4.2.15'\n",
+        )
+        .unwrap();
+        write_android_version(tmp.path(), "4.2.16", 43).unwrap();
+        let content = fs::read_to_string(tmp.path().join("app/build.gradle")).unwrap();
+        assert!(content.contains("versionCode 43"), "versionCode not updated: {content}");
+        assert!(
+            content.contains("versionName '4.2.16'"),
+            "versionName not updated: {content}"
+        );
+    }
+
+    #[test]
+    fn write_android_version_preserves_other_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("app")).unwrap();
+        let original = "android {\n    compileSdk 34\n    defaultConfig {\n        applicationId \"com.example\"\n        versionCode 10\n        versionName '1.0.0'\n        minSdk 26\n    }\n}\n";
+        fs::write(tmp.path().join("app/build.gradle"), original).unwrap();
+        write_android_version(tmp.path(), "1.0.1", 11).unwrap();
+        let content = fs::read_to_string(tmp.path().join("app/build.gradle")).unwrap();
+        assert!(content.contains("compileSdk 34"));
+        assert!(content.contains("applicationId \"com.example\""));
+        assert!(content.contains("versionCode 11"));
+        assert!(content.contains("versionName '1.0.1'"));
+        assert!(content.contains("minSdk 26"));
+    }
 
     #[test]
     fn bump_patch() {
