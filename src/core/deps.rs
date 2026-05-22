@@ -59,6 +59,7 @@ pub fn check(dir: &Path) -> DepsReport {
         ProjectType::Node => check_node(dir),
         ProjectType::Python => check_python(dir),
         ProjectType::Go => check_go(dir),
+        ProjectType::Android => check_android(dir),
         ProjectType::Unknown => {
             let mut r = DepsReport::empty("Unknown");
             r.tool_missing.push("Cannot detect project type".into());
@@ -388,6 +389,13 @@ fn check_go(dir: &Path) -> DepsReport {
     }
 
     report
+}
+
+// ─── Android ─────────────────────────────────────────────────────────────────
+
+fn check_android(dir: &Path) -> DepsReport {
+    let _ = dir;
+    DepsReport::empty("Android")
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

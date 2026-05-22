@@ -11,6 +11,7 @@ pub enum ProjectType {
     Node,
     Python,
     Go,
+    Android,
     Unknown,
 }
 
@@ -21,6 +22,7 @@ impl ProjectType {
             Self::Node => "Node",
             Self::Python => "Python",
             Self::Go => "Go",
+            Self::Android => "Android",
             Self::Unknown => "Unknown",
         }
     }
@@ -77,6 +79,11 @@ pub fn detect_type(dir: &Path) -> ProjectType {
     if dir.join("go.mod").exists() {
         return ProjectType::Go;
     }
+    if (dir.join("gradlew").exists() || dir.join("gradlew.bat").exists())
+        && (dir.join("build.gradle").exists() || dir.join("settings.gradle").exists())
+    {
+        return ProjectType::Android;
+    }
     ProjectType::Unknown
 }
 
@@ -88,6 +95,7 @@ pub fn build(dir: &Path) -> BuildResult {
         ProjectType::Node => build_node(dir),
         ProjectType::Python => build_python(dir),
         ProjectType::Go => build_go(dir),
+        ProjectType::Android => build_android(dir),
         ProjectType::Unknown => BuildResult {
             ok: false,
             project_type: "Unknown".into(),
@@ -97,7 +105,7 @@ pub fn build(dir: &Path) -> BuildResult {
             errors: 1,
             diagnostics: vec![],
             raw_output:
-                "Cannot detect project type (no Cargo.toml, package.json, go.mod, pyproject.toml)"
+                "Cannot detect project type (no Cargo.toml, package.json, go.mod, pyproject.toml, gradlew)"
                     .into(),
         },
     }
@@ -254,6 +262,7 @@ pub fn test(dir: &Path) -> TestResult {
         ProjectType::Node => test_node(dir),
         ProjectType::Python => test_python(dir),
         ProjectType::Go => test_go(dir),
+        ProjectType::Android => test_android_unit(dir),
         ProjectType::Unknown => TestResult {
             ok: false,
             project_type: "Unknown".into(),
@@ -537,6 +546,55 @@ fn failed_test(ptype: &str, cmd: &str, elapsed: Duration, msg: String) -> TestRe
     }
 }
 
+// ─── Android ─────────────────────────────────────────────────────────────────
+
+pub fn build_android(dir: &Path) -> BuildResult {
+    build_android_impl(dir, "assembleDebug")
+}
+
+pub fn build_android_release(dir: &Path) -> BuildResult {
+    build_android_impl(dir, "assembleRelease")
+}
+
+pub fn build_android_check(dir: &Path) -> BuildResult {
+    build_android_impl(dir, "compileDebugKotlin")
+}
+
+pub fn test_android_unit(dir: &Path) -> TestResult {
+    run_android_test(dir, "testDebugUnitTest")
+}
+
+pub fn test_android_instrumented(dir: &Path) -> TestResult {
+    run_android_test(dir, "connectedAndroidTest")
+}
+
+fn build_android_impl(_dir: &Path, _task: &str) -> BuildResult {
+    BuildResult {
+        ok: false,
+        project_type: "Android".into(),
+        command: "—".into(),
+        duration_ms: 0,
+        warnings: 0,
+        errors: 0,
+        diagnostics: vec![],
+        raw_output: "Android build not yet implemented".into(),
+    }
+}
+
+fn run_android_test(_dir: &Path, _task: &str) -> TestResult {
+    TestResult {
+        ok: false,
+        project_type: "Android".into(),
+        command: "—".into(),
+        duration_ms: 0,
+        passed: 0,
+        failed: 0,
+        ignored: 0,
+        failures: vec![],
+        raw_output: "Android test not yet implemented".into(),
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -598,5 +656,30 @@ mod tests {
     fn extract_num_works() {
         assert_eq!(extract_num("22 passed", "passed"), Some(22));
         assert_eq!(extract_num("no number here", "passed"), None);
+    }
+
+    #[test]
+    fn detect_android_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::File::create(tmp.path().join("gradlew")).unwrap();
+        std::fs::File::create(tmp.path().join("build.gradle")).unwrap();
+        assert_eq!(detect_type(tmp.path()), ProjectType::Android);
+    }
+
+    #[test]
+    fn detect_android_with_bat_and_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::File::create(tmp.path().join("gradlew.bat")).unwrap();
+        std::fs::File::create(tmp.path().join("settings.gradle")).unwrap();
+        assert_eq!(detect_type(tmp.path()), ProjectType::Android);
+    }
+
+    #[test]
+    fn rust_takes_priority_over_android() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        std::fs::File::create(tmp.path().join("gradlew")).unwrap();
+        std::fs::File::create(tmp.path().join("build.gradle")).unwrap();
+        assert_eq!(detect_type(tmp.path()), ProjectType::Rust);
     }
 }
