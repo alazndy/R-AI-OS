@@ -158,10 +158,13 @@ pub enum Commands {
         /// Android: compileDebugKotlin (type-check only, no APK)
         #[arg(long)] check: bool,
     },
-    /// Run tests for a project (auto-detects test runner)
+    /// Run tests for a project (auto-detects Rust/Node/Python/Go/Android)
     Test {
         project: Option<String>,
+        /// Test all projects in portfolio
         #[arg(long)] all: bool,
+        /// Android: run connectedAndroidTest (requires connected device/emulator)
+        #[arg(long)] instrumented: bool,
     },
     /// Git operations on any project
     Git {
@@ -338,7 +341,9 @@ pub fn run(cli: Cli) {
         Commands::Build { project, release, check } => {
             dev::cmd_build(project, release, check, &cfg.dev_ops_path, cli.json)
         }
-        Commands::Test { project, all } => dev::cmd_test(project, all, &cfg.dev_ops_path, cli.json),
+        Commands::Test { project, all, instrumented } => {
+            dev::cmd_test(project, all, instrumented, &cfg.dev_ops_path, cli.json)
+        }
         Commands::Git { cmd } => git::cmd_git(cmd, &cfg.dev_ops_path, cli.json),
         Commands::Instinct { cmd } => instinct::cmd_instinct(cmd, &cfg.dev_ops_path, cli.json),
         Commands::Ci { project } => dev::cmd_ci(project, &cfg.dev_ops_path, cli.json),

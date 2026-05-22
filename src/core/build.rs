@@ -568,6 +568,32 @@ pub fn test_android_instrumented(dir: &Path) -> TestResult {
     run_android_test(dir, "connectedAndroidTest")
 }
 
+/// Parse Gradle test stdout. Returns (passed, failed).
+/// Looks for "Tests run: N, Failures: M, Errors: E" — passed = N - M - E.
+fn parse_gradle_test_output(output: &str) -> (usize, usize) {
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Tests run:") {
+            let total = extract_num_after(trimmed, "Tests run:").unwrap_or(0);
+            let failures = extract_num_after(trimmed, "Failures:").unwrap_or(0);
+            let errors = extract_num_after(trimmed, "Errors:").unwrap_or(0);
+            let failed = failures + errors;
+            return (total.saturating_sub(failed), failed);
+        }
+    }
+    (0, 0)
+}
+
+/// Extract the first integer after a label in a comma-separated line.
+/// e.g. extract_num_after("Tests run: 47, Failures: 2", "Failures:") → Some(2)
+fn extract_num_after(s: &str, label: &str) -> Option<usize> {
+    let idx = s.find(label)?;
+    let rest = s[idx + label.len()..].trim_start();
+    rest.split(|c: char| !c.is_ascii_digit())
+        .next()
+        .and_then(|n| n.parse().ok())
+}
+
 /// Parse Gradle stdout+stderr. Returns (success, error_count).
 fn parse_gradle_build_output(output: &str) -> (bool, usize) {
     let ok = output.contains("BUILD SUCCESSFUL");
@@ -662,17 +688,61 @@ fn build_android_impl(dir: &Path, task: &str) -> BuildResult {
     }
 }
 
-fn run_android_test(_dir: &Path, _task: &str) -> TestResult {
-    TestResult {
-        ok: false,
-        project_type: "Android".into(),
-        command: "—".into(),
-        duration_ms: 0,
-        passed: 0,
-        failed: 1,
-        ignored: 0,
-        failures: vec![],
-        raw_output: "Android test not yet implemented".into(),
+fn run_android_test(dir: &Path, task: &str) -> TestResult {
+    let cmd_str = format!("gradlew {}", task);
+    let start = Instant::now();
+
+    #[cfg(windows)]
+    let output = {
+        let dir_str = dir.to_string_lossy().into_owned();
+        let raw = format!("/C cd /d \"{}\" && .\\gradlew.bat \"{}\"", dir_str, task);
+        use std::os::windows::process::CommandExt;
+        Command::new("cmd").raw_arg(&raw).current_dir(dir).output()
+    };
+    #[cfg(not(windows))]
+    let output = {
+        let wrapper = if dir.join("gradlew").exists() {
+            "./gradlew"
+        } else {
+            "gradle"
+        };
+        Command::new(wrapper).arg(task).current_dir(dir).output()
+    };
+
+    let elapsed = start.elapsed();
+
+    match output {
+        Err(e) => TestResult {
+            ok: false,
+            project_type: "Android".into(),
+            command: cmd_str,
+            duration_ms: elapsed.as_millis() as u64,
+            passed: 0,
+            failed: 1,
+            ignored: 0,
+            failures: vec![format!("Failed to launch Gradle: {e}")],
+            raw_output: String::new(),
+        },
+        Ok(o) => {
+            let raw = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let ok = raw.contains("BUILD SUCCESSFUL");
+            let (passed, failed) = parse_gradle_test_output(&raw);
+            TestResult {
+                ok,
+                project_type: "Android".into(),
+                command: cmd_str,
+                duration_ms: elapsed.as_millis() as u64,
+                passed,
+                failed,
+                ignored: 0,
+                failures: vec![],
+                raw_output: raw,
+            }
+        }
     }
 }
 
@@ -810,5 +880,29 @@ mod tests {
         let (ok, errors) = parse_gradle_build_output(output);
         assert!(ok);
         assert_eq!(errors, 0);
+    }
+
+    #[test]
+    fn parse_gradle_test_output_success() {
+        let output = "Tests run: 47, Failures: 2, Errors: 0, Skipped: 1\nBUILD SUCCESSFUL in 12s";
+        let (passed, failed) = parse_gradle_test_output(output);
+        assert_eq!(passed, 45);
+        assert_eq!(failed, 2);
+    }
+
+    #[test]
+    fn parse_gradle_test_all_pass() {
+        let output = "Tests run: 20, Failures: 0, Errors: 0, Skipped: 0\nBUILD SUCCESSFUL";
+        let (passed, failed) = parse_gradle_test_output(output);
+        assert_eq!(passed, 20);
+        assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn parse_gradle_test_build_failed_no_results() {
+        let output = "BUILD FAILED in 5s\nCould not connect to emulator";
+        let (passed, failed) = parse_gradle_test_output(output);
+        assert_eq!(passed, 0);
+        assert_eq!(failed, 0);
     }
 }

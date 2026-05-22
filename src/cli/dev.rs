@@ -212,8 +212,8 @@ pub(super) fn cmd_build(project: Option<String>, release: bool, check: bool, dev
     }
 }
 
-pub(super) fn cmd_test(project: Option<String>, all: bool, dev_ops: &Path, json: bool) {
-    use crate::core::build;
+pub(super) fn cmd_test(project: Option<String>, all: bool, instrumented: bool, dev_ops: &Path, json: bool) {
+    use crate::core::build::{self, detect_type, ProjectType};
     if all {
         if let Ok(conn) = crate::db::open_db() {
             if let Ok(projects) = crate::db::load_all_projects(&conn) {
@@ -237,11 +237,18 @@ pub(super) fn cmd_test(project: Option<String>, all: bool, dev_ops: &Path, json:
         }
         return;
     }
+
     let path = super::resolve_project_path(project, dev_ops);
-    let result = build::test(&path);
+    let result = match detect_type(&path) {
+        ProjectType::Android if instrumented => build::test_android_instrumented(&path),
+        ProjectType::Android => build::test_android_unit(&path),
+        _ => build::test(&path),
+    };
+
     if json { println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default()); return; }
     let status = if result.ok { "✓" } else { "✗" };
-    println!("{} {} — {} passed, {} failed, {} ignored  ({}ms)", status, result.command, result.passed, result.failed, result.ignored, result.duration_ms);
+    println!("{} {} — {} passed, {} failed, {} ignored  ({}ms)",
+        status, result.command, result.passed, result.failed, result.ignored, result.duration_ms);
     for f in &result.failures { println!("  ↳ {}", f); }
     if !result.ok && result.failures.is_empty() { println!("{}", result.raw_output); }
 }
