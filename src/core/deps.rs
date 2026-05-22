@@ -393,9 +393,42 @@ fn check_go(dir: &Path) -> DepsReport {
 
 // ─── Android ─────────────────────────────────────────────────────────────────
 
-fn check_android(dir: &Path) -> DepsReport {
-    let _ = dir;
-    DepsReport::empty("Android")
+pub(crate) fn check_android(dir: &Path) -> DepsReport {
+    let mut report = DepsReport::empty("Android");
+
+    let catalog_path = dir.join("gradle").join("libs.versions.toml");
+    if catalog_path.exists() {
+        report.has_lockfile = true;
+        if let Ok(content) = std::fs::read_to_string(&catalog_path) {
+            report.outdated_count = count_catalog_versions(&content);
+        }
+    }
+
+    report.tool_missing.push(
+        "OWASP CVE scan: add `id 'org.owasp.dependencycheck'` plugin to build.gradle".into(),
+    );
+    report
+}
+
+/// Count entries in the [versions] section of a Gradle version catalog TOML.
+/// Counts non-comment lines containing `=` while inside the [versions] section.
+fn count_catalog_versions(toml: &str) -> usize {
+    let mut in_versions = false;
+    let mut count = 0;
+    for line in toml.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[versions]" {
+            in_versions = true;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            in_versions = false;
+        }
+        if in_versions && trimmed.contains('=') && !trimmed.starts_with('#') {
+            count += 1;
+        }
+    }
+    count
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -445,5 +478,37 @@ mod tests {
         assert_eq!(r.project_type, "Unknown");
         assert!(!r.tool_missing.is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn count_version_catalog_entries_basic() {
+        let toml = "[versions]\nkotlin = \"2.0.0\"\ncompose = \"1.7.8\"\nretrofit = \"2.11.0\"\n\n[libraries]\nretrofit-core = { group = \"com.squareup\", version.ref = \"retrofit\" }\n";
+        let count = count_catalog_versions(toml);
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn count_version_catalog_no_versions_section() {
+        let toml = "[libraries]\nsome = \"x:y:1.0\"\n";
+        let count = count_catalog_versions(toml);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn check_android_finds_version_catalog() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("gradle")).unwrap();
+        std::fs::write(
+            tmp.path().join("gradle/libs.versions.toml"),
+            "[versions]\nkotlin = \"2.0.0\"\ncompose = \"1.7.8\"\n",
+        )
+        .unwrap();
+        std::fs::File::create(tmp.path().join("gradlew")).unwrap();
+        std::fs::File::create(tmp.path().join("build.gradle")).unwrap();
+        let report = check_android(tmp.path());
+        assert_eq!(report.project_type, "Android");
+        assert!(report.has_lockfile);
+        assert_eq!(report.outdated_count, 2);
+        assert!(report.tool_missing.iter().any(|m| m.contains("OWASP")));
     }
 }
