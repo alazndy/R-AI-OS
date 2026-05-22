@@ -150,8 +150,14 @@ pub enum Commands {
         #[arg(long)] audit: bool,
         #[arg(long)] all: bool,
     },
-    /// Build a project (auto-detects Rust/Node/Python/Go)
-    Build { project: Option<String> },
+    /// Build a project (auto-detects Rust/Node/Python/Go/Android)
+    Build {
+        project: Option<String>,
+        /// Android: assembleRelease instead of assembleDebug
+        #[arg(long)] release: bool,
+        /// Android: compileDebugKotlin (type-check only, no APK)
+        #[arg(long)] check: bool,
+    },
     /// Run tests for a project (auto-detects test runner)
     Test {
         project: Option<String>,
@@ -329,7 +335,9 @@ pub fn run(cli: Cli) {
         Commands::KillPort { port } => dev::cmd_kill_port(port, cli.json),
         Commands::Env { project, all } => dev::cmd_env(project, all, &cfg.dev_ops_path, cli.json),
         Commands::Deps { project, audit, all } => dev::cmd_deps(project, audit, all, &cfg.dev_ops_path, cli.json),
-        Commands::Build { project } => dev::cmd_build(project, &cfg.dev_ops_path, cli.json),
+        Commands::Build { project, release, check } => {
+            dev::cmd_build(project, release, check, &cfg.dev_ops_path, cli.json)
+        }
         Commands::Test { project, all } => dev::cmd_test(project, all, &cfg.dev_ops_path, cli.json),
         Commands::Git { cmd } => git::cmd_git(cmd, &cfg.dev_ops_path, cli.json),
         Commands::Instinct { cmd } => instinct::cmd_instinct(cmd, &cfg.dev_ops_path, cli.json),

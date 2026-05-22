@@ -182,17 +182,34 @@ fn print_deps_report(r: &crate::core::deps::DepsReport, json: bool) {
     for msg in &r.tool_missing { println!("  ℹ  Tool not found: {}", msg); }
 }
 
-pub(super) fn cmd_build(project: Option<String>, dev_ops: &Path, json: bool) {
+pub(super) fn cmd_build(project: Option<String>, release: bool, check: bool, dev_ops: &Path, json: bool) {
+    use crate::core::build::{self, detect_type, ProjectType};
     let path = super::resolve_project_path(project, dev_ops);
-    let result = crate::core::build::build(&path);
-    if json { println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default()); return; }
+
+    let result = match detect_type(&path) {
+        ProjectType::Android if check => build::build_android_check(&path),
+        ProjectType::Android if release => build::build_android_release(&path),
+        ProjectType::Android => build::build_android(&path),
+        _ => build::build(&path),
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        return;
+    }
     let status = if result.ok { "✓ OK" } else { "✗ FAILED" };
-    println!("{} {} — {} in {}ms  ({} warnings, {} errors)", status, result.project_type, result.command, result.duration_ms, result.warnings, result.errors);
+    println!(
+        "{} {} — {} in {}ms  ({} warnings, {} errors)",
+        status, result.project_type, result.command, result.duration_ms,
+        result.warnings, result.errors
+    );
     for d in &result.diagnostics {
         let loc = d.line.map(|l| format!(":{}", l)).unwrap_or_default();
         println!("  [{}] {}{} — {}", d.level.to_uppercase(), d.file, loc, d.message);
     }
-    if !result.ok && result.diagnostics.is_empty() { println!("{}", result.raw_output); }
+    if !result.ok && result.diagnostics.is_empty() {
+        println!("{}", result.raw_output);
+    }
 }
 
 pub(super) fn cmd_test(project: Option<String>, all: bool, dev_ops: &Path, json: bool) {

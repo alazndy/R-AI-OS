@@ -568,16 +568,93 @@ pub fn test_android_instrumented(dir: &Path) -> TestResult {
     run_android_test(dir, "connectedAndroidTest")
 }
 
-fn build_android_impl(_dir: &Path, _task: &str) -> BuildResult {
-    BuildResult {
-        ok: false,
-        project_type: "Android".into(),
-        command: "—".into(),
-        duration_ms: 0,
-        warnings: 0,
-        errors: 1,
-        diagnostics: vec![],
-        raw_output: "Android build not yet implemented".into(),
+/// Parse Gradle stdout+stderr. Returns (success, error_count).
+fn parse_gradle_build_output(output: &str) -> (bool, usize) {
+    let ok = output.contains("BUILD SUCCESSFUL");
+    let errors = output
+        .lines()
+        .filter(|l| {
+            l.trim_start().starts_with("e: ")
+                || l.contains(": error:")
+                || l.starts_with("error:")
+        })
+        .count();
+    (ok, errors)
+}
+
+fn build_android_impl(dir: &Path, task: &str) -> BuildResult {
+    let cmd_str = format!("gradlew {}", task);
+    let start = Instant::now();
+
+    // On Windows, .bat files cannot be executed directly — they require cmd.exe.
+    // Paths containing special cmd characters (& | < >) must be handled carefully.
+    // Using `cd /d "<dir>" && .\gradlew.bat <task>` avoids path-in-argument quoting
+    // issues: `cd /d` accepts a quoted path, then gradlew is called from cwd.
+    #[cfg(windows)]
+    let output = {
+        use std::os::windows::process::CommandExt;
+        let bat = dir.join("gradlew.bat");
+        if bat.exists() {
+            // Build raw command line: cd /d "<dir>" && .\gradlew.bat <task>
+            // raw_arg bypasses Rust's per-argument quoting so cmd.exe sees the
+            // string exactly as constructed here.
+            let dir_str = dir.to_string_lossy();
+            let raw = format!("/C cd /d \"{}\" && .\\gradlew.bat {}", dir_str, task);
+            let mut c = Command::new("cmd");
+            c.raw_arg(raw);
+            c.output()
+        } else {
+            Command::new("gradle")
+                .arg(task)
+                .current_dir(dir)
+                .output()
+        }
+    };
+
+    #[cfg(not(windows))]
+    let output = {
+        let prog = if dir.join("gradlew").exists() {
+            "./gradlew"
+        } else {
+            "gradle"
+        };
+        Command::new(prog)
+            .arg(task)
+            .current_dir(dir)
+            .output()
+    };
+
+    let elapsed = start.elapsed();
+
+    match output {
+        Err(e) => BuildResult {
+            ok: false,
+            project_type: "Android".into(),
+            command: cmd_str,
+            duration_ms: elapsed.as_millis() as u64,
+            warnings: 0,
+            errors: 1,
+            diagnostics: vec![],
+            raw_output: format!("Failed to launch Gradle: {e}"),
+        },
+        Ok(o) => {
+            let raw = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let (ok, errors) = parse_gradle_build_output(&raw);
+            BuildResult {
+                ok,
+                project_type: "Android".into(),
+                command: cmd_str,
+                duration_ms: elapsed.as_millis() as u64,
+                warnings: 0,
+                errors,
+                diagnostics: vec![],
+                raw_output: raw,
+            }
+        }
     }
 }
 
@@ -695,5 +772,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::File::create(tmp.path().join("build.gradle")).unwrap();
         assert_eq!(detect_type(tmp.path()), ProjectType::Unknown);
+    }
+
+    #[test]
+    fn parse_gradle_build_success() {
+        let output = "BUILD SUCCESSFUL in 15s\n5 actionable tasks: 5 executed";
+        let (ok, errors) = parse_gradle_build_output(output);
+        assert!(ok);
+        assert_eq!(errors, 0);
+    }
+
+    #[test]
+    fn parse_gradle_build_failure_counts_errors() {
+        let output = "e: file.kt: (42, 5): error: unresolved reference: Foo\ne: file.kt: (50, 3): error: type mismatch\nBUILD FAILED in 8s";
+        let (ok, errors) = parse_gradle_build_output(output);
+        assert!(!ok);
+        assert_eq!(errors, 2);
     }
 }
