@@ -139,14 +139,6 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
             let sig_text = if h.has_sigmap { "✓ sig" } else { "✗ sig" };
             let sig_color = if h.has_sigmap { GREEN } else { RED };
 
-            let type_text = if h.path.join("Cargo.toml").exists() {
-                "Rust"
-            } else if h.path.join("package.json").exists() {
-                "Node"
-            } else {
-                "Other"
-            };
-
             let rf_color = match h.refactor_grade.as_str() {
                 "A" | "B" => GREEN,
                 "C" => AMBER,
@@ -158,6 +150,25 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
                 h.refactor_grade.clone()
             };
 
+            let (build_text, build_color) = match h.build_ok {
+                Some(true) => ("✓ ok", GREEN),
+                Some(false) => ("✗ err", RED),
+                None => ("—", DIM),
+            };
+
+            let (test_text, test_color) = match (h.test_passed, h.test_failed) {
+                (Some(p), Some(f)) if f > 0 => (format!("✗ {}/{}", f, p + f), RED),
+                (Some(p), Some(_)) => (format!("✓ {}", p), GREEN),
+                _ => ("—".into(), DIM),
+            };
+
+            let (deps_text, deps_color) = match (h.deps_outdated, h.deps_cve) {
+                (Some(_out), Some(cve)) if cve > 0 => (format!("⚠{}cve", cve), RED),
+                (Some(out), Some(_)) if out > 0 => (format!("↑{}", out), AMBER),
+                (Some(_), Some(_)) => ("✓ ok".into(), GREEN),
+                _ => ("—".into(), DIM),
+            };
+
             Row::new(vec![
                 Cell::from(if selected { "▶" } else { " " }),
                 Cell::from(Span::styled(git_icon, Style::new().fg(git_color))),
@@ -165,9 +176,11 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
                 Cell::from(Span::styled(comp_text, Style::new().fg(score_color))),
                 Cell::from(Span::styled(sec_text, Style::new().fg(MID))),
                 Cell::from(Span::styled(rf_text, Style::new().fg(rf_color))),
+                Cell::from(Span::styled(build_text, Style::new().fg(build_color))),
+                Cell::from(Span::styled(test_text, Style::new().fg(test_color))),
+                Cell::from(Span::styled(deps_text, Style::new().fg(deps_color))),
                 Cell::from(Span::styled(mem_text, Style::new().fg(mem_color))),
                 Cell::from(Span::styled(sig_text, Style::new().fg(sig_color))),
-                Cell::from(Span::styled(type_text, Style::new().fg(DIM))),
             ])
             .style(if selected {
                 selected_style
@@ -182,13 +195,15 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
         [
             Constraint::Length(2),  // Selector
             Constraint::Length(10), // Git
-            Constraint::Min(20),    // Name
+            Constraint::Min(18),    // Name
             Constraint::Length(12), // Compliance
-            Constraint::Length(15), // Security
-            Constraint::Length(10), // Refactor
-            Constraint::Length(8),  // Memory
-            Constraint::Length(8),  // Sigmap
-            Constraint::Length(8),  // Type
+            Constraint::Length(12), // Security
+            Constraint::Length(8),  // Refactor
+            Constraint::Length(7),  // Build
+            Constraint::Length(9),  // Test
+            Constraint::Length(8),  // Deps
+            Constraint::Length(6),  // Memory
+            Constraint::Length(6),  // Sigmap
         ],
     )
     .header(
@@ -198,15 +213,17 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
             "PROJECT NAME",
             "COMPLIANCE",
             "SECURITY",
-            "REFACTOR",
+            "RFCT",
+            "BUILD",
+            "TEST",
+            "DEPS",
             "MEM",
             "SIG",
-            "TYPE",
         ])
         .style(header_style)
         .bottom_margin(1),
     )
-    .column_spacing(2);
+    .column_spacing(1);
 
     let mut state = TableState::default();
     state.select(Some(app.health.cursor));
@@ -270,7 +287,7 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
             Style::new().fg(if rf_high_total > 0 { AMBER } else { GREEN }),
         ),
         Span::styled(
-            "  [↑↓] nav  [Enter] detail  [c] commit  [p] push  [r] refresh  [Esc] back",
+            "  [↑↓] nav  [Enter] detail  [b] build/test/deps  [c] commit  [p] push  [r] refresh  [Esc] back",
             Style::new().fg(DIM),
         ),
     ]))

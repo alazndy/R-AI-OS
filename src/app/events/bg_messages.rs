@@ -294,6 +294,15 @@ impl App {
                 self.health.is_checking = false;
                 self.health.cursor = 0;
             }
+            BgMsg::BuildTestDepsResult { idx, health } => {
+                if let Some(entry) = self.health.report.get_mut(idx) {
+                    entry.build_ok = health.build_ok;
+                    entry.test_passed = health.test_passed;
+                    entry.test_failed = health.test_failed;
+                    entry.deps_outdated = health.deps_outdated;
+                    entry.deps_cve = health.deps_cve;
+                }
+            }
             BgMsg::SentinelUpdate {
                 project,
                 status,

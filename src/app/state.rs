@@ -51,6 +51,10 @@ pub enum BgMsg {
         git_log: Vec<String>,
     },
     HealthReport(Vec<crate::health::ProjectHealth>),
+    BuildTestDepsResult {
+        idx: usize,
+        health: Box<crate::health::ProjectHealth>,
+    },
     StateSync {
         projects: Vec<crate::entities::EntityProject>,
         health_reports: Vec<crate::health::ProjectHealth>,

@@ -29,6 +29,12 @@ pub struct ProjectHealth {
     // CI/CD
     pub ci_status: Option<String>,
     pub ci_url: Option<String>,
+    // Build / Test / Deps (populated on demand via [B])
+    pub build_ok: Option<bool>,
+    pub test_passed: Option<usize>,
+    pub test_failed: Option<usize>,
+    pub deps_outdated: Option<usize>,
+    pub deps_cve: Option<usize>,
 }
 
 const CONSTITUTION_RULES: &[(&str, &str)] = &[
@@ -91,6 +97,11 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
         refactor_medium_count: refactor.medium_count,
         ci_status,
         ci_url,
+        build_ok: None,
+        test_passed: None,
+        test_failed: None,
+        deps_outdated: None,
+        deps_cve: None,
     };
 
     // Write to SQLite health_cache (best-effort, don't fail if DB unavailable)
@@ -118,6 +129,20 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
     }
 
     health
+}
+
+/// Run build + test + deps check and attach results to an existing health report.
+pub fn check_build_test_deps(h: &mut ProjectHealth) {
+    let build = crate::core::build::build(&h.path);
+    h.build_ok = Some(build.ok);
+
+    let test = crate::core::build::test(&h.path);
+    h.test_passed = Some(test.passed);
+    h.test_failed = Some(test.failed);
+
+    let deps = crate::core::deps::check(&h.path);
+    h.deps_outdated = Some(deps.outdated_count);
+    h.deps_cve = Some(deps.cve_count);
 }
 
 /// Run full security scan and attach results to a health report.

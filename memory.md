@@ -72,6 +72,89 @@
 - **UI Component Extraction:** `src/ui/dashboard.rs` (900+ lines) broken down into 13 separate modules under `src/ui/panels/`. Dashboard orchestration made component-based.
 - **Clippy Cleanup:** Total of 140+ linter warnings and technical debt cleared.
 
+## Feature Inventory (v1.5.1 — 2026-05-21)
+
+### CLI Commands (35 total)
+| Command | Description |
+|---------|-------------|
+| `raios health` | Portfolio health dashboard |
+| `raios health --json` | JSON output |
+| `raios security [--watch] [--json]` | OWASP scan or file-watch mode |
+| `raios memory --query <text> [--top N]` | Hybrid semantic search across all project memory files |
+| `raios instinct add/list/suggest` | Instinct management (global ~/.agents/instincts.json + per-project memory.md) |
+| `raios task list/add/done/dispatch` | Task management with agent dispatch |
+| `raios git status/log/diff/commit/push/pull/branch/checkout` | Git operations (9 commands) |
+| `raios build [--test]` | Project build + test runner (Rust/Node/Python/Go) |
+| `raios deps [--audit]` | Outdated deps + CVE scan |
+| `raios env` | .env vs .env.example diff, missing/empty key detection |
+| `raios version bump/changelog/tag` | Semver bump, CHANGELOG.md, git tag |
+| `raios process ports/list/kill-port` | Port list, process list, kill |
+| `raios disk size/clean` | Project size analysis, cache cleaning |
+| `raios swarm add/list/merge/status` | Agent Swarm Mesh (5 TCP nodes) |
+| `raios route` | EdgeRouter — model/agent routing |
+| `raios evolve` | CandidateStore — evolutionary intelligence |
+| `raios graph` | TaskGraph DAG (recursive reasoning) |
+| `raios workspace sync/status` | Workspace sync |
+| `raios ci status` | GitHub Actions CI/CD status |
+
+### MCP Tools (23 total)
+- `project_info` — aggregated git+health+version+env+disk in 1 call (~5x token savings)
+- `portfolio_status` — summary table for all 42 projects
+- Git: status, log, commit, push (4)
+- Build: build, test (2)
+- Deps: check (1)
+- Env: check (1)
+- Version: bump, release (2)
+- Process: port_list (1)
+- Disk: analyze (1)
+- Swarm: add_node, list_nodes, merge (3)
+- Route: route (1)
+- Evolve: submit, list (2)
+- Graph: ask_architect (1)
+
+### TUI Views
+| View | Access | Key Features |
+|------|--------|-------------|
+| Dashboard | boot | Task panel, menu navigation, agent launcher |
+| Health View | `h` | BUILD/TEST/DEPS/COMPLIANCE/SECURITY/RFCT/MEM/SIG columns; `[b]` triggers build/test/deps on selected project; `[c]` commit, `[p]` push |
+| Project Detail | `Enter` on project | memory.md viewer, git log, graphify, git diff |
+| MemPalace | `m` | Room-based project navigation with filter |
+| Sentinel | `s` | File watch with OWASP alerts |
+| Search | `Ctrl+P` | Hybrid semantic search |
+| Git Diff | `i` | File change approval UI (`y`/`n`) |
+| Graph Report | `r` in detail | Graphify output viewer |
+| Setup Wizard | first boot | 7-step workspace configuration |
+
+### Module Structure (v1.5.1)
+```
+src/
+├── cli/          (11 modules) — all CLI commands
+├── mcp/          (7 modules)  — MCP server + tools
+├── app/
+│   └── events/
+│       ├── keyboard/  (7 modules: mod, dashboard, editor, graph, health, mempalace, project)
+│       ├── actions.rs
+│       ├── bg_messages.rs
+│       ├── commands.rs
+│       └── helpers.rs
+├── security/     (3 modules: mod, patterns, scanner, audit)
+├── intelligence/ — instinct, memory search
+├── swarm/        — mesh, store, merge, worktree
+├── core/         — build, deps, env, git, version, process, disk, ci
+├── ui/
+│   └── panels/   (13 components)
+├── daemon/       — IPC, state, health, validation
+└── cortex/       — BM25 hybrid search, chunker, embedder
+```
+
+### Key Invariants / Architecture Decisions
+- Health check (`check_project`) is fast — build/test/deps NOT auto-run; triggered by `[b]` in TUI
+- `project_info` MCP aggregates 5 tools in 1 call — always prefer over individual calls
+- `OnceLock` for all regex compilation in security scanner — never recompile in hot path
+- `check_project_with_security()` for security scan, `check_build_test_deps()` for build/test/deps
+- SQLite health_cache for O(1) portfolio queries — never re-scan disk synchronously in UI render
+- Swarm: 5 TCP nodes max, merge via git worktrees
+
 ## Plan
 ### Completed
 - [x] SQLite Transition (Phase 1A).
@@ -96,8 +179,8 @@
 ### In Progress
 
 ### Next Steps
-- [ ] build/test/deps columns in health view (TUI).
-- [ ] Faz B: `analysis/` + `projects/` module grouping (keyboard.rs 987, security.rs 831 split).
+- [x] **build/test/deps columns in health view (TUI)** — ProjectHealth'e build_ok/test_passed/test_failed/deps_outdated/deps_cve eklendi. `[b]` ile selected project için background trigger. ✅ 2026-05-21
+- [x] **Faz B: keyboard.rs (1032→7 modül) + security.rs (907→4 modül) bölünmesi.** ✅ 2026-05-21
 - [x] **v1.5.0 Release** — Intelligence & Architecture Edition. ✅ 2026-05-21
 - [x] **Codebase Refactor** — cli/ (11 modules), mcp/ (7 modules), search/, intelligence/. 0 clippy warnings. ✅ 2026-05-21
 - [x] **Phase 8: Recursive Reasoning** — TaskGraph DAG. ✅ 2026-05-21

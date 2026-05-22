@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.5.1 — 2026-05-21
+- (no commits since last tag)
+
 All notable changes to the **R-AI-OS** project will be documented in this file.
 
 ## [1.5.0] - 2026-05-21 (Intelligence & Architecture Edition)

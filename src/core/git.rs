@@ -362,14 +362,24 @@ mod tests {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     }
 
+    fn git_available() -> bool {
+        which::which("git").is_ok()
+    }
+
     #[test]
     fn status_returns_branch() {
+        if !git_available() {
+            return;
+        }
         let s = status(&raios_root());
         assert!(s.branch.is_some(), "should detect branch in a git repo");
     }
 
     #[test]
     fn log_returns_entries() {
+        if !git_available() {
+            return;
+        }
         let entries = log(&raios_root(), 5);
         assert!(!entries.is_empty(), "should have commit history");
         assert!(!entries[0].short_hash.is_empty());
@@ -378,6 +388,9 @@ mod tests {
 
     #[test]
     fn branches_contains_master_or_main() {
+        if !git_available() {
+            return;
+        }
         let bs = branches(&raios_root());
         assert!(!bs.is_empty());
         let has_main = bs.iter().any(|b| b.name == "master" || b.name == "main");
@@ -387,7 +400,6 @@ mod tests {
     #[test]
     fn diff_stat_on_clean_repo() {
         let d = diff(&raios_root(), false);
-        // sadece struct dönüyor, panic etmemeli
         let _ = d.files_changed;
     }
 

@@ -68,6 +68,12 @@ pub fn route_capability(query: &str) -> Option<String> {
 /// Legacy wrapper kept for MCP tools that may reference AgentRouter.
 pub struct AgentRouter;
 
+impl Default for AgentRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgentRouter {
     pub fn new() -> Self {
         Self
