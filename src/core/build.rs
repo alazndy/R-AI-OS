@@ -574,9 +574,13 @@ fn parse_gradle_build_output(output: &str) -> (bool, usize) {
     let errors = output
         .lines()
         .filter(|l| {
-            l.trim_start().starts_with("e: ")
-                || l.contains(": error:")
-                || l.starts_with("error:")
+            let t = l.trim_start();
+            // Kotlin compiler error: "e: path/file.kt: (42,5): error: ..."
+            t.starts_with("e: ")
+                // Java/Gradle error starting with a file path
+                || (t.contains(": error:") && (t.starts_with('/') || t.starts_with('.') || t.chars().nth(1) == Some(':')))
+                // Gradle wrapper / daemon startup errors
+                || t.starts_with("error:")
         })
         .count();
     (ok, errors)
@@ -598,8 +602,8 @@ fn build_android_impl(dir: &Path, task: &str) -> BuildResult {
             // Build raw command line: cd /d "<dir>" && .\gradlew.bat <task>
             // raw_arg bypasses Rust's per-argument quoting so cmd.exe sees the
             // string exactly as constructed here.
-            let dir_str = dir.to_string_lossy();
-            let raw = format!("/C cd /d \"{}\" && .\\gradlew.bat {}", dir_str, task);
+            let dir_str = dir.to_string_lossy().into_owned();
+            let raw = format!("/C cd /d \"{}\" && .\\gradlew.bat \"{}\"", dir_str, task);
             let mut c = Command::new("cmd");
             c.raw_arg(raw);
             c.output()
@@ -788,5 +792,23 @@ mod tests {
         let (ok, errors) = parse_gradle_build_output(output);
         assert!(!ok);
         assert_eq!(errors, 2);
+    }
+
+    #[test]
+    fn parse_gradle_build_error_prefix_only() {
+        // Line starting with "error:" (daemon/wrapper errors)
+        let output = "error: Could not find or load main class GradleWrapperMain\nBUILD FAILED";
+        let (ok, errors) = parse_gradle_build_output(output);
+        assert!(!ok);
+        assert_eq!(errors, 1);
+    }
+
+    #[test]
+    fn parse_gradle_build_no_false_positive_on_log_line() {
+        // A log line containing ": error:" that is NOT from a file path — should not be counted
+        let output = "NOTE: The Kotlin options have changed: error: is now deprecated\nBUILD SUCCESSFUL";
+        let (ok, errors) = parse_gradle_build_output(output);
+        assert!(ok);
+        assert_eq!(errors, 0);
     }
 }
