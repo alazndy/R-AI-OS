@@ -575,7 +575,7 @@ fn build_android_impl(_dir: &Path, _task: &str) -> BuildResult {
         command: "—".into(),
         duration_ms: 0,
         warnings: 0,
-        errors: 0,
+        errors: 1,
         diagnostics: vec![],
         raw_output: "Android build not yet implemented".into(),
     }
@@ -588,7 +588,7 @@ fn run_android_test(_dir: &Path, _task: &str) -> TestResult {
         command: "—".into(),
         duration_ms: 0,
         passed: 0,
-        failed: 0,
+        failed: 1,
         ignored: 0,
         failures: vec![],
         raw_output: "Android test not yet implemented".into(),
@@ -681,5 +681,19 @@ mod tests {
         std::fs::File::create(tmp.path().join("gradlew")).unwrap();
         std::fs::File::create(tmp.path().join("build.gradle")).unwrap();
         assert_eq!(detect_type(tmp.path()), ProjectType::Rust);
+    }
+
+    #[test]
+    fn gradlew_alone_does_not_detect_android() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::File::create(tmp.path().join("gradlew")).unwrap();
+        assert_eq!(detect_type(tmp.path()), ProjectType::Unknown);
+    }
+
+    #[test]
+    fn build_gradle_alone_does_not_detect_android() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::File::create(tmp.path().join("build.gradle")).unwrap();
+        assert_eq!(detect_type(tmp.path()), ProjectType::Unknown);
     }
 }
