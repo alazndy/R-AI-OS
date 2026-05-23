@@ -1,3 +1,4 @@
+mod audit;
 mod dev;
 mod git;
 mod health;
@@ -92,6 +93,14 @@ pub enum Commands {
         query: String,
         #[arg(short, long, default_value = "8")] top_k: usize,
         #[arg(long)] reindex: bool,
+    },
+    /// Run Google Lighthouse web audit on a URL
+    Audit {
+        /// URL to audit (e.g. https://example.com)
+        url: String,
+        /// Fail if any score is below this threshold (0-100)
+        #[arg(short, long)]
+        threshold: Option<u8>,
     },
     /// Run OWASP security scan — pass a path or project name, or omit for all projects
     Security {
@@ -326,6 +335,10 @@ pub fn run(cli: Cli) {
         Commands::Commit { project, message, push, dry_run } => health::cmd_commit(project, message, push, dry_run, &cfg.dev_ops_path, cli.json),
         Commands::Stats => health::cmd_stats(&cfg.dev_ops_path, cli.json),
         Commands::Search { query, top_k, reindex } => search::cmd_search(&query, top_k, reindex, &cfg.dev_ops_path, cli.json),
+        Commands::Audit { url, threshold } => {
+            let exit = audit::cmd_audit(&url, threshold, cli.json);
+            std::process::exit(exit);
+        }
         Commands::Security { target, full, watch } => security::cmd_security(target, full, watch, &cfg.dev_ops_path, cli.json),
         Commands::New { name, category, github, no_vault } => new::cmd_new(&name, &category, github, no_vault, &cfg.dev_ops_path, cli.json),
         Commands::Task { description, project, agent } => new::cmd_task(&description, project, agent),
