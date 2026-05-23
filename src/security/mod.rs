@@ -1,10 +1,12 @@
 pub mod audit;
+pub mod license;
 pub mod patterns;
 pub mod scanner;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub use license::{scan_licenses, LicenseDep, LicenseReport};
 pub use patterns::{scan_file, WATCHED_EXTS};
 pub use scanner::scan_project;
 
