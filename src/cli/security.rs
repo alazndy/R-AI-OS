@@ -63,9 +63,43 @@ pub(super) fn cmd_security(
 
     if json {
         #[derive(serde::Serialize)]
-        struct Row<'a> { name: &'a str, path: String, score: u8, grade: &'a str, issues: usize, critical: usize }
+        struct IssueJson<'a> {
+            owasp: &'a str,
+            severity: &'a str,
+            title: &'a str,
+            file: Option<String>,
+            line: Option<usize>,
+            snippet: Option<&'a String>,
+        }
+        #[derive(serde::Serialize)]
+        struct Row<'a> {
+            schema_version: u8,
+            name: &'a str,
+            path: String,
+            score: u8,
+            grade: &'a str,
+            critical_count: usize,
+            high_count: usize,
+            issues: Vec<IssueJson<'a>>,
+        }
         let rows: Vec<Row> = all_reports.iter()
-            .map(|(n, p, r)| Row { name: n, path: p.display().to_string(), score: r.score, grade: r.grade, issues: r.issues.len(), critical: r.critical_count() })
+            .map(|(n, p, r)| Row {
+                schema_version: 1,
+                name: n,
+                path: p.display().to_string(),
+                score: r.score,
+                grade: r.grade,
+                critical_count: r.critical_count(),
+                high_count: r.high_count(),
+                issues: r.issues.iter().map(|i| IssueJson {
+                    owasp: i.owasp,
+                    severity: i.severity.label(),
+                    title: i.title,
+                    file: i.file.as_ref().map(|p| p.display().to_string()),
+                    line: i.line,
+                    snippet: i.snippet.as_ref(),
+                }).collect(),
+            })
             .collect();
         println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
         return;

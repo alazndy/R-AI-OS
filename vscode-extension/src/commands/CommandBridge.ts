@@ -4,7 +4,10 @@ import { DaemonClient } from "../ipc/DaemonClient";
 import { resolveRaiosBinary } from "../utils/raiosBinary";
 
 export class CommandBridge {
-  constructor(private readonly client: DaemonClient) {}
+  constructor(
+    private readonly client: DaemonClient,
+    private readonly outputChannel: vscode.OutputChannel
+  ) {}
 
   register(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
@@ -22,12 +25,19 @@ export class CommandBridge {
       ),
       vscode.commands.registerCommand("raios.securityScan", () =>
         this.runCli(["security", "."], "Security scan complete")
+      ),
+      vscode.commands.registerCommand("raios.licenseCheck", () =>
+        this.runCli(["license"], "License check complete")
+      ),
+      vscode.commands.registerCommand("raios.auditPage", () =>
+        this.auditFlow()
       )
     );
   }
 
   private runCli(args: string[], successMsg: string): void {
     const projectPath = this.currentProjectPath();
+    this.outputChannel.appendLine(`[raios] running: raios ${args.join(" ")}`);
 
     vscode.window.withProgress(
       {
@@ -41,15 +51,15 @@ export class CommandBridge {
             resolveRaiosBinary(),
             args,
             { cwd: projectPath ?? undefined, timeout: 60000 },
-            (err, _stdout, stderr) => {
+            (err, stdout, stderr) => {
+              if (stdout.trim()) this.outputChannel.appendLine(stdout.trim());
               if (err) {
+                this.outputChannel.appendLine(`[raios] error: ${stderr || err.message}`);
                 vscode.window.showErrorMessage(
                   `R-AI-OS error: ${stderr || err.message}`
                 );
               } else {
-                vscode.window.showInformationMessage(
-                  `R-AI-OS: ${successMsg}`
-                );
+                vscode.window.showInformationMessage(`R-AI-OS: ${successMsg}`);
               }
               resolve();
             }
@@ -71,6 +81,16 @@ export class CommandBridge {
       : ["commit", "--push"];
 
     this.runCli(args, "Committed & pushed");
+  }
+
+  private async auditFlow(): Promise<void> {
+    const url = await vscode.window.showInputBox({
+      prompt: "URL to audit with Lighthouse",
+      placeHolder: "https://example.com",
+      validateInput: (v) => (v.startsWith("http") ? null : "Must start with http:// or https://"),
+    });
+    if (!url?.trim()) return;
+    this.runCli(["audit", url.trim()], "Audit complete");
   }
 
   private async dispatchTask(): Promise<void> {

@@ -3,7 +3,7 @@
   "publisher": "alazndy",
   "displayName": "R-AI-OS",
   "description": "R-AI-OS Kernel integration for VS Code",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "alazndy",
   "repository": {
     "type": "git",
@@ -34,8 +34,25 @@
       {
         "command": "raios.securityScan",
         "title": "R-AI-OS: Security Scan"
+      },
+      {
+        "command": "raios.licenseCheck",
+        "title": "R-AI-OS: License Compliance Check"
+      },
+      {
+        "command": "raios.auditPage",
+        "title": "R-AI-OS: Audit Web Page (Lighthouse)..."
       }
     ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "raios.securityScan",
+          "when": "explorerResourceIsFolder",
+          "group": "raios@1"
+        }
+      ]
+    },
     "configuration": {
       "title": "R-AI-OS",
       "properties": {
