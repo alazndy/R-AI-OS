@@ -1,3 +1,4 @@
+use crate::security::license::{scan_licenses, LicenseReport};
 use std::path::Path;
 
 pub(super) fn cmd_security(
@@ -183,4 +184,43 @@ fn send_toast(path: &Path, issues: &[crate::security::SecurityIssue]) {
     if let Err(e) = notify_rust::Notification::new().summary(&summary).body(&body).show() {
         eprintln!("[guard] toast failed (non-fatal): {e}");
     }
+}
+
+pub(super) fn cmd_license(project: Option<String>, dev_ops: &Path, json_out: bool) {
+    let path = crate::cli::resolve_project_path(project, dev_ops);
+    let report = scan_licenses(&path);
+
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+        return;
+    }
+
+    print_license_report(&report);
+}
+
+fn print_license_report(report: &LicenseReport) {
+    println!("\n  License Compliance — {}", report.project_path.display());
+    println!("  {}", "─".repeat(60));
+    println!("  Total dependencies scanned : {}", report.total);
+
+    if report.copyleft_count > 0 {
+        println!("  Copyleft (GPL/AGPL/LGPL)   : {} ⚠", report.copyleft_count);
+    } else {
+        println!("  Copyleft (GPL/AGPL/LGPL)   : 0 ✓");
+    }
+
+    if report.unknown_count > 0 {
+        println!("  Unknown license            : {} ⚠", report.unknown_count);
+    } else {
+        println!("  Unknown license            : 0 ✓");
+    }
+
+    if report.copyleft_count > 0 || report.unknown_count > 0 {
+        println!("\n  Issues:");
+        for dep in report.deps.iter().filter(|d| d.is_copyleft || d.is_unknown) {
+            let tag = if dep.is_copyleft { "COPYLEFT" } else { "UNKNOWN " };
+            println!("    [{}] {} {} — {}", tag, dep.name, dep.version, dep.license);
+        }
+    }
+    println!();
 }

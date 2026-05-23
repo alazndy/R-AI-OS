@@ -94,7 +94,7 @@ fn lookup_cargo_license(project_path: &Path, name: &str, version: &str) -> Strin
                 if let Ok(content) = std::fs::read_to_string(&manifest) {
                     for line in content.lines() {
                         if let Some(rest) = line.strip_prefix("license") {
-                            let val = rest.trim_start_matches(|c| c == ' ' || c == '=');
+                            let val = rest.trim_start_matches(&[' ', '='][..]);
                             let cleaned = val.trim().trim_matches('"').to_string();
                             if !cleaned.is_empty() {
                                 return cleaned;

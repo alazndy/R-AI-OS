@@ -94,6 +94,11 @@ pub enum Commands {
         #[arg(short, long, default_value = "8")] top_k: usize,
         #[arg(long)] reindex: bool,
     },
+    /// Scan dependency licenses for copyleft (GPL/AGPL/LGPL) and unknown licenses
+    License {
+        /// Project name or path (omit for current directory)
+        project: Option<String>,
+    },
     /// Run Google Lighthouse web audit on a URL
     Audit {
         /// URL to audit (e.g. https://example.com)
@@ -335,6 +340,7 @@ pub fn run(cli: Cli) {
         Commands::Commit { project, message, push, dry_run } => health::cmd_commit(project, message, push, dry_run, &cfg.dev_ops_path, cli.json),
         Commands::Stats => health::cmd_stats(&cfg.dev_ops_path, cli.json),
         Commands::Search { query, top_k, reindex } => search::cmd_search(&query, top_k, reindex, &cfg.dev_ops_path, cli.json),
+        Commands::License { project } => security::cmd_license(project, &cfg.dev_ops_path, cli.json),
         Commands::Audit { url, threshold } => {
             let exit = audit::cmd_audit(&url, threshold, cli.json);
             std::process::exit(exit);
