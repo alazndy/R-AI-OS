@@ -152,6 +152,46 @@ pub(super) const PATTERNS: &[Pattern] = &[
         pattern: r"print\s*\(.*(?i)(password|token|secret|key)",
         exts: &["py"],
     },
+    // A02 — Specific credential formats (high-specificity, low false-positive rate)
+    Pattern {
+        owasp: "A02",
+        title: "AWS Access Key ID (AKIA prefix)",
+        severity: Severity::Critical,
+        pattern: r"\bAKIA[0-9A-Z]{16}\b",
+        exts: &[
+            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml",
+            "json", "sh",
+        ],
+    },
+    Pattern {
+        owasp: "A02",
+        title: "GitHub Personal Access Token (ghp_ prefix)",
+        severity: Severity::Critical,
+        pattern: r"\bghp_[a-zA-Z0-9]{36}\b",
+        exts: &[
+            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml",
+            "json", "sh",
+        ],
+    },
+    Pattern {
+        owasp: "A02",
+        title: "Stripe secret key (sk_live_ or sk_test_)",
+        severity: Severity::Critical,
+        pattern: r"\bsk_(live|test)_[0-9a-zA-Z]{24,}\b",
+        exts: &[
+            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml", "json",
+        ],
+    },
+    Pattern {
+        owasp: "A02",
+        title: "Google API key (AIza prefix)",
+        severity: Severity::Critical,
+        pattern: r"\bAIza[0-9A-Za-z\-_]{35}\b",
+        exts: &[
+            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml",
+            "json", "html",
+        ],
+    },
     // A01 — Broken Access Control
     Pattern {
         owasp: "A01",
@@ -291,5 +331,49 @@ mod tests_scan_file {
         writeln!(f, "fn main() {{ println!(\"hello\"); }}").unwrap();
         let issues = scan_file(f.path());
         assert!(issues.is_empty(), "Expected no issues for clean file");
+    }
+
+    #[test]
+    fn detects_aws_access_key() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".env").unwrap();
+        writeln!(f, "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE").unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().any(|i| i.owasp == "A02" && i.title.contains("AWS")),
+            "Should detect AWS access key ID"
+        );
+    }
+
+    #[test]
+    fn detects_github_pat() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".env").unwrap();
+        writeln!(f, "GITHUB_TOKEN=ghp_16C7e42F292c6912E7710c838347Ae178B4a").unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().any(|i| i.owasp == "A02" && i.title.contains("GitHub")),
+            "Should detect GitHub PAT (ghp_ prefix)"
+        );
+    }
+
+    #[test]
+    fn detects_stripe_live_key() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".env").unwrap();
+        writeln!(f, "STRIPE_SECRET=sk_live_51H2BLkJ3Ow1234567890abcde").unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().any(|i| i.owasp == "A02" && i.title.contains("Stripe")),
+            "Should detect Stripe live secret key"
+        );
+    }
+
+    #[test]
+    fn detects_google_api_key() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".ts").unwrap();
+        writeln!(f, r#"const key = "AIzaSyD-9tSrke72I6e0sEh8bT9SfGgfHIqnYjw";"#).unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().any(|i| i.owasp == "A02" && i.title.contains("Google")),
+            "Should detect Google API key (AIza prefix)"
+        );
     }
 }
