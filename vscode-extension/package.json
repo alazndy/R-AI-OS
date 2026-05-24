@@ -110,6 +110,26 @@
           "type": "number",
           "default": 800,
           "description": "Debounce delay (ms) before triggering a security scan on save"
+        },
+        "raios.refactor.highLineThreshold": {
+          "type": "number",
+          "default": 500,
+          "description": "Line count at which a file is flagged HIGH for refactor (default: 500)"
+        },
+        "raios.refactor.mediumLineThreshold": {
+          "type": "number",
+          "default": 300,
+          "description": "Line count at which a file is flagged MEDIUM for refactor (default: 300)"
+        },
+        "raios.refactor.highUnwrapThreshold": {
+          "type": "number",
+          "default": 10,
+          "description": "Risky-pattern count (unwrap/!!/as any) for HIGH severity (default: 10)"
+        },
+        "raios.refactor.mediumUnwrapThreshold": {
+          "type": "number",
+          "default": 5,
+          "description": "Risky-pattern count (unwrap/!!/as any) for MEDIUM severity (default: 5)"
         }
       }
     }

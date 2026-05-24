@@ -29,6 +29,11 @@ export class RefactorProvider implements vscode.Disposable {
       vscode.workspace.onDidSaveTextDocument(() => {
         if (this.scanTimer) clearTimeout(this.scanTimer);
         this.scanTimer = setTimeout(() => this.scanWorkspace(), 3000);
+      }),
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration("raios.refactor")) {
+          this.scanWorkspace();
+        }
       })
     );
     context.subscriptions.push(...this.disposables);
@@ -57,13 +62,27 @@ export class RefactorProvider implements vscode.Disposable {
     }
   }
 
+  private getThresholdArgs(): string[] {
+    const cfg = vscode.workspace.getConfiguration("raios.refactor");
+    return [
+      "--high-lines",
+      String(cfg.get<number>("highLineThreshold", 500)),
+      "--medium-lines",
+      String(cfg.get<number>("mediumLineThreshold", 300)),
+      "--high-unwrap",
+      String(cfg.get<number>("highUnwrapThreshold", 10)),
+      "--medium-unwrap",
+      String(cfg.get<number>("mediumUnwrapThreshold", 5)),
+    ];
+  }
+
   private runScan(
     path: string,
     callback: (issues: RefactorFileIssue[]) => void
   ): void {
     cp.execFile(
       "raios",
-      ["--json", "refactor", path],
+      ["--json", "refactor", path, ...this.getThresholdArgs()],
       { timeout: 30_000 },
       (err, stdout, stderr) => {
         if (err) {

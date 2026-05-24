@@ -49,6 +49,27 @@ impl RefactorReport {
     }
 }
 
+// ─── Thresholds ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct RefactorThresholds {
+    pub high_lines: usize,
+    pub medium_lines: usize,
+    pub high_unwrap: usize,
+    pub medium_unwrap: usize,
+}
+
+impl Default for RefactorThresholds {
+    fn default() -> Self {
+        Self {
+            high_lines: 500,
+            medium_lines: 300,
+            high_unwrap: 10,
+            medium_unwrap: 5,
+        }
+    }
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const SOURCE_EXTS: &[&str] = &[
@@ -63,17 +84,20 @@ const UNWRAP_PATTERNS: &[(&str, &str)] = &[
     ("kt", "!!"),
 ];
 
-const HIGH_LINE_THRESHOLD: usize = 500;
-const MEDIUM_LINE_THRESHOLD: usize = 300;
-const UNWRAP_HIGH: usize = 10;
-const UNWRAP_MEDIUM: usize = 5;
 const MAX_FILES: usize = 200;
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 pub fn scan_project(root: &Path) -> RefactorReport {
+    scan_project_with(root, &RefactorThresholds::default())
+}
+
+pub fn scan_project_with(root: &Path, thresholds: &RefactorThresholds) -> RefactorReport {
     let files = collect_source_files(root);
-    let mut issues: Vec<RefactorIssue> = files.iter().filter_map(|f| analyze_file(f)).collect();
+    let mut issues: Vec<RefactorIssue> = files
+        .iter()
+        .filter_map(|f| analyze_file(f, thresholds))
+        .collect();
 
     let high_count = issues
         .iter()
@@ -105,26 +129,23 @@ pub fn scan_project(root: &Path) -> RefactorReport {
 
 // ─── File analysis ───────────────────────────────────────────────────────────
 
-fn analyze_file(path: &Path) -> Option<RefactorIssue> {
+fn analyze_file(path: &Path, t: &RefactorThresholds) -> Option<RefactorIssue> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let content = std::fs::read_to_string(path).ok()?;
     let lines = content.lines().count();
 
     let mut reasons: Vec<String> = Vec::new();
 
-    if lines >= HIGH_LINE_THRESHOLD {
-        reasons.push(format!("{} lines (>{} limit)", lines, HIGH_LINE_THRESHOLD));
-    } else if lines >= MEDIUM_LINE_THRESHOLD {
-        reasons.push(format!(
-            "{} lines (>{} limit)",
-            lines, MEDIUM_LINE_THRESHOLD
-        ));
+    if lines >= t.high_lines {
+        reasons.push(format!("{} lines (>{} limit)", lines, t.high_lines));
+    } else if lines >= t.medium_lines {
+        reasons.push(format!("{} lines (>{} limit)", lines, t.medium_lines));
     }
 
     let unwrap_count = count_risky_patterns(&content, ext);
-    if unwrap_count >= UNWRAP_HIGH {
+    if unwrap_count >= t.high_unwrap {
         reasons.push(format!("{} risky patterns (.unwrap/!!)", unwrap_count));
-    } else if unwrap_count >= UNWRAP_MEDIUM {
+    } else if unwrap_count >= t.medium_unwrap {
         reasons.push(format!("{} risky patterns", unwrap_count));
     }
 
@@ -140,7 +161,7 @@ fn analyze_file(path: &Path) -> Option<RefactorIssue> {
     Some(RefactorIssue {
         file: path.to_path_buf(),
         lines,
-        severity: determine_severity(lines, unwrap_count, max_depth),
+        severity: determine_severity(lines, unwrap_count, max_depth, t),
         reasons,
     })
 }
@@ -164,11 +185,14 @@ fn estimate_max_nesting(content: &str) -> usize {
         .unwrap_or(0)
 }
 
-fn determine_severity(lines: usize, unwrap_count: usize, max_depth: usize) -> RefactorSeverity {
-    let is_high = lines >= HIGH_LINE_THRESHOLD || unwrap_count >= UNWRAP_HIGH || max_depth >= 6;
-
-    let is_medium =
-        lines >= MEDIUM_LINE_THRESHOLD || unwrap_count >= UNWRAP_MEDIUM || max_depth >= 5;
+fn determine_severity(
+    lines: usize,
+    unwrap_count: usize,
+    max_depth: usize,
+    t: &RefactorThresholds,
+) -> RefactorSeverity {
+    let is_high = lines >= t.high_lines || unwrap_count >= t.high_unwrap || max_depth >= 6;
+    let is_medium = lines >= t.medium_lines || unwrap_count >= t.medium_unwrap || max_depth >= 5;
 
     if is_high {
         RefactorSeverity::High
@@ -286,11 +310,23 @@ mod tests {
 
     #[test]
     fn severity_high_on_large_file() {
-        assert_eq!(determine_severity(600, 0, 0), RefactorSeverity::High);
+        let t = RefactorThresholds::default();
+        assert_eq!(determine_severity(600, 0, 0, &t), RefactorSeverity::High);
     }
 
     #[test]
     fn severity_medium_on_mid_file() {
-        assert_eq!(determine_severity(350, 0, 0), RefactorSeverity::Medium);
+        let t = RefactorThresholds::default();
+        assert_eq!(determine_severity(350, 0, 0, &t), RefactorSeverity::Medium);
+    }
+
+    #[test]
+    fn custom_thresholds_change_severity() {
+        let t = RefactorThresholds {
+            high_lines: 1000,
+            medium_lines: 700,
+            ..Default::default()
+        };
+        assert_eq!(determine_severity(600, 0, 0, &t), RefactorSeverity::Low);
     }
 }

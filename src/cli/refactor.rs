@@ -1,4 +1,4 @@
-use crate::refactor_scan::{scan_project, RefactorSeverity};
+use crate::refactor_scan::{scan_project_with, RefactorSeverity, RefactorThresholds};
 use serde::Serialize;
 use std::path::Path;
 
@@ -11,13 +11,27 @@ struct RefactorFileIssue {
     reasons: Vec<String>,
 }
 
-pub(super) fn cmd_refactor(target: Option<String>, dev_ops: &Path, json: bool) {
+pub(super) fn cmd_refactor(
+    target: Option<String>,
+    dev_ops: &Path,
+    json: bool,
+    high_lines: usize,
+    medium_lines: usize,
+    high_unwrap: usize,
+    medium_unwrap: usize,
+) {
     let path = super::resolve_project_path(target, dev_ops);
+    let thresholds = RefactorThresholds {
+        high_lines,
+        medium_lines,
+        high_unwrap,
+        medium_unwrap,
+    };
     if !path.exists() {
         eprintln!("Path does not exist: {}", path.display());
         std::process::exit(1);
     }
-    let report = scan_project(&path);
+    let report = scan_project_with(&path, &thresholds);
     if json {
         let items: Vec<RefactorFileIssue> = report
             .issues

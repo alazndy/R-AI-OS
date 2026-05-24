@@ -119,6 +119,18 @@ pub enum Commands {
     Refactor {
         /// Project name or absolute path (omit for current directory)
         target: Option<String>,
+        /// Line count threshold for HIGH severity (default: 500)
+        #[arg(long, default_value_t = 500)]
+        high_lines: usize,
+        /// Line count threshold for MEDIUM severity (default: 300)
+        #[arg(long, default_value_t = 300)]
+        medium_lines: usize,
+        /// Risky-pattern count threshold for HIGH severity (default: 10)
+        #[arg(long, default_value_t = 10)]
+        high_unwrap: usize,
+        /// Risky-pattern count threshold for MEDIUM severity (default: 5)
+        #[arg(long, default_value_t = 5)]
+        medium_unwrap: usize,
     },
     /// Scaffold a new project following MASTER.md rules
     New {
@@ -352,7 +364,9 @@ pub fn run(cli: Cli) {
             std::process::exit(exit);
         }
         Commands::Security { target, full, watch } => security::cmd_security(target, full, watch, &cfg.dev_ops_path, cli.json),
-        Commands::Refactor { target } => refactor::cmd_refactor(target, &cfg.dev_ops_path, cli.json),
+        Commands::Refactor { target, high_lines, medium_lines, high_unwrap, medium_unwrap } => {
+            refactor::cmd_refactor(target, &cfg.dev_ops_path, cli.json, high_lines, medium_lines, high_unwrap, medium_unwrap)
+        }
         Commands::New { name, category, github, no_vault } => new::cmd_new(&name, &category, github, no_vault, &cfg.dev_ops_path, cli.json),
         Commands::Task { description, project, agent } => new::cmd_task(&description, project, agent),
         Commands::Bootstrap => new::cmd_bootstrap(),
