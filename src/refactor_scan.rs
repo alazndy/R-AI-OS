@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -70,6 +71,34 @@ impl Default for RefactorThresholds {
     }
 }
 
+/// Per-extension overrides — each field falls back to the global default when absent.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PartialThresholds {
+    pub high_lines: Option<usize>,
+    pub medium_lines: Option<usize>,
+    pub high_unwrap: Option<usize>,
+    pub medium_unwrap: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RefactorConfig {
+    pub defaults: RefactorThresholds,
+    /// Map from file extension (e.g. "rs", "kt") to partial overrides.
+    pub per_ext: HashMap<String, PartialThresholds>,
+}
+
+impl RefactorConfig {
+    pub fn for_ext(&self, ext: &str) -> RefactorThresholds {
+        let p = self.per_ext.get(ext);
+        RefactorThresholds {
+            high_lines: p.and_then(|x| x.high_lines).unwrap_or(self.defaults.high_lines),
+            medium_lines: p.and_then(|x| x.medium_lines).unwrap_or(self.defaults.medium_lines),
+            high_unwrap: p.and_then(|x| x.high_unwrap).unwrap_or(self.defaults.high_unwrap),
+            medium_unwrap: p.and_then(|x| x.medium_unwrap).unwrap_or(self.defaults.medium_unwrap),
+        }
+    }
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const SOURCE_EXTS: &[&str] = &[
@@ -89,14 +118,18 @@ const MAX_FILES: usize = 200;
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 pub fn scan_project(root: &Path) -> RefactorReport {
-    scan_project_with(root, &RefactorThresholds::default())
+    scan_project_with(root, &RefactorConfig::default())
 }
 
-pub fn scan_project_with(root: &Path, thresholds: &RefactorThresholds) -> RefactorReport {
+pub fn scan_project_with(root: &Path, config: &RefactorConfig) -> RefactorReport {
     let files = collect_source_files(root);
     let mut issues: Vec<RefactorIssue> = files
         .iter()
-        .filter_map(|f| analyze_file(f, thresholds))
+        .filter_map(|f| {
+            let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let t = config.for_ext(ext);
+            analyze_file(f, &t)
+        })
         .collect();
 
     let high_count = issues

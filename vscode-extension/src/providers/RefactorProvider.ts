@@ -64,7 +64,7 @@ export class RefactorProvider implements vscode.Disposable {
 
   private getThresholdArgs(): string[] {
     const cfg = vscode.workspace.getConfiguration("raios.refactor");
-    return [
+    const args = [
       "--high-lines",
       String(cfg.get<number>("highLineThreshold", 500)),
       "--medium-lines",
@@ -74,6 +74,28 @@ export class RefactorProvider implements vscode.Disposable {
       "--medium-unwrap",
       String(cfg.get<number>("mediumUnwrapThreshold", 5)),
     ];
+
+    const extRaw = cfg.get<Record<string, unknown>>("extensions", {});
+    if (Object.keys(extRaw).length > 0) {
+      // Convert VS Code camelCase keys to snake_case for the CLI
+      const extCli: Record<string, Record<string, number>> = {};
+      for (const [ext, overrides] of Object.entries(extRaw)) {
+        if (typeof overrides === "object" && overrides !== null) {
+          const o = overrides as Record<string, number>;
+          const mapped: Record<string, number> = {};
+          if (o.highLines !== undefined) mapped.high_lines = o.highLines;
+          if (o.mediumLines !== undefined) mapped.medium_lines = o.mediumLines;
+          if (o.highUnwrap !== undefined) mapped.high_unwrap = o.highUnwrap;
+          if (o.mediumUnwrap !== undefined) mapped.medium_unwrap = o.mediumUnwrap;
+          if (Object.keys(mapped).length > 0) extCli[ext] = mapped;
+        }
+      }
+      if (Object.keys(extCli).length > 0) {
+        args.push("--ext-config", JSON.stringify(extCli));
+      }
+    }
+
+    return args;
   }
 
   private runScan(

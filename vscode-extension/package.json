@@ -3,7 +3,7 @@
   "publisher": "alazndy",
   "displayName": "R-AI-OS",
   "description": "R-AI-OS Kernel integration for VS Code",
-  "version": "0.3.0",
+  "version": "0.3.3",
   "repository": {
     "type": "git",
     "url": "https://github.com/alazndy/r-ai-os"
@@ -130,6 +130,11 @@
           "type": "number",
           "default": 5,
           "description": "Risky-pattern count (unwrap/!!/as any) for MEDIUM severity (default: 5)"
+        },
+        "raios.refactor.extensions": {
+          "type": "object",
+          "default": {},
+          "description": "Per-extension threshold overrides. Keys are file extensions (e.g. \"rs\", \"kt\", \"ts\"). Each value can override: highLines, mediumLines, highUnwrap, mediumUnwrap. Example: { \"kt\": { \"highLines\": 800 }, \"rs\": { \"highLines\": 600, \"mediumLines\": 400 } }"
         }
       }
     }

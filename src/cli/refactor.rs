@@ -1,5 +1,8 @@
-use crate::refactor_scan::{scan_project_with, RefactorSeverity, RefactorThresholds};
+use crate::refactor_scan::{
+    scan_project_with, PartialThresholds, RefactorConfig, RefactorSeverity, RefactorThresholds,
+};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Serialize)]
@@ -19,19 +22,30 @@ pub(super) fn cmd_refactor(
     medium_lines: usize,
     high_unwrap: usize,
     medium_unwrap: usize,
+    ext_config: Option<String>,
 ) {
     let path = super::resolve_project_path(target, dev_ops);
-    let thresholds = RefactorThresholds {
-        high_lines,
-        medium_lines,
-        high_unwrap,
-        medium_unwrap,
-    };
     if !path.exists() {
         eprintln!("Path does not exist: {}", path.display());
         std::process::exit(1);
     }
-    let report = scan_project_with(&path, &thresholds);
+
+    let per_ext: HashMap<String, PartialThresholds> = ext_config
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+
+    let config = RefactorConfig {
+        defaults: RefactorThresholds {
+            high_lines,
+            medium_lines,
+            high_unwrap,
+            medium_unwrap,
+        },
+        per_ext,
+    };
+
+    let report = scan_project_with(&path, &config);
     if json {
         let items: Vec<RefactorFileIssue> = report
             .issues
