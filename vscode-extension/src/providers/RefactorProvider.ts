@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import * as cp from "child_process";
 import { RefactorDecorationProvider } from "./RefactorDecorationProvider";
+import { RefactorTreeProvider, RefactorFileData } from "./RefactorTreeProvider";
+import { RefactorStatusItem } from "./RefactorStatusItem";
 
 interface RefactorFileIssue {
   schema_version: number;
@@ -14,14 +16,20 @@ export class RefactorProvider implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly outputChannel: vscode.OutputChannel;
   private readonly decorationProvider: RefactorDecorationProvider;
+  private readonly treeProvider: RefactorTreeProvider;
+  private readonly statusItem: RefactorStatusItem;
   private scanTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     outputChannel: vscode.OutputChannel,
-    decorationProvider: RefactorDecorationProvider
+    decorationProvider: RefactorDecorationProvider,
+    treeProvider: RefactorTreeProvider,
+    statusItem: RefactorStatusItem
   ) {
     this.outputChannel = outputChannel;
     this.decorationProvider = decorationProvider;
+    this.treeProvider = treeProvider;
+    this.statusItem = statusItem;
   }
 
   activate(context: vscode.ExtensionContext): void {
@@ -44,19 +52,30 @@ export class RefactorProvider implements vscode.Disposable {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) return;
 
-    const allFiles = new Map<string, "HIGH" | "MEDIUM">();
+    const allDecorations = new Map<string, "HIGH" | "MEDIUM">();
+    const allFileData: RefactorFileData[] = [];
     let pending = folders.length;
 
     for (const folder of folders) {
       this.runScan(folder.uri.fsPath, (issues) => {
         for (const issue of issues) {
           if (issue.severity === "HIGH" || issue.severity === "MEDIUM") {
-            allFiles.set(issue.file, issue.severity);
+            allDecorations.set(issue.file, issue.severity);
+            allFileData.push({
+              file: issue.file,
+              severity: issue.severity,
+              lines: issue.lines,
+              reasons: issue.reasons,
+            });
           }
         }
         pending--;
         if (pending === 0) {
-          this.decorationProvider.update(allFiles);
+          this.decorationProvider.update(allDecorations);
+          this.treeProvider.update(allFileData);
+          const high = allFileData.filter((f) => f.severity === "HIGH").length;
+          const med = allFileData.filter((f) => f.severity === "MEDIUM").length;
+          this.statusItem.update(high, med);
         }
       });
     }
@@ -77,7 +96,6 @@ export class RefactorProvider implements vscode.Disposable {
 
     const extRaw = cfg.get<Record<string, unknown>>("extensions", {});
     if (Object.keys(extRaw).length > 0) {
-      // Convert VS Code camelCase keys to snake_case for the CLI
       const extCli: Record<string, Record<string, number>> = {};
       for (const [ext, overrides] of Object.entries(extRaw)) {
         if (typeof overrides === "object" && overrides !== null) {

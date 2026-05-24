@@ -13,6 +13,15 @@
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "raiosRefactorView",
+          "name": "R-AI-OS Refactor",
+          "visibility": "collapsed"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "raios.healthCheck",
@@ -49,6 +58,10 @@
       {
         "command": "raios.openMemory",
         "title": "R-AI-OS: Open Project Memory"
+      },
+      {
+        "command": "raios.showRefactorView",
+        "title": "R-AI-OS: Show Refactor Panel"
       }
     ],
     "menus": {
