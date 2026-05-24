@@ -20,8 +20,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   client = new DaemonClient(port);
   statusBar = new StatusBarProvider(client, pollInterval, outputChannel);
-  const bridge = new CommandBridge(client, outputChannel, diagnostics);
   diagnostics = new DiagnosticProvider(outputChannel);
+  const bridge = new CommandBridge(client, outputChannel, diagnostics);
 
   statusBar.activate(context);
   bridge.register(context);
