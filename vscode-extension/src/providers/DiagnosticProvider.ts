@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import * as cp from "child_process";
 import * as path from "path";
 import { resolveRaiosBinary } from "../utils/raiosBinary";
+import { SecurityDecorationProvider } from "./SecurityDecorationProvider";
 
 // Schema v1 — matches raios security --json output
 interface SecurityIssueJson {
@@ -42,13 +43,17 @@ export class DiagnosticProvider implements vscode.Disposable {
   private readonly collection: vscode.DiagnosticCollection;
   private debounceTimer: NodeJS.Timeout | null = null;
   private pendingProcess: cp.ChildProcess | null = null;
-  // Track which files have diagnostics per scanned directory
   private readonly seenFiles = new Map<string, Set<string>>();
   private readonly outputChannel: vscode.OutputChannel;
+  private decorationProvider: SecurityDecorationProvider | null = null;
 
   constructor(outputChannel: vscode.OutputChannel) {
     this.collection = vscode.languages.createDiagnosticCollection("raios-security");
     this.outputChannel = outputChannel;
+  }
+
+  setDecorationProvider(provider: SecurityDecorationProvider): void {
+    this.decorationProvider = provider;
   }
 
   activate(context: vscode.ExtensionContext): void {
@@ -182,6 +187,23 @@ export class DiagnosticProvider implements vscode.Disposable {
     if (total > 0) {
       this.outputChannel.appendLine(`[raios] ${total} issue(s) found in ${scannedDir}`);
     }
+
+    this.updateDecorations();
+  }
+
+  private updateDecorations(): void {
+    if (!this.decorationProvider) return;
+    const worstPerFile = new Map<string, vscode.DiagnosticSeverity>();
+    this.collection.forEach((uri, diags) => {
+      let worst = vscode.DiagnosticSeverity.Information;
+      for (const d of diags) {
+        if (d.severity < worst) worst = d.severity;
+      }
+      if (worst <= vscode.DiagnosticSeverity.Warning) {
+        worstPerFile.set(uri.fsPath, worst);
+      }
+    });
+    this.decorationProvider.update(worstPerFile);
   }
 
   dispose(): void {

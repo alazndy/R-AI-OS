@@ -4,6 +4,7 @@ import { StatusBarProvider } from "./providers/StatusBarProvider";
 import { CommandBridge } from "./commands/CommandBridge";
 import { DiffInboxProvider } from "./providers/DiffInboxProvider";
 import { DiagnosticProvider } from "./providers/DiagnosticProvider";
+import { SecurityDecorationProvider } from "./providers/SecurityDecorationProvider";
 import { JumpToCode } from "./bridge/JumpToCode";
 
 let client: DaemonClient;
@@ -21,10 +22,16 @@ export function activate(context: vscode.ExtensionContext): void {
   client = new DaemonClient(port);
   statusBar = new StatusBarProvider(client, pollInterval, outputChannel);
   diagnostics = new DiagnosticProvider(outputChannel);
+  const decorations = new SecurityDecorationProvider();
+  diagnostics.setDecorationProvider(decorations);
   const bridge = new CommandBridge(client, outputChannel, diagnostics);
 
   statusBar.activate(context);
   bridge.register(context);
+  context.subscriptions.push(
+    vscode.window.registerFileDecorationProvider(decorations),
+    decorations
+  );
   diagnostics.activate(context);
   const diffInbox = new DiffInboxProvider(client);
   diffInbox.activate(context);
