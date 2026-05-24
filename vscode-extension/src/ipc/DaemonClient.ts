@@ -18,6 +18,10 @@ export class DaemonClient {
     private readonly host: string = "127.0.0.1"
   ) {}
 
+  get isConnected(): boolean {
+    return this.connected;
+  }
+
   onMessage(handler: MessageHandler): void {
     this.handlers.push(handler);
   }

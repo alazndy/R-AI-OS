@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as cp from "child_process";
+import * as path from "path";
 import { resolveRaiosBinary } from "../utils/raiosBinary";
 
 // Schema v1 — matches raios security --json output
@@ -41,6 +42,8 @@ export class DiagnosticProvider implements vscode.Disposable {
   private readonly collection: vscode.DiagnosticCollection;
   private debounceTimer: NodeJS.Timeout | null = null;
   private pendingProcess: cp.ChildProcess | null = null;
+  // Track which files have diagnostics per scanned directory
+  private readonly seenFiles = new Map<string, Set<string>>();
   private readonly outputChannel: vscode.OutputChannel;
 
   constructor(outputChannel: vscode.OutputChannel) {
@@ -53,6 +56,8 @@ export class DiagnosticProvider implements vscode.Disposable {
 
     context.subscriptions.push(
       vscode.workspace.onDidSaveTextDocument((doc) => {
+        const cfg = vscode.workspace.getConfiguration("raios");
+        if (!cfg.get<boolean>("diagnosticsEnabled", true)) return;
         this.onSave(doc.uri.fsPath);
       })
     );
@@ -65,20 +70,25 @@ export class DiagnosticProvider implements vscode.Disposable {
   }
 
   private onSave(filePath: string): void {
+    const cfg = vscode.workspace.getConfiguration("raios");
+    const debounceMs = cfg.get<number>("diagnosticsDebounceMs", 800);
+
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
-    // Kill any in-flight scan — avoids process accumulation on rapid saves
     if (this.pendingProcess) {
       this.pendingProcess.kill();
       this.pendingProcess = null;
     }
 
+    // Scan the parent directory, not the file itself
+    const dir = path.dirname(filePath);
+
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      this.scanPath(filePath);
-    }, 800);
+      this.scanPath(dir);
+    }, debounceMs);
   }
 
   scanPath(targetPath: string): void {
@@ -94,6 +104,10 @@ export class DiagnosticProvider implements vscode.Disposable {
 
     this.pendingProcess = child;
 
+    // Show spinner — auto-clears when the process closes
+    const scanDone = new Promise<void>((resolve) => child.on("close", () => resolve()));
+    vscode.window.setStatusBarMessage("$(sync~spin) R-AI-OS scanning…", scanDone);
+
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
@@ -102,11 +116,8 @@ export class DiagnosticProvider implements vscode.Disposable {
       if (stderr.trim()) {
         this.outputChannel.appendLine(`[raios] stderr: ${stderr.trim()}`);
       }
-      if (code === null) {
-        // Process was killed (new scan replaced this one)
-        return;
-      }
-      this.applyDiagnostics(stdout);
+      if (code === null) return; // killed — newer scan replaced this one
+      this.applyDiagnostics(stdout, targetPath);
     });
 
     child.on("error", (err) => {
@@ -115,7 +126,7 @@ export class DiagnosticProvider implements vscode.Disposable {
     });
   }
 
-  private applyDiagnostics(raw: string): void {
+  private applyDiagnostics(raw: string, scannedDir: string): void {
     if (!raw.trim()) return;
 
     let rows: SecurityRowJson[];
@@ -126,7 +137,6 @@ export class DiagnosticProvider implements vscode.Disposable {
       return;
     }
 
-    // Guard against future schema changes
     if (rows.length > 0 && rows[0].schema_version !== SUPPORTED_SCHEMA_VERSION) {
       this.outputChannel.appendLine(
         `[raios] Unsupported schema_version ${rows[0].schema_version} (expected ${SUPPORTED_SCHEMA_VERSION}) — update extension`
@@ -140,29 +150,37 @@ export class DiagnosticProvider implements vscode.Disposable {
     for (const row of rows) {
       for (const issue of row.issues) {
         if (!issue.file) continue;
-
-        const line = Math.max(0, (issue.line ?? 1) - 1); // VS Code is 0-indexed
+        const line = Math.max(0, (issue.line ?? 1) - 1);
         const range = new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER);
         const message = `[${issue.owasp}] ${issue.title}`;
         const diagnostic = new vscode.Diagnostic(range, message, toVscodeSeverity(issue.severity));
         diagnostic.source = "raios";
         diagnostic.code = issue.owasp;
-
         const existing = byFile.get(issue.file) ?? [];
         existing.push(diagnostic);
         byFile.set(issue.file, existing);
       }
     }
 
-    // Clear stale diagnostics, then apply fresh ones
-    this.collection.clear();
-    for (const [filePath, diagnostics] of byFile) {
-      this.collection.set(vscode.Uri.file(filePath), diagnostics);
+    // Clear stale diagnostics only for files in this scanned directory
+    const prevFiles = this.seenFiles.get(scannedDir) ?? new Set<string>();
+    for (const fp of prevFiles) {
+      if (!byFile.has(fp)) {
+        this.collection.delete(vscode.Uri.file(fp));
+      }
     }
+
+    // Apply fresh diagnostics
+    const newSeen = new Set<string>();
+    for (const [fp, diags] of byFile) {
+      this.collection.set(vscode.Uri.file(fp), diags);
+      newSeen.add(fp);
+    }
+    this.seenFiles.set(scannedDir, newSeen);
 
     const total = [...byFile.values()].reduce((s, d) => s + d.length, 0);
     if (total > 0) {
-      this.outputChannel.appendLine(`[raios] ${total} issue(s) found`);
+      this.outputChannel.appendLine(`[raios] ${total} issue(s) found in ${scannedDir}`);
     }
   }
 

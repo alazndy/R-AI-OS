@@ -3,8 +3,7 @@
   "publisher": "alazndy",
   "displayName": "R-AI-OS",
   "description": "R-AI-OS Kernel integration for VS Code",
-  "version": "0.2.0",
-  "publisher": "alazndy",
+  "version": "0.3.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/alazndy/r-ai-os"
@@ -42,6 +41,14 @@
       {
         "command": "raios.auditPage",
         "title": "R-AI-OS: Audit Web Page (Lighthouse)..."
+      },
+      {
+        "command": "raios.scanCurrentFile",
+        "title": "R-AI-OS: Scan File for Security Issues"
+      },
+      {
+        "command": "raios.openMemory",
+        "title": "R-AI-OS: Open Project Memory"
       }
     ],
     "menus": {
@@ -50,9 +57,37 @@
           "command": "raios.securityScan",
           "when": "explorerResourceIsFolder",
           "group": "raios@1"
+        },
+        {
+          "command": "raios.scanCurrentFile",
+          "when": "!explorerResourceIsFolder",
+          "group": "raios@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "raios.scanCurrentFile",
+          "group": "raios@1"
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "raios.securityScan",
+        "key": "ctrl+shift+r s",
+        "mac": "cmd+shift+r s"
+      },
+      {
+        "command": "raios.healthCheck",
+        "key": "ctrl+shift+r h",
+        "mac": "cmd+shift+r h"
+      },
+      {
+        "command": "raios.scanCurrentFile",
+        "key": "ctrl+shift+r f",
+        "mac": "cmd+shift+r f"
+      }
+    ],
     "configuration": {
       "title": "R-AI-OS",
       "properties": {
@@ -65,6 +100,16 @@
           "type": "number",
           "default": 30,
           "description": "Status bar refresh interval (seconds)"
+        },
+        "raios.diagnosticsEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run security diagnostics automatically on file save"
+        },
+        "raios.diagnosticsDebounceMs": {
+          "type": "number",
+          "default": 800,
+          "description": "Debounce delay (ms) before triggering a security scan on save"
         }
       }
     }

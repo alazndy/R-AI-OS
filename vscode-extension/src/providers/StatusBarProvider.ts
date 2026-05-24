@@ -17,7 +17,8 @@ export class StatusBarProvider implements vscode.Disposable {
 
   constructor(
     private readonly client: DaemonClient,
-    private readonly pollIntervalSecs: number
+    private readonly pollIntervalSecs: number,
+    private readonly outputChannel: vscode.OutputChannel
   ) {
     this.item = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
@@ -55,8 +56,9 @@ export class StatusBarProvider implements vscode.Disposable {
       resolveRaiosBinary(),
       ["--json", "health", projectName],
       { timeout: 10000 },
-      (err, stdout) => {
+      (err, stdout, stderr) => {
         if (err || !stdout.trim()) {
+          this.outputChannel.appendLine(`[raios] health refresh error: ${stderr || err?.message}`);
           this.item.text = "$(warning) R-AI-OS";
           return;
         }
@@ -77,6 +79,7 @@ export class StatusBarProvider implements vscode.Disposable {
               ? "$(info)"
               : "$(warning)";
           this.item.text = `${icon} R-AI-OS ${score}/100 (${grade})${dirty}`;
+          this.outputChannel.appendLine(`[raios] health: ${score}/100 (${grade})${dirty}`);
         } catch {
           this.item.text = "$(warning) R-AI-OS";
         }

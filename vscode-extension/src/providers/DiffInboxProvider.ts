@@ -36,6 +36,7 @@ export class DiffInboxProvider implements vscode.Disposable {
   }
 
   private poll(): void {
+    if (!this.client.isConnected) return;
     this.client.sendRaw({ command: "GetPendingDiffs" });
   }
 

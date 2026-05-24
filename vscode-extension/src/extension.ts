@@ -19,8 +19,8 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(outputChannel);
 
   client = new DaemonClient(port);
-  statusBar = new StatusBarProvider(client, pollInterval);
-  const bridge = new CommandBridge(client, outputChannel);
+  statusBar = new StatusBarProvider(client, pollInterval, outputChannel);
+  const bridge = new CommandBridge(client, outputChannel, diagnostics);
   diagnostics = new DiagnosticProvider(outputChannel);
 
   statusBar.activate(context);
