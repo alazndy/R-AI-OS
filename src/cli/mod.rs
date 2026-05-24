@@ -4,6 +4,7 @@ mod git;
 mod health;
 mod instinct;
 mod new;
+mod refactor;
 mod search;
 mod security;
 mod swarm;
@@ -113,6 +114,11 @@ pub enum Commands {
         target: Option<String>,
         #[arg(long)] full: bool,
         #[arg(short, long)] watch: bool,
+    },
+    /// Scan source files for refactor candidates (large files, risky patterns, deep nesting)
+    Refactor {
+        /// Project name or absolute path (omit for current directory)
+        target: Option<String>,
     },
     /// Scaffold a new project following MASTER.md rules
     New {
@@ -346,6 +352,7 @@ pub fn run(cli: Cli) {
             std::process::exit(exit);
         }
         Commands::Security { target, full, watch } => security::cmd_security(target, full, watch, &cfg.dev_ops_path, cli.json),
+        Commands::Refactor { target } => refactor::cmd_refactor(target, &cfg.dev_ops_path, cli.json),
         Commands::New { name, category, github, no_vault } => new::cmd_new(&name, &category, github, no_vault, &cfg.dev_ops_path, cli.json),
         Commands::Task { description, project, agent } => new::cmd_task(&description, project, agent),
         Commands::Bootstrap => new::cmd_bootstrap(),

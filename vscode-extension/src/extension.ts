@@ -5,6 +5,8 @@ import { CommandBridge } from "./commands/CommandBridge";
 import { DiffInboxProvider } from "./providers/DiffInboxProvider";
 import { DiagnosticProvider } from "./providers/DiagnosticProvider";
 import { SecurityDecorationProvider } from "./providers/SecurityDecorationProvider";
+import { RefactorDecorationProvider } from "./providers/RefactorDecorationProvider";
+import { RefactorProvider } from "./providers/RefactorProvider";
 import { JumpToCode } from "./bridge/JumpToCode";
 
 let client: DaemonClient;
@@ -22,17 +24,22 @@ export function activate(context: vscode.ExtensionContext): void {
   client = new DaemonClient(port);
   statusBar = new StatusBarProvider(client, pollInterval, outputChannel);
   diagnostics = new DiagnosticProvider(outputChannel);
-  const decorations = new SecurityDecorationProvider();
-  diagnostics.setDecorationProvider(decorations);
+  const securityDecorations = new SecurityDecorationProvider();
+  diagnostics.setDecorationProvider(securityDecorations);
+  const refactorDecorations = new RefactorDecorationProvider();
+  const refactorProvider = new RefactorProvider(outputChannel, refactorDecorations);
   const bridge = new CommandBridge(client, outputChannel, diagnostics);
 
   statusBar.activate(context);
   bridge.register(context);
   context.subscriptions.push(
-    vscode.window.registerFileDecorationProvider(decorations),
-    decorations
+    vscode.window.registerFileDecorationProvider(securityDecorations),
+    securityDecorations,
+    vscode.window.registerFileDecorationProvider(refactorDecorations),
+    refactorDecorations
   );
   diagnostics.activate(context);
+  refactorProvider.activate(context);
   const diffInbox = new DiffInboxProvider(client);
   diffInbox.activate(context);
   const jumpToCode = new JumpToCode(client);
@@ -44,6 +51,7 @@ export function activate(context: vscode.ExtensionContext): void {
       client.disconnect();
       statusBar.dispose();
       diagnostics.dispose();
+      refactorProvider.dispose();
     },
   });
 
