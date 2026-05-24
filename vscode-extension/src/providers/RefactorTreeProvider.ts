@@ -144,18 +144,11 @@ export class RefactorTreeProvider
 
     const items: RefactorNode[] = [
       makeItem("High line limit", String(cfg.get("highLineThreshold", 500))),
-      makeItem(
-        "Medium line limit",
-        String(cfg.get("mediumLineThreshold", 300))
-      ),
-      makeItem(
-        "High unwrap limit",
-        String(cfg.get("highUnwrapThreshold", 10))
-      ),
-      makeItem(
-        "Medium unwrap limit",
-        String(cfg.get("mediumUnwrapThreshold", 5))
-      ),
+      makeItem("Medium line limit", String(cfg.get("mediumLineThreshold", 300))),
+      makeItem("High unwrap limit", String(cfg.get("highUnwrapThreshold", 10))),
+      makeItem("Medium unwrap limit", String(cfg.get("mediumUnwrapThreshold", 5))),
+      makeItem("High nesting depth", String(cfg.get("highNestingThreshold", 10))),
+      makeItem("Medium nesting depth", String(cfg.get("mediumNestingThreshold", 8))),
     ];
 
     const extRaw = cfg.get<Record<string, unknown>>("extensions", {});

@@ -58,6 +58,10 @@ pub struct RefactorThresholds {
     pub medium_lines: usize,
     pub high_unwrap: usize,
     pub medium_unwrap: usize,
+    /// Nesting depth (leading_spaces / indent_size) to trigger HIGH
+    pub high_nesting: usize,
+    /// Nesting depth to trigger MEDIUM
+    pub medium_nesting: usize,
 }
 
 impl Default for RefactorThresholds {
@@ -67,6 +71,8 @@ impl Default for RefactorThresholds {
             medium_lines: 300,
             high_unwrap: 10,
             medium_unwrap: 5,
+            high_nesting: 10,
+            medium_nesting: 8,
         }
     }
 }
@@ -78,6 +84,8 @@ pub struct PartialThresholds {
     pub medium_lines: Option<usize>,
     pub high_unwrap: Option<usize>,
     pub medium_unwrap: Option<usize>,
+    pub high_nesting: Option<usize>,
+    pub medium_nesting: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -95,6 +103,10 @@ impl RefactorConfig {
             medium_lines: p.and_then(|x| x.medium_lines).unwrap_or(self.defaults.medium_lines),
             high_unwrap: p.and_then(|x| x.high_unwrap).unwrap_or(self.defaults.high_unwrap),
             medium_unwrap: p.and_then(|x| x.medium_unwrap).unwrap_or(self.defaults.medium_unwrap),
+            high_nesting: p.and_then(|x| x.high_nesting).unwrap_or(self.defaults.high_nesting),
+            medium_nesting: p
+                .and_then(|x| x.medium_nesting)
+                .unwrap_or(self.defaults.medium_nesting),
         }
     }
 }
@@ -183,7 +195,7 @@ fn analyze_file(path: &Path, t: &RefactorThresholds) -> Option<RefactorIssue> {
     }
 
     let max_depth = estimate_max_nesting(&content);
-    if max_depth >= 5 {
+    if max_depth >= t.medium_nesting {
         reasons.push(format!("nesting depth ~{}", max_depth));
     }
 
@@ -224,8 +236,11 @@ fn determine_severity(
     max_depth: usize,
     t: &RefactorThresholds,
 ) -> RefactorSeverity {
-    let is_high = lines >= t.high_lines || unwrap_count >= t.high_unwrap || max_depth >= 6;
-    let is_medium = lines >= t.medium_lines || unwrap_count >= t.medium_unwrap || max_depth >= 5;
+    let is_high =
+        lines >= t.high_lines || unwrap_count >= t.high_unwrap || max_depth >= t.high_nesting;
+    let is_medium = lines >= t.medium_lines
+        || unwrap_count >= t.medium_unwrap
+        || max_depth >= t.medium_nesting;
 
     if is_high {
         RefactorSeverity::High
@@ -351,6 +366,24 @@ mod tests {
     fn severity_medium_on_mid_file() {
         let t = RefactorThresholds::default();
         assert_eq!(determine_severity(350, 0, 0, &t), RefactorSeverity::Medium);
+    }
+
+    #[test]
+    fn nesting_depth_6_no_longer_triggers_high() {
+        let t = RefactorThresholds::default();
+        assert_eq!(determine_severity(0, 0, 6, &t), RefactorSeverity::Low);
+    }
+
+    #[test]
+    fn nesting_depth_10_triggers_high() {
+        let t = RefactorThresholds::default();
+        assert_eq!(determine_severity(0, 0, 10, &t), RefactorSeverity::High);
+    }
+
+    #[test]
+    fn nesting_depth_8_triggers_medium() {
+        let t = RefactorThresholds::default();
+        assert_eq!(determine_severity(0, 0, 8, &t), RefactorSeverity::Medium);
     }
 
     #[test]

@@ -22,6 +22,8 @@ pub(super) fn cmd_refactor(
     medium_lines: usize,
     high_unwrap: usize,
     medium_unwrap: usize,
+    high_nesting: usize,
+    medium_nesting: usize,
     ext_config: Option<String>,
 ) {
     let path = super::resolve_project_path(target, dev_ops);
@@ -41,6 +43,8 @@ pub(super) fn cmd_refactor(
             medium_lines,
             high_unwrap,
             medium_unwrap,
+            high_nesting,
+            medium_nesting,
         },
         per_ext,
     };

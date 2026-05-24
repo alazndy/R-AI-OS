@@ -92,6 +92,10 @@ export class RefactorProvider implements vscode.Disposable {
       String(cfg.get<number>("highUnwrapThreshold", 10)),
       "--medium-unwrap",
       String(cfg.get<number>("mediumUnwrapThreshold", 5)),
+      "--high-nesting",
+      String(cfg.get<number>("highNestingThreshold", 10)),
+      "--medium-nesting",
+      String(cfg.get<number>("mediumNestingThreshold", 8)),
     ];
 
     const extRaw = cfg.get<Record<string, unknown>>("extensions", {});

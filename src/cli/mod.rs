@@ -131,6 +131,12 @@ pub enum Commands {
         /// Default risky-pattern count for MEDIUM severity (default: 5)
         #[arg(long, default_value_t = 5)]
         medium_unwrap: usize,
+        /// Default nesting depth threshold for HIGH severity (default: 10)
+        #[arg(long, default_value_t = 10)]
+        high_nesting: usize,
+        /// Default nesting depth threshold for MEDIUM severity (default: 8)
+        #[arg(long, default_value_t = 8)]
+        medium_nesting: usize,
         /// Per-extension threshold overrides as JSON, e.g. '{"rs":{"high_lines":600},"kt":{"high_lines":800}}'
         #[arg(long)]
         ext_config: Option<String>,
@@ -367,8 +373,8 @@ pub fn run(cli: Cli) {
             std::process::exit(exit);
         }
         Commands::Security { target, full, watch } => security::cmd_security(target, full, watch, &cfg.dev_ops_path, cli.json),
-        Commands::Refactor { target, high_lines, medium_lines, high_unwrap, medium_unwrap, ext_config } => {
-            refactor::cmd_refactor(target, &cfg.dev_ops_path, cli.json, high_lines, medium_lines, high_unwrap, medium_unwrap, ext_config)
+        Commands::Refactor { target, high_lines, medium_lines, high_unwrap, medium_unwrap, high_nesting, medium_nesting, ext_config } => {
+            refactor::cmd_refactor(target, &cfg.dev_ops_path, cli.json, high_lines, medium_lines, high_unwrap, medium_unwrap, high_nesting, medium_nesting, ext_config)
         }
         Commands::New { name, category, github, no_vault } => new::cmd_new(&name, &category, github, no_vault, &cfg.dev_ops_path, cli.json),
         Commands::Task { description, project, agent } => new::cmd_task(&description, project, agent),
