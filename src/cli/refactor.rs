@@ -14,6 +14,7 @@ struct RefactorFileIssue {
     reasons: Vec<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn cmd_refactor(
     target: Option<String>,
     dev_ops: &Path,

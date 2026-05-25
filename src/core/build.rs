@@ -11,6 +11,8 @@ pub enum ProjectType {
     Node,
     Python,
     Go,
+    Flutter,
+    Ios,
     Android,
     Unknown,
 }
@@ -22,6 +24,8 @@ impl ProjectType {
             Self::Node => "Node",
             Self::Python => "Python",
             Self::Go => "Go",
+            Self::Flutter => "Flutter",
+            Self::Ios => "iOS",
             Self::Android => "Android",
             Self::Unknown => "Unknown",
         }
@@ -79,6 +83,23 @@ pub fn detect_type(dir: &Path) -> ProjectType {
     if dir.join("go.mod").exists() {
         return ProjectType::Go;
     }
+    // Flutter before iOS: a Flutter project contains an ios/ subfolder with .xcworkspace
+    if dir.join("pubspec.yaml").exists() {
+        return ProjectType::Flutter;
+    }
+    // iOS: .xcodeproj/.xcworkspace at root level, or Package.swift (SPM)
+    if dir.join("Package.swift").exists()
+        || std::fs::read_dir(dir).ok().is_some_and(|entries| {
+            entries.flatten().any(|e| {
+                matches!(
+                    e.path().extension().and_then(|s| s.to_str()),
+                    Some("xcodeproj" | "xcworkspace")
+                )
+            })
+        })
+    {
+        return ProjectType::Ios;
+    }
     if (dir.join("gradlew").exists() || dir.join("gradlew.bat").exists())
         && (dir.join("build.gradle").exists() || dir.join("settings.gradle").exists())
     {
@@ -95,6 +116,17 @@ pub fn build(dir: &Path) -> BuildResult {
         ProjectType::Node => build_node(dir),
         ProjectType::Python => build_python(dir),
         ProjectType::Go => build_go(dir),
+        ProjectType::Flutter => build_flutter(dir),
+        ProjectType::Ios => BuildResult {
+            ok: false,
+            project_type: "iOS".into(),
+            command: "xcodebuild".into(),
+            duration_ms: 0,
+            warnings: 0,
+            errors: 1,
+            diagnostics: vec![],
+            raw_output: "iOS support not yet implemented (see 2026-05-22-ios-xcode-support.md)".into(),
+        },
         ProjectType::Android => build_android(dir),
         ProjectType::Unknown => BuildResult {
             ok: false,
@@ -262,6 +294,18 @@ pub fn test(dir: &Path) -> TestResult {
         ProjectType::Node => test_node(dir),
         ProjectType::Python => test_python(dir),
         ProjectType::Go => test_go(dir),
+        ProjectType::Flutter => test_flutter(dir),
+        ProjectType::Ios => TestResult {
+            ok: false,
+            project_type: "iOS".into(),
+            command: "xcodebuild test".into(),
+            duration_ms: 0,
+            passed: 0,
+            failed: 0,
+            ignored: 0,
+            failures: vec!["iOS support not yet implemented".into()],
+            raw_output: String::new(),
+        },
         ProjectType::Android => test_android_unit(dir),
         ProjectType::Unknown => TestResult {
             ok: false,
@@ -543,6 +587,126 @@ fn failed_test(ptype: &str, cmd: &str, elapsed: Duration, msg: String) -> TestRe
         ignored: 0,
         failures: vec![msg.clone()],
         raw_output: msg,
+    }
+}
+
+// ─── Flutter ─────────────────────────────────────────────────────────────────
+
+fn parse_flutter_build_output(output: &str) -> (bool, usize) {
+    let ok = output.contains("Built build/")
+        || output.contains("Build complete!")
+        || output.contains("Succeeded after");
+    let errors = if !ok
+        && (output.contains("Error:") || output.contains("error:") || output.contains("Failed"))
+    {
+        output
+            .lines()
+            .filter(|l| l.trim_start().starts_with("Error:") || l.contains(": error:"))
+            .count()
+            .max(1)
+    } else {
+        0
+    };
+    (ok, errors)
+}
+
+fn parse_flutter_test_output(output: &str) -> (usize, usize) {
+    // Lines look like: "00:05 +38 -3: Some tests failed." or "00:03 +42: All tests passed!"
+    for line in output.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.len() > 6 && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            let rest = trimmed.split_once(' ').map(|x| x.1).unwrap_or("");
+            let passed = rest
+                .split_whitespace()
+                .find(|w| w.starts_with('+'))
+                .and_then(|w| w[1..].trim_end_matches(':').parse::<usize>().ok())
+                .unwrap_or(0);
+            let failed = rest
+                .split_whitespace()
+                .find(|w| w.starts_with('-'))
+                .and_then(|w| w[1..].trim_end_matches(':').parse::<usize>().ok())
+                .unwrap_or(0);
+            if passed > 0 || failed > 0 {
+                return (passed, failed);
+            }
+        }
+    }
+    (0, 0)
+}
+
+fn build_flutter_impl(dir: &Path, args: &[&str]) -> BuildResult {
+    let cmd_str = format!("flutter {}", args.join(" "));
+    let start = Instant::now();
+    let output = Command::new("flutter").args(args).current_dir(dir).output();
+    let elapsed = start.elapsed();
+
+    match output {
+        Err(e) => failed_result("Flutter", &cmd_str, elapsed, e.to_string()),
+        Ok(o) => {
+            let raw = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let (ok, errors) = parse_flutter_build_output(&raw);
+            let ok = ok && o.status.success();
+            BuildResult {
+                ok,
+                project_type: "Flutter".into(),
+                command: cmd_str,
+                duration_ms: elapsed.as_millis() as u64,
+                warnings: raw.lines().filter(|l| l.contains("Warning:")).count(),
+                errors,
+                diagnostics: vec![],
+                raw_output: raw,
+            }
+        }
+    }
+}
+
+pub fn build_flutter(dir: &Path) -> BuildResult {
+    build_flutter_impl(dir, &["build", "apk"])
+}
+
+pub fn build_flutter_release(dir: &Path) -> BuildResult {
+    build_flutter_impl(dir, &["build", "apk", "--release"])
+}
+
+pub fn build_flutter_check(dir: &Path) -> BuildResult {
+    build_flutter_impl(dir, &["analyze"])
+}
+
+pub fn test_flutter(dir: &Path) -> TestResult {
+    let cmd_str = "flutter test";
+    let start = Instant::now();
+    let output = Command::new("flutter").args(["test"]).current_dir(dir).output();
+    let elapsed = start.elapsed();
+
+    match output {
+        Err(e) => failed_test("Flutter", cmd_str, elapsed, e.to_string()),
+        Ok(o) => {
+            let raw = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let (passed, failed) = parse_flutter_test_output(&raw);
+            TestResult {
+                ok: o.status.success(),
+                project_type: "Flutter".into(),
+                command: cmd_str.into(),
+                duration_ms: elapsed.as_millis() as u64,
+                passed,
+                failed,
+                ignored: 0,
+                failures: raw
+                    .lines()
+                    .filter(|l| l.contains("FAILED") || l.contains("✗"))
+                    .map(|l| l.trim().to_string())
+                    .collect(),
+                raw_output: raw,
+            }
+        }
     }
 }
 
@@ -839,6 +1003,68 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::File::create(tmp.path().join("gradlew")).unwrap();
         assert_eq!(detect_type(tmp.path()), ProjectType::Unknown);
+    }
+
+    #[test]
+    fn detect_flutter_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("pubspec.yaml"), "name: myapp\nversion: 1.0.0+1\n").unwrap();
+        assert_eq!(detect_type(tmp.path()), ProjectType::Flutter);
+    }
+
+    #[test]
+    fn flutter_takes_priority_over_ios_subfolder() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("pubspec.yaml"), "name: myapp\n").unwrap();
+        std::fs::create_dir_all(tmp.path().join("ios/Runner.xcworkspace")).unwrap();
+        assert_eq!(detect_type(tmp.path()), ProjectType::Flutter);
+    }
+
+    #[test]
+    fn node_takes_priority_over_flutter() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), "{\"name\":\"x\"}").unwrap();
+        std::fs::write(tmp.path().join("pubspec.yaml"), "name: myapp\n").unwrap();
+        assert_eq!(detect_type(tmp.path()), ProjectType::Node);
+    }
+
+    #[test]
+    fn parse_flutter_build_success() {
+        let output = "Running Gradle task 'assembleRelease'...\nBuilt build/app/outputs/apk/release/app-release.apk (7.4MB)";
+        let (ok, errors) = parse_flutter_build_output(output);
+        assert!(ok);
+        assert_eq!(errors, 0);
+    }
+
+    #[test]
+    fn parse_flutter_build_failure() {
+        let output = "Error: A JDK was not found.\nFailed to execute gradle";
+        let (ok, errors) = parse_flutter_build_output(output);
+        assert!(!ok);
+        assert!(errors >= 1);
+    }
+
+    #[test]
+    fn parse_flutter_test_all_pass() {
+        let output = "00:03 +42: All tests passed!\n";
+        let (passed, failed) = parse_flutter_test_output(output);
+        assert_eq!(passed, 42);
+        assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn parse_flutter_test_partial_failure() {
+        let output = "00:05 +38 -3: Some tests failed.\n";
+        let (passed, failed) = parse_flutter_test_output(output);
+        assert_eq!(passed, 38);
+        assert_eq!(failed, 3);
+    }
+
+    #[test]
+    fn parse_flutter_test_empty_output() {
+        let (passed, failed) = parse_flutter_test_output("");
+        assert_eq!(passed, 0);
+        assert_eq!(failed, 0);
     }
 
     #[test]

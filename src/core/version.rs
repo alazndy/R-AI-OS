@@ -167,6 +167,9 @@ fn read_version(dir: &Path) -> Option<(String, String, String)> {
     if let Some(v) = read_pyproject_version(dir) {
         return Some((v, "Python".into(), "pyproject.toml".into()));
     }
+    if let Some((v, _build)) = read_flutter_version(dir) {
+        return Some((v, "Flutter".into(), "pubspec.yaml".into()));
+    }
     if let Some((name, _code)) = read_android_version(dir) {
         return Some((name, "Android".into(), "app/build.gradle".into()));
     }
@@ -244,6 +247,60 @@ fn parse_version_code(content: &str) -> Option<u64> {
     None
 }
 
+/// Read (semver, build_number) from pubspec.yaml.
+/// Format: `version: 1.2.3+7` — strips the `+N` build suffix for the semver component.
+fn read_flutter_version(dir: &Path) -> Option<(String, u64)> {
+    let content = std::fs::read_to_string(dir.join("pubspec.yaml")).ok()?;
+    parse_pubspec_version(&content)
+}
+
+fn parse_pubspec_version(content: &str) -> Option<(String, u64)> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("version:") {
+            let val = trimmed
+                .trim_start_matches("version:")
+                .trim()
+                .trim_matches(|c| c == '\'' || c == '"');
+            if let Some(plus_pos) = val.find('+') {
+                let semver = &val[..plus_pos];
+                let build: u64 = val[plus_pos + 1..].parse().unwrap_or(0);
+                if looks_like_semver(semver) {
+                    return Some((semver.to_string(), build));
+                }
+            } else if looks_like_semver(val) {
+                return Some((val.to_string(), 0));
+            }
+        }
+    }
+    None
+}
+
+/// Write new version into pubspec.yaml, incrementing the build number.
+pub(crate) fn write_flutter_version(dir: &Path, new_version: &str, new_build: u64) -> Result<(), String> {
+    let path = dir.join("pubspec.yaml");
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let updated: String = content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("version:") {
+                let indent = &line[..line.len() - line.trim_start().len()];
+                format!("{indent}version: {new_version}+{new_build}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let final_content = if content.ends_with('\n') {
+        format!("{updated}\n")
+    } else {
+        updated
+    };
+    std::fs::write(&path, final_content).map_err(|e| e.to_string())
+}
+
 /// Write new versionName and versionCode into app/build.gradle (line-by-line replacement).
 pub(crate) fn write_android_version(dir: &Path, new_name: &str, new_code: u64) -> Result<(), String> {
     let path = dir.join("app").join("build.gradle");
@@ -274,6 +331,14 @@ pub(crate) fn write_android_version(dir: &Path, new_name: &str, new_code: u64) -
 }
 
 fn write_version(path: &Path, project_type: &str, old: &str, new: &str) -> Result<(), String> {
+    if project_type == "Flutter" {
+        let dir = path
+            .parent()
+            .ok_or_else(|| "Cannot resolve project dir from pubspec.yaml".to_string())?;
+        let (_, old_build) = read_flutter_version(dir)
+            .ok_or_else(|| "Cannot read current build number from pubspec.yaml".to_string())?;
+        return write_flutter_version(dir, new, old_build + 1);
+    }
     if project_type == "Android" {
         // path is app/build.gradle; dir is path.parent().parent()
         let dir = path
@@ -534,5 +599,57 @@ mod tests {
         assert_eq!(BumpType::parse("patch"), Some(BumpType::Patch));
         assert_eq!(BumpType::parse("MINOR"), Some(BumpType::Minor));
         assert_eq!(BumpType::parse("xyz"), None);
+    }
+
+    #[test]
+    fn parse_pubspec_version_with_build_number() {
+        let content = "name: my_app\nversion: 2.3.1+7\ndescription: test\n";
+        let (semver, build) = parse_pubspec_version(content).unwrap();
+        assert_eq!(semver, "2.3.1");
+        assert_eq!(build, 7);
+    }
+
+    #[test]
+    fn parse_pubspec_version_without_build_number() {
+        let content = "name: my_app\nversion: 1.0.0\n";
+        let (semver, build) = parse_pubspec_version(content).unwrap();
+        assert_eq!(semver, "1.0.0");
+        assert_eq!(build, 0);
+    }
+
+    #[test]
+    fn parse_pubspec_version_invalid_returns_none() {
+        assert!(parse_pubspec_version("name: my_app\n").is_none());
+        assert!(parse_pubspec_version("version: not-semver+1\n").is_none());
+        assert!(parse_pubspec_version("version: 1.2\n").is_none());
+    }
+
+    #[test]
+    fn write_flutter_version_updates_version_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("pubspec.yaml"),
+            "name: my_app\nversion: 1.0.0+1\nsdkVersion: '>=3.0.0'\n",
+        )
+        .unwrap();
+        write_flutter_version(tmp.path(), "1.0.1", 2).unwrap();
+        let content = fs::read_to_string(tmp.path().join("pubspec.yaml")).unwrap();
+        assert!(content.contains("version: 1.0.1+2"), "version not updated: {content}");
+    }
+
+    #[test]
+    fn write_flutter_version_preserves_other_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("pubspec.yaml"),
+            "name: my_app\nversion: 2.0.0+5\ndescription: a flutter app\nenvironment:\n  sdk: '>=3.0.0'\n",
+        )
+        .unwrap();
+        write_flutter_version(tmp.path(), "2.1.0", 6).unwrap();
+        let content = fs::read_to_string(tmp.path().join("pubspec.yaml")).unwrap();
+        assert!(content.contains("name: my_app"));
+        assert!(content.contains("description: a flutter app"));
+        assert!(content.contains("sdk: '>=3.0.0'"));
+        assert!(content.contains("version: 2.1.0+6"));
     }
 }
