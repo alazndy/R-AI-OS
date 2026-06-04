@@ -24,7 +24,11 @@ pub struct Cli {
     pub command: Option<Commands>,
     #[arg(short, long, global = true)]
     pub json: bool,
+    /// Quick scan of the current directory for refactor candidates
+    #[arg(long)]
+    pub refactor: bool,
 }
+
 
 #[derive(Subcommand)]
 pub enum InstinctCmd {
@@ -235,6 +239,13 @@ pub enum Commands {
         #[command(subcommand)]
         action: EvolveAction,
     },
+    /// Verify the integrity of the audit ledger hash chain (tamper detection)
+    #[command(name = "verify-chain")]
+    VerifyChain {
+        /// Show last N entries before the result
+        #[arg(short = 'n', long, default_value = "0")]
+        last: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -400,5 +411,23 @@ pub fn run(cli: Cli) {
         Commands::Swarm { action } => swarm::cmd_swarm(action, cli.json),
         Commands::Route { query } => swarm::cmd_route(&query, cli.json),
         Commands::Evolve { action } => swarm::cmd_evolve(action, cli.json),
+        Commands::VerifyChain { last } => security::cmd_verify_chain(last, cli.json),
     }
 }
+
+pub fn run_refactor_flag(json: bool) {
+    let dev_ops_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    refactor::cmd_refactor(
+        None, // Target is None to check the current directory
+        &dev_ops_path,
+        json,
+        500, // high_lines
+        300, // medium_lines
+        10,  // high_unwrap
+        5,   // medium_unwrap
+        10,  // high_nesting
+        8,   // medium_nesting
+        None // ext_config
+    );
+}
+

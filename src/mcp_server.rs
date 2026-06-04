@@ -603,6 +603,34 @@ impl McpServer {
         let name = params["name"].as_str().ok_or("missing tool name")?;
         let args = &params["arguments"];
 
+        // ─── Policy gate + Audit log ──────────────────────────────────────────
+        if let Some(policy) = crate::security::PolicyConfig::try_load_default() {
+            match policy.validate_tool_call(name) {
+                Ok(()) => {
+                    // Record allowed tool call to the audit ledger
+                    if let Ok(conn) = crate::db::open_db() {
+                        let _ = crate::security::record_audit_event(
+                            &conn, "tool_call", "mcp", name,
+                        );
+                    }
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    // Record the denial before rejecting
+                    if let Ok(conn) = crate::db::open_db() {
+                        let _ = crate::security::record_audit_event(
+                            &conn,
+                            if msg.starts_with("confirm:") { "tool_confirm_block" } else { "tool_deny" },
+                            "policy",
+                            &format!("{}: {}", name, msg),
+                        );
+                    }
+                    return Err(format!("Security policy rejected tool '{}': {}", name, msg));
+                }
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         match name {
             "update_state" => self.tool_update_state(args),
             "handover" => self.tool_handover(args),
@@ -1522,20 +1550,32 @@ impl McpServer {
     fn resolve_git_path(&self, args: &Value) -> Result<std::path::PathBuf, String> {
         let project = args["project"].as_str().ok_or("missing project")?;
         let direct = std::path::Path::new(project);
-        if direct.exists() {
-            return Ok(direct.to_path_buf());
-        }
-        if let Ok(conn) = crate::db::open_db() {
+
+        let resolved = if direct.exists() {
+            direct.to_path_buf()
+        } else if let Ok(conn) = crate::db::open_db() {
             if let Ok(projects) = crate::db::load_all_projects(&conn) {
-                if let Some(found) = projects
-                    .iter()
+                projects
+                    .into_iter()
                     .find(|p| p.name.to_lowercase().contains(&project.to_lowercase()))
-                {
-                    return Ok(std::path::PathBuf::from(&found.path));
-                }
+                    .map(|p| std::path::PathBuf::from(&p.path))
+                    .ok_or_else(|| format!("Project not found: {}", project))?
+            } else {
+                return Err(format!("Project not found: {}", project));
             }
+        } else {
+            return Err(format!("Project not found: {}", project));
+        };
+
+        // ─── Sandbox: project paths must live inside dev_ops ──────────────────
+        if crate::security::is_path_safe(&resolved, &self.config.dev_ops_path) {
+            Ok(resolved)
+        } else {
+            Err(format!(
+                "Security Denied: project path {:?} is outside the allowed workspace {:?}",
+                resolved, self.config.dev_ops_path
+            ))
         }
-        Err(format!("Project not found: {}", project))
     }
 
     fn tool_git_status(&self, args: &Value) -> Result<Value, String> {

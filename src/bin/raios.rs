@@ -19,6 +19,11 @@ use crate::cli::Cli;
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    if cli.refactor {
+        cli::run_refactor_flag(cli.json);
+        return Ok(());
+    }
+
     if cli.command.is_some() {
         cli::run(cli);
         return Ok(());
@@ -26,6 +31,7 @@ fn main() -> Result<()> {
 
     run_tui()
 }
+
 
 fn run_tui() -> Result<()> {
     enable_raw_mode()?;

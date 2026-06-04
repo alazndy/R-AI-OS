@@ -258,3 +258,61 @@ fn print_license_report(report: &LicenseReport) {
     }
     println!();
 }
+
+// ─── verify-chain ─────────────────────────────────────────────────────────────
+
+pub(super) fn cmd_verify_chain(last: usize, json: bool) {
+    let conn = match crate::db::open_db() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to open database: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Optionally show the last N entries before verification
+    if last > 0 {
+        match conn.prepare(
+            "SELECT id, timestamp, event_type, actor, data FROM audit_log ORDER BY id DESC LIMIT ?1",
+        ) {
+            Ok(mut stmt) => {
+                if let Ok(rows) = stmt.query_map([last as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                }) {
+                    let entries: Vec<_> = rows.flatten().collect();
+                    println!("Last {} audit entries:", last);
+                    for (id, ts, ev, actor, data) in entries.iter().rev() {
+                        println!("  [{id}] {ts} | {ev} | {actor} | {}", data.chars().take(60).collect::<String>());
+                    }
+                    println!();
+                }
+            }
+            Err(e) => eprintln!("Warning: could not read entries: {}", e),
+        }
+    }
+
+    match crate::security::verify_chain(&conn) {
+        Ok(n) => {
+            if json {
+                println!("{{\"status\":\"ok\",\"entries_verified\":{}}}", n);
+            } else {
+                println!("✅ Audit chain OK — {} entries verified, no tampering detected.", n);
+            }
+        }
+        Err(e) => {
+            if json {
+                println!("{{\"status\":\"broken\",\"error\":{:?}}}", e.to_string());
+            } else {
+                eprintln!("❌ Audit chain BROKEN: {}", e);
+            }
+            std::process::exit(2);
+        }
+    }
+}
+

@@ -181,6 +181,23 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_swarm_status ON swarm_tasks(status);
         ",
     )?;
+
+    // ─── Audit Ledger (Faz 3: Hash-Chain Tamper Detection) ────────────────────
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp  TEXT    NOT NULL DEFAULT (datetime('now','utc')),
+            event_type TEXT    NOT NULL,
+            actor      TEXT    NOT NULL DEFAULT 'raios',
+            data       TEXT    NOT NULL DEFAULT '',
+            prev_hash  TEXT    NOT NULL DEFAULT '',
+            hash       TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(timestamp);
+        ",
+    )?;
+
     Ok(())
 }
 
