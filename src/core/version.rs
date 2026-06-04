@@ -170,6 +170,9 @@ fn read_version(dir: &Path) -> Option<(String, String, String)> {
     if let Some((v, _build)) = read_flutter_version(dir) {
         return Some((v, "Flutter".into(), "pubspec.yaml".into()));
     }
+    if let Some(v) = read_ios_version(dir) {
+        return Some((v, "iOS".into(), "Info.plist".into()));
+    }
     if let Some((name, _code)) = read_android_version(dir) {
         return Some((name, "Android".into(), "app/build.gradle".into()));
     }
@@ -301,6 +304,65 @@ pub(crate) fn write_flutter_version(dir: &Path, new_version: &str, new_build: u6
     std::fs::write(&path, final_content).map_err(|e| e.to_string())
 }
 
+/// Read CFBundleShortVersionString from Info.plist (checks common locations).
+pub(crate) fn read_ios_version(dir: &Path) -> Option<String> {
+    for candidate in &["Info.plist", "Sources/Info.plist", "App/Info.plist", "Resources/Info.plist"] {
+        if let Ok(content) = std::fs::read_to_string(dir.join(candidate)) {
+            if let Some(v) = extract_plist_key(&content, "CFBundleShortVersionString") {
+                if looks_like_semver(&v) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn extract_plist_key(content: &str, key: &str) -> Option<String> {
+    let key_tag = format!("<key>{}</key>", key);
+    let mut lines = content.lines();
+    while let Some(line) = lines.next() {
+        if line.trim() == key_tag {
+            if let Some(value_line) = lines.next() {
+                let trimmed = value_line.trim();
+                if trimmed.starts_with("<string>") && trimmed.ends_with("</string>") {
+                    return Some(
+                        trimmed
+                            .trim_start_matches("<string>")
+                            .trim_end_matches("</string>")
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Update CFBundleShortVersionString in Info.plist.
+pub(crate) fn write_ios_version(dir: &Path, old_version: &str, new_version: &str) -> Result<(), String> {
+    for candidate in &["Info.plist", "Sources/Info.plist", "App/Info.plist"] {
+        let path = dir.join(candidate);
+        if !path.exists() {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        if !content.contains(&format!("<string>{}</string>", old_version)) {
+            continue;
+        }
+        let updated = content.replace(
+            &format!("<string>{}</string>", old_version),
+            &format!("<string>{}</string>", new_version),
+        );
+        std::fs::write(&path, updated).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    Err(format!(
+        "Info.plist with version {} not found in expected locations",
+        old_version
+    ))
+}
+
 /// Write new versionName and versionCode into app/build.gradle (line-by-line replacement).
 pub(crate) fn write_android_version(dir: &Path, new_name: &str, new_code: u64) -> Result<(), String> {
     let path = dir.join("app").join("build.gradle");
@@ -338,6 +400,12 @@ fn write_version(path: &Path, project_type: &str, old: &str, new: &str) -> Resul
         let (_, old_build) = read_flutter_version(dir)
             .ok_or_else(|| "Cannot read current build number from pubspec.yaml".to_string())?;
         return write_flutter_version(dir, new, old_build + 1);
+    }
+    if project_type == "iOS" {
+        let dir = path
+            .parent()
+            .ok_or_else(|| "Cannot resolve project dir from Info.plist".to_string())?;
+        return write_ios_version(dir, old, new);
     }
     if project_type == "Android" {
         // path is app/build.gradle; dir is path.parent().parent()
@@ -635,6 +703,51 @@ mod tests {
         write_flutter_version(tmp.path(), "1.0.1", 2).unwrap();
         let content = fs::read_to_string(tmp.path().join("pubspec.yaml")).unwrap();
         assert!(content.contains("version: 1.0.1+2"), "version not updated: {content}");
+    }
+
+    #[test]
+    fn extract_plist_key_finds_value() {
+        let content = "<key>CFBundleShortVersionString</key>\n<string>1.2.3</string>";
+        assert_eq!(
+            extract_plist_key(content, "CFBundleShortVersionString"),
+            Some("1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_plist_key_returns_none_for_missing_key() {
+        let content = "<key>OtherKey</key>\n<string>value</string>";
+        assert_eq!(extract_plist_key(content, "CFBundleShortVersionString"), None);
+    }
+
+    #[test]
+    fn read_ios_version_from_info_plist() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("Info.plist"),
+            "<?xml version=\"1.0\"?>\n<plist version=\"1.0\">\n<dict>\n<key>CFBundleShortVersionString</key>\n<string>2.4.1</string>\n</dict>\n</plist>",
+        ).unwrap();
+        assert_eq!(read_ios_version(tmp.path()), Some("2.4.1".to_string()));
+    }
+
+    #[test]
+    fn write_ios_version_updates_plist() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("Info.plist"),
+            "<key>CFBundleShortVersionString</key>\n<string>1.0.0</string>\n",
+        ).unwrap();
+        write_ios_version(tmp.path(), "1.0.0", "1.0.1").unwrap();
+        let content = fs::read_to_string(tmp.path().join("Info.plist")).unwrap();
+        assert!(content.contains("<string>1.0.1</string>"), "not updated: {content}");
+        assert!(!content.contains("<string>1.0.0</string>"), "old version still present");
+    }
+
+    #[test]
+    fn write_ios_version_missing_plist_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = write_ios_version(tmp.path(), "1.0.0", "1.0.1");
+        assert!(result.is_err());
     }
 
     #[test]
