@@ -281,3 +281,75 @@ fn parse_gradle_test_build_failed_no_results() {
     assert_eq!(passed, 0);
     assert_eq!(failed, 0);
 }
+
+#[test]
+fn detect_esp_idf_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::File::create(tmp.path().join("idf.py")).unwrap();
+    std::fs::File::create(tmp.path().join("CMakeLists.txt")).unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Embedded);
+}
+
+#[test]
+fn detect_platformio_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("platformio.ini"),
+        "[env:esp32dev]\nplatform = espressif32\n",
+    )
+    .unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Embedded);
+}
+
+#[test]
+fn detect_arduino_ino_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("mysketch.ino"), "void setup() {}\nvoid loop() {}\n").unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Embedded);
+}
+
+#[test]
+fn android_takes_priority_over_embedded() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::File::create(tmp.path().join("gradlew")).unwrap();
+    std::fs::File::create(tmp.path().join("build.gradle")).unwrap();
+    std::fs::File::create(tmp.path().join("idf.py")).unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Android);
+}
+
+#[test]
+fn detect_terraform_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("main.tf"),
+        "terraform {\n  required_version = \">= 1.5\"\n}\n",
+    )
+    .unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Iac);
+}
+
+#[test]
+fn detect_docker_compose_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("docker-compose.yml"),
+        "version: \"3.8\"\nservices:\n  app:\n    image: nginx\n",
+    )
+    .unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Iac);
+}
+
+#[test]
+fn detect_dockerfile_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("Dockerfile"), "FROM ubuntu:22.04\n").unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Iac);
+}
+
+#[test]
+fn embedded_takes_priority_over_dockerfile() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("platformio.ini"), "[env:esp32dev]\n").unwrap();
+    std::fs::write(tmp.path().join("Dockerfile"), "FROM ubuntu\n").unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Embedded);
+}

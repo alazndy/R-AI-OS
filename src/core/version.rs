@@ -176,6 +176,9 @@ fn read_version(dir: &Path) -> Option<(String, String, String)> {
     if let Some(v) = read_embedded_version(dir) {
         return Some((v, "Embedded".into(), "version.h / CMakeLists.txt".into()));
     }
+    if let Some(v) = read_iac_version(dir) {
+        return Some((v, "IaC".into(), "main.tf / docker-compose.yml".into()));
+    }
     if let Some((name, _code)) = read_android_version(dir) {
         return Some((name, "Android".into(), "app/build.gradle".into()));
     }
@@ -210,6 +213,47 @@ fn read_pyproject_version(dir: &Path) -> Option<String> {
             let val = line.split('=').nth(1)?.trim().trim_matches('"').to_string();
             if looks_like_semver(&val) {
                 return Some(val);
+            }
+        }
+    }
+    None
+}
+
+/// Read version from IaC projects: required_version from *.tf, or version: from docker-compose.yml.
+pub(crate) fn read_iac_version(dir: &Path) -> Option<String> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("tf") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    for line in content.lines() {
+                        let t = line.trim();
+                        if t.starts_with("required_version") && t.contains('=') {
+                            let val = t.split_once('=').map(|x| x.1).unwrap_or("").trim().trim_matches('"');
+                            let version = val.split_whitespace().last().unwrap_or("").trim_matches('"');
+                            if looks_like_semver(version) {
+                                return Some(version.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(content) = std::fs::read_to_string(dir.join("docker-compose.yml"))
+        .or_else(|_| std::fs::read_to_string(dir.join("docker-compose.yaml")))
+    {
+        for line in content.lines() {
+            let t = line.trim();
+            if t.starts_with("version:") {
+                let val = t
+                    .trim_start_matches("version:")
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'');
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
             }
         }
     }
@@ -795,6 +839,26 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = write_ios_version(tmp.path(), "1.0.0", "1.0.1");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_iac_version_from_terraform_required_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("main.tf"),
+            "terraform {\n  required_version = \">= 1.7.0\"\n}\n",
+        ).unwrap();
+        assert_eq!(read_iac_version(tmp.path()), Some("1.7.0".to_string()));
+    }
+
+    #[test]
+    fn read_iac_version_from_docker_compose() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("docker-compose.yml"),
+            "version: \"3.8\"\nservices:\n  app:\n    image: nginx\n",
+        ).unwrap();
+        assert_eq!(read_iac_version(tmp.path()), Some("3.8".to_string()));
     }
 
     #[test]
