@@ -9,12 +9,14 @@ pub mod go;
 pub mod flutter;
 pub mod ios;
 pub mod android;
+pub mod embedded;
 
 // Re-exports
 pub use common::{BuildDiagnostic, BuildResult, TestResult};
 pub use flutter::{build_flutter, build_flutter_release, build_flutter_check, test_flutter};
 pub use ios::{build_ios, build_ios_release, build_ios_check, test_ios};
 pub use android::{build_android, build_android_release, build_android_check, test_android_unit, test_android_instrumented};
+pub use embedded::{build_embedded, test_embedded, detect_embedded_kind, EmbeddedKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectType {
@@ -25,6 +27,7 @@ pub enum ProjectType {
     Flutter,
     Ios,
     Android,
+    Embedded,
     Unknown,
 }
 
@@ -38,6 +41,7 @@ impl ProjectType {
             Self::Flutter => "Flutter",
             Self::Ios => "iOS",
             Self::Android => "Android",
+            Self::Embedded => "Embedded",
             Self::Unknown => "Unknown",
         }
     }
@@ -79,6 +83,9 @@ pub fn detect_type(dir: &Path) -> ProjectType {
     {
         return ProjectType::Android;
     }
+    if embedded::detect_embedded_kind(dir).is_some() {
+        return ProjectType::Embedded;
+    }
     ProjectType::Unknown
 }
 
@@ -91,6 +98,7 @@ pub fn build(dir: &Path) -> BuildResult {
         ProjectType::Flutter => build_flutter(dir),
         ProjectType::Ios => build_ios(dir),
         ProjectType::Android => build_android(dir),
+        ProjectType::Embedded => build_embedded(dir),
         ProjectType::Unknown => BuildResult {
             ok: false,
             project_type: "Unknown".into(),
@@ -115,6 +123,7 @@ pub fn test(dir: &Path) -> TestResult {
         ProjectType::Flutter => test_flutter(dir),
         ProjectType::Ios => test_ios(dir),
         ProjectType::Android => android::test_android_unit(dir),
+        ProjectType::Embedded => test_embedded(dir),
         ProjectType::Unknown => TestResult {
             ok: false,
             project_type: "Unknown".into(),

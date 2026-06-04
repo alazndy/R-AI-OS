@@ -173,6 +173,9 @@ fn read_version(dir: &Path) -> Option<(String, String, String)> {
     if let Some(v) = read_ios_version(dir) {
         return Some((v, "iOS".into(), "Info.plist".into()));
     }
+    if let Some(v) = read_embedded_version(dir) {
+        return Some((v, "Embedded".into(), "version.h / CMakeLists.txt".into()));
+    }
     if let Some((name, _code)) = read_android_version(dir) {
         return Some((name, "Android".into(), "app/build.gradle".into()));
     }
@@ -207,6 +210,50 @@ fn read_pyproject_version(dir: &Path) -> Option<String> {
             let val = line.split('=').nth(1)?.trim().trim_matches('"').to_string();
             if looks_like_semver(&val) {
                 return Some(val);
+            }
+        }
+    }
+    None
+}
+
+/// Read version from embedded projects: version.h (#define APP_VERSION), CMakeLists.txt (VERSION), platformio.ini.
+pub(crate) fn read_embedded_version(dir: &Path) -> Option<String> {
+    for candidate in &["version.h", "src/version.h", "main/version.h", "include/version.h"] {
+        if let Ok(content) = std::fs::read_to_string(dir.join(candidate)) {
+            for line in content.lines() {
+                let t = line.trim();
+                if t.starts_with("#define") && (t.contains("VERSION") || t.contains("version")) {
+                    let parts: Vec<&str> = t.splitn(3, ' ').collect();
+                    if parts.len() == 3 {
+                        let val = parts[2].trim().trim_matches('"').trim_matches('\'');
+                        if looks_like_semver(val) {
+                            return Some(val.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(content) = std::fs::read_to_string(dir.join("CMakeLists.txt")) {
+        for line in content.lines() {
+            let t = line.trim();
+            if t.starts_with("project(") && t.contains("VERSION") {
+                let after = t.split("VERSION").nth(1).unwrap_or("").trim();
+                let version = after.split([' ', ')', '\n']).next().unwrap_or("").trim();
+                if looks_like_semver(version) {
+                    return Some(version.to_string());
+                }
+            }
+        }
+    }
+    if let Ok(content) = std::fs::read_to_string(dir.join("platformio.ini")) {
+        for line in content.lines() {
+            let t = line.trim();
+            if t.starts_with("version") && t.contains('=') {
+                let val = t.split('=').nth(1).unwrap_or("").trim().trim_matches('"');
+                if looks_like_semver(val) {
+                    return Some(val.to_string());
+                }
             }
         }
     }
@@ -748,6 +795,40 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = write_ios_version(tmp.path(), "1.0.0", "1.0.1");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_embedded_version_from_version_h() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("main")).unwrap();
+        fs::write(
+            tmp.path().join("main/version.h"),
+            "#pragma once\n#define APP_VERSION \"1.3.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(read_embedded_version(tmp.path()), Some("1.3.0".to_string()));
+    }
+
+    #[test]
+    fn read_embedded_version_from_cmake() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("CMakeLists.txt"),
+            "cmake_minimum_required(VERSION 3.16)\nproject(my_app VERSION 2.0.1)\n",
+        )
+        .unwrap();
+        assert_eq!(read_embedded_version(tmp.path()), Some("2.0.1".to_string()));
+    }
+
+    #[test]
+    fn read_embedded_version_from_platformio_ini() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("platformio.ini"),
+            "[env:esp32dev]\nplatform = espressif32\nversion = 0.4.2\n",
+        )
+        .unwrap();
+        assert_eq!(read_embedded_version(tmp.path()), Some("0.4.2".to_string()));
     }
 
     #[test]

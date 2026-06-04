@@ -8,6 +8,7 @@ pub mod go;
 pub mod flutter;
 pub mod ios;
 pub mod android;
+pub mod embedded;
 
 pub use common::{OutdatedDep, CveIssue, DepsReport};
 
@@ -23,6 +24,7 @@ pub fn check(dir: &Path) -> DepsReport {
         ProjectType::Flutter => flutter::check_flutter(dir),
         ProjectType::Ios => ios::check_ios(dir),
         ProjectType::Android => android::check_android(dir),
+        ProjectType::Embedded => embedded::check_embedded(dir),
         ProjectType::Unknown => {
             let mut r = DepsReport::empty("Unknown");
             r.tool_missing.push("Cannot detect project type".into());
