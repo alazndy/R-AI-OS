@@ -11,6 +11,8 @@ pub mod ios;
 pub mod android;
 pub mod embedded;
 pub mod iac;
+pub mod dotnet;
+pub mod cpp;
 
 // Re-exports
 pub use common::{BuildDiagnostic, BuildResult, TestResult};
@@ -19,6 +21,8 @@ pub use ios::{build_ios, build_ios_release, build_ios_check, test_ios};
 pub use android::{build_android, build_android_release, build_android_check, test_android_unit, test_android_instrumented};
 pub use embedded::{build_embedded, test_embedded, detect_embedded_kind, EmbeddedKind};
 pub use iac::{build_iac, test_iac, detect_iac_kind, IacKind};
+pub use dotnet::{build_dotnet, test_dotnet};
+pub use cpp::{build_cpp, test_cpp};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectType {
@@ -31,6 +35,8 @@ pub enum ProjectType {
     Android,
     Embedded,
     Iac,
+    DotNet,
+    Cpp,
     Unknown,
 }
 
@@ -46,6 +52,8 @@ impl ProjectType {
             Self::Android => "Android",
             Self::Embedded => "Embedded",
             Self::Iac => "IaC",
+            Self::DotNet => ".NET",
+            Self::Cpp => "C++",
             Self::Unknown => "Unknown",
         }
     }
@@ -93,6 +101,19 @@ pub fn detect_type(dir: &Path) -> ProjectType {
     if iac::detect_iac_kind(dir).is_some() {
         return ProjectType::Iac;
     }
+    if std::fs::read_dir(dir).ok().is_some_and(|entries| {
+        entries.flatten().any(|e| {
+            matches!(
+                e.path().extension().and_then(|s| s.to_str()),
+                Some("csproj" | "sln")
+            )
+        })
+    }) {
+        return ProjectType::DotNet;
+    }
+    if dir.join("CMakeLists.txt").exists() {
+        return ProjectType::Cpp;
+    }
     ProjectType::Unknown
 }
 
@@ -107,6 +128,8 @@ pub fn build(dir: &Path) -> BuildResult {
         ProjectType::Android => build_android(dir),
         ProjectType::Embedded => build_embedded(dir),
         ProjectType::Iac => build_iac(dir),
+        ProjectType::DotNet => build_dotnet(dir),
+        ProjectType::Cpp => build_cpp(dir),
         ProjectType::Unknown => BuildResult {
             ok: false,
             project_type: "Unknown".into(),
@@ -133,6 +156,8 @@ pub fn test(dir: &Path) -> TestResult {
         ProjectType::Android => android::test_android_unit(dir),
         ProjectType::Embedded => test_embedded(dir),
         ProjectType::Iac => test_iac(dir),
+        ProjectType::DotNet => test_dotnet(dir),
+        ProjectType::Cpp => test_cpp(dir),
         ProjectType::Unknown => TestResult {
             ok: false,
             project_type: "Unknown".into(),

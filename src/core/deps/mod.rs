@@ -10,6 +10,8 @@ pub mod ios;
 pub mod android;
 pub mod embedded;
 pub mod iac;
+pub mod dotnet;
+pub mod cpp;
 
 pub use common::{OutdatedDep, CveIssue, DepsReport};
 
@@ -27,6 +29,8 @@ pub fn check(dir: &Path) -> DepsReport {
         ProjectType::Android => android::check_android(dir),
         ProjectType::Embedded => embedded::check_embedded(dir),
         ProjectType::Iac => iac::check_iac(dir),
+        ProjectType::DotNet => dotnet::check_dotnet(dir),
+        ProjectType::Cpp => cpp::check_cpp(dir),
         ProjectType::Unknown => {
             let mut r = DepsReport::empty("Unknown");
             r.tool_missing.push("Cannot detect project type".into());

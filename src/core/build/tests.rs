@@ -353,3 +353,56 @@ fn embedded_takes_priority_over_dockerfile() {
     std::fs::write(tmp.path().join("Dockerfile"), "FROM ubuntu\n").unwrap();
     assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Embedded);
 }
+
+#[test]
+fn detect_dotnet_csproj() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("MyApp.csproj"),
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n</Project>\n",
+    )
+    .unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::DotNet);
+}
+
+#[test]
+fn detect_dotnet_sln() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("MySolution.sln"),
+        "Microsoft Visual Studio Solution File\n",
+    )
+    .unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::DotNet);
+}
+
+#[test]
+fn detect_cpp_cmake() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.20)\nproject(MyApp)\n",
+    )
+    .unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Cpp);
+}
+
+#[test]
+fn embedded_takes_priority_over_cpp_cmake() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::File::create(tmp.path().join("idf.py")).unwrap();
+    std::fs::write(
+        tmp.path().join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.20)\n",
+    )
+    .unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Embedded);
+}
+
+#[test]
+fn iac_takes_priority_over_cpp() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("main.tf"), "terraform {}\n").unwrap();
+    std::fs::write(tmp.path().join("CMakeLists.txt"), "project(MyApp)\n").unwrap();
+    assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Iac);
+}

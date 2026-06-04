@@ -179,6 +179,12 @@ fn read_version(dir: &Path) -> Option<(String, String, String)> {
     if let Some(v) = read_iac_version(dir) {
         return Some((v, "IaC".into(), "main.tf / docker-compose.yml".into()));
     }
+    if let Some(v) = read_dotnet_version(dir) {
+        return Some((v, ".NET".into(), "*.csproj".into()));
+    }
+    if let Some(v) = read_cpp_cmake_version(dir) {
+        return Some((v, "C++".into(), "CMakeLists.txt".into()));
+    }
     if let Some((name, _code)) = read_android_version(dir) {
         return Some((name, "Android".into(), "app/build.gradle".into()));
     }
@@ -213,6 +219,74 @@ fn read_pyproject_version(dir: &Path) -> Option<String> {
             let val = line.split('=').nth(1)?.trim().trim_matches('"').to_string();
             if looks_like_semver(&val) {
                 return Some(val);
+            }
+        }
+    }
+    None
+}
+
+/// Read <Version> from first *.csproj found at root.
+pub(crate) fn read_dotnet_version(dir: &Path) -> Option<String> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("csproj") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    for line in content.lines() {
+                        let t = line.trim();
+                        if t.starts_with("<Version>") && t.ends_with("</Version>") {
+                            let v = t
+                                .trim_start_matches("<Version>")
+                                .trim_end_matches("</Version>");
+                            if looks_like_semver(v) {
+                                return Some(v.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Write <Version> in *.csproj.
+pub(crate) fn write_dotnet_version(
+    dir: &Path,
+    old_version: &str,
+    new_version: &str,
+) -> Result<(), String> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("csproj") {
+                let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                let old_tag = format!("<Version>{}</Version>", old_version);
+                let new_tag = format!("<Version>{}</Version>", new_version);
+                if content.contains(&old_tag) {
+                    std::fs::write(&path, content.replace(&old_tag, &new_tag))
+                        .map_err(|e| e.to_string())?;
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err(format!(
+        "No *.csproj with <Version>{}</Version> found",
+        old_version
+    ))
+}
+
+/// Read project(... VERSION x.y.z ...) from CMakeLists.txt.
+pub(crate) fn read_cpp_cmake_version(dir: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(dir.join("CMakeLists.txt")).ok()?;
+    for line in content.lines() {
+        let t = line.trim();
+        if t.starts_with("project(") && t.contains("VERSION") {
+            let after = t.split("VERSION").nth(1)?.trim();
+            let version = after.split([' ', ')', '\n']).next()?.trim();
+            if looks_like_semver(version) {
+                return Some(version.to_string());
             }
         }
     }
@@ -491,6 +565,12 @@ fn write_version(path: &Path, project_type: &str, old: &str, new: &str) -> Resul
         let (_, old_build) = read_flutter_version(dir)
             .ok_or_else(|| "Cannot read current build number from pubspec.yaml".to_string())?;
         return write_flutter_version(dir, new, old_build + 1);
+    }
+    if project_type == ".NET" {
+        let dir = path
+            .parent()
+            .ok_or_else(|| "Cannot resolve project dir from *.csproj".to_string())?;
+        return write_dotnet_version(dir, old, new);
     }
     if project_type == "iOS" {
         let dir = path
@@ -839,6 +919,39 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = write_ios_version(tmp.path(), "1.0.0", "1.0.1");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_dotnet_version_from_csproj() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("MyApp.csproj"),
+            "<Project>\n  <PropertyGroup>\n    <Version>3.1.4</Version>\n  </PropertyGroup>\n</Project>\n",
+        ).unwrap();
+        assert_eq!(read_dotnet_version(tmp.path()), Some("3.1.4".to_string()));
+    }
+
+    #[test]
+    fn write_dotnet_version_updates_csproj() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("App.csproj"),
+            "<Project>\n  <Version>1.0.0</Version>\n</Project>\n",
+        ).unwrap();
+        write_dotnet_version(tmp.path(), "1.0.0", "1.0.1").unwrap();
+        let content = fs::read_to_string(tmp.path().join("App.csproj")).unwrap();
+        assert!(content.contains("<Version>1.0.1</Version>"));
+        assert!(!content.contains("<Version>1.0.0</Version>"));
+    }
+
+    #[test]
+    fn read_cpp_cmake_version_from_cmakelists() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("CMakeLists.txt"),
+            "project(MyLib VERSION 2.5.0 LANGUAGES CXX)\n",
+        ).unwrap();
+        assert_eq!(read_cpp_cmake_version(tmp.path()), Some("2.5.0".to_string()));
     }
 
     #[test]
