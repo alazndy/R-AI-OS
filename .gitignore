@@ -3,3 +3,5 @@
 .DS_Store
 *.pdb
 *.exe
+*.bak
+*_bak/

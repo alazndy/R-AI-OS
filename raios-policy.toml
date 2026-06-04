@@ -1,0 +1,84 @@
+# R-AI-OS Security Policy Configuration
+
+[filesystem]
+enforce_sandbox = true
+allowed_paths = []
+blocked_paths = [
+    "C:/Users/turha/.ssh",
+    "C:/Windows",
+    "C:/Users/turha/AppData"
+]
+
+[tools]
+default_action = "confirm"
+
+# Allow read-only info tools
+[[tools.rules]]
+name = "list_projects"
+action = "allow"
+
+[[tools.rules]]
+name = "get_stats"
+action = "allow"
+
+[[tools.rules]]
+name = "get_health"
+action = "allow"
+
+[[tools.rules]]
+name = "portfolio_status"
+action = "allow"
+
+[[tools.rules]]
+name = "project_info"
+action = "allow"
+
+[[tools.rules]]
+name = "version_info"
+action = "allow"
+
+# Deny or restrict high-risk tools
+[[tools.rules]]
+name = "run_build"
+action = "confirm"
+
+[[tools.rules]]
+name = "run_tests"
+action = "confirm"
+
+[[tools.rules]]
+name = "git_commit"
+action = "confirm"
+
+[[tools.rules]]
+name = "version_bump"
+action = "confirm"
+
+# ─── Egress (Network) Filtering ───────────────────────────────────────────────
+# Controls outbound HTTP calls made by MCP tools (e.g. CI status, GitHub API).
+# Domains not in allowed_domains are BLOCKED (fail-closed).
+# Set enabled = false to disable filtering entirely.
+
+[egress]
+enabled = true
+deny_all = false
+
+# Suffix ".crates.io" matches both crates.io and static.crates.io
+allowed_domains = [
+    ".crates.io",
+    "api.github.com",
+    "github.com",
+    "raw.githubusercontent.com",
+    "pypi.org",
+    "registry.npmjs.org",
+    "doc.rust-lang.org",
+    ".googleapis.com",
+]
+
+# Explicitly block known exfiltration / C2 vectors
+blocked_domains = [
+    "ngrok.io",
+    "requestbin.com",
+    "webhook.site",
+    "burpcollaborator.net",
+]
