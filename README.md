@@ -5,11 +5,11 @@
 </p>
 
 <p align="center">
-  <strong>The First High-Performance, LLM-Native Operating System Kernel for Autonomous Swarms</strong>
+  <strong>A Hardened, LLM-Native OS Kernel for Autonomous Agent Swarms</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/github/v/release/alazndy/r-ai-os?style=for-the-badge&color=blue" alt="Version"></a>
+  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v2.0.0--alpha-blue?style=for-the-badge" alt="Version"></a>
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="https://owasp.org/www-project-top-ten/"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
@@ -17,9 +17,9 @@
 
 <p align="center">
   <a href="#-the-vision">Vision</a> •
-  <a href="docs/WIKI/Home.md">Documentation</a> •
-  <a href="#-core-kernel-modules">Core Modules</a> •
-  <a href="#-universal-kernel-edition-v140">Universal Kernel</a> •
+  <a href="#-security-kernel">Security Kernel</a> •
+  <a href="#-core-modules">Core Modules</a> •
+  <a href="#-vs-code-extension">VS Code Extension</a> •
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-cli-reference">CLI</a> •
   <a href="#-roadmap">Roadmap</a>
@@ -29,87 +29,160 @@
 
 ## 🔭 The Vision
 
-R-AI-OS is not just a CLI tool; it is a **Kernel**. While traditional Operating Systems manage hardware (CPU, RAM, Disk), R-AI-OS is designed for the **AI Era**. 
+R-AI-OS is not just a CLI tool — it is a **Kernel**. While traditional operating systems manage hardware, R-AI-OS manages the **AI layer**: a decentralized swarm of 90+ autonomous specialists running across Claude Code, Gemini CLI, and any MCP-compatible agent.
 
-It serves as the **Intelligence Orchestration Layer** that sits between the human user and a decentralized swarm of 90+ autonomous specialists. R-AI-OS handles the complexity of **Context Economics, Semantic Routing, and Zero-Zero-Trust Agent Security**, allowing you to focus on high-level architecture while your "factory" does the heavy lifting.
+It solves the fundamental problem of **unsupervised agent execution**: agents that run unchecked can leak secrets, corrupt files, and make network calls they shouldn't. R-AI-OS sits between the human and the swarm as a hardened control plane — enforcing policies, auditing every action, and managing context economics.
 
-## 📖 Deep Dive Documentation
-
-For detailed technical guides, architectural maps, and security protocols, visit our **[Official Wiki](docs/WIKI/Home.md)**:
-
-*   🏛️ **[Architecture](docs/WIKI/01-Architecture-Deep-Dive.md)** - Daemon/Client design.
-*   🛡️ **[Security](docs/WIKI/02-Security-Model.md)** - AgentShield & Token Auth.
-*   🧠 **[Memory & Context](docs/WIKI/03-Hybrid-Memory-and-Context.md)** - Cortex & Sigmap.
-*   ⌨️ **[CLI Reference](docs/WIKI/06-CLI-Commands-Reference.md)** - Detailed command guide.
+```
+Human → [ R-AI-OS Kernel ] → Agent Swarm (Claude / Gemini / MCP)
+              ↓
+    [Security Kernel] [Context Manager] [Swarm Mesh] [Hybrid UI]
+```
 
 ---
 
-## 🧠 Core Kernel Modules
+## 🛡️ Security Kernel (v2.0.0-alpha)
 
-### 🎯 1. Unified Agent Router (The Brain)
-The Router solves the "Over-Agenting" problem. With 90+ specialists available, R-AI-OS selects the right one instantly.
-- **Semantic Dispatch:** Maps task descriptions to agent metadata using local neural indexing.
-- **Maestro & ECC Bridge:** Native integration with both major agentic frameworks.
+The Security Kernel is the core of R-AI-OS. It enforces a **zero-trust model** for all agent tool calls: every action is policy-gated, logged, and auditable. All 4 phases are complete and tested (239/239 tests green).
 
-### 🛡️ 2. Universal AgentShield (The Guard)
-Safety is non-negotiable. AgentShield acts as a low-level syscall filter.
-- **Command Interception:** Blocks destructive actions (`rm -rf /`, etc.) before they execute.
-- **Secret Leak Protection:** Sanitizes `.env`, `.pem`, and API keys in real-time.
+### Architecture
 
-### 📉 3. Token Budgeter & Context Manager (The Economist)
-Context is the new currency. R-AI-OS ensures you don't go bankrupt.
-- **Sigmap Synergy:** Up to **97% token reduction** via high-density signature mapping.
-- **Neural Budgeting:** Automatically prevents raw file ingestion for large directories.
+```
+src/security/
+├── sandbox.rs       # Filesystem Jail — canonicalize + boundary enforcement
+├── policy.rs        # Policy Manager — TOML-based allow/deny/confirm engine
+├── verify_chain.rs  # Audit Chain — SHA-256 hash-chained SQLite ledger
+└── egress.rs        # Egress Filter — domain allowlist/blocklist, fail-closed
+```
 
-### 🧬 4. Autonomous Instinct Engine (The Memory)
-Memory is not static; it is evolutionary.
-- **Behavioral Persistence:** Learns your style, favorite libraries, and project-specific quirks.
-- **Cross-Session Injection:** Learned "Instincts" follow you across projects and sessions.
+### Phase 1 — Filesystem Jail
+Prevents agents from reading or writing outside their designated workspace boundary. Uses path canonicalization to defeat traversal attacks.
 
-### ⚖️ 5. RBJ Stratejik Analiz Modülü (The Judge)
-Engineering rigor is maintained through a mandatory **Red-Blue-Judge** cycle.
-- **Red Team:** Aggressively critiques architecture and code for flaws.
-- **Blue Team:** Defends with technical rationale and architectural integrity.
-- **The Judge:** Reaches a final, actionable verdict to guide implementation.
+```toml
+# raios-policy.toml
+[sandbox]
+enabled = true
+workspace_root = "/home/user/projects/my-app"
+```
+
+### Phase 2 — Policy Manager
+Every MCP tool call passes through a policy gate before execution. Rules are defined in `raios-policy.toml` and evaluated in order.
+
+```toml
+[tools]
+default = "allow"
+
+[[tools.rules]]
+tool = "bash"
+action = "confirm"   # requires human approval
+
+[[tools.rules]]
+tool = "write_file"
+path_glob = "/etc/**"
+action = "deny"
+```
+
+Fail-closed by design: `confirm` rules in daemon/stdio mode deny by default — no interactive prompt means no silent execution.
+
+### Phase 3 — Audit Chain
+Every allow/deny decision is written to a tamper-evident, SHA-256 hash-chained SQLite ledger. Each entry links to the previous entry's hash — any tampering is immediately detectable.
+
+```bash
+raios verify-chain          # verify full chain integrity
+raios verify-chain -n 50    # show last 50 entries then verify
+```
+
+### Phase 4 — Egress Filter
+Domain-level allowlist/blocklist for any HTTP/HTTPS calls made via MCP tools. Fail-closed: unrecognized domains are denied unless explicitly allowed.
+
+```toml
+[egress]
+mode = "allowlist"
+allowed = ["api.anthropic.com", "api.openai.com", "*.github.com"]
+```
+
+### Redaction Engine
+Automatically masks sensitive values (API keys, GCP secrets, PII patterns) before they appear in logs or are forwarded to Sentry. Built on `regex` with 20+ detection patterns.
+
+### Sentry Observability
+Production-grade error tracking with contextual breadcrumbs and automatic panic capture. Every unhandled crash sends a structured report with session context.
 
 ---
 
-## 🌐 Universal Kernel Edition (v1.4.0)
+## 🧠 Core Modules
 
-R-AI-OS evolves from a CLI toolkit into a true **Universal Agent Operating System Kernel**:
+### 🎯 Unified Agent Router
+Maps natural-language task descriptions to the right specialist using local BM25 + vector hybrid indexing. Bridges Maestro (39 agents) and ECC (48 agents) ecosystems natively.
 
-*   **🔌 Tri-Protocol Interface:** Daemon TCP (:42069) + MCP-over-TCP (:42070) + CLI — all concurrent, all sharing one event bus. Any agent ecosystem can connect natively.
-*   **🔒 Lock Manager:** File and task-level locks with priority levels (User > Agent > Automation), 30s timeout, and deadlock prevention. Multi-agent swarms can't corrupt each other's work.
-*   **📡 Radar Whisper Stream:** Real-time context hints pushed to every connected agent — compile errors, security vulnerabilities, architectural violations — as structured `RadarWhisper` events.
-*   **🏭 Factory Mode:** Submit heavy jobs (refactor, test gen, build) and get a `job_id` instantly. Jobs run async in SQLite-backed queue; completion fires broadcast + optional webhook.
-*   **🧩 Universal Proxy-Store:** One capability name, any backend — Rust internal, Python skill, shell command, or MCP bridge. Agents request generically; the kernel translates.
-*   **💾 Storage Overhaul:** Vector embeddings moved from JSON to binary SQLite BLOBs (transaction-safe), BM25 index now persisted (mtime-based invalidation), session memory tracked per-agent with `memory.md` auto-append.
+### 📉 Token Budgeter & Context Manager (Cortex)
+- **Sigmap:** Up to 97% token reduction via high-density signature mapping (`SIGMAP.md`)
+- **BM25 persistence:** Index survives restarts via mtime-based invalidation
+- **Vector store:** Binary SQLite BLOBs — transaction-safe, no JSON drift
+- **Session memory:** Per-agent `memory.md` auto-append
+
+### 🔄 Agent Swarm Mesh
+Parallel worktree-based agent execution with coordination primitives:
+- **Lock Manager:** File and task-level locks with priority levels (User > Agent > Automation)
+- **Radar Whispers:** Real-time context hints pushed to all connected agents (compile errors, security alerts, architectural violations)
+- **Factory Mode:** Submit heavy jobs async; completion fires broadcast + optional webhook
+
+### 🔌 Tri-Protocol Interface
+All three protocols share one event bus:
+- `TCP :42069` — Daemon IPC (UUID token auth, mandatory handshake)
+- `TCP :42070` — MCP-over-TCP (agent tool calls, policy-gated)
+- `CLI` — Direct commands (`raios <command>`)
+
+### 📊 Portfolio Intelligence
+- **Neural Search:** Semantic search across 140+ projects with BM25 + embeddings
+- **Health Scanner:** Background scan for `memory.md` compliance, security leaks, git drift
+- **GitHub Sync:** Live star counts and last-commit timestamps
+- **Auto-Discovery:** Detects new workspace directories and updates `entities.json` automatically
 
 ---
 
-## 🦾 Aura Hardened Edition (v1.3.0)
+## 🖥️ VS Code Extension (v0.4.0)
 
-R-AI-OS has evolved into its most stable and secure version yet:
+R-AI-OS ships a native VS Code extension that turns the IDE into a **Hybrid UI** — combining the real-time power of the TUI with the rich surface of the IDE.
 
-*   **🛡️ IPC Hardening:** Random UUID-based token authentication for `aiosd` daemon.
-*   **📥 Diff Inbox Pattern:** Non-blocking, asynchronous change approval workflow.
-*   **🏗️ Daemon-Centric:** All heavy indexing and sync tasks are handled by the background daemon.
-*   **🔍 Neural Search:** Advanced BM25 + Vector hybrid search across your entire workspace.
+```
+vscode-extension/
+├── src/extension.ts    # Extension host + TokenBridge proxy
+├── src/sidebar/        # Webview Kanban dashboard (Geist Sans + glassmorphism)
+└── raios-0.4.0.vsix    # Packaged extension
+```
+
+**Features:**
+- **Activity Bar icon** — `raios-sidebar-view` panel always visible
+- **Kanban Dashboard** — Read-only project status, health scores, active tasks
+- **TokenBridge Proxy** — Extension host proxies all daemon requests with Bearer token; the session token never touches the Webview context (XSS-safe)
+- **Status Bar** — Live daemon connection indicator
+
+**Install:**
+```bash
+code --install-extension vscode-extension/raios-0.4.0.vsix
+```
 
 ---
 
 ## 🚀 Quick Start
 
-### Installation
-Ensure you have Rust installed, then:
 ```bash
-git clone https://github.com/alazndy/r-ai-os.git
-cd r-ai-os
+git clone https://github.com/alazndy/R-AI-OS.git
+cd R-AI-OS
 cargo install --path . --force
 ```
 
-### The "One-Touch" Setup
-Replicate your entire AI software factory (90+ agents, 180+ skills) on any machine:
+Start the daemon (background process that powers the TUI and MCP server):
+```bash
+aiosd
+```
+
+Launch the TUI:
+```bash
+raios
+```
+
+Bootstrap your AI factory (replicates 90+ agents and 180+ skills):
 ```bash
 raios bootstrap
 ```
@@ -118,39 +191,111 @@ raios bootstrap
 
 ## 💻 CLI Reference
 
-| Command | Usage | Description |
-| :--- | :--- | :--- |
-| **`rbj`** | `raios rbj --project <name>` | **[NEW]** Runs a Red-Blue-Judge audit cycle on any project. |
-| **`task`** | `raios task "optimize db" [--agent <name>]` | Routes to best agent or specific one (Claude, Gemini, Codex). |
-| **`health`** | `raios health <project>` | Scans for compliance and security leaks. |
-| **`search`** | `raios search "auth logic"` | Semantic search across your portfolio. |
-| **`commit`** | `raios commit --push` | Intelligent bulk commit for dirty projects. |
-| **`new`** | `raios new "ProjectName"` | Scaffolds a project following official rules. |
+### Core Operations
+
+| Command | Description |
+| :--- | :--- |
+| `raios health` | Portfolio health dashboard — scans all projects |
+| `raios health <project>` | Single-project health scan |
+| `raios search "<query>"` | Semantic search across portfolio |
+| `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules) |
+| `raios task "<description>"` | Route to best agent or specific one |
+| `raios bootstrap` | Replicate AI factory on a new machine |
+
+### Git Operations
+
+| Command | Description |
+| :--- | :--- |
+| `raios git status` | Git status across portfolio |
+| `raios git log` | Recent commits |
+| `raios git diff` | Staged/unstaged diff |
+| `raios git commit` | Intelligent bulk commit |
+
+### Security
+
+| Command | Description |
+| :--- | :--- |
+| `raios verify-chain` | Verify audit log hash-chain integrity |
+| `raios verify-chain -n <N>` | Show last N entries then verify |
+| `raios security` | OWASP security scan |
+
+### Build & Dev
+
+| Command | Description |
+| :--- | :--- |
+| `raios build` | Build current project |
+| `raios test` | Run test suite |
+| `raios deps` | Dependency audit |
+| `raios env` | Environment variable scan |
+
+### Agent Swarm
+
+| Command | Description |
+| :--- | :--- |
+| `raios swarm start` | Start a parallel agent worktree |
+| `raios swarm list` | List active swarm tasks |
+| `raios swarm approve <id>` | Approve a pending swarm diff |
+
+### Analysis
+
+| Command | Description |
+| :--- | :--- |
+| `raios rbj --project <name>` | Red-Blue-Judge audit cycle |
+
+---
+
+## 📁 Project Structure
+
+```
+src/
+├── bin/
+│   ├── raios.rs          # CLI entrypoint
+│   └── aiosd.rs          # Daemon entrypoint
+├── app/
+│   └── events/           # Event handling (actions, keyboard, commands)
+│       └── keyboard/     # Keyboard module (6 sub-modules)
+├── cli/                  # CLI command implementations
+├── core/
+│   ├── build/            # Build logic (10 sub-modules, language-specific)
+│   └── deps/             # Dependency management (10 sub-modules)
+├── cortex/               # Vector store, BM25 index, session memory
+├── daemon/               # aiosd background daemon
+├── intelligence/         # Agent routing, instinct engine, RBJ
+├── mcp/                  # MCP server — policy-gated tool call handler
+├── search/               # Neural search (BM25 + vector hybrid)
+├── security/             # Security Kernel (sandbox, policy, chain, egress)
+├── sentinel/             # Redaction engine, Sentry integration
+├── server/               # HTTP/WebSocket server (Axum)
+├── swarm/                # Parallel worktree agent management
+└── ui/
+    └── panels/           # TUI panels (13 modules — dashboard, security, etc.)
+```
 
 ---
 
 ## 🗺️ Roadmap
 
-- [x] **Phase 1: Core Evolution** - Workspace mapping and health.
-- [x] **Phase 2: AI OS Kernel** - Router, Shield, Instincts, Universal Bootstrap.
-- [x] **Phase 3: TUI Mission Control** - Aura Hardened IPC & Diff Inbox.
-- [x] **Phase 4: SQLite Migration** - Cortex BLOB store, BM25 persistence, session memory — all in SQLite.
-- [x] **Phase 5: Agent Swarm Mesh** - Lock Manager, Radar Whispers, Factory Mode, Universal Proxy-Store, Tri-Protocol Kernel.
-- [ ] **Phase 6: Edge-Intelligence & Local Routing** - Integration of **Needle** for ultra-fast, zero-cost local function calling.
-- [ ] **Phase 7: Evolutionary Intelligence (Experimental)** - Self-evolving skills and autonomous instinct refinement based on task success/failure (Inspired by **OpenSpace**).
-- [ ] **Phase 8: Recursive Reasoning (Experimental)** - Deep task decomposition and recursive logic flows for complex architectural problems (Inspired by **RLM**).
-- [x] **Phase 9: IDE Symbiosis** - Native VS Code extension acting as a "Thin Client" to bridge the terminal TUI with rich IDE features (Status bar, Diff overlays).
+- [x] **Phase 1–7:** Core TUI, workspace mapping, health dashboard, BM25 search
+- [x] **Phase 8:** Universal Kernel — Tri-protocol, Lock Manager, Radar Whispers, Factory Mode
+- [x] **Phase 9:** Refactor & Modularization — all large files split into focused modules
+- [x] **Phase 10:** Hardened Kernel Alpha — Sentry, Redaction Engine, Audit Ledger
+- [x] **Phase 10B:** Security Kernel (Faz 1–4) — Sandbox + Policy + Audit Chain + Egress ✅
+- [x] **Phase IDE:** Hybrid UI — VS Code Sidebar WebView + TokenBridge Proxy ✅
+- [ ] **Phase 11:** Tool Pinning & Drift Detection — MCP tool manifest hashing, supply chain tamper detection
+- [ ] **Phase 12:** Secret Leasing — `raios secret grant <tool> <ENV_VAR>` with TTL-based auto-revoke
+- [ ] **Phase 13:** Rate Limiting — Tool call frequency limiter for AI loop spam protection
+- [ ] **Phase 14:** Quarantine Mode — Isolate suspicious agent calls, require human approval
+- [ ] **Phase 15:** Write-Back Bridge — Sidebar Kanban → memory.md task state sync
 
 ---
 
 ## 🔗 Research References
 
-These projects are foundational references for the future evolution of R-AI-OS:
-
-*   **[agent-skills](https://github.com/addyosmani/agent-skills):** Engineering discipline and agent verification protocols.
-*   **[needle](https://github.com/cactus-compute/needle):** Ultra-fast local function calling and edge-intelligence.
-*   **[OpenSpace](https://github.com/HKUDS/OpenSpace):** Self-evolving skills and spatial intelligence.
-*   **[rlm](https://github.com/alexzhang13/rlm):** Recursive language models for deep logical reasoning.
+- **[vigils](https://github.com/duncatzat/vigils)** — Agent control plane (Filesystem Jail, Egress Filter, Policy Manager, Hash-Chain)
+- **[ruvos](https://github.com/dgdev25/ruvos)** — Agentic OS memory architecture reference
+- **[bash-agent](https://github.com/lloydzhou/bash-agent)** — Lightweight agent worker patterns
+- **[agent-skills](https://github.com/addyosmani/agent-skills)** — Engineering discipline and agent verification
+- **[needle](https://github.com/cactus-compute/needle)** — Ultra-fast local function calling
 
 ---
 
