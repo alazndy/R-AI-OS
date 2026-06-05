@@ -42,17 +42,20 @@ impl Server {
     }
 
     async fn run_inner(&self, tx: broadcast::Sender<String>) -> anyhow::Result<()> {
-        // 1. Generate and save IPC token for security
-        let token = uuid::Uuid::new_v4().to_string();
+        // 1. Generate and save IPC token for security using SessionTokenManager
+        let token_mgr = crate::security::SessionTokenManager::new();
+        let token = token_mgr.generate_and_save()?;
         let config_dir = Config::config_file().parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let token_path = config_dir.join(".ipc_token");
-        std::fs::write(&token_path, &token)?;
+        let token_path = config_dir.join(".session_token");
         println!(
-            "[Daemon] Security: IPC Token generated and saved to {:?}",
+            "[Daemon] Security: Secure Session Token generated and saved to {:?}",
             token_path
         );
+
+        // Also write legacy token for backwards compatibility with any existing tools
+        let _ = std::fs::write(config_dir.join(".ipc_token"), &token);
 
         println!("Server is listening on 127.0.0.1:42069...");
         let listener = TcpListener::bind("127.0.0.1:42069").await?;

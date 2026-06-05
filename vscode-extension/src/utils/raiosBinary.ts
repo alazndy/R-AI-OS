@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
 
 /**
  * Resolve the full path to the raios executable.
@@ -8,6 +9,18 @@ import * as path from "path";
  * so we check known installation locations explicitly.
  */
 export function resolveRaiosBinary(): string {
+  const config = vscode.workspace.getConfiguration("raios");
+  const configPath = config.get<string>("pathToBinary");
+  if (configPath && configPath !== "raios") {
+    try {
+      if (fs.existsSync(configPath)) {
+        return configPath;
+      }
+    } catch {
+      // continue
+    }
+  }
+
   const home = os.homedir();
   const isWindows = process.platform === "win32";
   const exe = isWindows ? "raios.exe" : "raios";

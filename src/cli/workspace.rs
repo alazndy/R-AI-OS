@@ -25,7 +25,7 @@ pub(super) fn cmd_rules(filter: Option<String>, master_md: &Path, json: bool) {
         }
     }
     if json {
-        println!("{}", serde_json::to_string_pretty(&results).unwrap());
+        println!("{}", serde_json::to_string_pretty(&results).unwrap_or_default());
     }
 }
 
@@ -178,7 +178,7 @@ pub(super) fn cmd_mempalace(dev_ops: &Path, json: bool) {
     let files = get_mempalace_files(dev_ops);
     if let Some(first) = files.first() {
         if json {
-            println!("{}", serde_json::to_string_pretty(&first).unwrap());
+            println!("{}", serde_json::to_string_pretty(&first).unwrap_or_default());
         } else {
             println!("{}", load_file_content(&first.path));
         }
@@ -188,7 +188,7 @@ pub(super) fn cmd_mempalace(dev_ops: &Path, json: bool) {
 pub(super) fn cmd_projects(dev_ops: &Path, json: bool) {
     let files = discover_memory_files(dev_ops, 100);
     if json {
-        println!("{}", serde_json::to_string_pretty(&files).unwrap());
+        println!("{}", serde_json::to_string_pretty(&files).unwrap_or_default());
     } else {
         for entry in files {
             let proj = entry.name.trim_end_matches("/memory.md");
@@ -200,7 +200,7 @@ pub(super) fn cmd_projects(dev_ops: &Path, json: bool) {
 pub(super) fn cmd_agents(json: bool) {
     let entries = get_agent_config_files();
     if json {
-        println!("{}", serde_json::to_string_pretty(&entries).unwrap());
+        println!("{}", serde_json::to_string_pretty(&entries).unwrap_or_default());
     } else {
         for entry in entries {
             let mark = if entry.exists() { "✓" } else { "✗" };
@@ -213,7 +213,7 @@ pub(super) fn cmd_view(name: String, master_md: &Path, json: bool) {
     match find_file_by_name(&name, master_md) {
         Some(entry) => {
             if json {
-                println!("{}", serde_json::to_string_pretty(&entry).unwrap());
+                println!("{}", serde_json::to_string_pretty(&entry).unwrap_or_default());
             } else {
                 println!("{}", load_file_content(&entry.path));
             }
@@ -233,7 +233,7 @@ pub(super) fn cmd_discover(dev_ops: &Path, json: bool) {
     let projects = crate::entities::discover_entities(dev_ops);
     let _ = crate::entities::save_entities(dev_ops, projects.clone());
     if json {
-        println!("{}", serde_json::to_string_pretty(&projects).unwrap());
+        println!("{}", serde_json::to_string_pretty(&projects).unwrap_or_default());
     } else {
         println!("Discovery complete. Found {} projects.", projects.len());
     }

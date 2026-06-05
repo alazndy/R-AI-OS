@@ -40,6 +40,14 @@ impl Kernel {
         let daemon_state = self.state.clone();
         let daemon_tx = tx.clone();
         let mcp_tx = tx.clone();
+        let http_tx = tx.clone();
+        let http_state = self.state.clone();
+
+        // 1. Resolve HTTP port from raios-policy.toml, fallback to 42071
+        let http_port = crate::security::PolicyConfig::try_load_default()
+            .and_then(|p| p.server)
+            .and_then(|s| s.http_port)
+            .unwrap_or(42071);
 
         let daemon_handle = tokio::spawn(async move {
             let server = crate::daemon::server::Server::new(daemon_state);
@@ -48,12 +56,19 @@ impl Kernel {
 
         let mcp_handle = tokio::spawn(async move { run_mcp_tcp(mcp_tx).await });
 
+        let http_handle = tokio::spawn(async move {
+            crate::server::http::start_http_server(http_port, http_state, http_tx).await
+        });
+
         tokio::select! {
             res = daemon_handle => {
                 eprintln!("[Kernel] Daemon TCP exited: {:?}", res);
             }
             res = mcp_handle => {
                 eprintln!("[Kernel] MCP-over-TCP exited: {:?}", res);
+            }
+            res = http_handle => {
+                eprintln!("[Kernel] HTTP API Adapter exited: {:?}", res);
             }
         }
 

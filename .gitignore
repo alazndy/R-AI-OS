@@ -1,5 +1,6 @@
 /target
 /scratch
+/reference
 .DS_Store
 *.pdb
 *.exe

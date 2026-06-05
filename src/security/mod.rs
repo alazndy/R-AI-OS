@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod auth;
 pub mod egress;
 pub mod license;
 pub mod patterns;
@@ -6,6 +7,8 @@ pub mod policy;
 pub mod sandbox;
 pub mod scanner;
 pub mod verify_chain;
+
+pub use auth::SessionTokenManager;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

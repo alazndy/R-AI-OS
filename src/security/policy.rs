@@ -6,10 +6,16 @@ use anyhow::{Result, anyhow};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyConfig {
+    pub server: Option<ServerPolicy>,
     pub filesystem: FilesystemPolicy,
     pub tools: ToolsPolicy,
     /// Optional egress (network) filtering rules
     pub egress: Option<EgressPolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerPolicy {
+    pub http_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +140,9 @@ mod tests {
     }
 
     const SAMPLE_TOML: &str = r#"
+[server]
+http_port = 42071
+
 [filesystem]
 enforce_sandbox = true
 allowed_paths = []

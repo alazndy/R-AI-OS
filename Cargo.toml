@@ -40,6 +40,10 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 which = "6"
 base64 = "0.22"
 git2 = "0.19"
+sentry = { version = "0.34", features = ["anyhow", "panic", "contexts"] }
+sha2 = "0.10"
+regex = "1.10"
+axum = { version = "0.7", features = ["ws"] }
 # Cortex / Vector Engine — optional (enable with --features cortex)
 fastembed = { version = "3", features = ["online"], optional = true }
 instant-distance = "0.6"

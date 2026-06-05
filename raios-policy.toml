@@ -1,5 +1,8 @@
 # R-AI-OS Security Policy Configuration
 
+[server]
+http_port = 42071 # Axum HTTP/WebSocket API adapter port
+
 [filesystem]
 enforce_sandbox = true
 allowed_paths = []

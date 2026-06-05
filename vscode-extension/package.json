@@ -3,7 +3,7 @@
   "publisher": "alazndy",
   "displayName": "R-AI-OS",
   "description": "R-AI-OS Kernel integration for VS Code",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/alazndy/r-ai-os"
@@ -13,7 +13,23 @@
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "raios-sidebar-view",
+          "title": "R-AI-OS",
+          "icon": "$(rocket)"
+        }
+      ]
+    },
     "views": {
+      "raios-sidebar-view": [
+        {
+          "type": "webview",
+          "id": "raios.sidebar",
+          "name": "R-AI-OS Control Panel"
+        }
+      ],
       "explorer": [
         {
           "id": "raiosRefactorView",
@@ -104,6 +120,16 @@
     "configuration": {
       "title": "R-AI-OS",
       "properties": {
+        "raios.httpPort": {
+          "type": "number",
+          "default": 42071,
+          "description": "R-AI-OS HTTP API server port"
+        },
+        "raios.pathToBinary": {
+          "type": "string",
+          "default": "raios",
+          "description": "Path to the raios executable. Defaults to 'raios' (relying on PATH)."
+        },
         "raios.daemonPort": {
           "type": "number",
           "default": 42069,

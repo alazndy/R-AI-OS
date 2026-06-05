@@ -3,6 +3,7 @@ import * as cp from "child_process";
 import { RefactorDecorationProvider } from "./RefactorDecorationProvider";
 import { RefactorTreeProvider, RefactorFileData } from "./RefactorTreeProvider";
 import { RefactorStatusItem } from "./RefactorStatusItem";
+import { resolveRaiosBinary } from "../utils/raiosBinary";
 
 interface RefactorFileIssue {
   schema_version: number;
@@ -125,7 +126,7 @@ export class RefactorProvider implements vscode.Disposable {
     callback: (issues: RefactorFileIssue[]) => void
   ): void {
     cp.execFile(
-      "raios",
+      resolveRaiosBinary(),
       ["--json", "refactor", path, ...this.getThresholdArgs()],
       { timeout: 30_000 },
       (err, stdout, stderr) => {

@@ -10,6 +10,8 @@ import { RefactorProvider } from "./providers/RefactorProvider";
 import { RefactorTreeProvider } from "./providers/RefactorTreeProvider";
 import { RefactorStatusItem } from "./providers/RefactorStatusItem";
 import { JumpToCode } from "./bridge/JumpToCode";
+import { TokenBridge } from "./ipc/TokenBridge";
+import { SidebarProvider } from "./providers/SidebarProvider";
 
 let client: DaemonClient;
 let statusBar: StatusBarProvider;
@@ -27,6 +29,8 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBar = new StatusBarProvider(client, pollInterval, outputChannel);
 
   diagnostics = new DiagnosticProvider(outputChannel);
+  const tokenBridge = new TokenBridge(context);
+  const sidebarProvider = new SidebarProvider(context, tokenBridge, outputChannel);
   const securityDecorations = new SecurityDecorationProvider();
   diagnostics.setDecorationProvider(securityDecorations);
 
@@ -53,6 +57,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerTreeDataProvider("raiosRefactorView", refactorTree),
     refactorTree,
     refactorStatus,
+    vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebarProvider),
     vscode.commands.registerCommand("raios.showRefactorView", () => {
       vscode.commands.executeCommand("raiosRefactorView.focus");
     })

@@ -212,11 +212,35 @@ fn analyze_file(path: &Path, t: &RefactorThresholds) -> Option<RefactorIssue> {
 }
 
 fn count_risky_patterns(content: &str, ext: &str) -> usize {
-    UNWRAP_PATTERNS
+    let mut count = 0;
+    let patterns: Vec<&str> = UNWRAP_PATTERNS
         .iter()
         .filter(|(e, _)| *e == ext)
-        .map(|(_, pat)| content.matches(pat).count())
-        .sum()
+        .map(|(_, pat)| *pat)
+        .collect();
+
+    if patterns.is_empty() {
+        return 0;
+    }
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        
+        // Skip Rust test modules since unwraps are standard practice there
+        if ext == "rs" && (trimmed.contains("mod tests") || trimmed.contains("#[cfg(test)]")) {
+            break; // Test modules are typically at the end of the file
+        }
+
+        // Skip individual test cases and assertions
+        if ext == "rs" && (trimmed.contains("#[test]") || trimmed.contains("assert!")) {
+            continue;
+        }
+
+        for pat in &patterns {
+            count += trimmed.matches(pat).count();
+        }
+    }
+    count
 }
 
 fn estimate_max_nesting(content: &str) -> usize {

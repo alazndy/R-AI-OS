@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 // ─── Task model ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Task {
     pub text: String,
     pub completed: bool,
