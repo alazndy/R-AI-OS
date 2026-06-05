@@ -1,4 +1,5 @@
 pub mod agent_runner;
+pub mod compressor;
 pub mod app;
 pub mod cli;
 pub mod compliance;
@@ -33,6 +34,7 @@ pub use intelligence::router;
 pub mod safe_io;
 pub mod security;
 pub mod sentinel;
+pub mod server;
 pub mod session;
 pub mod setup_wizard;
 pub mod shield;

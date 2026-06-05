@@ -631,7 +631,7 @@ impl McpServer {
         }
         // ─────────────────────────────────────────────────────────────────────
 
-        match name {
+        let mut result = match name {
             "update_state" => self.tool_update_state(args),
             "handover" => self.tool_handover(args),
             "add_task" => self.tool_add_task(args),
@@ -663,7 +663,11 @@ impl McpServer {
             "list_evolution_candidates" => self.tool_list_evolution_candidates(args),
             "promote_evolution_candidate" => self.tool_promote_evolution_candidate(args),
             _ => Err(format!("Unknown tool: {}", name)),
+        };
+        if let Ok(ref mut v) = result {
+            crate::compressor::apply(name, v);
         }
+        result
     }
 
     fn tool_ask_architect(&self, args: &Value) -> Result<Value, String> {
