@@ -360,3 +360,45 @@ pub(super) fn cmd_rate_status(json: bool) {
     }
 }
 
+pub(super) fn cmd_pin_reset(json: bool) {
+    match crate::security::tool_pin::reset_pin() {
+        Ok(()) => {
+            if json {
+                println!("{{\"status\":\"ok\",\"message\":\"pin file removed — next mcp-server start will re-pin\"}}");
+            } else {
+                println!("Pin file removed. Next `raios mcp-server` start will re-pin the tool manifest.");
+            }
+        }
+        Err(e) => {
+            if json {
+                println!("{{\"status\":\"error\",\"message\":{:?}}}", e.to_string());
+            } else {
+                eprintln!("pin-reset failed: {e}");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+pub(super) fn cmd_pin_status(json: bool) {
+    match crate::security::tool_pin::current_pin() {
+        Some(hash) => {
+            if json {
+                println!("{{\"status\":\"pinned\",\"hash\":\"{hash}\"}}");
+            } else {
+                println!("Tool manifest is pinned.");
+                println!("  SHA-256: {hash}");
+                println!("  Run `raios pin-reset` to clear and re-pin on next start.");
+            }
+        }
+        None => {
+            if json {
+                println!("{{\"status\":\"unpinned\",\"message\":\"no pin file found\"}}");
+            } else {
+                println!("No pin file found — manifest is not yet pinned.");
+                println!("Start `raios mcp-server` to create the initial pin.");
+            }
+        }
+    }
+}
+

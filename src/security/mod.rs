@@ -7,6 +7,7 @@ pub mod policy;
 pub mod rate_limiter;
 pub mod sandbox;
 pub mod scanner;
+pub mod tool_pin;
 pub mod verify_chain;
 
 pub use auth::SessionTokenManager;

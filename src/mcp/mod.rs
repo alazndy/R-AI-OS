@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use crate::config::Config;
 use crate::security::rate_limiter::RateLimiter;
+use crate::security::tool_pin;
 
 // ─── JSON-RPC types ───────────────────────────────────────────────────────────
 
@@ -62,6 +63,7 @@ impl RpcResponse {
 pub(super) struct McpServer {
     pub(super) config: Config,
     rate_limiter: RateLimiter,
+    pin_broken: bool,
 }
 
 impl McpServer {
@@ -78,7 +80,38 @@ impl McpServer {
         let rate_limiter = crate::security::PolicyConfig::try_load_default()
             .map(|p| RateLimiter::from_policy(p.rate_limits))
             .unwrap_or_else(RateLimiter::disabled);
-        Self { config, rate_limiter }
+
+        let manifest_json = serde_json::to_string(
+            &Self::static_tools_manifest()
+        ).unwrap_or_default();
+        let pin_broken = match tool_pin::verify_or_pin(&manifest_json) {
+            Ok(fresh) => {
+                if fresh {
+                    eprintln!("[raios] Tool manifest pinned (first run).");
+                }
+                false
+            }
+            Err(e) => {
+                eprintln!("[raios] SECURITY WARNING: {e}");
+                true
+            }
+        };
+
+        Self { config, rate_limiter, pin_broken }
+    }
+
+    fn static_tools_manifest() -> serde_json::Value {
+        json!({
+            "tools": [
+                "update_state","handover","add_task","get_health","list_projects",
+                "get_stats","semantic_search","project_info","portfolio_status",
+                "disk_usage","list_ports","version_info","version_bump","env_status",
+                "deps_status","run_build","run_tests","git_status","git_log","git_diff",
+                "git_commit","ask_architect","get_validation_errors","session_note",
+                "create_swarm_task","list_swarm_tasks","approve_swarm_task",
+                "route_capability","list_evolution_candidates","promote_evolution_candidate"
+            ]
+        })
     }
 
     fn handle(&mut self, req: RpcRequest) -> Option<RpcResponse> {
@@ -100,6 +133,7 @@ impl McpServer {
         Some(match result {
             Ok(v) => RpcResponse::ok(id, v),
             Err(msg) if msg.starts_with("rate_limit:") => RpcResponse::err(id, -32029, msg),
+            Err(msg) if msg.starts_with("tool_pin:") => RpcResponse::err(id, -32028, msg),
             Err(msg) if msg.starts_with("method_not_found:") => RpcResponse::err(id, -32601, msg),
             Err(msg) => RpcResponse::err(id, -32603, msg),
         })

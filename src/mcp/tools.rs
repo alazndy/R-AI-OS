@@ -39,6 +39,14 @@ impl McpServer {
     }
 
     pub(super) fn handle_tools_call(&mut self, params: &Value) -> Result<Value, String> {
+        if self.pin_broken {
+            return Err(
+                "tool_pin: manifest tampered — all tool calls blocked. \
+                 Run `raios pin-reset` after verifying the binary."
+                    .to_string(),
+            );
+        }
+
         let name = params["name"].as_str().ok_or("missing tool name")?;
         let args = &params["arguments"];
 

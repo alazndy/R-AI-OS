@@ -249,6 +249,12 @@ pub enum Commands {
     /// Show MCP tool rate-limit configuration from raios-policy.toml
     #[command(name = "rate-status")]
     RateStatus,
+    /// Show or reset the MCP tool manifest pin (supply-chain tamper detection)
+    #[command(name = "pin-reset")]
+    PinReset,
+    /// Show the current pinned tool manifest hash
+    #[command(name = "pin-status")]
+    PinStatus,
 }
 
 #[derive(Subcommand)]
@@ -416,6 +422,8 @@ pub fn run(cli: Cli) {
         Commands::Evolve { action } => swarm::cmd_evolve(action, cli.json),
         Commands::VerifyChain { last } => security::cmd_verify_chain(last, cli.json),
         Commands::RateStatus => security::cmd_rate_status(cli.json),
+        Commands::PinReset => security::cmd_pin_reset(cli.json),
+        Commands::PinStatus => security::cmd_pin_status(cli.json),
     }
 }
 

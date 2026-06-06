@@ -374,9 +374,9 @@ vscode-extension/
 - [x] **Phase 10B:** Security Kernel (Phases 1–4) — Sandbox + Policy + Audit Chain + Egress
 - [x] **Phase IDE:** VS Code Extension — Sidebar WebView + TokenBridge + DaemonManager + Refactor Tree
 - [x] **Phase IDE v0.5:** Sidebar v2 — Git Status card, Swarm card with Approve, Quick Actions
-- [ ] **Phase 11:** Tool Pinning & Drift Detection — MCP tool manifest hashing, supply chain tamper detection
+- [x] **Phase 11:** Tool Pinning & Drift Detection — SHA-256 manifest pin, `-32028` on mismatch, `raios pin-reset / pin-status`
 - [ ] **Phase 12:** Secret Leasing — `raios secret grant <tool> <ENV_VAR>` with TTL-based auto-revoke
-- [ ] **Phase 13:** Rate Limiting — Tool call frequency limiter for AI loop spam protection
+- [x] **Phase 13:** Rate Limiting — Fixed-window counter per tool, `-32029` on exceed, `raios rate-status`
 - [ ] **Phase 14:** Quarantine Mode — Isolate suspicious agent calls, require human approval
 - [ ] **Phase 15:** Write-Back Bridge — Sidebar Kanban → `memory.md` task state sync
 
