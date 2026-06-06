@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="38%" cy="38%" r="70%">
+      <stop offset="0%" stop-color="#1c2030"/>
+      <stop offset="100%" stop-color="#070910"/>
+    </radialGradient>
+
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0L0 0 0 24" fill="none" stroke="#FF7700" stroke-width="0.5" opacity="0.10"/>
+    </pattern>
+
+    <!-- Diagonal hatch for gear face texture -->
+    <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45 0 0)">
+      <line x1="0" y1="0" x2="0" y2="8" stroke="#000" stroke-width="1.2" opacity="0.18"/>
+    </pattern>
+
+    <!-- Orange glow filter -->
+    <filter id="orange-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Clip for rounded canvas -->
+    <clipPath id="canvas-clip">
+      <rect width="512" height="512" rx="60"/>
+    </clipPath>
+  </defs>
+
+  <!-- ── BACKGROUND ── -->
+  <rect width="512" height="512" rx="60" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="60" fill="url(#grid)"/>
+
+  <!-- Outer border -->
+  <rect x="3" y="3" width="506" height="506" rx="57" fill="none" stroke="#FF7700" stroke-width="1.5" opacity="0.30"/>
+
+  <!-- ── LCARS CORNER BRACKETS ── -->
+  <!-- Top-left -->
+  <rect x="22" y="22" width="58" height="8" rx="4" fill="#FF7700"/>
+  <rect x="22" y="22" width="8" height="58" rx="4" fill="#FF7700"/>
+  <!-- Corner dot -->
+  <rect x="22" y="22" width="8" height="8" fill="#FF7700"/>
+
+  <!-- Top-right -->
+  <rect x="432" y="22" width="58" height="8" rx="4" fill="#FF7700"/>
+  <rect x="482" y="22" width="8" height="58" rx="4" fill="#FF7700"/>
+  <rect x="482" y="22" width="8" height="8" fill="#FF7700"/>
+
+  <!-- Bottom-left -->
+  <rect x="22" y="482" width="58" height="8" rx="4" fill="#FF7700"/>
+  <rect x="22" y="432" width="8" height="58" rx="4" fill="#FF7700"/>
+  <rect x="22" y="482" width="8" height="8" fill="#FF7700"/>
+
+  <!-- Bottom-right -->
+  <rect x="432" y="482" width="58" height="8" rx="4" fill="#FF7700"/>
+  <rect x="482" y="432" width="8" height="58" rx="4" fill="#FF7700"/>
+  <rect x="482" y="482" width="8" height="8" fill="#FF7700"/>
+
+  <!-- ── LCARS TOP BLUE BAR ── -->
+  <rect x="96" y="22" width="320" height="8" rx="4" fill="#4499FF" opacity="0.75"/>
+
+  <!-- Small decorative tick marks on blue bar -->
+  <rect x="180" y="22" width="4" height="8" rx="2" fill="#fff" opacity="0.25"/>
+  <rect x="256" y="22" width="4" height="8" rx="2" fill="#fff" opacity="0.35"/>
+  <rect x="332" y="22" width="4" height="8" rx="2" fill="#fff" opacity="0.25"/>
+
+  <!-- ── GEAR SYMBOL (centered at 256, 220) ── -->
+  <!-- Soft orange halo (glow layer) -->
+  <circle cx="256" cy="220" r="118" fill="#FF7700" opacity="0.12" filter="url(#orange-glow)"/>
+
+  <!-- Gear base circle -->
+  <circle cx="256" cy="220" r="110" fill="#FF7700"/>
+
+  <!-- Hatch texture over gear face (industrial feel) -->
+  <circle cx="256" cy="220" r="110" fill="url(#hatch)"/>
+
+  <!-- 8 teeth — rect x=231 y=72 w=50 h=40 rx=5 centered at (256, 92) which is 128px above gear center 220 -->
+  <!-- Rotate around gear center (256, 220) -->
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="#FF7700" transform="rotate(0   256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="#FF7700" transform="rotate(45  256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="#FF7700" transform="rotate(90  256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="#FF7700" transform="rotate(135 256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="#FF7700" transform="rotate(180 256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="#FF7700" transform="rotate(225 256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="#FF7700" transform="rotate(270 256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="#FF7700" transform="rotate(315 256 220)"/>
+
+  <!-- Hatch on top of teeth -->
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="url(#hatch)" transform="rotate(0   256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="url(#hatch)" transform="rotate(45  256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="url(#hatch)" transform="rotate(90  256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="url(#hatch)" transform="rotate(135 256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="url(#hatch)" transform="rotate(180 256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="url(#hatch)" transform="rotate(225 256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="url(#hatch)" transform="rotate(270 256 220)"/>
+  <rect x="231" y="72" width="50" height="40" rx="5" fill="url(#hatch)" transform="rotate(315 256 220)"/>
+
+  <!-- Gear bevel ring (thin dark ring inside outer edge) -->
+  <circle cx="256" cy="220" r="107" fill="none" stroke="#a84d00" stroke-width="3" opacity="0.5"/>
+
+  <!-- ── HUB (dark inner circle) ── -->
+  <circle cx="256" cy="220" r="80" fill="#080b12"/>
+
+  <!-- Hub outer ring accent -->
+  <circle cx="256" cy="220" r="80" fill="none" stroke="#FF7700" stroke-width="2" opacity="0.4"/>
+
+  <!-- ── CIRCUIT TRACES (cardinal, inside hub) ── -->
+  <!-- North -->
+  <line x1="256" y1="220" x2="256" y2="162" stroke="#4499FF" stroke-width="2" opacity="0.60"/>
+  <!-- East -->
+  <line x1="256" y1="220" x2="314" y2="220" stroke="#4499FF" stroke-width="2" opacity="0.60"/>
+  <!-- South -->
+  <line x1="256" y1="220" x2="256" y2="278" stroke="#4499FF" stroke-width="2" opacity="0.60"/>
+  <!-- West -->
+  <line x1="256" y1="220" x2="198" y2="220" stroke="#4499FF" stroke-width="2" opacity="0.60"/>
+
+  <!-- Circuit trace endpoints (node dots) -->
+  <circle cx="256" cy="162" r="5" fill="#4499FF" opacity="0.90"/>
+  <circle cx="314" cy="220" r="5" fill="#4499FF" opacity="0.90"/>
+  <circle cx="256" cy="278" r="5" fill="#4499FF" opacity="0.90"/>
+  <circle cx="198" cy="220" r="5" fill="#4499FF" opacity="0.90"/>
+
+  <!-- Diagonal secondary traces (45°, shorter) -->
+  <line x1="256" y1="220" x2="295" y2="181" stroke="#4499FF" stroke-width="1" opacity="0.30"/>
+  <line x1="256" y1="220" x2="295" y2="259" stroke="#4499FF" stroke-width="1" opacity="0.30"/>
+  <line x1="256" y1="220" x2="217" y2="181" stroke="#4499FF" stroke-width="1" opacity="0.30"/>
+  <line x1="256" y1="220" x2="217" y2="259" stroke="#4499FF" stroke-width="1" opacity="0.30"/>
+
+  <!-- ── INNER RING (center of hub) ── -->
+  <circle cx="256" cy="220" r="36" fill="#0d1018" stroke="#4499FF" stroke-width="1.5" opacity="0.55"/>
+
+  <!-- ── "R" LETTER (centered in hub) ── -->
+  <!-- Shadow layer for depth -->
+  <text
+    x="258" y="245"
+    font-family="'Arial Black', Impact, Arial, sans-serif"
+    font-size="68"
+    font-weight="900"
+    fill="#a84d00"
+    text-anchor="middle"
+    opacity="0.5"
+  >R</text>
+  <!-- Main letter -->
+  <text
+    x="256" y="243"
+    font-family="'Arial Black', Impact, Arial, sans-serif"
+    font-size="68"
+    font-weight="900"
+    fill="white"
+    text-anchor="middle"
+    stroke="#080b12"
+    stroke-width="2"
+    paint-order="stroke"
+  >R</text>
+
+  <!-- ── BOTTOM PANEL ── -->
+  <!-- Separator line -->
+  <rect x="56" y="384" width="400" height="1.5" fill="#FF7700" opacity="0.35"/>
+
+  <!-- Thin blue secondary line -->
+  <rect x="56" y="388" width="400" height="1" fill="#4499FF" opacity="0.25"/>
+
+  <!-- "R-AI-OS" wordmark -->
+  <text
+    x="256" y="432"
+    font-family="'Courier New', 'Lucida Console', Courier, monospace"
+    font-size="44"
+    font-weight="700"
+    fill="white"
+    text-anchor="middle"
+    letter-spacing="7"
+  >R-AI-OS</text>
+
+  <!-- "KERNEL" sub-label -->
+  <text
+    x="256" y="464"
+    font-family="'Courier New', 'Lucida Console', Courier, monospace"
+    font-size="14"
+    fill="#4499FF"
+    text-anchor="middle"
+    letter-spacing="12"
+    opacity="0.80"
+  >KERNEL</text>
+
+  <!-- Version tag (top-right, inside bracket) -->
+  <text
+    x="480" y="42"
+    font-family="'Courier New', monospace"
+    font-size="10"
+    fill="#FF7700"
+    text-anchor="end"
+    opacity="0.60"
+  >v2.0</text>
+
+  <!-- Status indicator dots (bottom, LCARS style) -->
+  <circle cx="90"  cy="472" r="3" fill="#FF7700" opacity="0.55"/>
+  <circle cx="104" cy="472" r="3" fill="#FF7700" opacity="0.35"/>
+  <circle cx="118" cy="472" r="3" fill="#FF7700" opacity="0.20"/>
+
+  <circle cx="422" cy="472" r="3" fill="#4499FF" opacity="0.55"/>
+  <circle cx="408" cy="472" r="3" fill="#4499FF" opacity="0.35"/>
+  <circle cx="394" cy="472" r="3" fill="#4499FF" opacity="0.20"/>
+</svg>
