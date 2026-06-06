@@ -3,7 +3,7 @@
   "publisher": "alazndy",
   "displayName": "R-AI-OS",
   "description": "R-AI-OS Kernel integration for VS Code",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/alazndy/r-ai-os"
