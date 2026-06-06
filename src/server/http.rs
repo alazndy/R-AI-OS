@@ -38,6 +38,7 @@ pub async fn start_http_server(
         .route("/api/health", get(handle_health))
         .route("/api/projects", get(handle_projects))
         .route("/api/tasks", get(handle_tasks))
+        .route("/api/plans", get(handle_plans))
         .route("/api/approve", post(handle_approve))
         .route("/api/stream", get(handle_websocket))
         .layer(axum::middleware::from_fn(auth_middleware))
@@ -197,6 +198,91 @@ async fn handle_approve(
     }
 
     Json(json!({ "status": "error", "message": "Task or diff ID not found" }))
+}
+
+/// GET /api/plans
+/// Reads docs/superpowers/plans/*.md and returns title + checkbox status.
+async fn handle_plans() -> impl IntoResponse {
+    let plans_dir = locate_plans_dir();
+    let plans = match plans_dir {
+        Some(dir) => scan_plans(&dir),
+        None => vec![],
+    };
+    Json(json!({ "plans": plans }))
+}
+
+fn locate_plans_dir() -> Option<std::path::PathBuf> {
+    let suffix = std::path::Path::new("docs").join("superpowers").join("plans");
+
+    // Try binary parent → project root (works for target/debug and target/release)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(target) = exe.parent().and_then(|p| p.parent()) {
+            let candidate = target.parent().unwrap_or(target).join(&suffix);
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    // Fallback: current working directory
+    if let Ok(cwd) = std::env::current_dir() {
+        let candidate = cwd.join(&suffix);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn scan_plans(dir: &std::path::Path) -> Vec<serde_json::Value> {
+    let mut entries: Vec<_> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
+        Err(_) => return vec![],
+    };
+    entries.sort_by_key(|e| e.file_name());
+
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                return None;
+            }
+            let slug = path.file_stem()?.to_string_lossy().to_string();
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+
+            let title = content
+                .lines()
+                .find(|l| l.starts_with("# "))
+                .map(|l| l.trim_start_matches("# ").to_string())
+                .unwrap_or_else(|| slug.clone());
+
+            let checked = content.matches("- [x]").count() + content.matches("- [X]").count();
+            let unchecked = content.matches("- [ ]").count();
+            let total = checked + unchecked;
+            let pct: u8 = if total == 0 { 0 } else { ((checked * 100) / total).min(100) as u8 };
+
+            let status = match (checked, unchecked) {
+                (0, 0) => "no_tasks",
+                (0, _) => "not_started",
+                (_, 0) => "done",
+                _ => "in_progress",
+            };
+
+            let date = slug.get(..10).unwrap_or("").to_string();
+
+            Some(json!({
+                "slug": slug,
+                "title": title,
+                "date": date,
+                "status": status,
+                "checked": checked,
+                "total": total,
+                "pct": pct,
+            }))
+        })
+        .collect()
 }
 
 fn decode_base64(s: &str) -> anyhow::Result<Vec<u8>> {
