@@ -1,7 +1,23 @@
-# ⚡ R-AI-OS: The AI OS Kernel
+# R-AI-OS Kernel
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/alazndy/r-ai-os/master/assets/raios-logo.png" width="220" alt="R-AI-OS Logo">
+  <img src="vscode-extension/icon.png" width="180" alt="R-AI-OS Logo"/>
+</p>
+
+<p align="center">
+<pre>
+  ╔═╗ ══════════════════════════════════════════ ╔═╗
+  ║ ╚╗                                          ╔╝ ║
+  ╚═╗║         ▄█████████████▄                  ║╔═╝
+    ║║      ▄█▀  ┌─────────┐  ▀█▄               ║║
+    ║║   ▄█▀  ───│   · │ · │───  ▀█▄            ║║
+    ║║   █ ─────│   │ R │  │ ───── █           ║║
+    ║║   ▀█▄  ───│   · │ · │───  ▄█▀            ║║
+    ║║      ▀█▄  └─────────┘  ▄█▀               ║║
+  ╔═╝║         ▀█████████████▀                  ║╚═╗
+  ║ ╔╝   · · ·   R - A I - O S   KERNEL  v2.0   ╚╗ ║
+  ╚═╝ ══════════════════════════════════════════ ╚═╝
+</pre>
 </p>
 
 <p align="center">
@@ -12,14 +28,16 @@
   <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v2.0.0--alpha-blue?style=for-the-badge" alt="Version"></a>
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
-  <a href="https://owasp.org/www-project-top-ten/"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
+  <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
+  <a href="#-vs-code-extension"><img src="https://img.shields.io/badge/VS%20Code-v0.5.1-blueviolet?style=for-the-badge&logo=visualstudiocode" alt="VS Code"></a>
 </p>
 
 <p align="center">
   <a href="#-the-vision">Vision</a> •
-  <a href="#-security-kernel">Security Kernel</a> •
-  <a href="#-core-modules">Core Modules</a> •
-  <a href="#-vs-code-extension">VS Code Extension</a> •
+  <a href="#-security-kernel">Security</a> •
+  <a href="#-tri-protocol-interface">Protocols</a> •
+  <a href="#-core-modules">Modules</a> •
+  <a href="#-vs-code-extension">VS Code</a> •
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-cli-reference">CLI</a> •
   <a href="#-roadmap">Roadmap</a>
@@ -29,33 +47,39 @@
 
 ## 🔭 The Vision
 
-R-AI-OS is not just a CLI tool — it is a **Kernel**. While traditional operating systems manage hardware, R-AI-OS manages the **AI layer**: a decentralized swarm of 90+ autonomous specialists running across Claude Code, Gemini CLI, and any MCP-compatible agent.
+R-AI-OS is not a CLI tool — it is a **Kernel**. While traditional operating systems manage hardware, R-AI-OS manages the **AI layer**: a decentralized swarm of 90+ autonomous specialists running across Claude Code, Gemini CLI, and any MCP-compatible agent.
 
-It solves the fundamental problem of **unsupervised agent execution**: agents that run unchecked can leak secrets, corrupt files, and make network calls they shouldn't. R-AI-OS sits between the human and the swarm as a hardened control plane — enforcing policies, auditing every action, and managing context economics.
+It solves the fundamental problem of **unsupervised agent execution**: agents that run unchecked can leak secrets, corrupt files, and make unauthorized network calls. R-AI-OS sits between the human and the swarm as a hardened control plane — enforcing policies, auditing every action, and managing context economics.
 
 ```
 Human → [ R-AI-OS Kernel ] → Agent Swarm (Claude / Gemini / MCP)
               ↓
-    [Security Kernel] [Context Manager] [Swarm Mesh] [Hybrid UI]
+    ┌──────────────────────────────────────────────┐
+    │  Security Kernel  │  Cortex  │  Swarm Mesh  │
+    │  Policy Gate      │  BM25+V  │  Lock Mgr    │
+    │  Audit Ledger     │  Sigmap  │  Factory Mode│
+    └──────────────────────────────────────────────┘
+         ↓ TCP :42069   ↓ MCP :42070   ↓ HTTP :42071
 ```
 
 ---
 
-## 🛡️ Security Kernel (v2.0.0-alpha)
+## 🛡️ Security Kernel
 
-The Security Kernel is the core of R-AI-OS. It enforces a **zero-trust model** for all agent tool calls: every action is policy-gated, logged, and auditable. All 4 phases are complete and tested (239/239 tests green).
+The Security Kernel is the core of R-AI-OS. It enforces a **zero-trust model** for all agent tool calls: every action is policy-gated, logged, and auditable. All 4 phases are implemented and tested.
 
 ### Architecture
 
 ```
 src/security/
-├── sandbox.rs       # Filesystem Jail — canonicalize + boundary enforcement
-├── policy.rs        # Policy Manager — TOML-based allow/deny/confirm engine
-├── verify_chain.rs  # Audit Chain — SHA-256 hash-chained SQLite ledger
-└── egress.rs        # Egress Filter — domain allowlist/blocklist, fail-closed
+├── sandbox.rs       # Phase 1 — Filesystem Jail (canonicalize + boundary)
+├── policy.rs        # Phase 2 — Policy Manager (TOML allow/deny/confirm)
+├── verify_chain.rs  # Phase 3 — Audit Chain (SHA-256 hash-chained SQLite)
+└── egress.rs        # Phase 4 — Egress Filter (domain allowlist, fail-closed)
 ```
 
 ### Phase 1 — Filesystem Jail
+
 Prevents agents from reading or writing outside their designated workspace boundary. Uses path canonicalization to defeat traversal attacks.
 
 ```toml
@@ -66,7 +90,8 @@ workspace_root = "/home/user/projects/my-app"
 ```
 
 ### Phase 2 — Policy Manager
-Every MCP tool call passes through a policy gate before execution. Rules are defined in `raios-policy.toml` and evaluated in order.
+
+Every MCP tool call passes through a policy gate before execution. Rules are defined in `raios-policy.toml` and evaluated in order. Fail-closed by design: `confirm` rules in headless mode deny without an interactive prompt.
 
 ```toml
 [tools]
@@ -82,9 +107,8 @@ path_glob = "/etc/**"
 action = "deny"
 ```
 
-Fail-closed by design: `confirm` rules in daemon/stdio mode deny by default — no interactive prompt means no silent execution.
-
 ### Phase 3 — Audit Chain
+
 Every allow/deny decision is written to a tamper-evident, SHA-256 hash-chained SQLite ledger. Each entry links to the previous entry's hash — any tampering is immediately detectable.
 
 ```bash
@@ -93,7 +117,8 @@ raios verify-chain -n 50    # show last 50 entries then verify
 ```
 
 ### Phase 4 — Egress Filter
-Domain-level allowlist/blocklist for any HTTP/HTTPS calls made via MCP tools. Fail-closed: unrecognized domains are denied unless explicitly allowed.
+
+Domain-level allowlist/blocklist for HTTP/HTTPS calls made via MCP tools. Fail-closed: unrecognized domains are denied unless explicitly allowed.
 
 ```toml
 [egress]
@@ -102,65 +127,125 @@ allowed = ["api.anthropic.com", "api.openai.com", "*.github.com"]
 ```
 
 ### Redaction Engine
-Automatically masks sensitive values (API keys, GCP secrets, PII patterns) before they appear in logs or are forwarded to Sentry. Built on `regex` with 20+ detection patterns.
 
-### Sentry Observability
-Production-grade error tracking with contextual breadcrumbs and automatic panic capture. Every unhandled crash sends a structured report with session context.
+Automatically masks sensitive values (API keys, GCP secrets, PII patterns) before they appear in logs or telemetry. Built on `regex` with 20+ detection patterns.
+
+### Session Token Auth
+
+All HTTP API calls require a Bearer token stored at `%APPDATA%/raios/.session_token` (SHA-256, 8h TTL). The Host header is additionally validated to block DNS rebinding attacks.
+
+---
+
+## 🔌 Tri-Protocol Interface
+
+All three protocols share one event bus and one security kernel:
+
+| Protocol | Port | Purpose |
+| :--- | :--- | :--- |
+| `Daemon TCP` | `:42069` | IPC between CLI and background daemon — UUID token auth, mandatory handshake |
+| `MCP-over-TCP` | `:42070` | Agent tool calls — policy-gated, every call logged to audit ledger |
+| `HTTP / WebSocket` | `:42071` | VS Code extension + external integrations — Bearer auth + Host validation |
+
+### HTTP API Endpoints
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/health` | Daemon health + active agent count |
+| `GET` | `/api/projects` | All tracked projects from DaemonState |
+| `GET` | `/api/tasks` | Tasks from SQLite (grouped by project) |
+| `GET` | `/api/plans` | Plans from `docs/superpowers/plans/*.md` with checkbox progress |
+| `GET` | `/api/git-status?path=<dir>` | Git branch + dirty/staged/modified/untracked for a workspace |
+| `GET` | `/api/swarm` | Active (non-terminal) swarm tasks |
+| `POST` | `/api/approve` | Approve a swarm task (merge branch) or pending diff (write file) |
+| `GET` | `/api/stream` | WebSocket — real-time kernel event stream |
 
 ---
 
 ## 🧠 Core Modules
 
-### 🎯 Unified Agent Router
-Maps natural-language task descriptions to the right specialist using local BM25 + vector hybrid indexing. Bridges Maestro (39 agents) and ECC (48 agents) ecosystems natively.
+### 📉 Cortex — Token Budgeter & Context Manager
 
-### 📉 Token Budgeter & Context Manager (Cortex)
 - **Sigmap:** Up to 97% token reduction via high-density signature mapping (`SIGMAP.md`)
 - **BM25 persistence:** Index survives restarts via mtime-based invalidation
 - **Vector store:** Binary SQLite BLOBs — transaction-safe, no JSON drift
 - **Session memory:** Per-agent `memory.md` auto-append
 
+### 🎯 Unified Agent Router
+
+Maps natural-language task descriptions to the right specialist using local BM25 + vector hybrid indexing. Bridges Maestro (39 agents) and ECC (48 agents) ecosystems natively.
+
 ### 🔄 Agent Swarm Mesh
+
 Parallel worktree-based agent execution with coordination primitives:
+
+- **SwarmStore:** SQLite-backed task registry. States: `Initializing → Running → AwaitingReview → Merged / Rejected / Failed`
 - **Lock Manager:** File and task-level locks with priority levels (User > Agent > Automation)
-- **Radar Whispers:** Real-time context hints pushed to all connected agents (compile errors, security alerts, architectural violations)
+- **Radar Whispers:** Real-time context hints pushed to all connected agents
 - **Factory Mode:** Submit heavy jobs async; completion fires broadcast + optional webhook
 
-### 🔌 Tri-Protocol Interface
-All three protocols share one event bus:
-- `TCP :42069` — Daemon IPC (UUID token auth, mandatory handshake)
-- `TCP :42070` — MCP-over-TCP (agent tool calls, policy-gated)
-- `CLI` — Direct commands (`raios <command>`)
-
 ### 📊 Portfolio Intelligence
+
 - **Neural Search:** Semantic search across 140+ projects with BM25 + embeddings
 - **Health Scanner:** Background scan for `memory.md` compliance, security leaks, git drift
 - **GitHub Sync:** Live star counts and last-commit timestamps
-- **Auto-Discovery:** Detects new workspace directories and updates `entities.json` automatically
+- **Auto-Discovery:** Detects new workspace directories and updates `entities.json`
 
 ---
 
-## 🖥️ VS Code Extension (v0.4.0)
+## 🖥️ VS Code Extension (v0.5.1)
 
-R-AI-OS ships a native VS Code extension that turns the IDE into a **Hybrid UI** — combining the real-time power of the TUI with the rich surface of the IDE.
+R-AI-OS ships a native VS Code extension that turns the IDE into a **Hybrid UI** — the control panel for your agent swarm directly in your sidebar.
 
 ```
 vscode-extension/
-├── src/extension.ts    # Extension host + TokenBridge proxy
-├── src/sidebar/        # Webview Kanban dashboard (Geist Sans + glassmorphism)
-└── raios-0.4.0.vsix    # Packaged extension
+├── src/
+│   ├── extension.ts              # Activation + provider wiring
+│   ├── ipc/
+│   │   ├── DaemonClient.ts       # TCP :42069 connection
+│   │   ├── TokenBridge.ts        # Session token proxy (XSS-safe)
+│   │   └── DaemonManager.ts      # Auto-spawn aiosd, poll token file
+│   └── providers/
+│       ├── SidebarProvider.ts    # Main WebviewView control panel
+│       ├── StatusBarProvider.ts  # Live daemon indicator
+│       ├── DiagnosticProvider.ts # File-save security scan
+│       ├── RefactorProvider.ts   # Refactor surface analysis
+│       └── DiffInboxProvider.ts  # Pending diff approvals
 ```
 
-**Features:**
-- **Activity Bar icon** — `raios-sidebar-view` panel always visible
-- **Kanban Dashboard** — Read-only project status, health scores, active tasks
-- **TokenBridge Proxy** — Extension host proxies all daemon requests with Bearer token; the session token never touches the Webview context (XSS-safe)
-- **Status Bar** — Live daemon connection indicator
+### Control Panel Cards
 
-**Install:**
+| Card | Source | Features |
+| :--- | :--- | :--- |
+| **Git Status** | `/api/git-status` | Branch name, dirty/clean badge, staged/modified/untracked counts |
+| **Plans** | `/api/plans` | Live progress bars per plan file, status chips |
+| **Tasks** | `/api/tasks` | Grouped by project, inline completion indicators |
+| **Swarm** | `/api/swarm` | Active agent tasks, status dots, inline Approve button for `awaiting_review` |
+| **Quick Actions** | Extension host | `cargo build` and `cargo test` via VS Code terminal |
+
+### Security Properties
+
+- **TokenBridge proxy:** The session token never enters the Webview context — all API calls go through the extension host. XSS in the webview cannot exfiltrate the token.
+- **Auto-spawn:** `DaemonManager` starts `aiosd` automatically if the socket isn't listening. Polls the token file and triggers sidebar refresh when ready.
+- **Host validation:** All HTTP calls include the `Host: localhost` header, enforced by the Axum auth middleware.
+
+### Install
+
 ```bash
-code --install-extension vscode-extension/raios-0.4.0.vsix
+# From packaged VSIX
+code --install-extension vscode-extension/raios-0.5.1.vsix
+
+# Or build from source
+cd vscode-extension && npm run compile && vsce package
+code --install-extension raios-*.vsix
 ```
+
+**Keyboard shortcuts:**
+
+| Action | Windows / Linux | macOS |
+| :--- | :--- | :--- |
+| Security Scan | `Ctrl+Shift+R S` | `Cmd+Shift+R S` |
+| Health Check | `Ctrl+Shift+R H` | `Cmd+Shift+R H` |
+| Scan Current File | `Ctrl+Shift+R F` | `Cmd+Shift+R F` |
 
 ---
 
@@ -172,17 +257,20 @@ cd R-AI-OS
 cargo install --path . --force
 ```
 
-Start the daemon (background process that powers the TUI and MCP server):
+Start the daemon (powers the TUI, MCP server, and HTTP API):
+
 ```bash
 aiosd
 ```
 
 Launch the TUI:
+
 ```bash
 raios
 ```
 
 Bootstrap your AI factory (replicates 90+ agents and 180+ skills):
+
 ```bash
 raios bootstrap
 ```
@@ -199,17 +287,8 @@ raios bootstrap
 | `raios health <project>` | Single-project health scan |
 | `raios search "<query>"` | Semantic search across portfolio |
 | `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules) |
-| `raios task "<description>"` | Route to best agent or specific one |
+| `raios task "<description>"` | Route task to best agent |
 | `raios bootstrap` | Replicate AI factory on a new machine |
-
-### Git Operations
-
-| Command | Description |
-| :--- | :--- |
-| `raios git status` | Git status across portfolio |
-| `raios git log` | Recent commits |
-| `raios git diff` | Staged/unstaged diff |
-| `raios git commit` | Intelligent bulk commit |
 
 ### Security
 
@@ -219,6 +298,22 @@ raios bootstrap
 | `raios verify-chain -n <N>` | Show last N entries then verify |
 | `raios security` | OWASP security scan |
 
+### Agent Swarm
+
+| Command | Description |
+| :--- | :--- |
+| `raios swarm start` | Start a parallel agent worktree |
+| `raios swarm list` | List active swarm tasks |
+| `raios swarm approve <id>` | Approve a pending swarm diff (merge branch) |
+
+### Git Operations
+
+| Command | Description |
+| :--- | :--- |
+| `raios git status` | Git status across portfolio |
+| `raios git log` | Recent commits |
+| `raios git commit` | Intelligent bulk commit |
+
 ### Build & Dev
 
 | Command | Description |
@@ -227,20 +322,6 @@ raios bootstrap
 | `raios test` | Run test suite |
 | `raios deps` | Dependency audit |
 | `raios env` | Environment variable scan |
-
-### Agent Swarm
-
-| Command | Description |
-| :--- | :--- |
-| `raios swarm start` | Start a parallel agent worktree |
-| `raios swarm list` | List active swarm tasks |
-| `raios swarm approve <id>` | Approve a pending swarm diff |
-
-### Analysis
-
-| Command | Description |
-| :--- | :--- |
-| `raios rbj --project <name>` | Red-Blue-Judge audit cycle |
 
 ---
 
@@ -256,7 +337,7 @@ src/
 │       └── keyboard/     # Keyboard module (6 sub-modules)
 ├── cli/                  # CLI command implementations
 ├── core/
-│   ├── build/            # Build logic (10 sub-modules, language-specific)
+│   ├── build/            # Build logic (language-specific, 10 sub-modules)
 │   └── deps/             # Dependency management (10 sub-modules)
 ├── cortex/               # Vector store, BM25 index, session memory
 ├── daemon/               # aiosd background daemon
@@ -265,10 +346,21 @@ src/
 ├── search/               # Neural search (BM25 + vector hybrid)
 ├── security/             # Security Kernel (sandbox, policy, chain, egress)
 ├── sentinel/             # Redaction engine, Sentry integration
-├── server/               # HTTP/WebSocket server (Axum)
-├── swarm/                # Parallel worktree agent management
+├── server/               # HTTP/WebSocket server (Axum, :42071)
+├── swarm/                # Parallel worktree agent management + SQLite store
 └── ui/
     └── panels/           # TUI panels (13 modules — dashboard, security, etc.)
+
+vscode-extension/
+├── src/
+│   ├── extension.ts      # Extension activation
+│   ├── ipc/              # DaemonClient, TokenBridge, DaemonManager
+│   ├── providers/        # Sidebar, StatusBar, Diagnostics, Refactor, Diffs
+│   ├── commands/         # CommandBridge
+│   └── bridge/           # JumpToCode
+├── icon.svg              # Master logo (512×512, source of truth)
+├── icon.png              # Extension marketplace icon (512×512)
+└── icon128.png           # Extension sidebar icon (128×128)
 ```
 
 ---
@@ -279,24 +371,15 @@ src/
 - [x] **Phase 8:** Universal Kernel — Tri-protocol, Lock Manager, Radar Whispers, Factory Mode
 - [x] **Phase 9:** Refactor & Modularization — all large files split into focused modules
 - [x] **Phase 10:** Hardened Kernel Alpha — Sentry, Redaction Engine, Audit Ledger
-- [x] **Phase 10B:** Security Kernel (Faz 1–4) — Sandbox + Policy + Audit Chain + Egress ✅
-- [x] **Phase IDE:** Hybrid UI — VS Code Sidebar WebView + TokenBridge Proxy ✅
+- [x] **Phase 10B:** Security Kernel (Phases 1–4) — Sandbox + Policy + Audit Chain + Egress
+- [x] **Phase IDE:** VS Code Extension — Sidebar WebView + TokenBridge + DaemonManager + Refactor Tree
+- [x] **Phase IDE v0.5:** Sidebar v2 — Git Status card, Swarm card with Approve, Quick Actions
 - [ ] **Phase 11:** Tool Pinning & Drift Detection — MCP tool manifest hashing, supply chain tamper detection
 - [ ] **Phase 12:** Secret Leasing — `raios secret grant <tool> <ENV_VAR>` with TTL-based auto-revoke
 - [ ] **Phase 13:** Rate Limiting — Tool call frequency limiter for AI loop spam protection
 - [ ] **Phase 14:** Quarantine Mode — Isolate suspicious agent calls, require human approval
-- [ ] **Phase 15:** Write-Back Bridge — Sidebar Kanban → memory.md task state sync
+- [ ] **Phase 15:** Write-Back Bridge — Sidebar Kanban → `memory.md` task state sync
 
 ---
 
-## 🔗 Research References
-
-- **[vigils](https://github.com/duncatzat/vigils)** — Agent control plane (Filesystem Jail, Egress Filter, Policy Manager, Hash-Chain)
-- **[ruvos](https://github.com/dgdev25/ruvos)** — Agentic OS memory architecture reference
-- **[bash-agent](https://github.com/lloydzhou/bash-agent)** — Lightweight agent worker patterns
-- **[agent-skills](https://github.com/addyosmani/agent-skills)** — Engineering discipline and agent verification
-- **[needle](https://github.com/cactus-compute/needle)** — Ultra-fast local function calling
-
----
-
-**R-AI-OS is the bridge between human creativity and autonomous execution.** 🦾🛡️⚔️
+**R-AI-OS is the bridge between human creativity and autonomous execution.**
