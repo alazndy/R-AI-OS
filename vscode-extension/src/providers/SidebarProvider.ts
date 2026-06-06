@@ -1,15 +1,21 @@
 import * as vscode from "vscode";
 import { TokenBridge } from "../ipc/TokenBridge";
+import { DaemonManager } from "../ipc/DaemonManager";
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "raios.sidebar";
   private _view?: vscode.WebviewView;
+  private _daemonManager?: DaemonManager;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly tokenBridge: TokenBridge,
     private readonly outputChannel: vscode.OutputChannel
   ) {}
+
+  public setDaemonManager(dm: DaemonManager): void {
+    this._daemonManager = dm;
+  }
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -26,6 +32,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this.getHtmlContent(webviewView.webview);
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
+      if (message.type === "startDaemon") {
+        const dm = this._daemonManager;
+        if (!dm) { return; }
+        webviewView.webview.postMessage({ type: "daemonSpawning" });
+        const ok = await dm.spawn();
+        webviewView.webview.postMessage({ type: ok ? "refresh" : "daemonFailed" });
+        return;
+      }
       await this.tokenBridge.handleMessage(message, webviewView.webview);
     });
 
@@ -362,6 +376,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
       } else if (message.type === "refresh") {
         updateDashboard();
+      } else if (message.type === "daemonSpawning") {
+        document.getElementById("status-text").textContent = "Starting...";
+      } else if (message.type === "daemonFailed") {
+        document.getElementById("status-text").textContent = "Start failed";
+        document.getElementById("status-dot").className = "status-dot status-disconnected";
       }
     });
 
@@ -460,9 +479,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         statusDot.className = "status-dot status-disconnected";
         statusText.textContent = "Offline";
         approvalBox.style.display = "none";
-        projectsList.innerHTML = '<div class="empty-state">Daemon offline. Run "raios daemon start"</div>';
-        plansList.innerHTML    = '<div class="empty-state">—</div>';
-        tasksList.innerHTML    = '<div class="empty-state">—</div>';
+        projectsList.innerHTML = \`<div class="empty-state">
+          Daemon not running.<br>
+          <button id="launch-btn" class="btn" style="margin-top:10px;width:auto;padding:6px 14px;font-size:11px;">
+            Launch Daemon
+          </button>
+        </div>\`;
+        plansList.innerHTML = '<div class="empty-state">—</div>';
+        tasksList.innerHTML = '<div class="empty-state">—</div>';
+
+        document.getElementById("launch-btn")?.addEventListener("click", () => {
+          document.getElementById("launch-btn").textContent = "Starting...";
+          document.getElementById("launch-btn").disabled = true;
+          vscode.postMessage({ type: "startDaemon" });
+        });
       }
     }
 

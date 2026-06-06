@@ -11,6 +11,7 @@ import { RefactorTreeProvider } from "./providers/RefactorTreeProvider";
 import { RefactorStatusItem } from "./providers/RefactorStatusItem";
 import { JumpToCode } from "./bridge/JumpToCode";
 import { TokenBridge } from "./ipc/TokenBridge";
+import { DaemonManager } from "./ipc/DaemonManager";
 import { SidebarProvider } from "./providers/SidebarProvider";
 
 let client: DaemonClient;
@@ -31,6 +32,15 @@ export function activate(context: vscode.ExtensionContext): void {
   diagnostics = new DiagnosticProvider(outputChannel);
   const tokenBridge = new TokenBridge(context);
   const sidebarProvider = new SidebarProvider(context, tokenBridge, outputChannel);
+
+  const daemonManager = new DaemonManager(outputChannel, () => {
+    sidebarProvider.triggerRefresh();
+  });
+  sidebarProvider.setDaemonManager(daemonManager);
+  context.subscriptions.push({ dispose: () => daemonManager.dispose() });
+
+  // Auto-start daemon if not running — fire and forget, sidebar refreshes on ready
+  daemonManager.ensureRunning().catch(() => {/* handled internally */});
   const securityDecorations = new SecurityDecorationProvider();
   diagnostics.setDecorationProvider(securityDecorations);
 

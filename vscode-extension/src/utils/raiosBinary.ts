@@ -49,3 +49,51 @@ export function resolveRaiosBinary(): string {
   // Fallback: rely on PATH (may work if VS Code was launched from terminal)
   return "raios";
 }
+
+/**
+ * Resolve the full path to the aiosd daemon binary.
+ * Checks the same locations as raios, plus sibling of the raios binary.
+ */
+export function resolveAiosdBinary(): string | null {
+  const home = os.homedir();
+  const isWindows = process.platform === "win32";
+  const exe = isWindows ? "aiosd.exe" : "aiosd";
+
+  // Check sibling of the resolved raios binary first
+  const raiosBin = resolveRaiosBinary();
+  const siblingDir = path.dirname(raiosBin);
+  const sibling = path.join(siblingDir, exe);
+  try {
+    if (fs.existsSync(sibling)) {
+      return sibling;
+    }
+  } catch { /* continue */ }
+
+  const candidates = [
+    path.join(home, ".cargo", "bin", exe),
+    path.join(home, ".aios", exe),
+    path.join("/usr/local/bin", exe),
+    path.join("/usr/bin", exe),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch { /* continue */ }
+  }
+
+  return null;
+}
+
+/**
+ * Returns the path where the daemon writes its session token.
+ */
+export function tokenFilePath(): string {
+  const isWindows = process.platform === "win32";
+  const configBase = isWindows
+    ? process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming")
+    : path.join(os.homedir(), ".config");
+  return path.join(configBase, "raios", ".session_token");
+}
