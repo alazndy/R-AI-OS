@@ -4,6 +4,7 @@ pub mod egress;
 pub mod license;
 pub mod patterns;
 pub mod policy;
+pub mod quarantine;
 pub mod rate_limiter;
 pub mod sandbox;
 pub mod scanner;

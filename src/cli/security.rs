@@ -1,4 +1,5 @@
 use crate::security::license::{scan_licenses, LicenseReport};
+use crate::security::quarantine;
 use std::path::Path;
 
 pub(super) fn cmd_security(
@@ -399,6 +400,94 @@ pub(super) fn cmd_pin_status(json: bool) {
                 println!("Start `raios mcp-server` to create the initial pin.");
             }
         }
+    }
+}
+
+pub(super) fn cmd_quarantine(action: crate::cli::QuarantineAction, json: bool) {
+    use crate::cli::QuarantineAction::*;
+
+    let conn = match crate::db::open_db() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to open database: {e}");
+            std::process::exit(1);
+        }
+    };
+    let _ = quarantine::ensure_table(&conn);
+
+    match action {
+        List => {
+            let items = quarantine::list_pending(&conn).unwrap_or_default();
+            if json {
+                println!("{}", serde_json::to_string(&items).unwrap_or_default());
+                return;
+            }
+            if items.is_empty() {
+                println!("No pending quarantine items.");
+                return;
+            }
+            println!("{:<20}  {:<25}  {}", "ID", "TOOL", "CREATED");
+            for i in &items {
+                println!("{:<20}  {:<25}  {}", i.id, i.tool, i.created_at);
+            }
+        }
+        All => {
+            let items = quarantine::list_all(&conn).unwrap_or_default();
+            if json {
+                println!("{}", serde_json::to_string(&items).unwrap_or_default());
+                return;
+            }
+            if items.is_empty() {
+                println!("No quarantine items found.");
+                return;
+            }
+            println!("{:<20}  {:<25}  {:<10}  {}", "ID", "TOOL", "STATUS", "CREATED");
+            for i in &items {
+                println!("{:<20}  {:<25}  {:<10}  {}", i.id, i.tool, i.status, i.created_at);
+            }
+        }
+        Approve { id } => match quarantine::approve(&conn, &id) {
+            Ok(true) => {
+                if json {
+                    println!("{{\"status\":\"approved\",\"id\":\"{id}\"}}");
+                } else {
+                    println!("Approved {id}. Agent may now retry the tool call.");
+                }
+            }
+            Ok(false) => {
+                eprintln!("No pending item with id '{id}'.");
+                std::process::exit(1);
+            }
+            Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
+        },
+        Deny { id } => match quarantine::deny(&conn, &id) {
+            Ok(true) => {
+                if json {
+                    println!("{{\"status\":\"denied\",\"id\":\"{id}\"}}");
+                } else {
+                    println!("Denied {id}. Future calls for this tool will be blocked.");
+                }
+            }
+            Ok(false) => {
+                eprintln!("No active item with id '{id}'.");
+                std::process::exit(1);
+            }
+            Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
+        },
+        Clear { id } => match quarantine::clear(&conn, &id) {
+            Ok(true) => {
+                if json {
+                    println!("{{\"status\":\"cleared\",\"id\":\"{id}\"}}");
+                } else {
+                    println!("Cleared {id} from quarantine queue.");
+                }
+            }
+            Ok(false) => {
+                eprintln!("No item with id '{id}'.");
+                std::process::exit(1);
+            }
+            Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
+        },
     }
 }
 

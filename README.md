@@ -377,7 +377,7 @@ vscode-extension/
 - [x] **Phase 11:** Tool Pinning & Drift Detection — SHA-256 manifest pin, `-32028` on mismatch, `raios pin-reset / pin-status`
 - [ ] **Phase 12:** Secret Leasing — `raios secret grant <tool> <ENV_VAR>` with TTL-based auto-revoke
 - [x] **Phase 13:** Rate Limiting — Fixed-window counter per tool, `-32029` on exceed, `raios rate-status`
-- [ ] **Phase 14:** Quarantine Mode — Isolate suspicious agent calls, require human approval
+- [x] **Phase 14:** Quarantine Mode — Pattern-matched quarantine queue, `-32027` on block, `raios quarantine list/approve/deny`
 - [ ] **Phase 15:** Write-Back Bridge — Sidebar Kanban → `memory.md` task state sync
 
 ---

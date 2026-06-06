@@ -255,6 +255,25 @@ pub enum Commands {
     /// Show the current pinned tool manifest hash
     #[command(name = "pin-status")]
     PinStatus,
+    /// Manage the MCP tool call quarantine queue (Phase 14)
+    Quarantine {
+        #[command(subcommand)]
+        action: QuarantineAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum QuarantineAction {
+    /// List pending quarantine items
+    List,
+    /// List all quarantine items (all statuses)
+    All,
+    /// Approve a queued tool call (agent must retry after approval)
+    Approve { id: String },
+    /// Deny a queued tool call
+    Deny { id: String },
+    /// Remove an entry from the queue entirely
+    Clear { id: String },
 }
 
 #[derive(Subcommand)]
@@ -424,6 +443,7 @@ pub fn run(cli: Cli) {
         Commands::RateStatus => security::cmd_rate_status(cli.json),
         Commands::PinReset => security::cmd_pin_reset(cli.json),
         Commands::PinStatus => security::cmd_pin_status(cli.json),
+        Commands::Quarantine { action } => security::cmd_quarantine(action, cli.json),
     }
 }
 

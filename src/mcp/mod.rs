@@ -18,6 +18,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use crate::config::Config;
+use crate::security::quarantine::{self, QuarantineStore};
 use crate::security::rate_limiter::RateLimiter;
 use crate::security::tool_pin;
 
@@ -63,6 +64,7 @@ impl RpcResponse {
 pub(super) struct McpServer {
     pub(super) config: Config,
     rate_limiter: RateLimiter,
+    quarantine: QuarantineStore,
     pin_broken: bool,
 }
 
@@ -77,9 +79,19 @@ impl McpServer {
                 vault_projects_path: detected.vault_projects.unwrap_or_default(),
             }
         });
-        let rate_limiter = crate::security::PolicyConfig::try_load_default()
-            .map(|p| RateLimiter::from_policy(p.rate_limits))
+        let policy = crate::security::PolicyConfig::try_load_default();
+        let rate_limiter = policy.as_ref()
+            .map(|p| RateLimiter::from_policy(p.rate_limits.clone()))
             .unwrap_or_else(RateLimiter::disabled);
+        let quarantine = QuarantineStore::from_policy(
+            policy.and_then(|p| p.quarantine)
+        );
+
+        if quarantine.is_enabled() {
+            if let Ok(conn) = crate::db::open_db() {
+                let _ = quarantine::ensure_table(&conn);
+            }
+        }
 
         let manifest_json = serde_json::to_string(
             &Self::static_tools_manifest()
@@ -97,7 +109,7 @@ impl McpServer {
             }
         };
 
-        Self { config, rate_limiter, pin_broken }
+        Self { config, rate_limiter, quarantine, pin_broken }
     }
 
     fn static_tools_manifest() -> serde_json::Value {
@@ -134,6 +146,7 @@ impl McpServer {
             Ok(v) => RpcResponse::ok(id, v),
             Err(msg) if msg.starts_with("rate_limit:") => RpcResponse::err(id, -32029, msg),
             Err(msg) if msg.starts_with("tool_pin:") => RpcResponse::err(id, -32028, msg),
+            Err(msg) if msg.starts_with("quarantine:") => RpcResponse::err(id, -32027, msg),
             Err(msg) if msg.starts_with("method_not_found:") => RpcResponse::err(id, -32601, msg),
             Err(msg) => RpcResponse::err(id, -32603, msg),
         })

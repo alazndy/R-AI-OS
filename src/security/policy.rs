@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 
 use crate::security::rate_limiter::RateLimitConfig;
+use crate::security::quarantine::QuarantineConfig;
 
 // ─── Config Schema ────────────────────────────────────────────────────────────
 
@@ -15,6 +16,8 @@ pub struct PolicyConfig {
     pub egress: Option<EgressPolicy>,
     /// Optional rate limiting rules (Phase 13)
     pub rate_limits: Option<RateLimitConfig>,
+    /// Optional quarantine rules (Phase 14)
+    pub quarantine: Option<QuarantineConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

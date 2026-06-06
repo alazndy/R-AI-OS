@@ -54,6 +54,15 @@ impl McpServer {
             return Err(e.to_string());
         }
 
+        if self.quarantine.is_enabled() {
+            let args_str = serde_json::to_string(args).unwrap_or_default();
+            if let Ok(conn) = crate::db::open_db() {
+                if let Err(e) = self.quarantine.check(&conn, name, &args_str) {
+                    return Err(e.to_string());
+                }
+            }
+        }
+
         match name {
             "update_state"    => self.tool_update_state(args),
             "handover"        => self.tool_handover(args),
