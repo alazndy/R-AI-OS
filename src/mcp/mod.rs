@@ -18,6 +18,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use crate::config::Config;
+use crate::security::rate_limiter::RateLimiter;
 
 // ─── JSON-RPC types ───────────────────────────────────────────────────────────
 
@@ -60,6 +61,7 @@ impl RpcResponse {
 
 pub(super) struct McpServer {
     pub(super) config: Config,
+    rate_limiter: RateLimiter,
 }
 
 impl McpServer {
@@ -73,7 +75,10 @@ impl McpServer {
                 vault_projects_path: detected.vault_projects.unwrap_or_default(),
             }
         });
-        Self { config }
+        let rate_limiter = crate::security::PolicyConfig::try_load_default()
+            .map(|p| RateLimiter::from_policy(p.rate_limits))
+            .unwrap_or_else(RateLimiter::disabled);
+        Self { config, rate_limiter }
     }
 
     fn handle(&mut self, req: RpcRequest) -> Option<RpcResponse> {
@@ -88,13 +93,15 @@ impl McpServer {
             "resources/read" => self.handle_resources_read(&req.params),
             "tools/list"  => self.handle_tools_list(),
             "tools/call"  => self.handle_tools_call(&req.params),
-            other => Err(format!("Unknown method: {}", other)),
+            other => Err(format!("method_not_found:{}", other)),
         };
 
         if is_notification { return None; }
         Some(match result {
-            Ok(v)    => RpcResponse::ok(id, v),
-            Err(msg) => RpcResponse::err(id, -32601, msg),
+            Ok(v) => RpcResponse::ok(id, v),
+            Err(msg) if msg.starts_with("rate_limit:") => RpcResponse::err(id, -32029, msg),
+            Err(msg) if msg.starts_with("method_not_found:") => RpcResponse::err(id, -32601, msg),
+            Err(msg) => RpcResponse::err(id, -32603, msg),
         })
     }
 

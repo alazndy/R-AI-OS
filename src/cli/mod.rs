@@ -246,6 +246,9 @@ pub enum Commands {
         #[arg(short = 'n', long, default_value = "0")]
         last: usize,
     },
+    /// Show MCP tool rate-limit configuration from raios-policy.toml
+    #[command(name = "rate-status")]
+    RateStatus,
 }
 
 #[derive(Subcommand)]
@@ -412,6 +415,7 @@ pub fn run(cli: Cli) {
         Commands::Route { query } => swarm::cmd_route(&query, cli.json),
         Commands::Evolve { action } => swarm::cmd_evolve(action, cli.json),
         Commands::VerifyChain { last } => security::cmd_verify_chain(last, cli.json),
+        Commands::RateStatus => security::cmd_rate_status(cli.json),
     }
 }
 

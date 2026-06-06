@@ -4,6 +4,7 @@ pub mod egress;
 pub mod license;
 pub mod patterns;
 pub mod policy;
+pub mod rate_limiter;
 pub mod sandbox;
 pub mod scanner;
 pub mod verify_chain;
@@ -19,6 +20,7 @@ pub use patterns::{scan_file, WATCHED_EXTS};
 pub use scanner::scan_project;
 pub use sandbox::{validate_path, is_path_safe};
 pub use policy::PolicyConfig;
+pub use rate_limiter::{RateLimiter, RateLimitConfig, ToolRateStatus};
 pub use verify_chain::{record_audit_event, verify_chain};
 
 // ─── Types ───────────────────────────────────────────────────────────────────

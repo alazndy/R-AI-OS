@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use anyhow::{Result, anyhow};
 
+use crate::security::rate_limiter::RateLimitConfig;
+
 // ─── Config Schema ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,6 +13,8 @@ pub struct PolicyConfig {
     pub tools: ToolsPolicy,
     /// Optional egress (network) filtering rules
     pub egress: Option<EgressPolicy>,
+    /// Optional rate limiting rules (Phase 13)
+    pub rate_limits: Option<RateLimitConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

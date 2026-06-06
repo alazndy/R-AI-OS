@@ -316,3 +316,47 @@ pub(super) fn cmd_verify_chain(last: usize, json: bool) {
     }
 }
 
+pub(super) fn cmd_rate_status(json: bool) {
+    let config = crate::security::PolicyConfig::try_load_default();
+
+    match config.and_then(|c| c.rate_limits) {
+        None => {
+            if json {
+                println!("{{\"enabled\":false,\"source\":\"no raios-policy.toml found or no [rate_limits] section\"}}");
+            } else {
+                println!("Rate limiting: DISABLED (no raios-policy.toml or no [rate_limits] section)");
+                println!("Create raios-policy.toml with [rate_limits] to enable.");
+            }
+        }
+        Some(cfg) => {
+            if json {
+                let rules: Vec<serde_json::Value> = cfg.rules.iter().map(|r| {
+                    serde_json::json!({ "tool": r.tool, "max_calls": r.max_calls })
+                }).collect();
+                println!("{}", serde_json::json!({
+                    "enabled": cfg.enabled,
+                    "window_secs": cfg.window_secs,
+                    "default_max": cfg.default_max,
+                    "rules": rules,
+                }));
+            } else {
+                let status = if cfg.enabled { "ENABLED" } else { "DISABLED" };
+                println!("Rate limiting: {status}");
+                println!("  Window:      {}s", cfg.window_secs);
+                println!("  Default max: {} calls/window", cfg.default_max);
+                if cfg.rules.is_empty() {
+                    println!("  Rules:       (none — default applies to all tools)");
+                } else {
+                    println!("  Rules:");
+                    for r in &cfg.rules {
+                        let label = if r.tool == "*" { "(all tools)" } else { &r.tool };
+                        println!("    {label:<30}  max {} calls/{}s", r.max_calls, cfg.window_secs);
+                    }
+                }
+                println!();
+                println!("Note: live call counts are tracked per MCP server process.");
+            }
+        }
+    }
+}
+

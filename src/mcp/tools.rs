@@ -42,6 +42,10 @@ impl McpServer {
         let name = params["name"].as_str().ok_or("missing tool name")?;
         let args = &params["arguments"];
 
+        if let Err(e) = self.rate_limiter.check(name) {
+            return Err(e.to_string());
+        }
+
         match name {
             "update_state"    => self.tool_update_state(args),
             "handover"        => self.tool_handover(args),
