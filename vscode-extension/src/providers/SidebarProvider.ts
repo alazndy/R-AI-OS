@@ -32,6 +32,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this.getHtmlContent(webviewView.webview);
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
+      if (message.type === "runBuild") {
+        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const term = vscode.window.createTerminal({ name: "R-AI-OS: Build", cwd });
+        term.sendText("cargo build");
+        term.show();
+        return;
+      }
+      if (message.type === "runTest") {
+        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const term = vscode.window.createTerminal({ name: "R-AI-OS: Test", cwd });
+        term.sendText("cargo test");
+        term.show();
+        return;
+      }
       if (message.type === "startDaemon") {
         const dm = this._daemonManager;
         if (!dm) { return; }
@@ -54,7 +68,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   public triggerRefresh(): void {
     if (this._view) {
-      this._view.webview.postMessage({ type: "refresh" });
+      const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+      this._view.webview.postMessage({ type: "refresh", workspacePath: wsPath });
     }
   }
 
@@ -253,6 +268,48 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       flex-shrink: 0;
     }
 
+    /* Git Status */
+    .git-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 28px; }
+    .git-badge {
+      font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px;
+    }
+    .git-badge.clean { background: rgba(16,185,129,0.15); color: var(--success-color); }
+    .git-badge.dirty { background: rgba(245,158,11,0.15); color: var(--warning-color); }
+    .git-stat { font-size: 11px; color: var(--text-muted); }
+    .git-stat b { color: var(--text-main); font-weight: 600; }
+
+    /* Swarm */
+    .swarm-item {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.03);
+    }
+    .swarm-item:last-child { border-bottom: none; }
+    .swarm-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 3px;
+    }
+    .swarm-dot.running       { background: var(--warning-color); box-shadow: 0 0 6px var(--warning-color); }
+    .swarm-dot.awaiting_review { background: #f97316; box-shadow: 0 0 6px #f97316; }
+    .swarm-dot.initializing  { background: var(--gray-color); }
+    .swarm-body { flex: 1; min-width: 0; }
+    .swarm-desc { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .swarm-meta { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+    .btn-approve {
+      font-size: 10px; padding: 3px 8px; flex-shrink: 0;
+      background: rgba(249,115,22,0.12); border: 1px solid rgba(249,115,22,0.3);
+      color: #f97316; border-radius: 4px; cursor: pointer; transition: background 0.2s;
+    }
+    .btn-approve:hover { background: rgba(249,115,22,0.22); }
+
+    /* Quick Actions */
+    .quick-actions { display: flex; gap: 8px; margin-bottom: 12px; }
+    .btn-action {
+      flex: 1; background: rgba(255,255,255,0.06); border: 1px solid var(--panel-border);
+      color: var(--text-main); border-radius: 6px; padding: 7px 8px;
+      font-size: 11px; font-weight: 500; cursor: pointer;
+      text-align: center; transition: background 0.2s;
+    }
+    .btn-action:hover { background: rgba(255,255,255,0.11); }
+
     /* Approval */
     .approval-alert {
       background: rgba(245,158,11,0.1);
@@ -325,13 +382,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <div class="approval-alert">⚠️ Action Required: Approval pending.</div>
   </div>
 
-  <!-- Projects -->
+  <div id="offline-box" style="display: none;">
+    <div class="approval-alert" style="background:rgba(239,68,68,0.08);border-color:rgba(239,68,68,0.25);color:var(--error-color);">
+      Daemon not running.
+      <button id="launch-btn" class="btn" style="margin-top:8px;padding:6px 14px;font-size:11px;">
+        Launch Daemon
+      </button>
+    </div>
+  </div>
+
+  <!-- Git Status -->
   <div class="card">
     <div class="card-title">
-      <span>Active Projects</span>
-      <span id="project-count" style="font-size:10px; color: var(--text-muted);"></span>
+      <span>Git Status</span>
+      <span id="git-branch-label" style="font-size:10px;color:var(--text-muted);font-family:monospace;"></span>
     </div>
-    <div id="projects-list"><div class="empty-state">Loading...</div></div>
+    <div id="git-status-body"><div class="empty-state">Loading...</div></div>
   </div>
 
   <!-- Plans -->
@@ -349,7 +415,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <div id="tasks-list"><div class="empty-state">Loading...</div></div>
   </div>
 
-  <div style="margin-top: 16px;">
+  <!-- Swarm -->
+  <div class="card">
+    <div class="card-title">
+      <span>Swarm</span>
+      <span id="swarm-count" style="font-size:10px;color:var(--text-muted);"></span>
+    </div>
+    <div id="swarm-list"><div class="empty-state">Loading...</div></div>
+  </div>
+
+  <!-- Quick Actions -->
+  <div class="quick-actions">
+    <button id="btn-build" class="btn-action">Build</button>
+    <button id="btn-test" class="btn-action">Test</button>
+  </div>
+
+  <div>
     <button id="refresh-btn" class="btn btn-secondary">Refresh</button>
   </div>
 
@@ -357,6 +438,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     let requestIdCounter = 0;
     const pendingRequests = new Map();
+    let currentWorkspacePath = "";
 
     function apiFetch(endpoint, method = "GET", body = null) {
       const requestId = requestIdCounter++;
@@ -375,6 +457,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           message.success ? req.resolve(message.data) : req.reject(new Error(message.error));
         }
       } else if (message.type === "refresh") {
+        if (message.workspacePath !== undefined) currentWorkspacePath = message.workspacePath;
         updateDashboard();
       } else if (message.type === "daemonSpawning") {
         document.getElementById("status-text").textContent = "Starting...";
@@ -385,36 +468,44 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     });
 
     async function updateDashboard() {
-      const statusDot  = document.getElementById("status-dot");
-      const statusText = document.getElementById("status-text");
-      const projectsList = document.getElementById("projects-list");
+      const statusDot    = document.getElementById("status-dot");
+      const statusText   = document.getElementById("status-text");
+      const approvalBox  = document.getElementById("approval-box");
+      const offlineBox   = document.getElementById("offline-box");
+      const gitBody      = document.getElementById("git-status-body");
       const plansList    = document.getElementById("plans-list");
       const tasksList    = document.getElementById("tasks-list");
-      const approvalBox  = document.getElementById("approval-box");
+      const swarmList    = document.getElementById("swarm-list");
 
       try {
         const health = await apiFetch("/api/health");
         statusDot.className = "status-dot status-connected";
         statusText.textContent = "Daemon Live";
         approvalBox.style.display = health.needs_human_approval ? "block" : "none";
+        offlineBox.style.display = "none";
 
-        // Projects
+        // Git Status
         try {
-          const projects = await apiFetch("/api/projects");
-          document.getElementById("project-count").textContent = (projects.length || 0) + " total";
-          if (!projects || projects.length === 0) {
-            projectsList.innerHTML = '<div class="empty-state">No active projects</div>';
+          const pathParam = currentWorkspacePath ? "?path=" + encodeURIComponent(currentWorkspacePath) : "";
+          const git = await apiFetch("/api/git-status" + pathParam);
+          if (git.error) {
+            document.getElementById("git-branch-label").textContent = "";
+            gitBody.innerHTML = \`<div class="empty-state">\${esc(git.error)}</div>\`;
           } else {
-            projectsList.innerHTML = projects.map(p => {
-              const name = p.name || (p.path || "").split(/[\\\\/]/).pop() || "Unknown";
-              return \`<div class="project-item">
-                <span class="project-name">\${esc(name)}</span>
-                <span class="project-meta">\${esc(p.language || "Rust")}</span>
-              </div>\`;
-            }).join("");
+            document.getElementById("git-branch-label").textContent = git.branch || "";
+            const badgeClass = git.dirty ? "dirty" : "clean";
+            const badgeText  = git.dirty ? "Dirty" : "Clean";
+            let stats = "";
+            if (git.staged    > 0) stats += \`<span class="git-stat"><b>\${git.staged}</b> staged</span>\`;
+            if (git.modified  > 0) stats += \`<span class="git-stat"><b>\${git.modified}</b> modified</span>\`;
+            if (git.untracked > 0) stats += \`<span class="git-stat"><b>\${git.untracked}</b> untracked</span>\`;
+            gitBody.innerHTML = \`<div class="git-meta">
+              <span class="git-badge \${badgeClass}">\${badgeText}</span>
+              \${stats}
+            </div>\`;
           }
         } catch {
-          projectsList.innerHTML = '<div class="empty-state" style="color:var(--error-color)">Load failed</div>';
+          gitBody.innerHTML = '<div class="empty-state" style="color:var(--error-color)">Load failed</div>';
         }
 
         // Plans
@@ -422,7 +513,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           const planData = await apiFetch("/api/plans");
           const plans = planData.plans || [];
           document.getElementById("plans-count").textContent = plans.length + " plans";
-
           if (plans.length === 0) {
             plansList.innerHTML = '<div class="empty-state">No plans found</div>';
           } else {
@@ -431,9 +521,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 ? "Done"
                 : p.status === "not_started"
                   ? "Not started"
-                  : p.total > 0
-                    ? p.checked + "/" + p.total
-                    : "—";
+                  : p.total > 0 ? p.checked + "/" + p.total : "—";
               const barWidth = p.status === "done" ? 100 : (p.total > 0 ? Math.round(p.checked * 100 / p.total) : 0);
               return \`<div class="plan-item">
                 <div class="plan-dot \${esc(p.status)}"></div>
@@ -475,25 +563,69 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           tasksList.innerHTML = '<div class="empty-state" style="color:var(--error-color)">Load failed</div>';
         }
 
+        // Swarm
+        try {
+          const swarmData = await apiFetch("/api/swarm");
+          const swarmTasks = swarmData.tasks || [];
+          document.getElementById("swarm-count").textContent = swarmTasks.length > 0 ? swarmTasks.length + " active" : "";
+          if (swarmTasks.length === 0) {
+            swarmList.innerHTML = '<div class="empty-state">No active swarm tasks</div>';
+          } else {
+            swarmList.innerHTML = swarmTasks.map(t => {
+              const dotClass = t.status === "running" ? "running"
+                : t.status === "awaiting_review" ? "awaiting_review" : "initializing";
+              const approveBtn = t.status === "awaiting_review"
+                ? \`<button class="btn-approve" data-id="\${esc(t.id)}">Approve</button>\`
+                : "";
+              return \`<div class="swarm-item">
+                <div class="swarm-dot \${dotClass}"></div>
+                <div class="swarm-body">
+                  <div class="swarm-desc" title="\${esc(t.description)}">\${esc(t.description)}</div>
+                  <div class="swarm-meta">\${esc(t.project)} · \${esc(t.agent)}</div>
+                </div>
+                \${approveBtn}
+              </div>\`;
+            }).join("");
+            swarmList.querySelectorAll(".btn-approve").forEach(btn => {
+              btn.addEventListener("click", async () => {
+                btn.textContent = "...";
+                btn.disabled = true;
+                try {
+                  await apiFetch("/api/approve", "POST", { task_id: btn.dataset.id });
+                  updateSwarm();
+                } catch {
+                  btn.textContent = "Failed";
+                }
+              });
+            });
+          }
+        } catch {
+          swarmList.innerHTML = '<div class="empty-state" style="color:var(--error-color)">Load failed</div>';
+        }
+
       } catch {
         statusDot.className = "status-dot status-disconnected";
         statusText.textContent = "Offline";
         approvalBox.style.display = "none";
-        projectsList.innerHTML = \`<div class="empty-state">
-          Daemon not running.<br>
-          <button id="launch-btn" class="btn" style="margin-top:10px;width:auto;padding:6px 14px;font-size:11px;">
-            Launch Daemon
-          </button>
-        </div>\`;
-        plansList.innerHTML = '<div class="empty-state">—</div>';
-        tasksList.innerHTML = '<div class="empty-state">—</div>';
-
-        document.getElementById("launch-btn")?.addEventListener("click", () => {
-          document.getElementById("launch-btn").textContent = "Starting...";
-          document.getElementById("launch-btn").disabled = true;
-          vscode.postMessage({ type: "startDaemon" });
-        });
+        offlineBox.style.display = "block";
+        if (gitBody)    gitBody.innerHTML   = '<div class="empty-state">—</div>';
+        if (plansList)  plansList.innerHTML  = '<div class="empty-state">—</div>';
+        if (tasksList)  tasksList.innerHTML  = '<div class="empty-state">—</div>';
+        if (swarmList)  swarmList.innerHTML  = '<div class="empty-state">—</div>';
+        document.getElementById("git-branch-label").textContent = "";
       }
+    }
+
+    async function updateSwarm() {
+      const swarmList = document.getElementById("swarm-list");
+      try {
+        const swarmData = await apiFetch("/api/swarm");
+        const swarmTasks = swarmData.tasks || [];
+        document.getElementById("swarm-count").textContent = swarmTasks.length > 0 ? swarmTasks.length + " active" : "";
+        if (swarmTasks.length === 0) {
+          swarmList.innerHTML = '<div class="empty-state">No active swarm tasks</div>';
+        }
+      } catch { /* silent */ }
     }
 
     function esc(str) {
@@ -510,6 +642,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const btn = document.getElementById("refresh-btn");
       btn.innerHTML = '<span class="loading-spinner"></span>Refreshing...';
       updateDashboard().finally(() => { btn.textContent = "Refresh"; });
+    });
+
+    document.getElementById("launch-btn").addEventListener("click", () => {
+      const btn = document.getElementById("launch-btn");
+      btn.textContent = "Starting...";
+      btn.disabled = true;
+      vscode.postMessage({ type: "startDaemon" });
+    });
+
+    document.getElementById("btn-build").addEventListener("click", () => {
+      vscode.postMessage({ type: "runBuild" });
+    });
+
+    document.getElementById("btn-test").addEventListener("click", () => {
+      vscode.postMessage({ type: "runTest" });
     });
 
     updateDashboard();

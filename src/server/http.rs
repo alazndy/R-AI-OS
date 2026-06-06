@@ -1,6 +1,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
+        Query,
         State,
     },
     http::{header, HeaderMap, StatusCode},
@@ -40,6 +41,8 @@ pub async fn start_http_server(
         .route("/api/tasks", get(handle_tasks))
         .route("/api/plans", get(handle_plans))
         .route("/api/approve", post(handle_approve))
+        .route("/api/git-status", get(handle_git_status))
+        .route("/api/swarm", get(handle_swarm))
         .route("/api/stream", get(handle_websocket))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(app_state);
@@ -283,6 +286,90 @@ fn scan_plans(dir: &std::path::Path) -> Vec<serde_json::Value> {
             }))
         })
         .collect()
+}
+
+#[derive(Deserialize)]
+struct PathQuery {
+    path: Option<String>,
+}
+
+/// GET /api/git-status?path=<workspace_path>
+async fn handle_git_status(Query(params): Query<PathQuery>) -> impl IntoResponse {
+    let path = params.path.filter(|p| !p.is_empty()).unwrap_or_else(|| ".".to_string());
+
+    let out = std::process::Command::new("git")
+        .args(["-C", &path, "status", "--porcelain=v1", "-b"])
+        .output();
+
+    match out {
+        Err(_) => Json(json!({ "error": "git not available" })),
+        Ok(output) if !output.status.success() && output.stdout.is_empty() => {
+            Json(json!({ "error": "not a git repo" }))
+        }
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let mut branch = "unknown".to_string();
+            let mut staged: u32 = 0;
+            let mut modified: u32 = 0;
+            let mut untracked: u32 = 0;
+
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("## ") {
+                    branch = rest.split("...").next().unwrap_or(rest).to_string();
+                } else if line.len() >= 2 {
+                    let bytes = line.as_bytes();
+                    let x = bytes[0] as char;
+                    let y = bytes[1] as char;
+                    if x == '?' && y == '?' {
+                        untracked += 1;
+                    } else {
+                        if x != ' ' { staged += 1; }
+                        if y != ' ' { modified += 1; }
+                    }
+                }
+            }
+
+            let dirty = staged + modified + untracked > 0;
+            Json(json!({
+                "branch": branch,
+                "dirty": dirty,
+                "staged": staged,
+                "modified": modified,
+                "untracked": untracked,
+            }))
+        }
+    }
+}
+
+/// GET /api/swarm
+/// Lists active (non-terminal) swarm tasks.
+async fn handle_swarm() -> impl IntoResponse {
+    let store = crate::swarm::store::SwarmStore::new(
+        crate::swarm::store::SwarmStore::default_path(),
+    );
+    let tasks: Vec<_> = store
+        .list_active()
+        .iter()
+        .map(|t| {
+            let status = match &t.status {
+                crate::swarm::SwarmStatus::Initializing => "initializing",
+                crate::swarm::SwarmStatus::Running => "running",
+                crate::swarm::SwarmStatus::AwaitingReview => "awaiting_review",
+                crate::swarm::SwarmStatus::Merged => "merged",
+                crate::swarm::SwarmStatus::Rejected => "rejected",
+                crate::swarm::SwarmStatus::Failed(_) => "failed",
+            };
+            json!({
+                "id": t.id.to_string(),
+                "project": t.project_name,
+                "description": t.task_description,
+                "agent": t.agent,
+                "status": status,
+                "created_at": t.created_at,
+            })
+        })
+        .collect();
+    Json(json!({ "tasks": tasks }))
 }
 
 fn decode_base64(s: &str) -> anyhow::Result<Vec<u8>> {
