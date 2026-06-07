@@ -63,6 +63,13 @@ impl McpServer {
             }
         }
 
+        // Inject active secret leases into the process environment for this tool call.
+        if let Ok(conn) = crate::db::open_db() {
+            for (var, val) in crate::security::secret_lease::active_env_for_tool(&conn, name) {
+                std::env::set_var(var, val);
+            }
+        }
+
         match name {
             "update_state"    => self.tool_update_state(args),
             "handover"        => self.tool_handover(args),

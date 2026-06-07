@@ -260,6 +260,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: QuarantineAction,
     },
+    /// Manage TTL-scoped secret leases for MCP tools (Phase 12)
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -274,6 +279,26 @@ pub enum QuarantineAction {
     Deny { id: String },
     /// Remove an entry from the queue entirely
     Clear { id: String },
+}
+
+#[derive(Subcommand)]
+pub enum SecretAction {
+    /// Grant a tool access to an env var for a limited time (e.g. --ttl 5m)
+    Grant {
+        /// Tool name that receives the lease
+        tool: String,
+        /// Environment variable to expose (value read from host env at call time)
+        env_var: String,
+        /// TTL duration: 30s, 5m, 2h, 1d
+        #[arg(long, default_value = "5m")]
+        ttl: String,
+    },
+    /// List all active secret leases
+    List,
+    /// List all leases including expired/revoked
+    All,
+    /// Revoke an active lease by ID
+    Revoke { id: String },
 }
 
 #[derive(Subcommand)]
@@ -444,6 +469,7 @@ pub fn run(cli: Cli) {
         Commands::PinReset => security::cmd_pin_reset(cli.json),
         Commands::PinStatus => security::cmd_pin_status(cli.json),
         Commands::Quarantine { action } => security::cmd_quarantine(action, cli.json),
+        Commands::Secret { action } => security::cmd_secret(action, cli.json),
     }
 }
 

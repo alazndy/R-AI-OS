@@ -6,6 +6,7 @@ pub mod patterns;
 pub mod policy;
 pub mod quarantine;
 pub mod rate_limiter;
+pub mod secret_lease;
 pub mod sandbox;
 pub mod scanner;
 pub mod tool_pin;

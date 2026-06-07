@@ -1,5 +1,6 @@
 use crate::security::license::{scan_licenses, LicenseReport};
 use crate::security::quarantine;
+use crate::security::secret_lease;
 use std::path::Path;
 
 pub(super) fn cmd_security(
@@ -484,6 +485,89 @@ pub(super) fn cmd_quarantine(action: crate::cli::QuarantineAction, json: bool) {
             }
             Ok(false) => {
                 eprintln!("No item with id '{id}'.");
+                std::process::exit(1);
+            }
+            Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
+        },
+    }
+}
+
+pub(super) fn cmd_secret(action: crate::cli::SecretAction, json: bool) {
+    use crate::cli::SecretAction::*;
+
+    let conn = match crate::db::open_db() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to open database: {e}");
+            std::process::exit(1);
+        }
+    };
+    let _ = secret_lease::ensure_table(&conn);
+
+    match action {
+        Grant { tool, env_var, ttl } => {
+            let ttl_secs = match secret_lease::parse_ttl(&ttl) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("Invalid TTL: {e}"); std::process::exit(1); }
+            };
+            match secret_lease::grant(&conn, &tool, &env_var, ttl_secs) {
+                Ok(id) => {
+                    if json {
+                        println!("{{\"status\":\"granted\",\"id\":\"{id}\",\"tool\":\"{tool}\",\"env_var\":\"{env_var}\",\"ttl_secs\":{ttl_secs}}}");
+                    } else {
+                        println!("Lease granted.");
+                        println!("  ID:      {id}");
+                        println!("  Tool:    {tool}");
+                        println!("  Env var: {env_var}");
+                        println!("  TTL:     {ttl} ({ttl_secs}s)");
+                        println!();
+                        println!("The env var will be injected when '{tool}' is called via MCP.");
+                        println!("Run `raios secret revoke {id}` to revoke early.");
+                    }
+                }
+                Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
+            }
+        }
+        List => {
+            let leases = secret_lease::list_active(&conn).unwrap_or_default();
+            if json {
+                println!("{}", serde_json::to_string(&leases).unwrap_or_default());
+                return;
+            }
+            if leases.is_empty() {
+                println!("No active secret leases.");
+                return;
+            }
+            println!("{:<20}  {:<25}  {:<20}  {}", "ID", "TOOL", "ENV_VAR", "EXPIRES");
+            for l in &leases {
+                println!("{:<20}  {:<25}  {:<20}  {}", l.id, l.tool, l.env_var, l.expires_at);
+            }
+        }
+        All => {
+            let leases = secret_lease::list_all(&conn).unwrap_or_default();
+            if json {
+                println!("{}", serde_json::to_string(&leases).unwrap_or_default());
+                return;
+            }
+            if leases.is_empty() {
+                println!("No secret leases found.");
+                return;
+            }
+            println!("{:<20}  {:<25}  {:<20}  {:<10}  {}", "ID", "TOOL", "ENV_VAR", "STATUS", "EXPIRES");
+            for l in &leases {
+                println!("{:<20}  {:<25}  {:<20}  {:<10}  {}", l.id, l.tool, l.env_var, l.status, l.expires_at);
+            }
+        }
+        Revoke { id } => match secret_lease::revoke(&conn, &id) {
+            Ok(true) => {
+                if json {
+                    println!("{{\"status\":\"revoked\",\"id\":\"{id}\"}}");
+                } else {
+                    println!("Lease {id} revoked.");
+                }
+            }
+            Ok(false) => {
+                eprintln!("No active lease with id '{id}'.");
                 std::process::exit(1);
             }
             Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
