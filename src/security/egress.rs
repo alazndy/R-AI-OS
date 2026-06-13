@@ -134,7 +134,11 @@ mod tests {
 
     #[test]
     fn deny_all_blocks_everything() {
-        let f = EgressFilter { enabled: true, deny_all: true, ..EgressFilter::disabled() };
+        let f = EgressFilter {
+            enabled: true,
+            deny_all: true,
+            ..EgressFilter::disabled()
+        };
         assert!(!f.is_allowed("https://api.github.com"));
     }
 

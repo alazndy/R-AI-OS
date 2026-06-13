@@ -30,7 +30,11 @@ pub(crate) fn emit_security_whispers(
 }
 
 /// Background worker that periodically updates project health reports.
-pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>) {
+pub async fn start_health_worker(
+    state: Arc<RwLock<DaemonState>>,
+    tx: broadcast::Sender<String>,
+    interval: Duration,
+) {
     println!("[Daemon] Health Worker started.");
 
     loop {
@@ -92,20 +96,12 @@ pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast:
             println!("[Daemon] Health scan complete. Reports updated.");
 
             // 3. Broadcast new state
-            let msg = serde_json::json!({
-                "event": "StateSync",
-                "projects": s.projects,
-                "health_reports": s.health_reports,
-                "active_agents": s.active_agents,
-                "index_ready": s.index.is_some(),
-                "handover_count": s.handover_count,
-                "pending_file_changes": s.pending_file_changes
-            });
+            let msg = s.sync_payload();
             let _ = tx_clone.send(msg.to_string());
         }
 
         // Wait before next scan (e.g., 5 minutes)
-        sleep(Duration::from_secs(300)).await;
+        sleep(interval).await;
     }
 }
 

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 // ─── Config (raios-policy.toml [quarantine]) ─────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QuarantineConfig {
     pub enabled: bool,
     /// Tool names that are always quarantined regardless of args.
@@ -12,16 +12,6 @@ pub struct QuarantineConfig {
     /// Substrings matched against args JSON; any match triggers quarantine.
     #[serde(default)]
     pub suspicious_patterns: Vec<String>,
-}
-
-impl Default for QuarantineConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            always_quarantine: vec![],
-            suspicious_patterns: vec![],
-        }
-    }
 }
 
 // ─── Item ─────────────────────────────────────────────────────────────────────
@@ -65,9 +55,10 @@ impl QuarantineStore {
         if self.config.always_quarantine.iter().any(|t| t == tool) {
             return true;
         }
-        self.config.suspicious_patterns.iter().any(|p| {
-            args_json.contains(p.as_str()) || tool.contains(p.as_str())
-        })
+        self.config
+            .suspicious_patterns
+            .iter()
+            .any(|p| args_json.contains(p.as_str()) || tool.contains(p.as_str()))
     }
 
     /// Check whether a tool call should be quarantined.
@@ -239,10 +230,7 @@ pub fn deny(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
 }
 
 pub fn clear(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
-    let n = conn.execute(
-        "DELETE FROM quarantine_queue WHERE id=?1",
-        params![id],
-    )?;
+    let n = conn.execute("DELETE FROM quarantine_queue WHERE id=?1", params![id])?;
     Ok(n > 0)
 }
 
@@ -304,7 +292,9 @@ mod tests {
     fn suspicious_pattern_in_args_blocks() {
         let conn = mem_conn();
         let s = store(&[], &["--force"]);
-        let err = s.check(&conn, "run_build", r#"{"flags":"--force"}"#).unwrap_err();
+        let err = s
+            .check(&conn, "run_build", r#"{"flags":"--force"}"#)
+            .unwrap_err();
         assert!(matches!(err, QuarantineError::Queued(_)));
     }
 
@@ -319,8 +309,9 @@ mod tests {
     fn approve_then_retry_succeeds() {
         let conn = mem_conn();
         let s = store(&["git_commit"], &[]);
-        let QuarantineError::Queued(id) = s.check(&conn, "git_commit", "{}").unwrap_err()
-        else { panic!("expected Queued") };
+        let QuarantineError::Queued(id) = s.check(&conn, "git_commit", "{}").unwrap_err() else {
+            panic!("expected Queued")
+        };
         approve(&conn, &id).unwrap();
         assert!(s.check(&conn, "git_commit", "{}").is_ok());
     }
@@ -329,8 +320,9 @@ mod tests {
     fn deny_blocks_future_calls() {
         let conn = mem_conn();
         let s = store(&["run_build"], &[]);
-        let QuarantineError::Queued(id) = s.check(&conn, "run_build", "{}").unwrap_err()
-        else { panic!("expected Queued") };
+        let QuarantineError::Queued(id) = s.check(&conn, "run_build", "{}").unwrap_err() else {
+            panic!("expected Queued")
+        };
         deny(&conn, &id).unwrap();
         let err = s.check(&conn, "run_build", "{}").unwrap_err();
         assert!(matches!(err, QuarantineError::Denied(_)));

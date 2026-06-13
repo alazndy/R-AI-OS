@@ -1,7 +1,7 @@
+use super::common::{failed_result, failed_test, BuildResult, TestResult};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use super::common::{failed_result, failed_test, BuildResult, TestResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IacKind {
@@ -53,9 +53,7 @@ fn parse_docker_output(output: &str) -> (bool, usize) {
         || output.contains("Use 'docker scan'");
     let errors = output
         .lines()
-        .filter(|l| {
-            l.trim_start().starts_with("error:") || l.trim_start().starts_with("ERROR:")
-        })
+        .filter(|l| l.trim_start().starts_with("error:") || l.trim_start().starts_with("ERROR:"))
         .count();
     (ok && errors == 0, errors)
 }

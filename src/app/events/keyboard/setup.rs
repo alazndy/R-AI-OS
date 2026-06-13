@@ -1,5 +1,5 @@
-use crate::app::App;
 use crate::app::state::{AppState, BgMsg};
+use crate::app::App;
 use crate::config::Config;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -67,6 +67,9 @@ impl App {
                                 master_md_path: master,
                                 skills_path: skills,
                                 vault_projects_path: vault,
+                                system_name: "k-ai-ra".to_string(),
+                                github_user: String::new(),
+                                daemon: Default::default(),
                             };
                             let _ = cfg.save();
                             self.config = cfg;
@@ -94,7 +97,7 @@ impl App {
             KeyCode::Tab => match self.wizard.step {
                 WizardStep::Claude => self.wizard.skip_claude = !self.wizard.skip_claude,
                 WizardStep::Gemini => self.wizard.skip_gemini = !self.wizard.skip_gemini,
-                WizardStep::Antigravity => {
+                WizardStep::Codex => {
                     self.wizard.skip_antigravity = !self.wizard.skip_antigravity
                 }
                 _ => {

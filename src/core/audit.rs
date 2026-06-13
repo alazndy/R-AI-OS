@@ -23,11 +23,11 @@ pub fn parse_lighthouse_json(url: &str, json: &str, duration_ms: u128) -> AuditR
     let cats = &v["categories"];
     AuditResult {
         url: url.to_string(),
-        performance:    score_to_u8(&cats["performance"]["score"]),
-        accessibility:  score_to_u8(&cats["accessibility"]["score"]),
+        performance: score_to_u8(&cats["performance"]["score"]),
+        accessibility: score_to_u8(&cats["accessibility"]["score"]),
         best_practices: score_to_u8(&cats["best-practices"]["score"]),
-        seo:            score_to_u8(&cats["seo"]["score"]),
-        pwa:            score_to_u8(&cats["pwa"]["score"]),
+        seo: score_to_u8(&cats["seo"]["score"]),
+        pwa: score_to_u8(&cats["pwa"]["score"]),
         duration_ms,
         lighthouse_missing: false,
     }
@@ -40,8 +40,10 @@ pub fn run_lighthouse(url: &str) -> AuditResult {
             "--yes",
             "lighthouse",
             url,
-            "--output", "json",
-            "--output-path", "stdout",
+            "--output",
+            "json",
+            "--output-path",
+            "stdout",
             "--chrome-flags=--headless --no-sandbox",
             "--quiet",
         ])
@@ -87,11 +89,11 @@ mod tests {
             }
         }"#;
         let result = parse_lighthouse_json("https://example.com", json, 0);
-        assert_eq!(result.performance,    95);
-        assert_eq!(result.accessibility,  88);
+        assert_eq!(result.performance, 95);
+        assert_eq!(result.accessibility, 88);
         assert_eq!(result.best_practices, 100);
-        assert_eq!(result.seo,            92);
-        assert_eq!(result.pwa,            30);
+        assert_eq!(result.seo, 92);
+        assert_eq!(result.pwa, 30);
         assert!(!result.lighthouse_missing);
     }
 
@@ -106,10 +108,10 @@ mod tests {
     fn parse_lighthouse_json_handles_empty_categories() {
         let json = r#"{"categories": {}}"#;
         let result = parse_lighthouse_json("https://example.com", json, 0);
-        assert_eq!(result.performance,    0);
-        assert_eq!(result.accessibility,  0);
+        assert_eq!(result.performance, 0);
+        assert_eq!(result.accessibility, 0);
         assert_eq!(result.best_practices, 0);
-        assert_eq!(result.seo,            0);
-        assert_eq!(result.pwa,            0);
+        assert_eq!(result.seo, 0);
+        assert_eq!(result.pwa, 0);
     }
 }

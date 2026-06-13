@@ -81,16 +81,13 @@ fn parse_cargo_audit(json: &serde_json::Value, issues: &mut Vec<SecurityIssue>) 
             let severity = match severity_str {
                 s if s.contains("9.") || s.contains("10.") => Severity::Critical,
                 s if s.contains("7.") || s.contains("8.") => Severity::High,
-                s if s.contains("4.")
-                    || s.contains("5.")
-                    || s.contains("6.") =>
-                {
-                    Severity::Medium
-                }
+                s if s.contains("4.") || s.contains("5.") || s.contains("6.") => Severity::Medium,
                 _ => Severity::Low,
             };
             let pkg = vuln["package"]["name"].as_str().unwrap_or("unknown");
-            let title = vuln["advisory"]["title"].as_str().unwrap_or("Vulnerability");
+            let title = vuln["advisory"]["title"]
+                .as_str()
+                .unwrap_or("Vulnerability");
             issues.push(SecurityIssue {
                 owasp: "A06",
                 title: "Vulnerable dependency (cargo)",

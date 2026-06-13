@@ -1,7 +1,7 @@
-use super::*;
-use super::common::{cvss_to_severity};
 use super::android::count_catalog_versions;
+use super::common::cvss_to_severity;
 use super::ios::parse_package_resolved;
+use super::*;
 
 #[test]
 fn cvss_to_severity_ranges() {

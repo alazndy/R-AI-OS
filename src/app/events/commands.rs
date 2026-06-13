@@ -147,6 +147,7 @@ impl App {
                     // Re-use load logic: parse inline
                     let new_task = crate::tasks::parse_task_line(&fake_line).unwrap_or_else(|| {
                         crate::tasks::Task {
+                            id: None,
                             text: rest.to_string(),
                             completed: false,
                             agent: None,
@@ -266,9 +267,10 @@ impl App {
                         // Trigger correction task
                         let task_text = format!("FIX SENTINEL ERRORS: {}", sentinel_errors[0]);
                         let task = crate::tasks::Task {
+                            id: None,
                             text: task_text,
                             completed: false,
-                            agent: Some("claude".into()), // Default to claude for healing
+                            agent: Some("claude".into()),
                             project: Some(proj.name.clone()),
                         };
                         let result = crate::tasks::dispatch_to_agent(

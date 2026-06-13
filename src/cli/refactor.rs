@@ -83,7 +83,10 @@ pub(super) fn cmd_refactor(
             "Refactor Report — Grade {} ({}/100)",
             report.grade, report.score
         );
-        println!("  HIGH: {} | MED: {}", report.high_count, report.medium_count);
+        println!(
+            "  HIGH: {} | MED: {}",
+            report.high_count, report.medium_count
+        );
         println!();
         for issue in &report.issues {
             println!(

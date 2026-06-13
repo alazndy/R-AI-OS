@@ -11,22 +11,20 @@ pub(super) fn cmd_security(
     json: bool,
 ) {
     // Resolve target: existing filesystem path takes priority, else treat as project name filter
-    let (scan_path, project_filter): (Option<std::path::PathBuf>, Option<String>) =
-        match &target {
-            None => (None, None),
-            Some(t) => {
-                let p = std::path::PathBuf::from(t);
-                if p.exists() {
-                    (Some(p), None)
-                } else {
-                    (None, Some(t.clone()))
-                }
+    let (scan_path, project_filter): (Option<std::path::PathBuf>, Option<String>) = match &target {
+        None => (None, None),
+        Some(t) => {
+            let p = std::path::PathBuf::from(t);
+            if p.exists() {
+                (Some(p), None)
+            } else {
+                (None, Some(t.clone()))
             }
-        };
+        }
+    };
 
     if watch {
-        let watch_target = scan_path
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        let watch_target = scan_path.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         if !watch_target.exists() {
             eprintln!("Path does not exist: {}", watch_target.display());
             std::process::exit(1);
@@ -45,21 +43,33 @@ pub(super) fn cmd_security(
         let projects = crate::entities::load_entities(dev_ops);
         if let Some(ref q) = project_filter {
             let q = q.to_lowercase();
-            projects.into_iter()
+            projects
+                .into_iter()
                 .filter(|p| p.name.to_lowercase().contains(&q))
-                .map(|p| (p.name, p.local_path)).collect()
+                .map(|p| (p.name, p.local_path))
+                .collect()
         } else {
-            projects.into_iter().map(|p| (p.name, p.local_path)).collect()
+            projects
+                .into_iter()
+                .map(|p| (p.name, p.local_path))
+                .collect()
         }
     };
 
-    if targets.is_empty() { eprintln!("No projects found."); return; }
+    if targets.is_empty() {
+        eprintln!("No projects found.");
+        return;
+    }
 
     let mut all_reports = Vec::new();
     for (name, path) in &targets {
-        if !json { eprint!("  scanning {}...", name); }
+        if !json {
+            eprint!("  scanning {}...", name);
+        }
         let report = scan_project(path);
-        if !json { eprintln!(" {} ({}/100)", report.grade, report.score); }
+        if !json {
+            eprintln!(" {} ({}/100)", report.grade, report.score);
+        }
         all_reports.push((name.clone(), path.clone(), report));
     }
 
@@ -84,7 +94,8 @@ pub(super) fn cmd_security(
             high_count: usize,
             issues: Vec<IssueJson<'a>>,
         }
-        let rows: Vec<Row> = all_reports.iter()
+        let rows: Vec<Row> = all_reports
+            .iter()
             .map(|(n, p, r)| Row {
                 schema_version: 1,
                 name: n,
@@ -93,36 +104,65 @@ pub(super) fn cmd_security(
                 grade: r.grade,
                 critical_count: r.critical_count(),
                 high_count: r.high_count(),
-                issues: r.issues.iter().map(|i| IssueJson {
-                    owasp: i.owasp,
-                    severity: i.severity.label(),
-                    title: i.title,
-                    file: i.file.as_ref().map(|p| p.display().to_string()),
-                    line: i.line,
-                    snippet: i.snippet.as_ref(),
-                }).collect(),
+                issues: r
+                    .issues
+                    .iter()
+                    .map(|i| IssueJson {
+                        owasp: i.owasp,
+                        severity: i.severity.label(),
+                        title: i.title,
+                        file: i.file.as_ref().map(|p| p.display().to_string()),
+                        line: i.line,
+                        snippet: i.snippet.as_ref(),
+                    })
+                    .collect(),
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_default()
+        );
         return;
     }
 
     println!();
     println!("Security Scan Results");
     println!("{}", "─".repeat(72));
-    println!("{:<28} {:>5}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}", "Project", "Score", "Grade", "Crit", "High", "Med", "Low");
+    println!(
+        "{:<28} {:>5}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}",
+        "Project", "Score", "Grade", "Crit", "High", "Med", "Low"
+    );
     println!("{}", "─".repeat(72));
 
     let mut total_score: u32 = 0;
     let mut total_crit = 0usize;
 
     for (name, _, report) in &all_reports {
-        let crit = report.issues.iter().filter(|i| i.severity == Severity::Critical).count();
-        let high = report.issues.iter().filter(|i| i.severity == Severity::High).count();
-        let med  = report.issues.iter().filter(|i| i.severity == Severity::Medium).count();
-        let low  = report.issues.iter().filter(|i| i.severity == Severity::Low).count();
+        let crit = report
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::Critical)
+            .count();
+        let high = report
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::High)
+            .count();
+        let med = report
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::Medium)
+            .count();
+        let low = report
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::Low)
+            .count();
         let name_trunc: String = name.chars().take(27).collect();
-        println!("{:<28} {:>5}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}", name_trunc, report.score, report.grade, crit, high, med, low);
+        println!(
+            "{:<28} {:>5}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}",
+            name_trunc, report.score, report.grade, crit, high, med, low
+        );
         total_score += report.score as u32;
         total_crit += crit;
         if full && !report.issues.is_empty() {
@@ -132,8 +172,15 @@ pub(super) fn cmd_security(
     }
 
     println!("{}", "─".repeat(72));
-    let avg = if all_reports.is_empty() { 0 } else { total_score as usize / all_reports.len() };
-    println!("Average score: {}/100   Total critical issues: {}", avg, total_crit);
+    let avg = if all_reports.is_empty() {
+        0
+    } else {
+        total_score as usize / all_reports.len()
+    };
+    println!(
+        "Average score: {}/100   Total critical issues: {}",
+        avg, total_crit
+    );
     if !full && all_reports.iter().any(|(_, _, r)| !r.issues.is_empty()) {
         println!("\nUse --full to see individual issues.");
     }
@@ -145,7 +192,9 @@ pub(super) fn cmd_security_watch(path: &Path, json: bool) -> anyhow::Result<()> 
     use std::sync::mpsc::channel;
 
     let (tx, rx) = channel();
-    let mut watcher = notify::recommended_watcher(move |res| { let _ = tx.send(res); })?;
+    let mut watcher = notify::recommended_watcher(move |res| {
+        let _ = tx.send(res);
+    })?;
     watcher.watch(path, RecursiveMode::Recursive)?;
     eprintln!("Guard watching {} (Ctrl+C to stop)", path.display());
 
@@ -153,13 +202,19 @@ pub(super) fn cmd_security_watch(path: &Path, json: bool) -> anyhow::Result<()> 
         match rx.recv() {
             Ok(Ok(event)) => {
                 use notify::EventKind;
-                if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) { continue; }
+                if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+                    continue;
+                }
                 for file_path in &event.paths {
                     let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    if !WATCHED_EXTS.contains(&ext) { continue; }
+                    if !WATCHED_EXTS.contains(&ext) {
+                        continue;
+                    }
                     let issues = scan_file(file_path);
                     print_guard_result(file_path, &issues, json);
-                    if !issues.is_empty() { send_toast(file_path, &issues); }
+                    if !issues.is_empty() {
+                        send_toast(file_path, &issues);
+                    }
                 }
             }
             Ok(Err(e)) => eprintln!("[guard] watcher error: {e}"),
@@ -181,43 +236,94 @@ fn print_report(report: &crate::security::SecurityReport, json: bool) {
         }
         return;
     }
-    println!("Security scan: score={}/100 grade={}", report.score, report.grade);
-    if report.issues.is_empty() { println!("No issues found"); return; }
+    println!(
+        "Security scan: score={}/100 grade={}",
+        report.score, report.grade
+    );
+    if report.issues.is_empty() {
+        println!("No issues found");
+        return;
+    }
     for issue in &report.issues {
-        let file_info = issue.file.as_ref()
+        let file_info = issue
+            .file
+            .as_ref()
             .map(|p| format!(" — {}:{}", p.display(), issue.line.unwrap_or(0)))
             .unwrap_or_default();
-        println!("⚠ {} [{}] {}{}", issue.severity.label(), issue.owasp, issue.title, file_info);
-        if let Some(ref s) = issue.snippet { println!("   \"{}\"", s); }
+        println!(
+            "⚠ {} [{}] {}{}",
+            issue.severity.label(),
+            issue.owasp,
+            issue.title,
+            file_info
+        );
+        if let Some(ref s) = issue.snippet {
+            println!("   \"{}\"", s);
+        }
     }
 }
 
 fn print_guard_result(path: &Path, issues: &[crate::security::SecurityIssue], json: bool) {
     if json {
-        if issues.is_empty() { return; }
-        let out: Vec<serde_json::Value> = issues.iter().map(|i| serde_json::json!({
-            "file": path.display().to_string(), "line": i.line, "owasp": i.owasp,
-            "severity": i.severity.label(), "title": i.title, "snippet": i.snippet
-        })).collect();
+        if issues.is_empty() {
+            return;
+        }
+        let out: Vec<serde_json::Value> = issues
+            .iter()
+            .map(|i| {
+                serde_json::json!({
+                    "file": path.display().to_string(), "line": i.line, "owasp": i.owasp,
+                    "severity": i.severity.label(), "title": i.title, "snippet": i.snippet
+                })
+            })
+            .collect();
         match serde_json::to_string_pretty(&out) {
             Ok(j) => println!("{j}"),
             Err(e) => eprintln!("JSON error: {e}"),
         }
         return;
     }
-    if issues.is_empty() { eprintln!("  {} clean", path.display()); return; }
+    if issues.is_empty() {
+        eprintln!("  {} clean", path.display());
+        return;
+    }
     for issue in issues {
-        eprintln!("⚠ {} [{}] {} — {}:{}", issue.severity.label(), issue.owasp, issue.title, path.display(), issue.line.unwrap_or(0));
-        if let Some(ref s) = issue.snippet { eprintln!("   \"{}\"", s); }
+        eprintln!(
+            "⚠ {} [{}] {} — {}:{}",
+            issue.severity.label(),
+            issue.owasp,
+            issue.title,
+            path.display(),
+            issue.line.unwrap_or(0)
+        );
+        if let Some(ref s) = issue.snippet {
+            eprintln!("   \"{}\"", s);
+        }
     }
 }
 
 fn send_toast(path: &Path, issues: &[crate::security::SecurityIssue]) {
-    let top = match issues.first() { Some(i) => i, None => return };
-    let filename = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string());
-    let body = format!("{} · {} in {}:{}", top.owasp, top.title, filename, top.line.unwrap_or(0));
+    let top = match issues.first() {
+        Some(i) => i,
+        None => return,
+    };
+    let filename = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let body = format!(
+        "{} · {} in {}:{}",
+        top.owasp,
+        top.title,
+        filename,
+        top.line.unwrap_or(0)
+    );
     let summary = format!("[RAIOS GUARD] {}", top.severity.label());
-    if let Err(e) = notify_rust::Notification::new().summary(&summary).body(&body).show() {
+    if let Err(e) = notify_rust::Notification::new()
+        .summary(&summary)
+        .body(&body)
+        .show()
+    {
         eprintln!("[guard] toast failed (non-fatal): {e}");
     }
 }
@@ -227,7 +333,10 @@ pub(super) fn cmd_license(project: Option<String>, dev_ops: &Path, json_out: boo
     let report = scan_licenses(&path);
 
     if json_out {
-        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
         return;
     }
 
@@ -254,8 +363,15 @@ fn print_license_report(report: &LicenseReport) {
     if report.copyleft_count > 0 || report.unknown_count > 0 {
         println!("\n  Issues:");
         for dep in report.deps.iter().filter(|d| d.is_copyleft || d.is_unknown) {
-            let tag = if dep.is_copyleft { "COPYLEFT" } else { "UNKNOWN " };
-            println!("    [{}] {} {} — {}", tag, dep.name, dep.version, dep.license);
+            let tag = if dep.is_copyleft {
+                "COPYLEFT"
+            } else {
+                "UNKNOWN "
+            };
+            println!(
+                "    [{}] {} {} — {}",
+                tag, dep.name, dep.version, dep.license
+            );
         }
     }
     println!();
@@ -304,7 +420,10 @@ pub(super) fn cmd_verify_chain(last: usize, json: bool) {
             if json {
                 println!("{{\"status\":\"ok\",\"entries_verified\":{}}}", n);
             } else {
-                println!("✅ Audit chain OK — {} entries verified, no tampering detected.", n);
+                println!(
+                    "✅ Audit chain OK — {} entries verified, no tampering detected.",
+                    n
+                );
             }
         }
         Err(e) => {
@@ -326,21 +445,28 @@ pub(super) fn cmd_rate_status(json: bool) {
             if json {
                 println!("{{\"enabled\":false,\"source\":\"no raios-policy.toml found or no [rate_limits] section\"}}");
             } else {
-                println!("Rate limiting: DISABLED (no raios-policy.toml or no [rate_limits] section)");
+                println!(
+                    "Rate limiting: DISABLED (no raios-policy.toml or no [rate_limits] section)"
+                );
                 println!("Create raios-policy.toml with [rate_limits] to enable.");
             }
         }
         Some(cfg) => {
             if json {
-                let rules: Vec<serde_json::Value> = cfg.rules.iter().map(|r| {
-                    serde_json::json!({ "tool": r.tool, "max_calls": r.max_calls })
-                }).collect();
-                println!("{}", serde_json::json!({
-                    "enabled": cfg.enabled,
-                    "window_secs": cfg.window_secs,
-                    "default_max": cfg.default_max,
-                    "rules": rules,
-                }));
+                let rules: Vec<serde_json::Value> = cfg
+                    .rules
+                    .iter()
+                    .map(|r| serde_json::json!({ "tool": r.tool, "max_calls": r.max_calls }))
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "enabled": cfg.enabled,
+                        "window_secs": cfg.window_secs,
+                        "default_max": cfg.default_max,
+                        "rules": rules,
+                    })
+                );
             } else {
                 let status = if cfg.enabled { "ENABLED" } else { "DISABLED" };
                 println!("Rate limiting: {status}");
@@ -351,8 +477,15 @@ pub(super) fn cmd_rate_status(json: bool) {
                 } else {
                     println!("  Rules:");
                     for r in &cfg.rules {
-                        let label = if r.tool == "*" { "(all tools)" } else { &r.tool };
-                        println!("    {label:<30}  max {} calls/{}s", r.max_calls, cfg.window_secs);
+                        let label = if r.tool == "*" {
+                            "(all tools)"
+                        } else {
+                            &r.tool
+                        };
+                        println!(
+                            "    {label:<30}  max {} calls/{}s",
+                            r.max_calls, cfg.window_secs
+                        );
                     }
                 }
                 println!();
@@ -427,7 +560,7 @@ pub(super) fn cmd_quarantine(action: crate::cli::QuarantineAction, json: bool) {
                 println!("No pending quarantine items.");
                 return;
             }
-            println!("{:<20}  {:<25}  {}", "ID", "TOOL", "CREATED");
+            println!("{:<20}  {:<25}  CREATED", "ID", "TOOL");
             for i in &items {
                 println!("{:<20}  {:<25}  {}", i.id, i.tool, i.created_at);
             }
@@ -442,9 +575,12 @@ pub(super) fn cmd_quarantine(action: crate::cli::QuarantineAction, json: bool) {
                 println!("No quarantine items found.");
                 return;
             }
-            println!("{:<20}  {:<25}  {:<10}  {}", "ID", "TOOL", "STATUS", "CREATED");
+            println!("{:<20}  {:<25}  {:<10}  CREATED", "ID", "TOOL", "STATUS");
             for i in &items {
-                println!("{:<20}  {:<25}  {:<10}  {}", i.id, i.tool, i.status, i.created_at);
+                println!(
+                    "{:<20}  {:<25}  {:<10}  {}",
+                    i.id, i.tool, i.status, i.created_at
+                );
             }
         }
         Approve { id } => match quarantine::approve(&conn, &id) {
@@ -459,7 +595,10 @@ pub(super) fn cmd_quarantine(action: crate::cli::QuarantineAction, json: bool) {
                 eprintln!("No pending item with id '{id}'.");
                 std::process::exit(1);
             }
-            Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
+            Err(e) => {
+                eprintln!("DB error: {e}");
+                std::process::exit(1);
+            }
         },
         Deny { id } => match quarantine::deny(&conn, &id) {
             Ok(true) => {
@@ -473,7 +612,10 @@ pub(super) fn cmd_quarantine(action: crate::cli::QuarantineAction, json: bool) {
                 eprintln!("No active item with id '{id}'.");
                 std::process::exit(1);
             }
-            Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
+            Err(e) => {
+                eprintln!("DB error: {e}");
+                std::process::exit(1);
+            }
         },
         Clear { id } => match quarantine::clear(&conn, &id) {
             Ok(true) => {
@@ -487,7 +629,10 @@ pub(super) fn cmd_quarantine(action: crate::cli::QuarantineAction, json: bool) {
                 eprintln!("No item with id '{id}'.");
                 std::process::exit(1);
             }
-            Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
+            Err(e) => {
+                eprintln!("DB error: {e}");
+                std::process::exit(1);
+            }
         },
     }
 }
@@ -508,7 +653,10 @@ pub(super) fn cmd_secret(action: crate::cli::SecretAction, json: bool) {
         Grant { tool, env_var, ttl } => {
             let ttl_secs = match secret_lease::parse_ttl(&ttl) {
                 Ok(s) => s,
-                Err(e) => { eprintln!("Invalid TTL: {e}"); std::process::exit(1); }
+                Err(e) => {
+                    eprintln!("Invalid TTL: {e}");
+                    std::process::exit(1);
+                }
             };
             match secret_lease::grant(&conn, &tool, &env_var, ttl_secs) {
                 Ok(id) => {
@@ -525,7 +673,10 @@ pub(super) fn cmd_secret(action: crate::cli::SecretAction, json: bool) {
                         println!("Run `raios secret revoke {id}` to revoke early.");
                     }
                 }
-                Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
+                Err(e) => {
+                    eprintln!("DB error: {e}");
+                    std::process::exit(1);
+                }
             }
         }
         List => {
@@ -538,9 +689,12 @@ pub(super) fn cmd_secret(action: crate::cli::SecretAction, json: bool) {
                 println!("No active secret leases.");
                 return;
             }
-            println!("{:<20}  {:<25}  {:<20}  {}", "ID", "TOOL", "ENV_VAR", "EXPIRES");
+            println!("{:<20}  {:<25}  {:<20}  EXPIRES", "ID", "TOOL", "ENV_VAR");
             for l in &leases {
-                println!("{:<20}  {:<25}  {:<20}  {}", l.id, l.tool, l.env_var, l.expires_at);
+                println!(
+                    "{:<20}  {:<25}  {:<20}  {}",
+                    l.id, l.tool, l.env_var, l.expires_at
+                );
             }
         }
         All => {
@@ -553,9 +707,15 @@ pub(super) fn cmd_secret(action: crate::cli::SecretAction, json: bool) {
                 println!("No secret leases found.");
                 return;
             }
-            println!("{:<20}  {:<25}  {:<20}  {:<10}  {}", "ID", "TOOL", "ENV_VAR", "STATUS", "EXPIRES");
+            println!(
+                "{:<20}  {:<25}  {:<20}  {:<10}  EXPIRES",
+                "ID", "TOOL", "ENV_VAR", "STATUS"
+            );
             for l in &leases {
-                println!("{:<20}  {:<25}  {:<20}  {:<10}  {}", l.id, l.tool, l.env_var, l.status, l.expires_at);
+                println!(
+                    "{:<20}  {:<25}  {:<20}  {:<10}  {}",
+                    l.id, l.tool, l.env_var, l.status, l.expires_at
+                );
             }
         }
         Revoke { id } => match secret_lease::revoke(&conn, &id) {
@@ -570,8 +730,10 @@ pub(super) fn cmd_secret(action: crate::cli::SecretAction, json: bool) {
                 eprintln!("No active lease with id '{id}'.");
                 std::process::exit(1);
             }
-            Err(e) => { eprintln!("DB error: {e}"); std::process::exit(1); }
+            Err(e) => {
+                eprintln!("DB error: {e}");
+                std::process::exit(1);
+            }
         },
     }
 }
-

@@ -30,6 +30,7 @@ impl SwarmStore {
         }
         let conn = Connection::open(&self.db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        crate::db::migrate_existing(&conn)?;
         Ok(conn)
     }
 
@@ -41,9 +42,16 @@ impl SwarmStore {
                     project_path TEXT NOT NULL, worktree_path TEXT NOT NULL,
                     branch_name TEXT NOT NULL, description TEXT NOT NULL,
                     agent TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'initializing',
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')), completed_at TEXT
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')), completed_at TEXT,
+                    cp_task_id TEXT, cp_agent_run_id TEXT, cp_artifact_id TEXT, cp_approval_id TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_swarm_status ON swarm_tasks(status);",
+            );
+            let _ = conn.execute_batch(
+                "ALTER TABLE swarm_tasks ADD COLUMN cp_task_id TEXT;
+                 ALTER TABLE swarm_tasks ADD COLUMN cp_agent_run_id TEXT;
+                 ALTER TABLE swarm_tasks ADD COLUMN cp_artifact_id TEXT;
+                 ALTER TABLE swarm_tasks ADD COLUMN cp_approval_id TEXT;",
             );
         }
     }
@@ -61,10 +69,16 @@ impl SwarmStore {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         let conn = self.connect()?;
+        let workflow_ids = crate::db::create_swarm_workflow(
+            &conn,
+            project_path.to_str().unwrap_or(""),
+            description,
+            agent,
+        )?;
         conn.execute(
             "INSERT INTO swarm_tasks
-             (id,project_name,project_path,worktree_path,branch_name,description,agent,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+             (id,project_name,project_path,worktree_path,branch_name,description,agent,created_at,cp_task_id,cp_agent_run_id,cp_artifact_id,cp_approval_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,NULL)",
             params![
                 id.to_string(),
                 project_name,
@@ -73,9 +87,16 @@ impl SwarmStore {
                 branch_name,
                 description,
                 agent,
-                now
+                now,
+                workflow_ids.task_id,
+                workflow_ids.agent_run_id
             ],
         )?;
+        let _ = crate::db::mark_swarm_workflow_running(
+            &conn,
+            &workflow_ids.task_id,
+            &workflow_ids.agent_run_id,
+        );
 
         Ok(SwarmTask {
             id,
@@ -87,6 +108,10 @@ impl SwarmStore {
             agent: agent.to_string(),
             status: SwarmStatus::Initializing,
             created_at: now,
+            task_id: Some(workflow_ids.task_id),
+            agent_run_id: Some(workflow_ids.agent_run_id),
+            artifact_id: None,
+            approval_id: None,
         })
     }
 
@@ -94,14 +119,13 @@ impl SwarmStore {
         let conn = self.connect().ok()?;
         conn.query_row(
             "SELECT id,project_name,project_path,worktree_path,branch_name,
-                    description,agent,status,created_at
+                    description,agent,status,created_at,cp_task_id,cp_agent_run_id,cp_artifact_id,cp_approval_id
              FROM swarm_tasks WHERE id=?1",
             params![id],
             |row| {
                 let status_str: String = row.get(7)?;
                 Ok(SwarmTask {
-                    id: Uuid::parse_str(&row.get::<_, String>(0)?)
-                        .unwrap_or_else(|_| Uuid::nil()),
+                    id: Uuid::parse_str(&row.get::<_, String>(0)?).unwrap_or_else(|_| Uuid::nil()),
                     project_name: row.get(1)?,
                     project_path: PathBuf::from(row.get::<_, String>(2)?),
                     worktree_path: PathBuf::from(row.get::<_, String>(3)?),
@@ -110,6 +134,10 @@ impl SwarmStore {
                     agent: row.get(6)?,
                     status: parse_status(&status_str),
                     created_at: row.get(8)?,
+                    task_id: row.get(9)?,
+                    agent_run_id: row.get(10)?,
+                    artifact_id: row.get(11)?,
+                    approval_id: row.get(12)?,
                 })
             },
         )
@@ -123,7 +151,7 @@ impl SwarmStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id,project_name,project_path,worktree_path,branch_name,
-                        description,agent,status,created_at
+                        description,agent,status,created_at,cp_task_id,cp_agent_run_id,cp_artifact_id,cp_approval_id
                  FROM swarm_tasks WHERE status NOT IN ('merged','rejected','failed')",
             )
             .ok();
@@ -142,6 +170,10 @@ impl SwarmStore {
                         agent: row.get(6)?,
                         status: parse_status(&status_str),
                         created_at: row.get(8)?,
+                        task_id: row.get(9)?,
+                        agent_run_id: row.get(10)?,
+                        artifact_id: row.get(11)?,
+                        approval_id: row.get(12)?,
                     })
                 })
                 .ok()
@@ -153,11 +185,95 @@ impl SwarmStore {
 
     pub fn set_status(&self, id: &str, status: SwarmStatus) {
         let Ok(conn) = self.connect() else { return };
+        let ids = conn
+            .query_row(
+                "SELECT cp_task_id, cp_agent_run_id, cp_artifact_id, cp_approval_id, project_path, branch_name, worktree_path
+                 FROM swarm_tasks WHERE id=?1",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )
+            .ok();
         let s = status_str(&status);
         let completed = matches!(
             status,
             SwarmStatus::Merged | SwarmStatus::Rejected | SwarmStatus::Failed(_)
         );
+        if let Some((
+            Some(task_id),
+            Some(agent_run_id),
+            artifact_id,
+            approval_id,
+            project_path,
+            branch_name,
+            worktree_path,
+        )) = ids
+        {
+            match &status {
+                SwarmStatus::Initializing => {}
+                SwarmStatus::Running => {
+                    let _ = crate::db::mark_swarm_workflow_running(&conn, &task_id, &agent_run_id);
+                }
+                SwarmStatus::AwaitingReview => {
+                    if let Ok((artifact_id_new, approval_id_new)) =
+                        crate::db::ensure_swarm_review_artifacts(
+                            &conn,
+                            &task_id,
+                            &agent_run_id,
+                            crate::db::project_id_for_file_path(&conn, &project_path),
+                            &project_path,
+                            &branch_name,
+                            &worktree_path,
+                        )
+                    {
+                        let _ = conn.execute(
+                            "UPDATE swarm_tasks SET cp_artifact_id=?2, cp_approval_id=?3 WHERE id=?1",
+                            params![id, artifact_id_new, approval_id_new],
+                        );
+                    }
+                }
+                SwarmStatus::Merged => {
+                    let _ = crate::db::mark_swarm_workflow_merged(
+                        &conn,
+                        &task_id,
+                        &agent_run_id,
+                        artifact_id.as_deref(),
+                        approval_id.as_deref(),
+                    );
+                }
+                SwarmStatus::Rejected => {
+                    let _ = crate::db::mark_swarm_workflow_rejected(
+                        &conn,
+                        &task_id,
+                        &agent_run_id,
+                        artifact_id.as_deref(),
+                        approval_id.as_deref(),
+                    );
+                }
+                SwarmStatus::Failed(reason) => {
+                    let _ = crate::db::mark_swarm_workflow_rejected(
+                        &conn,
+                        &task_id,
+                        &agent_run_id,
+                        artifact_id.as_deref(),
+                        approval_id.as_deref(),
+                    );
+                    let _ = conn.execute(
+                        "UPDATE cp_agent_runs SET exit_reason=?2 WHERE id=?1",
+                        params![agent_run_id, reason],
+                    );
+                }
+            }
+        }
         if completed {
             let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
             let _ = conn.execute(
@@ -203,19 +319,33 @@ mod tests {
         SwarmStore::new(tmp.path().join("test.db"))
     }
 
-    fn fake_task(store: &SwarmStore, tmp: &tempfile::TempDir, desc: &str, agent: &str) -> SwarmTask {
+    fn fake_task(
+        store: &SwarmStore,
+        tmp: &tempfile::TempDir,
+        desc: &str,
+        agent: &str,
+    ) -> SwarmTask {
         let id = Uuid::new_v4();
         let branch = format!("swarm/{}-test", &id.to_string()[..8]);
         let worktree = tmp.path().join("wt").join(id.to_string());
         let now = "2026-01-01 00:00:00".to_string();
         let conn = store.connect().unwrap();
+        let workflow = crate::db::create_swarm_workflow(&conn, "/tmp/proj", desc, agent).unwrap();
         conn.execute(
             "INSERT INTO swarm_tasks
-             (id,project_name,project_path,worktree_path,branch_name,description,agent,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+             (id,project_name,project_path,worktree_path,branch_name,description,agent,created_at,cp_task_id,cp_agent_run_id,cp_artifact_id,cp_approval_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,NULL)",
             params![
-                id.to_string(), "test-project", "/tmp/proj",
-                worktree.to_str().unwrap(), branch, desc, agent, now
+                id.to_string(),
+                "test-project",
+                "/tmp/proj",
+                worktree.to_str().unwrap(),
+                branch,
+                desc,
+                agent,
+                now,
+                workflow.task_id,
+                workflow.agent_run_id
             ],
         )
         .unwrap();
@@ -229,6 +359,10 @@ mod tests {
             agent: agent.to_string(),
             status: SwarmStatus::Initializing,
             created_at: now,
+            task_id: Some(workflow.task_id),
+            agent_run_id: Some(workflow.agent_run_id),
+            artifact_id: None,
+            approval_id: None,
         }
     }
 
@@ -288,5 +422,68 @@ mod tests {
         let active = store.list_active();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, t1.id);
+    }
+
+    #[test]
+    fn awaiting_review_creates_control_plane_artifacts() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let store = make_store(&tmp);
+        let task = fake_task(&store, &tmp, "review auth refactor", "claude");
+        store.set_status(&task.id.to_string(), SwarmStatus::AwaitingReview);
+
+        let conn = store.connect().unwrap();
+        let artifact_id: Option<String> = conn
+            .query_row(
+                "SELECT cp_artifact_id FROM swarm_tasks WHERE id=?1",
+                params![task.id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let approval_id: Option<String> = conn
+            .query_row(
+                "SELECT cp_approval_id FROM swarm_tasks WHERE id=?1",
+                params![task.id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let task_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_tasks WHERE id=?1",
+                params![task.task_id.clone().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        assert!(artifact_id.is_some());
+        assert!(approval_id.is_some());
+        assert_eq!(task_status, "awaiting_approval");
+    }
+
+    #[test]
+    fn merged_swarm_updates_control_plane_task() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let store = make_store(&tmp);
+        let task = fake_task(&store, &tmp, "merge auth refactor", "claude");
+        store.set_status(&task.id.to_string(), SwarmStatus::AwaitingReview);
+        store.set_status(&task.id.to_string(), SwarmStatus::Merged);
+
+        let conn = store.connect().unwrap();
+        let task_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_tasks WHERE id=?1",
+                params![task.task_id.clone().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let run_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_agent_runs WHERE id=?1",
+                params![task.agent_run_id.clone().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(task_status, "completed");
+        assert_eq!(run_status, "succeeded");
     }
 }

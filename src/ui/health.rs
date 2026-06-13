@@ -343,6 +343,51 @@ pub fn render_system_audit(frame: &mut Frame, area: Rect, app: &App) {
                 status_span,
             ]));
         }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  ◈ USAGE & QUOTA SIGNALS",
+            Style::new().fg(CYAN).bold(),
+        )));
+
+        for usage in &report.usage {
+            let status = if usage.authenticated {
+                Span::styled(" [AUTH]", Style::new().fg(GREEN).bold())
+            } else if usage.installed {
+                Span::styled(" [LOCAL]", Style::new().fg(AMBER))
+            } else {
+                Span::styled(" [MISSING]", Style::new().fg(DIM))
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("    • {:<20}", usage.provider),
+                    Style::new().fg(MID),
+                ),
+                status,
+            ]));
+
+            let plan = usage.plan.as_deref().unwrap_or("unknown");
+            let remaining = usage.remaining.as_deref().unwrap_or("unknown");
+            let reset_at = usage.reset_at.as_deref().unwrap_or("unknown");
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "      plan:{}  remaining:{}  reset:{}",
+                    plan, remaining, reset_at
+                ),
+                Style::new().fg(DIM),
+            )));
+
+            let renews_at = usage.renews_at.as_deref().unwrap_or("unknown");
+            let auth_exp = usage.auth_expires_at.as_deref().unwrap_or("unknown");
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "      renew:{}  auth_exp:{}  confidence:{:?}",
+                    renews_at, auth_exp, usage.confidence
+                ),
+                Style::new().fg(DIM),
+            )));
+        }
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }

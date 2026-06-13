@@ -1,7 +1,7 @@
+use super::common::{BuildResult, TestResult};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use super::common::{BuildResult, TestResult};
 
 pub fn build_android(dir: &Path) -> BuildResult {
     build_android_impl(dir, "assembleDebug")
@@ -52,7 +52,8 @@ pub fn parse_gradle_build_output(output: &str) -> (bool, usize) {
         .filter(|l| {
             let t = l.trim_start();
             t.starts_with("e: ")
-                || (t.contains(": error:") && (t.starts_with('/') || t.starts_with('.') || t.chars().nth(1) == Some(':')))
+                || (t.contains(": error:")
+                    && (t.starts_with('/') || t.starts_with('.') || t.chars().nth(1) == Some(':')))
                 || t.starts_with("error:")
         })
         .count();
@@ -74,10 +75,7 @@ fn build_android_impl(dir: &Path, task: &str) -> BuildResult {
             c.raw_arg(raw);
             c.output()
         } else {
-            Command::new("gradle")
-                .arg(task)
-                .current_dir(dir)
-                .output()
+            Command::new("gradle").arg(task).current_dir(dir).output()
         }
     };
 
@@ -88,10 +86,7 @@ fn build_android_impl(dir: &Path, task: &str) -> BuildResult {
         } else {
             "gradle"
         };
-        Command::new(prog)
-            .arg(task)
-            .current_dir(dir)
-            .output()
+        Command::new(prog).arg(task).current_dir(dir).output()
     };
 
     let elapsed = start.elapsed();

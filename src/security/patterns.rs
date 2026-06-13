@@ -159,8 +159,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Critical,
         pattern: r"\bAKIA[0-9A-Z]{16}\b",
         exts: &[
-            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml",
-            "json", "sh",
+            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml", "json", "sh",
         ],
     },
     Pattern {
@@ -169,8 +168,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Critical,
         pattern: r"\bghp_[a-zA-Z0-9]{36}\b",
         exts: &[
-            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml",
-            "json", "sh",
+            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml", "json", "sh",
         ],
     },
     Pattern {
@@ -188,8 +186,8 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Critical,
         pattern: r"\bAIza[0-9A-Za-z\-_]{35}\b",
         exts: &[
-            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml",
-            "json", "html",
+            "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml", "json",
+            "html",
         ],
     },
     // A01 — Broken Access Control
@@ -339,7 +337,9 @@ mod tests_scan_file {
         writeln!(f, "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE").unwrap();
         let issues = scan_file(f.path());
         assert!(
-            issues.iter().any(|i| i.owasp == "A02" && i.title.contains("AWS")),
+            issues
+                .iter()
+                .any(|i| i.owasp == "A02" && i.title.contains("AWS")),
             "Should detect AWS access key ID"
         );
     }
@@ -350,7 +350,9 @@ mod tests_scan_file {
         writeln!(f, "GITHUB_TOKEN=ghp_16C7e42F292c6912E7710c838347Ae178B4a").unwrap();
         let issues = scan_file(f.path());
         assert!(
-            issues.iter().any(|i| i.owasp == "A02" && i.title.contains("GitHub")),
+            issues
+                .iter()
+                .any(|i| i.owasp == "A02" && i.title.contains("GitHub")),
             "Should detect GitHub PAT (ghp_ prefix)"
         );
     }
@@ -363,7 +365,9 @@ mod tests_scan_file {
         writeln!(f, "{}", fake).unwrap();
         let issues = scan_file(f.path());
         assert!(
-            issues.iter().any(|i| i.owasp == "A02" && i.title.contains("Stripe")),
+            issues
+                .iter()
+                .any(|i| i.owasp == "A02" && i.title.contains("Stripe")),
             "Should detect Stripe live secret key"
         );
     }
@@ -371,10 +375,16 @@ mod tests_scan_file {
     #[test]
     fn detects_google_api_key() {
         let mut f = tempfile::NamedTempFile::with_suffix(".ts").unwrap();
-        writeln!(f, r#"const key = "AIzaSyD-9tSrke72I6e0sEh8bT9SfGgfHIqnYjw";"#).unwrap();
+        writeln!(
+            f,
+            r#"const key = "AIzaSyD-9tSrke72I6e0sEh8bT9SfGgfHIqnYjw";"#
+        )
+        .unwrap();
         let issues = scan_file(f.path());
         assert!(
-            issues.iter().any(|i| i.owasp == "A02" && i.title.contains("Google")),
+            issues
+                .iter()
+                .any(|i| i.owasp == "A02" && i.title.contains("Google")),
             "Should detect Google API key (AIza prefix)"
         );
     }

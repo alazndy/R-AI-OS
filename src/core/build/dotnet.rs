@@ -1,7 +1,7 @@
+use super::common::{failed_result, failed_test, BuildResult, TestResult};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use super::common::{failed_result, failed_test, BuildResult, TestResult};
 
 fn parse_dotnet_build_output(output: &str) -> (bool, usize, usize) {
     let ok = output.contains("Build succeeded");
@@ -10,10 +10,18 @@ fn parse_dotnet_build_output(output: &str) -> (bool, usize, usize) {
     for line in output.lines() {
         let t = line.trim();
         if t.ends_with("Warning(s)") {
-            warnings = t.split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            warnings = t
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
         }
         if t.ends_with("Error(s)") {
-            errors = t.split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            errors = t
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
         }
     }
     (ok, warnings, errors)
@@ -44,7 +52,10 @@ fn extract_after(s: &str, key: &str) -> Option<usize> {
 pub fn build_dotnet(dir: &Path) -> BuildResult {
     let cmd_str = "dotnet build";
     let start = Instant::now();
-    let output = Command::new("dotnet").arg("build").current_dir(dir).output();
+    let output = Command::new("dotnet")
+        .arg("build")
+        .current_dir(dir)
+        .output();
     let elapsed = start.elapsed();
     match output {
         Err(e) => failed_result(".NET", cmd_str, elapsed, e.to_string()),
@@ -108,8 +119,7 @@ mod tests {
 
     #[test]
     fn parse_dotnet_build_success() {
-        let output =
-            "Build succeeded.\n  0 Warning(s)\n  0 Error(s)\n\nTime Elapsed 00:00:02.456";
+        let output = "Build succeeded.\n  0 Warning(s)\n  0 Error(s)\n\nTime Elapsed 00:00:02.456";
         let (ok, warnings, errors) = parse_dotnet_build_output(output);
         assert!(ok);
         assert_eq!(warnings, 0);

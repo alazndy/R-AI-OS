@@ -18,7 +18,11 @@ use std::path::{Path, PathBuf};
 // ─── CLI types ────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "raios", about = "AI OS Terminal Control Center — Rust Edition", version)]
+#[command(
+    name = "raios",
+    about = "AI OS Terminal Control Center — Rust Edition",
+    version
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -28,7 +32,6 @@ pub struct Cli {
     #[arg(long)]
     pub refactor: bool,
 }
-
 
 #[derive(Subcommand)]
 pub enum InstinctCmd {
@@ -86,18 +89,24 @@ pub enum Commands {
     },
     /// Commit dirty projects in bulk (optionally push)
     Commit {
-        #[arg(short, long)] project: Option<String>,
-        #[arg(short, long)] message: Option<String>,
-        #[arg(long)] push: bool,
-        #[arg(long)] dry_run: bool,
+        #[arg(short, long)]
+        project: Option<String>,
+        #[arg(short, long)]
+        message: Option<String>,
+        #[arg(long)]
+        push: bool,
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Show workspace portfolio statistics
     Stats,
     /// Search across the entire Dev Ops workspace (Semantic + BM25)
     Search {
         query: String,
-        #[arg(short, long, default_value = "8")] top_k: usize,
-        #[arg(long)] reindex: bool,
+        #[arg(short, long, default_value = "8")]
+        top_k: usize,
+        #[arg(long)]
+        reindex: bool,
     },
     /// Scan dependency licenses for copyleft (GPL/AGPL/LGPL) and unknown licenses
     License {
@@ -116,8 +125,10 @@ pub enum Commands {
     Security {
         /// Project name filter or absolute path (omit to scan all)
         target: Option<String>,
-        #[arg(long)] full: bool,
-        #[arg(short, long)] watch: bool,
+        #[arg(long)]
+        full: bool,
+        #[arg(short, long)]
+        watch: bool,
     },
     /// Scan source files for refactor candidates (large files, risky patterns, deep nesting)
     Refactor {
@@ -148,15 +159,20 @@ pub enum Commands {
     /// Scaffold a new project following MASTER.md rules
     New {
         name: String,
-        #[arg(short, long, default_value = "")] category: String,
-        #[arg(long)] github: bool,
-        #[arg(long)] no_vault: bool,
+        #[arg(short, long, default_value = "")]
+        category: String,
+        #[arg(long)]
+        github: bool,
+        #[arg(long)]
+        no_vault: bool,
     },
     /// Automatically route a task to the best specialist agent
     Task {
         description: String,
-        #[arg(short, long)] project: Option<String>,
-        #[arg(short, long)] agent: Option<String>,
+        #[arg(short, long)]
+        project: Option<String>,
+        #[arg(short, long)]
+        agent: Option<String>,
     },
     /// Install/Bootstrap the entire ECC, Maestro, and system architecture
     Bootstrap,
@@ -164,8 +180,10 @@ pub enum Commands {
     VersionBump {
         level: String,
         project: Option<String>,
-        #[arg(long)] changelog: bool,
-        #[arg(long)] tag: bool,
+        #[arg(long)]
+        changelog: bool,
+        #[arg(long)]
+        tag: bool,
     },
     /// Show current version and changelog since last tag
     VersionInfo { project: Option<String> },
@@ -174,42 +192,55 @@ pub enum Commands {
     /// Remove build artifacts (target/, node_modules/, __pycache__, etc.)
     Clean {
         project: Option<String>,
-        #[arg(long)] dry_run: bool,
-        #[arg(long)] all: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        all: bool,
     },
     /// List all listening ports with PID and process name
     Ps {
-        #[arg(short, long)] procs: bool,
-        #[arg(short, long, default_value = "15")] top: usize,
+        #[arg(short, long)]
+        procs: bool,
+        #[arg(short, long, default_value = "15")]
+        top: usize,
     },
+    /// Show local usage/quota signals for Codex, Claude, Gemini, and Antigravity
+    Usage,
     /// Kill a process by port number
     KillPort { port: u16 },
     /// Check .env files: missing keys, empty values, undocumented secrets
     Env {
         project: Option<String>,
-        #[arg(long)] all: bool,
+        #[arg(long)]
+        all: bool,
     },
     /// Check dependencies: outdated packages and CVE vulnerabilities
     Deps {
         project: Option<String>,
-        #[arg(long)] audit: bool,
-        #[arg(long)] all: bool,
+        #[arg(long)]
+        audit: bool,
+        #[arg(long)]
+        all: bool,
     },
     /// Build a project (auto-detects Rust/Node/Python/Go/Android)
     Build {
         project: Option<String>,
         /// Android: assembleRelease instead of assembleDebug
-        #[arg(long)] release: bool,
+        #[arg(long)]
+        release: bool,
         /// Android: compileDebugKotlin (type-check only, no APK)
-        #[arg(long)] check: bool,
+        #[arg(long)]
+        check: bool,
     },
     /// Run tests for a project (auto-detects Rust/Node/Python/Go/Android)
     Test {
         project: Option<String>,
         /// Test all projects in portfolio
-        #[arg(long)] all: bool,
+        #[arg(long)]
+        all: bool,
         /// Android: run connectedAndroidTest (requires connected device/emulator)
-        #[arg(long)] instrumented: bool,
+        #[arg(long)]
+        instrumented: bool,
     },
     /// Git operations on any project
     Git {
@@ -225,7 +256,8 @@ pub enum Commands {
     Ci { project: Option<String> },
     /// Index or re-index the Cortex semantic memory store
     CortexIndex {
-        #[arg(long)] force: bool,
+        #[arg(long)]
+        force: bool,
     },
     /// Manage parallel swarm tasks in isolated git worktrees
     Swarm {
@@ -305,10 +337,14 @@ pub enum SecretAction {
 pub enum SwarmAction {
     /// Start a new swarm task in an isolated git worktree
     Start {
-        #[arg(long)] project: String,
-        #[arg(long)] path: String,
-        #[arg(long)] description: String,
-        #[arg(long, default_value = "claude")] agent: String,
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        description: String,
+        #[arg(long, default_value = "claude")]
+        agent: String,
     },
     /// List all active swarm tasks
     List,
@@ -322,7 +358,8 @@ pub enum SwarmAction {
 pub enum EvolveAction {
     /// List pending instinct candidates
     List {
-        #[arg(long, default_value = "20")] limit: u64,
+        #[arg(long, default_value = "20")]
+        limit: u64,
     },
     /// Promote a candidate rule to active instincts
     Promote { rule: String },
@@ -337,18 +374,21 @@ pub enum GitCommands {
     /// Show commit log
     Log {
         project: Option<String>,
-        #[arg(short, long, default_value = "10")] count: usize,
+        #[arg(short, long, default_value = "10")]
+        count: usize,
     },
     /// Show diff
     Diff {
         project: Option<String>,
-        #[arg(long)] staged: bool,
+        #[arg(long)]
+        staged: bool,
     },
     /// Stage all changes and commit
     Commit {
         message: String,
         project: Option<String>,
-        #[arg(long)] push: bool,
+        #[arg(long)]
+        push: bool,
     },
     /// Push commits to remote
     Push { project: Option<String> },
@@ -374,13 +414,7 @@ fn load_cfg() -> Config {
     if let Some(cfg) = Config::load() {
         return cfg;
     }
-    let detected = Config::auto_detect();
-    Config {
-        dev_ops_path: detected.dev_ops.unwrap_or_else(|| dirs::desktop_dir().unwrap_or_default().join("Dev Ops")),
-        master_md_path: detected.master_md.unwrap_or_else(|| PathBuf::from("MASTER.md")),
-        skills_path: detected.skills.unwrap_or_else(|| PathBuf::from(".agents/skills")),
-        vault_projects_path: detected.vault_projects.unwrap_or_else(|| PathBuf::from("Projeler")),
-    }
+    Config::from_detect_result(Config::auto_detect())
 }
 
 pub(crate) fn resolve_project_path(project: Option<String>, dev_ops: &Path) -> PathBuf {
@@ -388,10 +422,15 @@ pub(crate) fn resolve_project_path(project: Option<String>, dev_ops: &Path) -> P
         None => std::env::current_dir().unwrap_or_else(|_| dev_ops.to_path_buf()),
         Some(ref p) => {
             let direct = Path::new(p);
-            if direct.exists() { return direct.to_path_buf(); }
+            if direct.exists() {
+                return direct.to_path_buf();
+            }
             if let Ok(conn) = crate::db::open_db() {
                 if let Ok(projects) = crate::db::load_all_projects(&conn) {
-                    if let Some(found) = projects.iter().find(|pr| pr.name.to_lowercase().contains(&p.to_lowercase())) {
+                    if let Some(found) = projects
+                        .iter()
+                        .find(|pr| pr.name.to_lowercase().contains(&p.to_lowercase()))
+                    {
                         return PathBuf::from(&found.path);
                     }
                 }
@@ -408,7 +447,11 @@ pub fn run(cli: Cli) {
     let cmd = cli.command.expect("Subcommand missing");
     match cmd {
         Commands::Rules { name } => workspace::cmd_rules(name, &cfg.master_md_path, cli.json),
-        Commands::Memory { project, query, top } => workspace::cmd_memory(project, query, top, &cfg.dev_ops_path, cli.json),
+        Commands::Memory {
+            project,
+            query,
+            top,
+        } => workspace::cmd_memory(project, query, top, &cfg.dev_ops_path, cli.json),
         Commands::Mempalace => workspace::cmd_mempalace(&cfg.dev_ops_path, cli.json),
         Commands::Projects => workspace::cmd_projects(&cfg.dev_ops_path, cli.json),
         Commands::Agents => workspace::cmd_agents(cli.json),
@@ -422,45 +465,122 @@ pub fn run(cli: Cli) {
                 std::process::exit(1);
             }
         }
-        Commands::Run { agent, project, timeout } => {
+        Commands::Run {
+            agent,
+            project,
+            timeout,
+        } => {
             if let Err(e) = crate::agent_runner::run_agent(&agent, project, timeout) {
                 eprintln!("Agent Runner Error: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::Commit { project, message, push, dry_run } => health::cmd_commit(project, message, push, dry_run, &cfg.dev_ops_path, cli.json),
+        Commands::Commit {
+            project,
+            message,
+            push,
+            dry_run,
+        } => health::cmd_commit(project, message, push, dry_run, &cfg.dev_ops_path, cli.json),
         Commands::Stats => health::cmd_stats(&cfg.dev_ops_path, cli.json),
-        Commands::Search { query, top_k, reindex } => search::cmd_search(&query, top_k, reindex, &cfg.dev_ops_path, cli.json),
-        Commands::License { project } => security::cmd_license(project, &cfg.dev_ops_path, cli.json),
+        Commands::Search {
+            query,
+            top_k,
+            reindex,
+        } => search::cmd_search(&query, top_k, reindex, &cfg.dev_ops_path, cli.json),
+        Commands::License { project } => {
+            security::cmd_license(project, &cfg.dev_ops_path, cli.json)
+        }
         Commands::Audit { url, threshold } => {
             let exit = audit::cmd_audit(&url, threshold, cli.json);
             std::process::exit(exit);
         }
-        Commands::Security { target, full, watch } => security::cmd_security(target, full, watch, &cfg.dev_ops_path, cli.json),
-        Commands::Refactor { target, high_lines, medium_lines, high_unwrap, medium_unwrap, high_nesting, medium_nesting, ext_config } => {
-            refactor::cmd_refactor(target, &cfg.dev_ops_path, cli.json, high_lines, medium_lines, high_unwrap, medium_unwrap, high_nesting, medium_nesting, ext_config)
-        }
-        Commands::New { name, category, github, no_vault } => new::cmd_new(&name, &category, github, no_vault, &cfg.dev_ops_path, cli.json),
-        Commands::Task { description, project, agent } => new::cmd_task(&description, project, agent),
+        Commands::Security {
+            target,
+            full,
+            watch,
+        } => security::cmd_security(target, full, watch, &cfg.dev_ops_path, cli.json),
+        Commands::Refactor {
+            target,
+            high_lines,
+            medium_lines,
+            high_unwrap,
+            medium_unwrap,
+            high_nesting,
+            medium_nesting,
+            ext_config,
+        } => refactor::cmd_refactor(
+            target,
+            &cfg.dev_ops_path,
+            cli.json,
+            high_lines,
+            medium_lines,
+            high_unwrap,
+            medium_unwrap,
+            high_nesting,
+            medium_nesting,
+            ext_config,
+        ),
+        Commands::New {
+            name,
+            category,
+            github,
+            no_vault,
+        } => new::cmd_new(
+            &name,
+            &category,
+            github,
+            no_vault,
+            &cfg.dev_ops_path,
+            cli.json,
+        ),
+        Commands::Task {
+            description,
+            project,
+            agent,
+        } => new::cmd_task(&description, project, agent),
         Commands::Bootstrap => new::cmd_bootstrap(),
-        Commands::VersionBump { level, project, changelog, tag } => version::cmd_version_bump(&level, project, changelog, tag, &cfg.dev_ops_path, cli.json),
-        Commands::VersionInfo { project } => version::cmd_version_info(project, &cfg.dev_ops_path, cli.json),
+        Commands::VersionBump {
+            level,
+            project,
+            changelog,
+            tag,
+        } => {
+            version::cmd_version_bump(&level, project, changelog, tag, &cfg.dev_ops_path, cli.json)
+        }
+        Commands::VersionInfo { project } => {
+            version::cmd_version_info(project, &cfg.dev_ops_path, cli.json)
+        }
         Commands::Disk { project } => dev::cmd_disk(project, &cfg.dev_ops_path, cli.json),
-        Commands::Clean { project, dry_run, all } => dev::cmd_clean(project, dry_run, all, &cfg.dev_ops_path, cli.json),
+        Commands::Clean {
+            project,
+            dry_run,
+            all,
+        } => dev::cmd_clean(project, dry_run, all, &cfg.dev_ops_path, cli.json),
         Commands::Ps { procs, top } => dev::cmd_ps(procs, top, cli.json),
+        Commands::Usage => dev::cmd_usage(cli.json),
         Commands::KillPort { port } => dev::cmd_kill_port(port, cli.json),
         Commands::Env { project, all } => dev::cmd_env(project, all, &cfg.dev_ops_path, cli.json),
-        Commands::Deps { project, audit, all } => dev::cmd_deps(project, audit, all, &cfg.dev_ops_path, cli.json),
-        Commands::Build { project, release, check } => {
-            dev::cmd_build(project, release, check, &cfg.dev_ops_path, cli.json)
-        }
-        Commands::Test { project, all, instrumented } => {
-            dev::cmd_test(project, all, instrumented, &cfg.dev_ops_path, cli.json)
-        }
+        Commands::Deps {
+            project,
+            audit,
+            all,
+        } => dev::cmd_deps(project, audit, all, &cfg.dev_ops_path, cli.json),
+        Commands::Build {
+            project,
+            release,
+            check,
+        } => dev::cmd_build(project, release, check, &cfg.dev_ops_path, cli.json),
+        Commands::Test {
+            project,
+            all,
+            instrumented,
+        } => dev::cmd_test(project, all, instrumented, &cfg.dev_ops_path, cli.json),
         Commands::Git { cmd } => git::cmd_git(cmd, &cfg.dev_ops_path, cli.json),
         Commands::Instinct { cmd } => instinct::cmd_instinct(cmd, &cfg.dev_ops_path, cli.json),
         Commands::Ci { project } => dev::cmd_ci(project, &cfg.dev_ops_path, cli.json),
-        Commands::CortexIndex { force } => search::cmd_cortex_index(force, &cfg.dev_ops_path, cli.json),
+        Commands::CortexIndex { force } => {
+            search::cmd_cortex_index(force, &cfg.dev_ops_path, cli.json)
+        }
         Commands::Swarm { action } => swarm::cmd_swarm(action, cli.json),
         Commands::Route { query } => swarm::cmd_route(&query, cli.json),
         Commands::Evolve { action } => swarm::cmd_evolve(action, cli.json),
@@ -479,13 +599,12 @@ pub fn run_refactor_flag(json: bool) {
         None, // Target is None to check the current directory
         &dev_ops_path,
         json,
-        500, // high_lines
-        300, // medium_lines
-        10,  // high_unwrap
-        5,   // medium_unwrap
-        10,  // high_nesting
-        8,   // medium_nesting
-        None // ext_config
+        500,  // high_lines
+        300,  // medium_lines
+        10,   // high_unwrap
+        5,    // medium_unwrap
+        10,   // high_nesting
+        8,    // medium_nesting
+        None, // ext_config
     );
 }
-

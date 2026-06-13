@@ -61,7 +61,7 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
     match app.wizard.step {
         WizardStep::Welcome => render_welcome(frame, area, app),
         WizardStep::Workspace => render_workspace(frame, area, app),
-        WizardStep::Master => render_master(frame, area, app),
+        WizardStep::Constitution => render_master(frame, area, app),
         WizardStep::Claude => render_agent(
             frame,
             area,
@@ -105,24 +105,24 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
             "https://ai.google.dev/gemini-api/docs/gemini-cli",
             &["~/.gemini/GEMINI.md", "~/.gemini/settings.json (MCP)"],
         ),
-        WizardStep::Antigravity => render_agent(
+        WizardStep::Codex => render_agent(
             frame,
             area,
             app,
-            "ANTIGRAVITY",
+            "CODEX KAIRA",
             app.wizard.skip_antigravity,
             app.wizard
                 .agent_status
                 .as_ref()
-                .map(|s| s.antigravity_installed)
+                .map(|s| s.codex_installed)
                 .unwrap_or(false),
             app.wizard
                 .agent_status
                 .as_ref()
-                .map(|s| s.antigravity_version.as_str())
+                .map(|s| s.codex_version.as_str())
                 .unwrap_or(""),
-            "https://antigravity.dev",
-            &[".agents/ANTIGRAVITY.md"],
+            "https://openai.com/codex",
+            &["~/.codex/AGENTS.md", "~/AGENTS.md (symlink)"],
         ),
         WizardStep::Skills => render_skills(frame, area, app),
         WizardStep::Initialize => render_initialize(frame, area, app),
@@ -195,12 +195,12 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
     ];
     for item in &[
-        "Workspace dizin yapısı (Dev_Ops + kategoriler)",
-        "MASTER.md — agent constitution template",
-        "Claude Code: CLAUDE.md + MCP kaydı + rules/",
-        "Gemini CLI:  GEMINI.md + MCP kaydı",
-        "Antigravity: ANTIGRAVITY.md",
-        "Skills & Hooks dizinleri + starter dosyalar",
+        "AGENT_CONSTITUTION.md — K-AI-RA unified constitution",
+        "Workspace symlinks: CLAUDE.md, GEMINI.md, AGENTS.md",
+        "Claude Kaira:       ~/.claude/CLAUDE.md + MCP",
+        "Antigravity Kaira:  ~/.gemini/GEMINI.md + MCP",
+        "Codex Kaira:        ~/.codex/AGENTS.md",
+        "Skills & Hooks:     6 K-AI-RA skill stubs",
         "İlk proje keşfi → entities.json",
     ] {
         lines.push(Line::from(vec![
@@ -225,11 +225,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &App) {
             ("gh (GitHub)", s.gh_installed, s.gh_version.as_str()),
             ("Claude Code", s.claude_installed, s.claude_version.as_str()),
             ("Gemini CLI", s.gemini_installed, s.gemini_version.as_str()),
-            (
-                "Antigravity",
-                s.antigravity_installed,
-                s.antigravity_version.as_str(),
-            ),
+            ("Codex", s.codex_installed, s.codex_version.as_str()),
         ] {
             let (icon, col) = if ok {
                 ("✓", GREEN)
@@ -329,46 +325,80 @@ fn render_workspace(frame: &mut Frame, area: Rect, app: &App) {
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), left);
 
+    let dev_ops_path = std::path::Path::new(&app.wizard.dev_ops);
+    let path_exists = !app.wizard.dev_ops.is_empty() && dev_ops_path.is_dir();
     let base = if app.wizard.dev_ops.is_empty() {
-        "Dev_Ops"
+        "~/dev".to_string()
     } else {
-        app.wizard
-            .dev_ops
-            .split(['/', '\\'])
-            .next_back()
-            .unwrap_or("Dev_Ops")
+        app.wizard.dev_ops.clone()
     };
+
+    let header_label = if path_exists {
+        "  MEVCUT YAPI"
+    } else {
+        "  OLUŞTURULACAK YAPI (K-AI-RA)"
+    };
+
     let mut r = vec![
-        Line::from(Span::styled(
-            "  OLUŞTURULACAK YAPI",
-            Style::new().fg(DIM).bold(),
-        )),
+        Line::from(Span::styled(header_label, Style::new().fg(DIM).bold())),
         Line::from(""),
         Line::from(Span::styled(
             format!("  {}/", base),
             Style::new().fg(ACCENT).bold(),
         )),
     ];
-    for (item, file) in [
-        ("├── 00_System/", false),
-        ("├── 01_Hardware_&_Embedded/", false),
-        ("├── 02_AI_&_Data/", false),
-        ("├── 03_Core_Libraries/", false),
-        ("├── 04_Web_Platforms/", false),
-        ("├── 05_Mobile_&_Gaming/", false),
-        ("├── 06_Media_&_Audio/", false),
-        ("├── 07_DevTools_&_Productivity/", false),
-        ("├── 08_External/", false),
-        ("├── 09_Archive/", false),
-        ("├── 10_ADC/", false),
-        ("├── 11_Personal/", false),
-        ("├── entities.json", true),
-        ("├── tasks.md", true),
-        ("└── mempalace.yaml", true),
-    ] {
+
+    if path_exists {
+        // Scan actual directory — show up to 12 entries
+        let mut entries: Vec<String> = std::fs::read_dir(dev_ops_path)
+            .map(|rd| {
+                let mut v: Vec<String> = rd
+                    .filter_map(|e| e.ok())
+                    .filter_map(|e| {
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        if name.starts_with('.') { None } else { Some(name) }
+                    })
+                    .collect();
+                v.sort();
+                v
+            })
+            .unwrap_or_default();
+        entries.truncate(12);
+        let total = entries.len();
+        for (i, name) in entries.iter().enumerate() {
+            let is_last = i == total - 1;
+            let prefix = if is_last { "└── " } else { "├── " };
+            let is_file = dev_ops_path.join(name).is_file();
+            r.push(Line::from(Span::styled(
+                format!("  {}{}", prefix, name),
+                Style::new().fg(if is_file { CYAN } else { MID }),
+            )));
+        }
+        r.push(Line::from(""));
         r.push(Line::from(Span::styled(
-            format!("  {}", item),
-            Style::new().fg(if file { CYAN } else { MID }),
+            "  + entities.json  tasks.md  mempalace.yaml",
+            Style::new().fg(CYAN),
+        )));
+    } else {
+        // Show K-AI-RA constitution-defined structure
+        for (item, file) in [
+            ("├── ai/", false),
+            ("├── embedded/", false),
+            ("├── web/", false),
+            ("├── tools/", false),
+            ("├── entities.json", true),
+            ("├── tasks.md", true),
+            ("└── mempalace.yaml", true),
+        ] {
+            r.push(Line::from(Span::styled(
+                format!("  {}", item),
+                Style::new().fg(if file { CYAN } else { MID }),
+            )));
+        }
+        r.push(Line::from(""));
+        r.push(Line::from(Span::styled(
+            "  Kategoriler AGENT_CONSTITUTION'dan",
+            Style::new().fg(DIM).italic(),
         )));
     }
     frame.render_widget(Paragraph::new(Text::from(r)), right);
@@ -394,22 +424,22 @@ fn render_master(frame: &mut Frame, area: Rect, app: &App) {
 
     let lines = vec![
         Line::from(Span::styled(
-            "  MASTER.md — AGENT CONSTITUTION",
+            "  K-AI-RA — AGENT CONSTITUTION",
             Style::new().fg(MID).bold(),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "  Tüm AI ajanların uyduğu kural dosyası.",
+            "  Tüm AI ajanların tek kaynağı (Claude, Gemini, Codex).",
             Style::new().fg(DIM),
         )),
         Line::from(Span::styled(
-            "  Yoksa minimal bir template oluşturulur.",
+            "  CLAUDE.md, GEMINI.md, AGENTS.md bu dosyaya symlink olur.",
             Style::new().fg(DIM),
         )),
         Line::from(""),
         Line::from(vec![
             Span::styled("  ▶ ", Style::new().fg(ACCENT)),
-            Span::styled("MASTER.md Path", Style::new().fg(ACCENT).bold()),
+            Span::styled("AGENT_CONSTITUTION.md Path", Style::new().fg(ACCENT).bold()),
         ]),
         Line::from(Span::styled(
             "      Mevcut yol veya oluşturulacak konum",
@@ -532,14 +562,13 @@ fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
     ];
     for (path, desc) in [
-        (
-            ".agents/skills/prompt-master.md",
-            "Prompt optimizasyon skill",
-        ),
-        (".agents/skills/graphify.md", "Knowledge graph skill"),
-        (".agents/skills/verify-ai-os.md", "System health skill"),
-        (".agents/skills/ki-snapshot.md", "Session snapshot skill"),
-        (".agents/hooks/README.md", "Hook sistemi dokümantasyonu"),
+        (".agents/skills/prompt-master.md",      "Prompt optimizasyon"),
+        (".agents/skills/graphify.md",           "Mimari haritalama"),
+        (".agents/skills/search-first.md",       "Koddan önce araştır"),
+        (".agents/skills/ki-snapshot.md",        "Session özeti"),
+        (".agents/skills/continuous-learning.md","Instinct kaydı"),
+        (".agents/skills/verify-ai-os.md",       "Sistem sağlığı"),
+        (".agents/hooks/README.md",              "Hook dokümantasyonu"),
     ] {
         lines.push(Line::from(vec![
             Span::styled("  + ", Style::new().fg(ACCENT)),
@@ -571,7 +600,7 @@ fn render_initialize(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         for (label, val) in [
             ("Dev_Ops", app.wizard.dev_ops.as_str()),
-            ("MASTER", app.wizard.master.as_str()),
+            ("CONSTITUTION", app.wizard.master.as_str()),
             ("GitHub", app.wizard.github.as_str()),
         ] {
             let (disp, col) = if val.is_empty() {
@@ -712,4 +741,4 @@ fn render_log(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
-const MASTER_PREVIEW: &str = "# MASTER — [Kullanıcı]\n\n## 1. Kimlik & Davranış\nNet, direkt. Kod: EN, İletişim: TR.\n\n## 2. Kodlama\npnpm > npm. TypeScript strict.\nFonksiyonel. Hata yönetimi zorunlu.\n\n## 3. Güvenlik\nAPI key asla client-side.\nRLS day 0.\n\n## 4. Agent İş Bölümü\nClaude: Geliştirme\nGemini: Araştırma\nAntigravity: Görsel/Perf";
+const MASTER_PREVIEW: &str = "# AGENT CONSTITUTION (v5.0)\n# K-AI-RA — Single source of truth\n\n## Identity\n- Claude Kaira  |  Codex Kaira\n- Antigravity Kaira (Gemini)\n\n## RIPER-5\n1. Requirement  2. Investigation\n3. Planning     4. Execution\n5. Review & Refactor\n\n## AgentShield (OWASP)\n- No client-side secrets\n- Parameterized queries only\n- pnpm audit on every commit\n\n## Skills\nraios · search-first · graphify\nprompt-master · ki-snapshot";

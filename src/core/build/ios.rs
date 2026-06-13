@@ -1,7 +1,7 @@
+use super::common::{failed_result, failed_test, BuildResult, TestResult};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use super::common::{failed_result, failed_test, BuildResult, TestResult};
 
 pub fn parse_xcodebuild_output(output: &str) -> (bool, usize) {
     let ok = output.contains("** BUILD SUCCEEDED **");
@@ -43,7 +43,10 @@ pub fn build_ios_check(dir: &Path) -> BuildResult {
     if dir.join("Package.swift").exists() {
         let cmd_str = "swift build";
         let start = Instant::now();
-        let out = Command::new("swift").args(["build"]).current_dir(dir).output();
+        let out = Command::new("swift")
+            .args(["build"])
+            .current_dir(dir)
+            .output();
         let elapsed = start.elapsed();
         return match out {
             Err(e) => failed_result("iOS", cmd_str, elapsed, e.to_string()),
@@ -104,7 +107,10 @@ pub fn test_ios(dir: &Path) -> TestResult {
     if dir.join("Package.swift").exists() {
         let cmd_str = "swift test";
         let start = Instant::now();
-        let out = Command::new("swift").args(["test"]).current_dir(dir).output();
+        let out = Command::new("swift")
+            .args(["test"])
+            .current_dir(dir)
+            .output();
         let elapsed = start.elapsed();
         return match out {
             Err(e) => failed_test("iOS", cmd_str, elapsed, e.to_string()),

@@ -8,6 +8,24 @@ use uuid::Uuid;
 
 use crate::daemon::state::DaemonState;
 
+fn agent_shell_command(agent_name: &str) -> (String, Vec<String>) {
+    #[cfg(target_family = "windows")]
+    {
+        (
+            "powershell".to_string(),
+            vec!["-Command".to_string(), agent_name.to_string()],
+        )
+    }
+
+    #[cfg(not(target_family = "windows"))]
+    {
+        (
+            "sh".to_string(),
+            vec!["-lc".to_string(), agent_name.to_string()],
+        )
+    }
+}
+
 /// Representation of an active agent process.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentProcess {
@@ -65,8 +83,9 @@ impl ExecutionProxy {
             use std::process::Stdio;
             use tokio::io::{AsyncBufReadExt, BufReader};
 
-            let mut cmd = Command::new("powershell");
-            cmd.args(["-Command", &agent_name_cloned]); // Use powershell as a bridge for commands
+            let (program, args) = agent_shell_command(&agent_name_cloned);
+            let mut cmd = Command::new(&program);
+            cmd.args(&args);
             cmd.current_dir(&path_cloned);
             cmd.stdout(Stdio::piped());
             cmd.stderr(Stdio::piped());
@@ -74,35 +93,35 @@ impl ExecutionProxy {
             // Wait for the child process to complete, with a timeout
             let result = match cmd.spawn() {
                 Ok(mut child) => {
-                    let stdout = child.stdout.take().unwrap();
-                    let stderr = child.stderr.take().unwrap();
-                    let state_for_logs = state_cloned.clone();
-
-                    // Stream output to logs
-                    tokio::spawn(async move {
-                        let mut reader = BufReader::new(stdout).lines();
-                        while let Ok(Some(line)) = reader.next_line().await {
-                            let mut s = state_for_logs.write().await;
-                            if let Some(agent) =
-                                s.active_agents.iter_mut().find(|a| a.id == process_id)
-                            {
-                                agent.logs.push(format!("[stdout] {}", line));
+                    if let Some(stdout) = child.stdout.take() {
+                        let state_for_logs = state_cloned.clone();
+                        tokio::spawn(async move {
+                            let mut reader = BufReader::new(stdout).lines();
+                            while let Ok(Some(line)) = reader.next_line().await {
+                                let mut s = state_for_logs.write().await;
+                                if let Some(agent) =
+                                    s.active_agents.iter_mut().find(|a| a.id == process_id)
+                                {
+                                    agent.logs.push(format!("[stdout] {}", line));
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
 
-                    let state_for_err = state_cloned.clone();
-                    tokio::spawn(async move {
-                        let mut reader = BufReader::new(stderr).lines();
-                        while let Ok(Some(line)) = reader.next_line().await {
-                            let mut s = state_for_err.write().await;
-                            if let Some(agent) =
-                                s.active_agents.iter_mut().find(|a| a.id == process_id)
-                            {
-                                agent.logs.push(format!("[stderr] {}", line));
+                    if let Some(stderr) = child.stderr.take() {
+                        let state_for_err = state_cloned.clone();
+                        tokio::spawn(async move {
+                            let mut reader = BufReader::new(stderr).lines();
+                            while let Ok(Some(line)) = reader.next_line().await {
+                                let mut s = state_for_err.write().await;
+                                if let Some(agent) =
+                                    s.active_agents.iter_mut().find(|a| a.id == process_id)
+                                {
+                                    agent.logs.push(format!("[stderr] {}", line));
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
 
                     match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
                         Ok(Ok(status)) => {
@@ -140,5 +159,26 @@ impl ExecutionProxy {
         });
 
         Ok(process_id.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::agent_shell_command;
+
+    #[cfg(target_family = "windows")]
+    #[test]
+    fn agent_shell_command_uses_powershell_on_windows() {
+        let (program, args) = agent_shell_command("claude");
+        assert_eq!(program, "powershell");
+        assert_eq!(args, vec!["-Command", "claude"]);
+    }
+
+    #[cfg(not(target_family = "windows"))]
+    #[test]
+    fn agent_shell_command_uses_sh_on_unix() {
+        let (program, args) = agent_shell_command("claude");
+        assert_eq!(program, "sh");
+        assert_eq!(args, vec!["-lc", "claude"]);
     }
 }

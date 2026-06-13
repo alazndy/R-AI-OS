@@ -1,7 +1,7 @@
+use super::common::{failed_result, failed_test, BuildResult, TestResult};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use super::common::{failed_result, failed_test, BuildResult, TestResult};
 
 pub fn build_go(dir: &Path) -> BuildResult {
     let start = Instant::now();

@@ -1,6 +1,6 @@
-use super::{ProjectType, SecurityIssue, SecurityReport, Severity};
 use super::audit::{parse_audit_issues, run_dependency_audit};
 use super::patterns::{compiled_pattern_regexes, PATTERNS, SKIP_DIRS};
+use super::{ProjectType, SecurityIssue, SecurityReport, Severity};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
@@ -288,10 +288,14 @@ mod tests {
         let mut issues = Vec::new();
         let mut count = 0;
         static_scan(tmp.path(), &mut issues, &mut count);
-        let has_false_positive = issues.iter().any(|i| {
-            i.owasp == "A02" && i.severity == crate::security::Severity::Critical
-        });
-        assert!(!has_false_positive, "Should not flag API key string inside #[cfg(test)] block. Issues: {:?}", issues.len());
+        let has_false_positive = issues
+            .iter()
+            .any(|i| i.owasp == "A02" && i.severity == crate::security::Severity::Critical);
+        assert!(
+            !has_false_positive,
+            "Should not flag API key string inside #[cfg(test)] block. Issues: {:?}",
+            issues.len()
+        );
     }
 
     #[test]

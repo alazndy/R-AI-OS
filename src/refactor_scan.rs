@@ -99,11 +99,21 @@ impl RefactorConfig {
     pub fn for_ext(&self, ext: &str) -> RefactorThresholds {
         let p = self.per_ext.get(ext);
         RefactorThresholds {
-            high_lines: p.and_then(|x| x.high_lines).unwrap_or(self.defaults.high_lines),
-            medium_lines: p.and_then(|x| x.medium_lines).unwrap_or(self.defaults.medium_lines),
-            high_unwrap: p.and_then(|x| x.high_unwrap).unwrap_or(self.defaults.high_unwrap),
-            medium_unwrap: p.and_then(|x| x.medium_unwrap).unwrap_or(self.defaults.medium_unwrap),
-            high_nesting: p.and_then(|x| x.high_nesting).unwrap_or(self.defaults.high_nesting),
+            high_lines: p
+                .and_then(|x| x.high_lines)
+                .unwrap_or(self.defaults.high_lines),
+            medium_lines: p
+                .and_then(|x| x.medium_lines)
+                .unwrap_or(self.defaults.medium_lines),
+            high_unwrap: p
+                .and_then(|x| x.high_unwrap)
+                .unwrap_or(self.defaults.high_unwrap),
+            medium_unwrap: p
+                .and_then(|x| x.medium_unwrap)
+                .unwrap_or(self.defaults.medium_unwrap),
+            high_nesting: p
+                .and_then(|x| x.high_nesting)
+                .unwrap_or(self.defaults.high_nesting),
             medium_nesting: p
                 .and_then(|x| x.medium_nesting)
                 .unwrap_or(self.defaults.medium_nesting),
@@ -225,7 +235,7 @@ fn count_risky_patterns(content: &str, ext: &str) -> usize {
 
     for line in content.lines() {
         let trimmed = line.trim();
-        
+
         // Skip Rust test modules since unwraps are standard practice there
         if ext == "rs" && (trimmed.contains("mod tests") || trimmed.contains("#[cfg(test)]")) {
             break; // Test modules are typically at the end of the file
@@ -262,9 +272,8 @@ fn determine_severity(
 ) -> RefactorSeverity {
     let is_high =
         lines >= t.high_lines || unwrap_count >= t.high_unwrap || max_depth >= t.high_nesting;
-    let is_medium = lines >= t.medium_lines
-        || unwrap_count >= t.medium_unwrap
-        || max_depth >= t.medium_nesting;
+    let is_medium =
+        lines >= t.medium_lines || unwrap_count >= t.medium_unwrap || max_depth >= t.medium_nesting;
 
     if is_high {
         RefactorSeverity::High

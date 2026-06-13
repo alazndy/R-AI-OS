@@ -32,7 +32,13 @@ pub fn scan_licenses(path: &Path) -> LicenseReport {
     let unknown_count = deps.iter().filter(|d| d.is_unknown).count();
     let total = deps.len();
 
-    LicenseReport { project_path: path.to_path_buf(), deps, copyleft_count, unknown_count, total }
+    LicenseReport {
+        project_path: path.to_path_buf(),
+        deps,
+        copyleft_count,
+        unknown_count,
+        total,
+    }
 }
 
 pub fn is_copyleft(license: &str) -> bool {
@@ -149,7 +155,13 @@ fn lookup_node_license(path: &Path, name: &str) -> Option<String> {
 fn make_dep(name: String, version: String, license: String) -> LicenseDep {
     let copyleft = is_copyleft(&license);
     let unknown = is_unknown(&license);
-    LicenseDep { name, version, license, is_copyleft: copyleft, is_unknown: unknown }
+    LicenseDep {
+        name,
+        version,
+        license,
+        is_copyleft: copyleft,
+        is_unknown: unknown,
+    }
 }
 
 #[cfg(test)]

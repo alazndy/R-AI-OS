@@ -1,6 +1,6 @@
 use crate::app::events::helpers::*;
-use crate::app::App;
 use crate::app::state::AppState;
+use crate::app::App;
 use crate::filebrowser::FileEntry;
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -94,7 +94,7 @@ impl App {
                     if let Some(ref tx) = self.tx_daemon {
                         let msg = serde_json::json!({
                             "command": "ApproveFileChange",
-                            "id": pending.id.to_string(),
+                            "id": pending.id.clone(),
                             "path": pending.path,
                             "approved": true
                         });
@@ -134,7 +134,7 @@ impl App {
                     if let Some(ref tx) = self.tx_daemon {
                         let msg = serde_json::json!({
                             "command": "ApproveFileChange",
-                            "id": pending.id.to_string(),
+                            "id": pending.id.clone(),
                             "path": pending.path,
                             "approved": false
                         });

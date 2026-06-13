@@ -3,7 +3,7 @@
 //! Embeds capability descriptions at startup (using the existing TF-IDF/fastembed
 //! embedder) and routes natural-language queries to the nearest capability via
 //! cosine similarity. Falls back to exact name match above the threshold.
-use crate::cortex::embedder::{Embedding, Embedder};
+use crate::cortex::embedder::{Embedder, Embedding};
 
 const CONFIDENCE_THRESHOLD: f32 = 0.25;
 
@@ -61,7 +61,11 @@ impl EdgeRouter {
 }
 
 fn cosine_similarity(a: &Embedding, b: &Embedding) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>().clamp(-1.0, 1.0)
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| x * y)
+        .sum::<f32>()
+        .clamp(-1.0, 1.0)
 }
 
 #[cfg(test)]
@@ -70,10 +74,22 @@ mod tests {
 
     fn make_router() -> EdgeRouter {
         let descriptions = vec![
-            ("health_check".to_string(), "Run health scan on a project".to_string()),
-            ("search_codebase".to_string(), "Search across all indexed files semantically".to_string()),
-            ("run_sentinel".to_string(), "Run compile and lint checks on project".to_string()),
-            ("list_projects".to_string(), "List all known projects in workspace".to_string()),
+            (
+                "health_check".to_string(),
+                "Run health scan on a project".to_string(),
+            ),
+            (
+                "search_codebase".to_string(),
+                "Search across all indexed files semantically".to_string(),
+            ),
+            (
+                "run_sentinel".to_string(),
+                "Run compile and lint checks on project".to_string(),
+            ),
+            (
+                "list_projects".to_string(),
+                "List all known projects in workspace".to_string(),
+            ),
         ];
         EdgeRouter::new(descriptions)
     }

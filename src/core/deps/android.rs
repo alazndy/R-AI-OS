@@ -1,5 +1,5 @@
-use std::path::Path;
 use super::common::DepsReport;
+use std::path::Path;
 
 pub fn check_android(dir: &Path) -> DepsReport {
     let mut report = DepsReport::empty("Android");
@@ -12,9 +12,9 @@ pub fn check_android(dir: &Path) -> DepsReport {
         }
     }
 
-    report.tool_missing.push(
-        "OWASP CVE scan: add `id 'org.owasp.dependencycheck'` plugin to build.gradle".into(),
-    );
+    report
+        .tool_missing
+        .push("OWASP CVE scan: add `id 'org.owasp.dependencycheck'` plugin to build.gradle".into());
     report
 }
 

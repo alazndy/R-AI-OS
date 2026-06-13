@@ -103,8 +103,6 @@ fn scan_dir_for_skills(entries: std::fs::ReadDir, cat: &'static str, skills: &mu
 }
 
 pub fn open_in_editor(path: &Path) -> anyhow::Result<()> {
-    std::process::Command::new("cmd")
-        .args(["/c", "start", "", &path.to_string_lossy()])
-        .spawn()?;
+    crate::core::process::open_in_system_editor(path)?;
     Ok(())
 }

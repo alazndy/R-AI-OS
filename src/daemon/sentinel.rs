@@ -8,7 +8,11 @@ use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 use tokio::time::sleep;
 
-pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>) {
+pub async fn start_sentinel_worker(
+    state: Arc<RwLock<DaemonState>>,
+    tx: broadcast::Sender<String>,
+    interval: Duration,
+) {
     println!("[Sentinel] Worker started.");
     let radar = RadarChannel::new(tx.clone());
 
@@ -92,6 +96,6 @@ pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcas
             }
         }
 
-        sleep(Duration::from_secs(30)).await;
+        sleep(interval).await;
     }
 }

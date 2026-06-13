@@ -8,7 +8,10 @@ pub(super) fn cmd_health(project: Option<String>, dev_ops: &Path, json: bool) {
         let query = q.to_lowercase();
         for p in &projects {
             if p.name.to_lowercase().contains(&query)
-                || p.local_path.to_string_lossy().to_lowercase().contains(&query)
+                || p.local_path
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .contains(&query)
             {
                 results.push(crate::health::check_project(p));
             }
@@ -51,11 +54,17 @@ pub(super) fn cmd_health(project: Option<String>, dev_ops: &Path, json: bool) {
 pub(super) fn cmd_stats(_dev_ops: &Path, json: bool) {
     let conn = match crate::db::open_db() {
         Ok(c) => c,
-        Err(e) => { eprintln!("DB error: {}", e); return; }
+        Err(e) => {
+            eprintln!("DB error: {}", e);
+            return;
+        }
     };
     let s = match crate::db::query_stats(&conn) {
         Ok(s) => s,
-        Err(e) => { eprintln!("Stats query failed: {}", e); return; }
+        Err(e) => {
+            eprintln!("Stats query failed: {}", e);
+            return;
+        }
     };
 
     let top_cats: Vec<(String, i64)> = conn.prepare(
@@ -77,13 +86,24 @@ pub(super) fn cmd_stats(_dev_ops: &Path, json: bool) {
     }
 
     fn bar(n: i64, total: i64, width: usize) -> String {
-        if total == 0 { return String::new(); }
+        if total == 0 {
+            return String::new();
+        }
         "█".repeat((n as usize * width) / total as usize)
     }
     #[allow(clippy::manual_checked_ops)]
-    fn pct(n: i64, total: i64) -> i64 { if total > 0 { n * 100 / total } else { 0 } }
+    fn pct(n: i64, total: i64) -> i64 {
+        if total > 0 {
+            n * 100 / total
+        } else {
+            0
+        }
+    }
 
-    println!("Portfolio Statistics — R-AI-OS v{}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "Portfolio Statistics — R-AI-OS v{}",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("{}", "─".repeat(46));
     println!("Total projects:      {:>5}", s.total);
     println!("Active / Archived:   {:>5} / {}", s.active, s.archived);
@@ -94,10 +114,30 @@ pub(super) fn cmd_stats(_dev_ops: &Path, json: bool) {
     println!("Avg security:        {:>4}/100", s.avg_security as u64);
     println!();
     println!("Grade Distribution:");
-    println!("  A (≥80): {:>4} projects  {} {}%", s.grade_a, bar(s.grade_a, s.total, 24), pct(s.grade_a, s.total));
-    println!("  B (≥60): {:>4} projects  {} {}%", s.grade_b, bar(s.grade_b, s.total, 24), pct(s.grade_b, s.total));
-    println!("  C (≥40): {:>4} projects  {} {}%", s.grade_c, bar(s.grade_c, s.total, 24), pct(s.grade_c, s.total));
-    println!("  D  (<40): {:>4} projects  {} {}%", s.grade_d, bar(s.grade_d, s.total, 24), pct(s.grade_d, s.total));
+    println!(
+        "  A (≥80): {:>4} projects  {} {}%",
+        s.grade_a,
+        bar(s.grade_a, s.total, 24),
+        pct(s.grade_a, s.total)
+    );
+    println!(
+        "  B (≥60): {:>4} projects  {} {}%",
+        s.grade_b,
+        bar(s.grade_b, s.total, 24),
+        pct(s.grade_b, s.total)
+    );
+    println!(
+        "  C (≥40): {:>4} projects  {} {}%",
+        s.grade_c,
+        bar(s.grade_c, s.total, 24),
+        pct(s.grade_c, s.total)
+    );
+    println!(
+        "  D  (<40): {:>4} projects  {} {}%",
+        s.grade_d,
+        bar(s.grade_d, s.total, 24),
+        pct(s.grade_d, s.total)
+    );
     println!();
     println!("Top Categories:");
     for (cat, count) in &top_cats {
@@ -119,13 +159,21 @@ pub(super) fn cmd_commit(
     let commit_msg = message.as_deref().unwrap_or("chore: raios auto-sync");
     let candidates: Vec<_> = if let Some(q) = project {
         let q = q.to_lowercase();
-        projects.into_iter().filter(|p| p.name.to_lowercase().contains(&q)).collect()
+        projects
+            .into_iter()
+            .filter(|p| p.name.to_lowercase().contains(&q))
+            .collect()
     } else {
         projects
     };
 
     #[derive(serde::Serialize)]
-    struct CommitEntry { name: String, committed: bool, pushed: bool, note: String }
+    struct CommitEntry {
+        name: String,
+        committed: bool,
+        pushed: bool,
+        note: String,
+    }
     let mut entries: Vec<CommitEntry> = Vec::new();
     let mut committed_count = 0usize;
     let mut skipped_count = 0usize;
@@ -134,12 +182,21 @@ pub(super) fn cmd_commit(
         let dirty = git_is_dirty(&p.local_path).unwrap_or(false);
         if !dirty {
             skipped_count += 1;
-            if !json { println!("  skip  {}", p.name); }
+            if !json {
+                println!("  skip  {}", p.name);
+            }
             continue;
         }
         if dry_run {
-            if !json { println!("  would commit  {}", p.name); }
-            entries.push(CommitEntry { name: p.name.clone(), committed: false, pushed: false, note: "dry-run".into() });
+            if !json {
+                println!("  would commit  {}", p.name);
+            }
+            entries.push(CommitEntry {
+                name: p.name.clone(),
+                committed: false,
+                pushed: false,
+                note: "dry-run".into(),
+            });
             continue;
         }
         let result = git_commit(&p.local_path, commit_msg);
@@ -147,23 +204,51 @@ pub(super) fn cmd_commit(
         let mut note = result.message.clone();
         if result.committed && push {
             match git_push(&p.local_path) {
-                Ok(()) => { pushed_ok = true; note = "committed + pushed".into(); }
-                Err(e) => { note = format!("committed, push failed: {}", e); }
+                Ok(()) => {
+                    pushed_ok = true;
+                    note = "committed + pushed".into();
+                }
+                Err(e) => {
+                    note = format!("committed, push failed: {}", e);
+                }
             }
         } else if result.committed {
             note = "committed".into();
         }
-        if result.committed { committed_count += 1; } else { skipped_count += 1; }
+        if result.committed {
+            committed_count += 1;
+        } else {
+            skipped_count += 1;
+        }
         if !json {
-            let status = if result.committed { if pushed_ok { "  ✓ push " } else { "  ✓ commit" } } else { "  - skip  " };
+            let status = if result.committed {
+                if pushed_ok {
+                    "  ✓ push "
+                } else {
+                    "  ✓ commit"
+                }
+            } else {
+                "  - skip  "
+            };
             println!("{} {} — {}", status, p.name, note);
         }
-        entries.push(CommitEntry { name: p.name.clone(), committed: result.committed, pushed: pushed_ok, note });
+        entries.push(CommitEntry {
+            name: p.name.clone(),
+            committed: result.committed,
+            pushed: pushed_ok,
+            note,
+        });
     }
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&entries).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&entries).unwrap_or_default()
+        );
     } else {
-        println!("\nDone — {} committed, {} skipped.", committed_count, skipped_count);
+        println!(
+            "\nDone — {} committed, {} skipped.",
+            committed_count, skipped_count
+        );
     }
 }

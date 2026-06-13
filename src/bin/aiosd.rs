@@ -19,21 +19,27 @@ async fn main() -> anyhow::Result<()> {
         let projects = r_ai_os::entities::discover_entities(&config.dev_ops_path);
         let _ = r_ai_os::entities::save_entities(&config.dev_ops_path, projects.clone());
 
-        println!("[Kernel] Building Neural Index...");
-        let bm25_db = dirs::config_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("raios")
-            .join("workspace.db");
+        if config.daemon.startup_bm25_indexing {
+            println!("[Kernel] Building Neural Index...");
+            let bm25_db = dirs::config_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("raios")
+                .join("workspace.db");
 
-        if let Ok(idx) = ProjectIndex::load_or_build(&config.dev_ops_path, &bm25_db) {
-            let mut s = state_for_index.write().await;
-            s.index = Some(idx);
-            s.projects = projects;
-            println!("[Kernel] Index & Projects ready.");
+            if let Ok(idx) = ProjectIndex::load_or_build(&config.dev_ops_path, &bm25_db) {
+                let mut s = state_for_index.write().await;
+                s.index = Some(idx);
+                s.projects = projects;
+                println!("[Kernel] Index & Projects ready.");
+            } else {
+                let mut s = state_for_index.write().await;
+                s.projects = projects;
+                println!("[Kernel] Projects ready (index failed — cortex feature not enabled).");
+            }
         } else {
             let mut s = state_for_index.write().await;
             s.projects = projects;
-            println!("[Kernel] Projects ready (index failed — cortex feature not enabled).");
+            println!("[Kernel] Projects ready (startup BM25 indexing disabled).");
         }
     });
 

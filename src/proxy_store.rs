@@ -1,3 +1,4 @@
+use crate::edge::EdgeRouter;
 /// Universal Capability Layer — Proxy-Store Bridge.
 ///
 /// Agents interact with R-AI-OS via a generic tool action name.
@@ -13,7 +14,6 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use crate::edge::EdgeRouter;
 
 // ─── Capability descriptor ────────────────────────────────────────────────────
 
@@ -229,7 +229,9 @@ impl CapabilityProxy {
                 if !expanded.exists() {
                     bail!("Python skill not found: {}", expanded.display());
                 }
-                let output = std::process::Command::new("python")
+                let (python, python_args) = crate::core::process::python_command();
+                let output = std::process::Command::new(&python)
+                    .args(&python_args)
                     .args([expanded.to_str().unwrap_or(""), input])
                     .output()?;
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())

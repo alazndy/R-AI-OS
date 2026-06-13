@@ -1,6 +1,6 @@
+use super::common::{DepsReport, OutdatedDep};
 use std::path::Path;
 use std::process::Command;
-use super::common::{DepsReport, OutdatedDep};
 
 pub fn check_dotnet(dir: &Path) -> DepsReport {
     let mut report = DepsReport::empty(".NET");
@@ -19,9 +19,9 @@ pub fn check_dotnet(dir: &Path) -> DepsReport {
         }
     }
     if Command::new("dotnet").arg("--version").output().is_err() {
-        report.tool_missing.push(
-            "dotnet (.NET SDK not found; install from https://dotnet.microsoft.com)".into(),
-        );
+        report
+            .tool_missing
+            .push("dotnet (.NET SDK not found; install from https://dotnet.microsoft.com)".into());
     }
     report
 }
@@ -70,7 +70,9 @@ mod tests {
         assert!(deps
             .iter()
             .any(|d| d.name == "Newtonsoft.Json" && d.current == "13.0.3"));
-        assert!(deps.iter().any(|d| d.name == "Serilog" && d.current == "3.1.1"));
+        assert!(deps
+            .iter()
+            .any(|d| d.name == "Serilog" && d.current == "3.1.1"));
     }
 
     #[test]

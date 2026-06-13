@@ -1,9 +1,9 @@
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use anyhow::{Result, anyhow};
 
-use crate::security::rate_limiter::RateLimitConfig;
 use crate::security::quarantine::QuarantineConfig;
+use crate::security::rate_limiter::RateLimitConfig;
 
 // ─── Config Schema ────────────────────────────────────────────────────────────
 
@@ -51,8 +51,8 @@ pub enum PolicyAction {
 impl PolicyAction {
     pub fn as_str(&self) -> &'static str {
         match self {
-            PolicyAction::Allow   => "allow",
-            PolicyAction::Deny    => "deny",
+            PolicyAction::Allow => "allow",
+            PolicyAction::Deny => "deny",
             PolicyAction::Confirm => "confirm",
         }
     }
@@ -116,9 +116,7 @@ impl PolicyConfig {
     pub fn try_load_default() -> Option<Self> {
         // Try current dir first, then user config dir
         let candidates = [
-            std::env::current_dir()
-                .ok()?
-                .join("raios-policy.toml"),
+            std::env::current_dir().ok()?.join("raios-policy.toml"),
             dirs::config_dir()?.join("raios").join("raios-policy.toml"),
         ];
         for path in &candidates {
@@ -203,6 +201,9 @@ action = "deny"
         let path = write_policy(&tmp, SAMPLE_TOML);
         let config = PolicyConfig::load_from_file(&path).unwrap();
         assert!(config.filesystem.enforce_sandbox);
-        assert!(config.filesystem.blocked_paths.contains(&"C:/Users/turha/.ssh".to_string()));
+        assert!(config
+            .filesystem
+            .blocked_paths
+            .contains(&"C:/Users/turha/.ssh".to_string()));
     }
 }

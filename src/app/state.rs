@@ -287,8 +287,7 @@ pub struct SystemState {
 
 // ─── Setup Wizard State ──────────────────────────────────────────────────────
 
-#[derive(Debug)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct WizardState {
     pub step: crate::setup_wizard::WizardStep,
     pub dev_ops: String,
@@ -305,7 +304,6 @@ pub struct WizardState {
     pub skip_antigravity: bool,
     pub running: bool,
 }
-
 
 #[derive(Debug, Default)]
 pub struct SetupState {

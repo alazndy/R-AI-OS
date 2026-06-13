@@ -2,21 +2,81 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DaemonConfig {
+    pub startup_bm25_indexing: bool,
+    pub startup_cortex_indexing: bool,
+    pub enable_health_worker: bool,
+    pub health_interval_secs: u64,
+    pub git_interval_secs: u64,
+    pub enable_sentinel_worker: bool,
+    pub sentinel_interval_secs: u64,
+    pub enable_port_monitor: bool,
+    pub port_monitor_interval_secs: u64,
+    pub port_probe_timeout_ms: u64,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        let windows = cfg!(target_os = "windows");
+        Self {
+            startup_bm25_indexing: true,
+            startup_cortex_indexing: !windows,
+            enable_health_worker: true,
+            health_interval_secs: if windows { 900 } else { 300 },
+            git_interval_secs: if windows { 300 } else { 120 },
+            enable_sentinel_worker: !windows,
+            sentinel_interval_secs: if windows { 300 } else { 30 },
+            enable_port_monitor: true,
+            port_monitor_interval_secs: if windows { 30 } else { 10 },
+            port_probe_timeout_ms: if windows { 75 } else { 100 },
+        }
+    }
+}
+
 /// Runtime config — loaded from ~/.config/raios/config.toml
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
-    /// Root workspace folder (e.g. Desktop/Dev Ops)
+    /// Root workspace folder (e.g. /home/user/dev)
     pub dev_ops_path: PathBuf,
-    /// Path to MASTER.md (central agent constitution)
+    /// Path to AGENT_CONSTITUTION.md (central agent constitution)
     pub master_md_path: PathBuf,
     /// Path to .agents/skills directory
     pub skills_path: PathBuf,
     /// Path to Obsidian Vault Projects folder (optional — can be empty)
     #[serde(default)]
     pub vault_projects_path: PathBuf,
+    /// K-AI-RA system name (default: "k-ai-ra")
+    #[serde(default = "Config::default_system_name")]
+    pub system_name: String,
+    /// GitHub username
+    #[serde(default)]
+    pub github_user: String,
+    #[serde(default)]
+    pub daemon: DaemonConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            dev_ops_path: PathBuf::new(),
+            master_md_path: PathBuf::new(),
+            skills_path: PathBuf::new(),
+            vault_projects_path: PathBuf::new(),
+            system_name: Self::default_system_name(),
+            github_user: String::new(),
+            daemon: DaemonConfig::default(),
+        }
+    }
 }
 
 impl Config {
+    fn default_system_name() -> String {
+        "k-ai-ra".to_string()
+    }
+
     /// Returns the path to the config file.
     pub fn config_file() -> PathBuf {
         dirs::config_dir()
@@ -67,6 +127,22 @@ impl Config {
             master_md,
             skills,
             vault_projects,
+        }
+    }
+
+    pub fn from_detect_result(detected: DetectResult) -> Self {
+        Self {
+            dev_ops_path: detected.dev_ops.unwrap_or_else(|| PathBuf::from(".")),
+            master_md_path: detected
+                .master_md
+                .unwrap_or_else(|| PathBuf::from("AGENT_CONSTITUTION.md")),
+            skills_path: detected
+                .skills
+                .unwrap_or_else(|| PathBuf::from(".agents/skills")),
+            vault_projects_path: detected.vault_projects.unwrap_or_default(),
+            system_name: Self::default_system_name(),
+            github_user: String::new(),
+            daemon: DaemonConfig::default(),
         }
     }
 }
@@ -178,4 +254,35 @@ fn find_vault_projects(home: &Path, master_md: Option<&Path>) -> Option<PathBuf>
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Config, DaemonConfig};
+
+    #[test]
+    fn config_defaults_include_daemon_tuning() {
+        let config = Config::default();
+        assert!(config.daemon.startup_bm25_indexing);
+        assert!(config.daemon.enable_port_monitor);
+        assert!(config.daemon.port_monitor_interval_secs > 0);
+    }
+
+    #[test]
+    fn deserialize_legacy_config_uses_daemon_defaults() {
+        let config: Config = toml::from_str(
+            r#"
+dev_ops_path = "/tmp/devops"
+master_md_path = "/tmp/MASTER.md"
+skills_path = "/tmp/.agents/skills"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.dev_ops_path, std::path::PathBuf::from("/tmp/devops"));
+        assert_eq!(
+            config.daemon.git_interval_secs,
+            DaemonConfig::default().git_interval_secs
+        );
+    }
 }

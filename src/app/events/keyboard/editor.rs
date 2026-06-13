@@ -1,5 +1,5 @@
-use crate::app::App;
 use crate::app::state::AppState;
+use crate::app::App;
 use crate::filebrowser::{load_file_content, FileEntry};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -47,7 +47,8 @@ impl App {
             KeyCode::Char('r') | KeyCode::Char('R') if self.editor.changed_externally => {
                 if let Some(ref file) = self.editor.active_file.clone() {
                     let content = load_file_content(&file.path);
-                    self.health.compliance = Some(crate::compliance::check_file(&file.path, &content));
+                    self.health.compliance =
+                        Some(crate::compliance::check_file(&file.path, &content));
                     self.editor.lines = content.lines().map(str::to_owned).collect();
                     self.editor.scroll = 0;
                     self.editor.watched_mtime = std::fs::metadata(&file.path)

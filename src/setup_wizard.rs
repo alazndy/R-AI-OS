@@ -8,10 +8,10 @@ pub enum WizardStep {
     #[default]
     Welcome,
     Workspace,
-    Master,
+    Constitution,
     Claude,
     Gemini,
-    Antigravity,
+    Codex,
     Skills,
     Initialize,
     Done,
@@ -21,11 +21,11 @@ impl WizardStep {
     pub fn next(&self) -> Self {
         match self {
             Self::Welcome => Self::Workspace,
-            Self::Workspace => Self::Master,
-            Self::Master => Self::Claude,
+            Self::Workspace => Self::Constitution,
+            Self::Constitution => Self::Claude,
             Self::Claude => Self::Gemini,
-            Self::Gemini => Self::Antigravity,
-            Self::Antigravity => Self::Skills,
+            Self::Gemini => Self::Codex,
+            Self::Codex => Self::Skills,
             Self::Skills => Self::Initialize,
             Self::Initialize => Self::Done,
             Self::Done => Self::Done,
@@ -36,10 +36,10 @@ impl WizardStep {
         match self {
             Self::Welcome => 0,
             Self::Workspace => 1,
-            Self::Master => 2,
+            Self::Constitution => 2,
             Self::Claude => 3,
             Self::Gemini => 4,
-            Self::Antigravity => 5,
+            Self::Codex => 5,
             Self::Skills => 6,
             Self::Initialize => 7,
             Self::Done => 8,
@@ -52,12 +52,12 @@ impl WizardStep {
 
     pub fn title(&self) -> &'static str {
         match self {
-            Self::Welcome => "WELCOME",
+            Self::Welcome => "WELCOME TO K-AI-RA",
             Self::Workspace => "WORKSPACE",
-            Self::Master => "MASTER.md",
-            Self::Claude => "CLAUDE CODE",
-            Self::Gemini => "GEMINI CLI",
-            Self::Antigravity => "ANTIGRAVITY",
+            Self::Constitution => "AGENT_CONSTITUTION.md",
+            Self::Claude => "CLAUDE KAIRA",
+            Self::Gemini => "ANTIGRAVITY KAIRA",
+            Self::Codex => "CODEX KAIRA",
             Self::Skills => "SKILLS & HOOKS",
             Self::Initialize => "INITIALIZE",
             Self::Done => "DONE",
@@ -73,8 +73,8 @@ pub struct AgentStatus {
     pub claude_version: String,
     pub gemini_installed: bool,
     pub gemini_version: String,
-    pub antigravity_installed: bool,
-    pub antigravity_version: String,
+    pub codex_installed: bool,
+    pub codex_version: String,
     pub git_installed: bool,
     pub git_version: String,
     pub gh_installed: bool,
@@ -92,9 +92,9 @@ pub fn detect_agents() -> AgentStatus {
         s.gemini_installed = ok;
         s.gemini_version = v;
     }
-    if let Some((ok, v)) = run_version(&["antigravity", "--version"]) {
-        s.antigravity_installed = ok;
-        s.antigravity_version = v;
+    if let Some((ok, v)) = run_version(&["codex", "--version"]) {
+        s.codex_installed = ok;
+        s.codex_version = v;
     }
     if let Some((ok, v)) = run_version(&["git", "--version"]) {
         s.git_installed = ok;
@@ -241,27 +241,60 @@ pub fn exec_workspace(dev_ops: &Path, github_user: &str) -> Vec<WizardAction> {
     log
 }
 
-/// Create MASTER.md template if it doesn't exist.
+/// Create AGENT_CONSTITUTION.md and set up workspace symlinks.
 pub fn exec_master(master_path: &Path, github_user: &str) -> Vec<WizardAction> {
     let mut log = Vec::new();
-
-    if master_path.exists() {
-        log.push(WizardAction::skip("exists: MASTER.md"));
-        return log;
-    }
 
     if let Some(parent) = master_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let content = master_template(github_user);
-    match std::fs::write(master_path, content) {
-        Ok(_) => log.push(WizardAction::ok(format!(
-            "created: {}",
-            master_path.display()
-        ))),
-        Err(e) => log.push(WizardAction::fail(format!("MASTER.md: {}", e))),
+    if master_path.exists() {
+        log.push(WizardAction::skip("exists: AGENT_CONSTITUTION.md"));
+    } else {
+        let content = master_template(github_user);
+        match std::fs::write(master_path, content) {
+            Ok(_) => log.push(WizardAction::ok(format!(
+                "created: {}",
+                master_path.display()
+            ))),
+            Err(e) => log.push(WizardAction::fail(format!("AGENT_CONSTITUTION.md: {}", e))),
+        }
     }
+
+    // Create workspace-level symlinks: CLAUDE.md, GEMINI.md, AGENTS.md
+    let home = dirs::home_dir().unwrap_or_default();
+    for link_name in &["CLAUDE.md", "GEMINI.md", "AGENTS.md"] {
+        let link_path = home.join(link_name);
+        if link_path.exists() || link_path.is_symlink() {
+            log.push(WizardAction::skip(format!("exists: ~/{}", link_name)));
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            match symlink(master_path, &link_path) {
+                Ok(_) => log.push(WizardAction::ok(format!(
+                    "symlinked: ~/{} → AGENT_CONSTITUTION.md",
+                    link_name
+                ))),
+                Err(e) => log.push(WizardAction::fail(format!("{}: {}", link_name, e))),
+            }
+        }
+        #[cfg(windows)]
+        {
+            // On Windows write an @import reference instead of a symlink
+            let content = format!("@{}\n", master_path.display());
+            match std::fs::write(&link_path, content) {
+                Ok(_) => log.push(WizardAction::ok(format!(
+                    "created: ~/{} (references AGENT_CONSTITUTION.md)",
+                    link_name
+                ))),
+                Err(e) => log.push(WizardAction::fail(format!("{}: {}", link_name, e))),
+            }
+        }
+    }
+
     log
 }
 
@@ -338,20 +371,21 @@ pub fn exec_gemini(master_path: &Path) -> Vec<WizardAction> {
     log
 }
 
-/// Set up Antigravity: ANTIGRAVITY.md template.
-pub fn exec_antigravity(dev_ops: &Path, master_path: &Path) -> Vec<WizardAction> {
+/// Set up Codex Kaira: ~/.codex/AGENTS.md
+pub fn exec_codex(master_path: &Path) -> Vec<WizardAction> {
     let mut log = Vec::new();
-    let agents_dir = dev_ops.join(".agents");
-    let _ = std::fs::create_dir_all(&agents_dir);
+    let home = dirs::home_dir().unwrap_or_default();
+    let codex_dir = home.join(".codex");
+    let _ = std::fs::create_dir_all(&codex_dir);
 
-    let ag_md = agents_dir.join("ANTIGRAVITY.md");
-    if ag_md.exists() {
-        log.push(WizardAction::skip("exists: .agents/ANTIGRAVITY.md"));
+    let agents_md = codex_dir.join("AGENTS.md");
+    if agents_md.exists() {
+        log.push(WizardAction::skip("exists: ~/.codex/AGENTS.md"));
     } else {
-        let content = antigravity_md_template(master_path);
-        match std::fs::write(&ag_md, content) {
-            Ok(_) => log.push(WizardAction::ok("created: .agents/ANTIGRAVITY.md")),
-            Err(e) => log.push(WizardAction::fail(format!("ANTIGRAVITY.md: {}", e))),
+        let content = codex_md_template(master_path);
+        match std::fs::write(&agents_md, content) {
+            Ok(_) => log.push(WizardAction::ok("created: ~/.codex/AGENTS.md (Codex Kaira)")),
+            Err(e) => log.push(WizardAction::fail(format!("AGENTS.md: {}", e))),
         }
     }
 
@@ -383,6 +417,8 @@ pub fn exec_skills(dev_ops: &Path) -> Vec<WizardAction> {
         ("graphify.md", SKILL_GRAPHIFY),
         ("verify-ai-os.md", SKILL_VERIFY),
         ("ki-snapshot.md", SKILL_KI_SNAPSHOT),
+        ("search-first.md", SKILL_SEARCH_FIRST),
+        ("continuous-learning.md", SKILL_CONTINUOUS_LEARNING),
     ];
 
     for (name, content) in &skill_stubs {
@@ -421,6 +457,9 @@ pub fn exec_initialize(
         master_md_path: master_path.to_path_buf(),
         skills_path: skills_path.to_path_buf(),
         vault_projects_path: vault_path.map(|p| p.to_path_buf()).unwrap_or_default(),
+        system_name: "k-ai-ra".to_string(),
+        github_user: String::new(),
+        daemon: Default::default(),
     };
 
     match config.save() {
@@ -504,137 +543,135 @@ fn register_mcp_gemini(settings_path: &Path) -> Result<bool, String> {
 // ─── Templates ────────────────────────────────────────────────────────────────
 
 fn master_template(github_user: &str) -> String {
+    let user = if github_user.is_empty() { "User" } else { github_user };
     format!(
-        r#"# MASTER — {user}
+        r#"# AGENT CONSTITUTION (v5.0 — Unified)
+# K-AI-RA — Single source of truth for all AI agents (Claude, Gemini, Codex)
+# GitHub: {user} | Edit this file; all agents pick up changes automatically.
 
 ---
 
-## 1. Kimlik & Davranış
-
-### Kimlik
-Kişisel asistanın. Arkadaş gibi konuş, iş önce. Net, direkt, gereksiz uzatma yok.
-Güvenlik ve performans odaklı pair-programming uzmanısın.
-
-### Dil
-- Kod: İngilizce
-- İletişim: Türkçe
-
----
-
-## 2. Kodlama Standartları
-
-### Paket Yönetimi
-pnpm > npm/yarn. Python: uv/pip.
-
-### Kod Kuralları
-1. Önce amacı netleştir → scope + edge case
-2. Skeleton önce, dosyaları doldurmadan yapıyı onayla
-3. Fonksiyonel yaz
-4. Hata yönetimi her zaman
-5. Yorum satırı yok, kod konuşsun
+## 1. Identity & Persona
+* **System Name:** k-ai-ra
+* **Agent Identities:**
+  * **Claude:** Claude Kaira
+  * **Codex:** Codex Kaira
+  * **Gemini:** Antigravity Kaira
+* **Role:** {user}'s senior partner. Security (OWASP Hardened), Performance, and Premium UX specialist.
+* **Attitude:** Genuine, open to slang and wordplay, hacker-vibe senior dev.
+* **Communication:** Turkish in chat (direct, no filler). English in code and technical docs.
+* **Philosophy:** "Secure by Design", "Performance is a Feature", "Visual Excellence".
 
 ---
 
-## 3. Güvenlik
-
-- API key'ler asla client-side'da olmaz
-- RLS day 0'dan
-- Managed services kullan
+## 2. Operational Standard: RIPER-5
+Every task — no exceptions — follows this loop:
+1. **Requirement:** Clarify scope, identify edge cases, get approval.
+2. **Investigation:** Use search-first to scan the existing codebase before writing anything.
+3. **Planning:** Build the skeleton and file structure, get approval.
+4. **Execution:** Functional, clean, idiomatic code. Progress component by component.
+5. **Review & Refactor:** Clear linter errors, optimize, verify.
 
 ---
 
-## 4. Sistem & Süreç
+## 3. Core Skills (always active, silently)
+* **raios:** System health and orchestration.
+* **prompt-master:** Optimize every prompt to the highest level.
+* **continuous-learning:** Record an "Instinct" entry at session end.
+* **search-first:** Always research deeply before writing code.
+* **graphify:** Error and architecture mapping.
+* **ki-snapshot:** Session summary and memory refresh.
 
-### Proje Konumu
-Tüm projeler `Dev Ops/` altında, istisna yok.
+---
 
-### Git Kuralları
-- Commit mesajı: İngilizce, kısa, net
-- Push etmeyi unutma
+## 4. Engineering Standards & Security Hardening
 
-### Agent İş Bölümü
-- **Claude Code:** İnteraktif geliştirme
-- **Gemini CLI:** Araştırma ve alternatif mimari
-- **Antigravity:** Görsel ve performans odaklı geliştirme
+### Skeleton-First Architecture (Mandatory)
+* When writing any new module or feature, always start with type definitions, data schemas,
+  API routing contracts, and empty mock functions (skeleton) first.
+* Business logic must not be written until the structural skeleton is approved.
 
-### GitHub
-- Kullanıcı: {user}
+### AgentShield: Absolute OWASP Rules
+1. **Broken Access Control:** Enforce least privilege. Validate ownership server-side on every request.
+2. **Cryptographic Failures:** No custom crypto. Use Argon2id/bcrypt, AES-256-GCM. Enforce TLS 1.3.
+3. **Injection:** Use parameterized queries and strict schema validation (e.g., Zod) at boundaries.
+4. **Insecure Design:** Threat-model before execution. Secure defaults — block unless explicitly permitted.
+5. **Security Misconfiguration:** No CORS `*` in production. Harden headers (HSTS, CSP, X-Frame-Options).
+6. **Vulnerable Components:** Run `pnpm audit --audit-level=high` as mandatory pre-commit hook.
+7. **Auth Failures:** `HttpOnly`, `Secure`, `SameSite=Strict` on cookies. Rate-limit all auth endpoints.
+8. **Data Integrity:** Verify checksums of external scripts. Enforce signed commits.
+9. **Logging Failures:** Log all high-risk events with timestamps. Never log passwords or PII.
+10. **SSRF:** Sanitize and whitelist user-supplied URLs. Block `169.254.169.254`, `127.0.0.1`.
+
+### Anti-Laziness
+* Never write `// ...rest of code` or `// TODO: implement later`. Always full, compilable context.
+
+---
+
+## 5. Communication Protocol
+* **Chat Mode:** Relaxed, witty, senior-dev camaraderie.
+* **Work Mode:** 100% professional in code, filenames, and commit messages.
+
+---
+
+## 6. Workspace Rules
+
+### Project Structure
+All projects under `{dev_ops}/`, categorized as:
+* `ai/`: AI and data projects.
+* `embedded/`: ESP32, C/C++, IoT projects.
+* `web/`: React, Next.js, Vite projects.
+* `tools/`: CLI, DevOps, and automation tools.
+
+### Mandatory Project Documentation
+Update these after every major change or before every commit:
+* **`gitrepo.md`**: Active Git repo link and short description.
+* **`SIGMAP.md`**: Run `sigmap` before every commit; keep architecture map current.
+* **`README.md`**: Detailed technical documentation.
+* **`memory.md`**: Dynamic memory — updated after decisions and changes using the standard template.
+
+### Git Standards
+* Commit messages: English, short, clear (e.g., `feat: add auth middleware`).
+* Run `pnpm audit --audit-level=high` before every commit.
+* Verify `SIGMAP.md` and `README.md` are current after every major change.
+
+## Change Log & Agent Trail
+- [YYYY-MM-DD] [Agent Identity]: [Brief summary of changes made in this session]
 "#,
-        user = if github_user.is_empty() {
-            "User"
-        } else {
-            github_user
-        }
+        user = user,
+        dev_ops = "~/dev",
     )
 }
 
 fn claude_md_template(master_path: &Path) -> String {
     format!(
-        r#"# Claude Code Rules
-
-> Full constitution: {}
-
-## Quick Reference
-- Code: English | Communication: Turkish (Türkçe)
-- Package manager: pnpm > npm/yarn
-- Security: API keys never client-side, RLS day 0
-- No console.log in production — use logger utility
-- TypeScript strict mode, no `any`
-
-## Mandatory Skills (run before relevant tasks)
-- `/prompt-master` — before any complex prompt
-- `/graphify` — on codebase entry and analysis
-- `/verify-ai-os` — session start and on inconsistency
-
-## Agent Handover
-Use `handover` MCP tool to pass tasks to Gemini or Antigravity.
+        r#"@{constitution}
 "#,
-        master_path.display()
+        constitution = master_path.display()
     )
 }
 
 fn gemini_md_template(master_path: &Path) -> String {
     format!(
-        r#"# Gemini CLI Rules
+        r#"# Antigravity Kaira — Global Gemini Config
+# K-AI-RA system. All rules defined in the unified constitution.
+# Source of truth: {constitution}
 
-> Full constitution: {}
-
-## Role
-Research, alternative architecture exploration, graphify analysis.
-
-## Quick Reference
-- Code: English | Communication: Turkish
-- Always run graphify on codebase entry
-- Use `handover` to pass implementation back to Claude
-
-## Mandatory
-- `graphify` motor: run on every research session
-- Document findings in project memory.md
+@{constitution}
 "#,
-        master_path.display()
+        constitution = master_path.display()
     )
 }
 
-fn antigravity_md_template(master_path: &Path) -> String {
+fn codex_md_template(master_path: &Path) -> String {
     format!(
-        r#"# Antigravity Rules
+        r#"# Codex Kaira — Global Codex Instructions
+# K-AI-RA system. All rules defined in the unified constitution.
+# Source of truth: {constitution}
 
-> Full constitution: {}
-
-## Role
-Visual and performance-focused development. System health monitoring.
-
-## Quick Reference
-- Code: English | Communication: Turkish
-- Glassmorphism UI standards: backdrop-blur-xl, bg-white/20
-- Run `verify-ai-os` for system health checks
-- Framer Motion for complex animations, tailwindcss-animate for simple
-
-## Mandatory
-- `verify-ai-os` on session start
-- Monitor Core Web Vitals: LCP, FID, CLS
+Read {constitution} and follow all rules defined there.
 "#,
-        master_path.display()
+        constitution = master_path.display()
     )
 }
 
@@ -727,6 +764,50 @@ Summarize and save progress at end of session or when context is large.
 3. Note key decisions and why
 4. Update memory.md with session summary
 5. Commit if there are pending changes
+"#;
+
+const SKILL_SEARCH_FIRST: &str = r#"---
+name: search-first
+description: Search codebase before writing any new code
+type: skill
+---
+
+# search-first
+
+Before writing any new code, scan the existing codebase for reusable patterns.
+
+## When to use
+Before implementing any new module, function, or feature.
+
+## Steps
+1. Search for existing implementations related to the task
+2. List what already exists and is relevant
+3. Identify what must be written from scratch
+4. Only then propose an implementation plan
+"#;
+
+const SKILL_CONTINUOUS_LEARNING: &str = r#"---
+name: continuous-learning
+description: Record a session Instinct entry at session end
+type: skill
+---
+
+# continuous-learning
+
+Capture a non-obvious insight from this session that should shape future work.
+
+## When to use
+At the end of every session.
+
+## Format
+```
+## Instinct — [date]
+**Context**: [What triggered this insight]
+**Insight**: [The non-obvious thing learned]
+**Apply when**: [Future trigger condition]
+```
+
+Append to project memory.md Change Log with agent identity.
 "#;
 
 const HOOKS_README: &str = r#"# Agent Hooks

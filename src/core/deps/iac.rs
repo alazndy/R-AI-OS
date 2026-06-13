@@ -1,7 +1,7 @@
-use std::path::Path;
-use std::process::Command;
 use super::common::{DepsReport, OutdatedDep};
 use crate::core::build::iac::{detect_iac_kind, IacKind};
+use std::path::Path;
+use std::process::Command;
 
 pub fn check_iac(dir: &Path) -> DepsReport {
     match detect_iac_kind(dir) {
@@ -82,7 +82,9 @@ provider "registry.terraform.io/hashicorp/random" {
 "#;
         let deps = parse_terraform_lock(content);
         assert_eq!(deps.len(), 2);
-        assert!(deps.iter().any(|d| d.name == "hashicorp/aws" && d.current == "5.0.0"));
+        assert!(deps
+            .iter()
+            .any(|d| d.name == "hashicorp/aws" && d.current == "5.0.0"));
         assert!(deps
             .iter()
             .any(|d| d.name == "hashicorp/random" && d.current == "3.5.1"));

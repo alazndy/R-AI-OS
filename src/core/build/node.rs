@@ -1,7 +1,7 @@
+use super::common::{extract_num, failed_result, failed_test, BuildResult, TestResult};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use super::common::{failed_result, failed_test, extract_num, BuildResult, TestResult};
 
 pub fn build_node(dir: &Path) -> BuildResult {
     let pkg = dir.join("package.json");

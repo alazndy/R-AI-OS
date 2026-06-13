@@ -177,12 +177,7 @@ impl App {
         let (tx, rx) = mpsc::channel::<BgMsg>();
         let boot_tx = tx.clone();
 
-        let config = Config::load().unwrap_or_else(|| Config {
-            dev_ops_path: PathBuf::from(""),
-            master_md_path: PathBuf::from(""),
-            skills_path: PathBuf::from(""),
-            vault_projects_path: PathBuf::from(""),
-        });
+        let config = Config::load().unwrap_or_default();
 
         // Boot results (minimal check for starting)
         let home = dirs::home_dir().unwrap_or_default();
@@ -467,26 +462,31 @@ impl App {
 
         let path_str = project_path.to_string_lossy().into_owned();
         let script_str = script.to_string_lossy().into_owned();
+        let (python, python_args) = crate::core::process::python_command();
+        let mut graphify_cmd = String::new();
+        graphify_cmd.push_str(&python);
+        for arg in &python_args {
+            graphify_cmd.push(' ');
+            graphify_cmd.push_str(arg);
+        }
+        graphify_cmd.push(' ');
+        graphify_cmd.push('"');
+        graphify_cmd.push_str(&script_str);
+        graphify_cmd.push('"');
+        graphify_cmd.push(' ');
+        graphify_cmd.push('"');
+        graphify_cmd.push_str(&path_str);
+        graphify_cmd.push('"');
 
-        if std::process::Command::new("wt")
-            .arg("-d")
-            .arg(&path_str)
-            .arg("python")
-            .arg(&script_str)
-            .arg(&path_str)
-            .spawn()
-            .is_ok()
-        {
-            "Graphify started in Windows Terminal".to_string()
-        } else {
-            match std::process::Command::new("python")
-                .arg(&script_str)
-                .arg(&path_str)
-                .spawn()
-            {
-                Ok(_) => "Graphify started".to_string(),
-                Err(e) => format!("Graphify launch error: {}", e),
-            }
+        if crate::core::process::launch_in_terminal(&graphify_cmd, project_path) {
+            return "Graphify started".to_string();
+        }
+
+        let mut cmd = std::process::Command::new(&python);
+        cmd.args(&python_args).arg(&script_str).arg(&path_str);
+        match cmd.spawn() {
+            Ok(_) => "Graphify started".to_string(),
+            Err(e) => format!("Graphify launch error: {}", e),
         }
     }
 }

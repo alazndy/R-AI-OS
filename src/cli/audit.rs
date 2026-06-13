@@ -10,7 +10,10 @@ pub(super) fn cmd_audit(url: &str, threshold: Option<u8>, json_out: bool) -> i32
     }
 
     if json_out {
-        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_default()
+        );
     } else {
         print_audit_table(&result, threshold);
     }
@@ -34,11 +37,11 @@ fn below_threshold(r: &AuditResult, threshold: u8) -> bool {
 fn print_audit_table(r: &AuditResult, threshold: Option<u8>) {
     println!("\n  Lighthouse Audit — {}", r.url);
     println!("  {}", "─".repeat(46));
-    print_score("Performance",    r.performance,    threshold);
-    print_score("Accessibility",  r.accessibility,  threshold);
+    print_score("Performance", r.performance, threshold);
+    print_score("Accessibility", r.accessibility, threshold);
     print_score("Best Practices", r.best_practices, threshold);
-    print_score("SEO",            r.seo,            threshold);
-    print_score("PWA",            r.pwa,            None);
+    print_score("SEO", r.seo, threshold);
+    print_score("PWA", r.pwa, None);
     println!("  {}", "─".repeat(46));
     println!("  Duration: {}ms\n", r.duration_ms);
 }

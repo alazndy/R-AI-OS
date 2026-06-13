@@ -90,7 +90,10 @@ mod tests {
 
     #[test]
     fn large_generic_output_is_capped() {
-        let text = (0..500).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let text = (0..500)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut resp = make_response(&text);
         apply("some_tool", &mut resp);
         let result = resp["content"][0]["text"].as_str().unwrap();

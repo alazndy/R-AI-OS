@@ -1,5 +1,5 @@
-use crate::app::App;
 use crate::app::state::{AppState, BgMsg};
+use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::thread;
 

@@ -21,7 +21,7 @@ pub fn check_requirements() -> Vec<Requirement> {
 }
 
 fn check(name: &'static str, cmd: &'static str, args: &'static str, critical: bool) -> Requirement {
-    let output = Command::new("cmd").args(["/c", cmd, args]).output();
+    let output = Command::new(cmd).arg(args).output();
 
     match output {
         Ok(out) if out.status.success() => {

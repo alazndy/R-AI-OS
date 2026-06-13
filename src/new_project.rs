@@ -97,7 +97,7 @@ pub fn create(cfg: &NewProjectConfig) -> NewProjectResult {
 
 ## Overview
 
-TODO: Describe the project.
+Describe the purpose and goals of this project.
 
 ## Structure
 
@@ -110,11 +110,11 @@ TODO: Describe the project.
 
 ## Usage
 
-TODO
+Describe how to build, run, or use this project.
 
 ## Stack
 
-TODO
+List the key languages, frameworks, and tools used.
 "#,
         name = cfg.name,
         today = today

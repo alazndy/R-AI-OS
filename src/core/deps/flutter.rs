@@ -1,6 +1,6 @@
+use super::common::{DepsReport, OutdatedDep};
 use std::path::Path;
 use std::process::Command;
-use super::common::{DepsReport, OutdatedDep};
 
 pub fn check_flutter(dir: &Path) -> DepsReport {
     let mut report = DepsReport::empty("Flutter");
@@ -14,9 +14,9 @@ pub fn check_flutter(dir: &Path) -> DepsReport {
     }
 
     if Command::new("flutter").arg("--version").output().is_err() {
-        report.tool_missing.push(
-            "flutter (install from https://docs.flutter.dev/get-started/install)".into(),
-        );
+        report
+            .tool_missing
+            .push("flutter (install from https://docs.flutter.dev/get-started/install)".into());
     }
 
     report

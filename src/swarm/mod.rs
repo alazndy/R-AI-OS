@@ -17,6 +17,10 @@ pub struct SwarmTask {
     pub agent: String,
     pub status: SwarmStatus,
     pub created_at: String,
+    pub task_id: Option<String>,
+    pub agent_run_id: Option<String>,
+    pub artifact_id: Option<String>,
+    pub approval_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -53,7 +53,11 @@ fn config_pin_path() -> Option<PathBuf> {
 #[cfg(test)]
 fn find_existing_pin_in(base: &Path) -> Option<PathBuf> {
     let p = base.join(PIN_FILE);
-    if p.exists() { Some(p) } else { None }
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
 }
 
 fn find_existing_pin() -> Option<PathBuf> {
@@ -84,12 +88,14 @@ fn verify_or_pin_in(base: &Path, manifest_json: &str) -> Result<bool, ToolPinErr
             Ok(true)
         }
         Some(path) => {
-            let stored = std::fs::read_to_string(&path)
-                .map(|s| s.trim().to_string())?;
+            let stored = std::fs::read_to_string(&path).map(|s| s.trim().to_string())?;
             if stored == actual {
                 Ok(false)
             } else {
-                Err(ToolPinError::HashMismatch { expected: stored, actual })
+                Err(ToolPinError::HashMismatch {
+                    expected: stored,
+                    actual,
+                })
             }
         }
     }
@@ -116,12 +122,14 @@ pub fn verify_or_pin(manifest_json: &str) -> Result<bool, ToolPinError> {
             Ok(true)
         }
         Some(path) => {
-            let stored = std::fs::read_to_string(&path)
-                .map(|s| s.trim().to_string())?;
+            let stored = std::fs::read_to_string(&path).map(|s| s.trim().to_string())?;
             if stored == actual {
                 Ok(false)
             } else {
-                Err(ToolPinError::HashMismatch { expected: stored, actual })
+                Err(ToolPinError::HashMismatch {
+                    expected: stored,
+                    actual,
+                })
             }
         }
     }
@@ -198,8 +206,8 @@ mod tests {
     fn changed_manifest_returns_mismatch_error() {
         let tmp = TempDir::new().unwrap();
         verify_or_pin_in(tmp.path(), r#"{"tools":["list_projects"]}"#).unwrap();
-        let err = verify_or_pin_in(tmp.path(), r#"{"tools":["list_projects","evil_tool"]}"#)
-            .unwrap_err();
+        let err =
+            verify_or_pin_in(tmp.path(), r#"{"tools":["list_projects","evil_tool"]}"#).unwrap_err();
         let msg = err.to_string();
         assert!(msg.starts_with("tool_pin:"));
         assert!(msg.contains("mismatch"));

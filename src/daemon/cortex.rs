@@ -6,12 +6,15 @@ use tokio::sync::{broadcast, RwLock};
 
 pub async fn start_cortex_worker(
     _state: Arc<RwLock<DaemonState>>,
+    eager_indexing: bool,
     mut tx_rx: broadcast::Receiver<String>,
 ) {
     println!("[Cortex Worker] Initializing...");
 
     // Initial full index on startup
-    if let Some(config) = Config::load() {
+    if eager_indexing {
+        let config =
+            Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
         if let Ok(mut cortex) = Cortex::init() {
             println!("[Cortex Worker] Starting initial indexing...");
             let count = cortex.index_workspace(&config.dev_ops_path).unwrap_or(0);

@@ -53,16 +53,22 @@ pub fn build(dev_ops: &Path) -> Vec<MemRoom> {
 
 fn scan_projects(room_path: &Path) -> Vec<MemProject> {
     let mut projects: Vec<(MemProject, SystemTime)> = Vec::new();
-    recursive_scan(room_path, &mut projects, 0);
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    recursive_scan(room_path, &mut projects, &mut seen, 0);
 
     projects.sort_by_key(|a| std::cmp::Reverse(a.1));
     projects.into_iter().map(|(p, _)| p).collect()
 }
 
-fn recursive_scan(current_path: &Path, projects: &mut Vec<(MemProject, SystemTime)>, depth: usize) {
-    if depth > 4 {
+fn recursive_scan(
+    current_path: &Path,
+    projects: &mut Vec<(MemProject, SystemTime)>,
+    seen: &mut std::collections::HashSet<PathBuf>,
+    depth: usize,
+) {
+    if depth > 3 {
         return;
-    } // Safety limit
+    }
 
     let Ok(entries) = std::fs::read_dir(current_path) else {
         return;
@@ -80,13 +86,20 @@ fn recursive_scan(current_path: &Path, projects: &mut Vec<(MemProject, SystemTim
         }
 
         let path = entry.path();
+
+        // Resolve symlinks — skip if we've already seen this canonical path
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if !seen.insert(canonical) {
+            continue;
+        }
+
         if is_project_root(&path) {
             if let Some(proj) = make_project(path) {
                 projects.push(proj);
             }
-            // Once a project root is found, do NOT recurse into it to avoid finding sub-components as projects
+            // Do not recurse into a project root — sub-components are not separate projects
         } else {
-            recursive_scan(&path, projects, depth + 1);
+            recursive_scan(&path, projects, seen, depth + 1);
         }
     }
 }
@@ -103,6 +116,28 @@ fn is_skip_dir(name: &str) -> bool {
             | "vendor"
             | ".turbo"
             | "out"
+            | "coverage"
+            | "cache"
+            | ".cache"
+            | "tmp"
+            | ".tmp"
+            | "temp"
+            | "logs"
+            | "log"
+            | "runs"
+            | "test"
+            | "tests"
+            | "__tests__"
+            | "e2e"
+            | "fixtures"
+            | "examples"
+            | "samples"
+            | "gradle"
+            | ".gradle"
+            | "cmake-build-debug"
+            | "cmake-build-release"
+            | ".idea"
+            | ".vscode"
     )
 }
 

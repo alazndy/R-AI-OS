@@ -112,7 +112,7 @@ impl App {
                 2 => self.wizard.vault = self.wizard.input.clone(),
                 _ => {}
             },
-            WizardStep::Master => {
+            WizardStep::Constitution => {
                 self.wizard.master = self.wizard.input.clone();
             }
             _ => {}
@@ -129,7 +129,7 @@ impl App {
                 2 => self.wizard.vault.clone(),
                 _ => String::new(),
             },
-            WizardStep::Master => self.wizard.master.clone(),
+            WizardStep::Constitution => self.wizard.master.clone(),
             _ => return,
         };
         self.wizard.editing = true;
@@ -156,7 +156,7 @@ impl App {
                     tx2.send(BgMsg::WizardActions(actions)).ok();
                 });
             }
-            WizardStep::Master if !master.as_os_str().is_empty() => {
+            WizardStep::Constitution if !master.as_os_str().is_empty() => {
                 let tx2 = tx.clone();
                 let m = master.clone();
                 let gh = github.clone();
@@ -182,12 +182,11 @@ impl App {
                     tx2.send(BgMsg::WizardActions(actions)).ok();
                 });
             }
-            WizardStep::Antigravity if !skip_a => {
+            WizardStep::Codex if !skip_a => {
                 let tx2 = tx.clone();
-                let d = dev_ops.clone();
                 let m = master.clone();
                 thread::spawn(move || {
-                    let actions = crate::setup_wizard::exec_antigravity(&d, &m);
+                    let actions = crate::setup_wizard::exec_codex(&m);
                     tx2.send(BgMsg::WizardActions(actions)).ok();
                 });
             }

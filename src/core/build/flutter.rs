@@ -1,7 +1,7 @@
+use super::common::{failed_result, failed_test, BuildResult, TestResult};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use super::common::{failed_result, failed_test, BuildResult, TestResult};
 
 pub fn parse_flutter_build_output(output: &str) -> (bool, usize) {
     let ok = output.contains("Built build/")
@@ -89,7 +89,10 @@ pub fn build_flutter_check(dir: &Path) -> BuildResult {
 pub fn test_flutter(dir: &Path) -> TestResult {
     let cmd_str = "flutter test";
     let start = Instant::now();
-    let output = Command::new("flutter").args(["test"]).current_dir(dir).output();
+    let output = Command::new("flutter")
+        .args(["test"])
+        .current_dir(dir)
+        .output();
     let elapsed = start.elapsed();
 
     match output {

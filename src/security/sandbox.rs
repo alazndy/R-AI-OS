@@ -1,5 +1,5 @@
+use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
-use anyhow::{Result, anyhow};
 
 // ─── Core Validation ─────────────────────────────────────────────────────────
 
@@ -154,4 +154,3 @@ mod tests {
         assert!(guard.is_allowed(&target));
     }
 }
-

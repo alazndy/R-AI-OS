@@ -1,28 +1,31 @@
-use std::path::Path;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
+pub mod android;
 pub mod common;
-pub mod rust;
+pub mod cpp;
+pub mod dotnet;
+pub mod embedded;
+pub mod flutter;
+pub mod go;
+pub mod iac;
+pub mod ios;
 pub mod node;
 pub mod python;
-pub mod go;
-pub mod flutter;
-pub mod ios;
-pub mod android;
-pub mod embedded;
-pub mod iac;
-pub mod dotnet;
-pub mod cpp;
+pub mod rust;
 
 // Re-exports
+pub use android::{
+    build_android, build_android_check, build_android_release, test_android_instrumented,
+    test_android_unit,
+};
 pub use common::{BuildDiagnostic, BuildResult, TestResult};
-pub use flutter::{build_flutter, build_flutter_release, build_flutter_check, test_flutter};
-pub use ios::{build_ios, build_ios_release, build_ios_check, test_ios};
-pub use android::{build_android, build_android_release, build_android_check, test_android_unit, test_android_instrumented};
-pub use embedded::{build_embedded, test_embedded, detect_embedded_kind, EmbeddedKind};
-pub use iac::{build_iac, test_iac, detect_iac_kind, IacKind};
-pub use dotnet::{build_dotnet, test_dotnet};
 pub use cpp::{build_cpp, test_cpp};
+pub use dotnet::{build_dotnet, test_dotnet};
+pub use embedded::{build_embedded, detect_embedded_kind, test_embedded, EmbeddedKind};
+pub use flutter::{build_flutter, build_flutter_check, build_flutter_release, test_flutter};
+pub use iac::{build_iac, detect_iac_kind, test_iac, IacKind};
+pub use ios::{build_ios, build_ios_check, build_ios_release, test_ios};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectType {
@@ -174,4 +177,3 @@ pub fn test(dir: &Path) -> TestResult {
 
 #[cfg(test)]
 mod tests;
-

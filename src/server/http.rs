@@ -1,8 +1,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query,
-        State,
+        Query, State,
     },
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -26,6 +25,23 @@ struct AppState {
     tx: broadcast::Sender<String>,
 }
 
+fn resolve_pending_diff_target(
+    file_path: &std::path::Path,
+    allowed_base: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let resolved = if file_path.exists() {
+        file_path.canonicalize().ok()
+    } else {
+        let file_name = file_path.file_name()?;
+        file_path
+            .parent()
+            .and_then(|p| p.canonicalize().ok())
+            .map(|parent| parent.join(file_name))
+    }?;
+
+    resolved.starts_with(allowed_base).then_some(resolved)
+}
+
 /// Start the Axum HTTP & WebSocket API Server.
 pub async fn start_http_server(
     port: u16,
@@ -39,6 +55,8 @@ pub async fn start_http_server(
         .route("/api/health", get(handle_health))
         .route("/api/projects", get(handle_projects))
         .route("/api/tasks", get(handle_tasks))
+        .route("/api/inbox", get(handle_inbox))
+        .route("/api/usage", get(handle_usage))
         .route("/api/plans", get(handle_plans))
         .route("/api/approve", post(handle_approve))
         .route("/api/git-status", get(handle_git_status))
@@ -67,7 +85,10 @@ async fn auth_middleware(
     if let Some(host) = headers.get(header::HOST) {
         let host_str = host.to_str().unwrap_or("").to_lowercase();
         if !host_str.starts_with("localhost") && !host_str.starts_with("127.0.0.1") {
-            eprintln!("[HTTP Auth] Blocked request due to foreign Host header: {}", host_str);
+            eprintln!(
+                "[HTTP Auth] Blocked request due to foreign Host header: {}",
+                host_str
+            );
             return Err(StatusCode::BAD_REQUEST);
         }
     } else {
@@ -118,20 +139,42 @@ async fn handle_projects(State(state): State<AppState>) -> impl IntoResponse {
 /// GET /api/tasks
 /// Retrieves all tasks from SQLite.
 async fn handle_tasks() -> impl IntoResponse {
-    let config = Config::load().unwrap_or_else(|| {
-        let detected = Config::auto_detect();
-        Config {
-            dev_ops_path: detected.dev_ops.unwrap_or_else(|| std::path::PathBuf::from(".")),
-            master_md_path: detected.master_md.unwrap_or_else(|| std::path::PathBuf::from("MASTER.md")),
-            skills_path: detected.skills.unwrap_or_else(|| std::path::PathBuf::from(".agents/skills")),
-            vault_projects_path: detected.vault_projects.unwrap_or_default(),
-        }
-    });
+    let config =
+        Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
 
     match crate::tasks::load_tasks(&config.dev_ops_path) {
         Ok(tasks) => Json(json!({ "status": "ok", "tasks": tasks })),
         Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
     }
+}
+
+/// GET /api/inbox
+/// Unified operational view: active tasks, pending approvals, in-progress runs.
+/// All data sourced from canonical cp_* tables.
+async fn handle_inbox() -> impl IntoResponse {
+    match crate::db::open_db() {
+        Ok(conn) => {
+            let tasks = crate::db::cp_query_active_tasks(&conn).unwrap_or_default();
+            let approvals = crate::db::cp_query_pending_approvals(&conn).unwrap_or_default();
+            let runs = crate::db::cp_query_active_runs(&conn).unwrap_or_default();
+            let blocked = crate::db::cp_query_blocked_tasks(&conn).unwrap_or_default();
+            Json(json!({
+                "status": "ok",
+                "active_tasks": tasks,
+                "pending_approvals": approvals,
+                "active_runs": runs,
+                "blocked_tasks": blocked,
+            }))
+        }
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
+    }
+}
+
+/// GET /api/usage
+/// Returns local usage/quota signals for supported AI tools.
+async fn handle_usage() -> impl IntoResponse {
+    let report = crate::system_scan::scan_system();
+    Json(json!({ "status": "ok", "usage": report.usage }))
 }
 
 #[derive(Deserialize)]
@@ -159,7 +202,9 @@ async fn handle_approve(
                     &task.worktree_path,
                 );
                 swarm_store.set_status(&payload.task_id, crate::swarm::SwarmStatus::Merged);
-                return Json(json!({ "status": "ok", "message": format!("Swarm task {} approved and merged", payload.task_id) }));
+                return Json(
+                    json!({ "status": "ok", "message": format!("Swarm task {} approved and merged", payload.task_id) }),
+                );
             }
             Err(e) => {
                 return Json(json!({ "status": "error", "message": e.to_string() }));
@@ -170,29 +215,23 @@ async fn handle_approve(
     // 2. Approve Diff if ID matches
     let mut s = state.daemon_state.write().await;
     if let Some(pos) = s.pending_diffs.iter().position(|d| d.id == payload.task_id) {
-        let diff = s.pending_diffs.remove(pos).unwrap();
+        let Some(diff) = s.pending_diffs.remove(pos) else {
+            return Json(
+                json!({ "status": "error", "message": "Pending diff disappeared before approval" }),
+            );
+        };
         drop(s);
 
         if let Ok(content) = decode_base64(&diff.proposed) {
             let file_path = std::path::Path::new(&diff.file_path);
             if let Some(config) = Config::load() {
                 if let Ok(allowed_base) = config.dev_ops_path.canonicalize() {
-                    // Quick workspace boundary check
-                    let safe_path = if file_path.exists() {
-                        file_path.canonicalize().ok()
-                    } else {
-                        file_path
-                            .parent()
-                            .and_then(|p| p.canonicalize().ok())
-                            .map(|parent| parent.join(file_path.file_name().unwrap()))
-                    };
-
-                    if let Some(ref path) = safe_path {
-                        if path.starts_with(&allowed_base) {
-                            if std::fs::write(&file_path, content).is_ok() {
-                                return Json(json!({ "status": "ok", "message": format!("File diff {} approved and written", payload.task_id) }));
-                            }
-                        }
+                    if resolve_pending_diff_target(file_path, &allowed_base).is_some()
+                        && std::fs::write(file_path, content).is_ok()
+                    {
+                        return Json(
+                            json!({ "status": "ok", "message": format!("File diff {} approved and written", payload.task_id) }),
+                        );
                     }
                 }
             }
@@ -215,7 +254,9 @@ async fn handle_plans() -> impl IntoResponse {
 }
 
 fn locate_plans_dir() -> Option<std::path::PathBuf> {
-    let suffix = std::path::Path::new("docs").join("superpowers").join("plans");
+    let suffix = std::path::Path::new("docs")
+        .join("superpowers")
+        .join("plans");
 
     // Try binary parent → project root (works for target/debug and target/release)
     if let Ok(exe) = std::env::current_exe() {
@@ -236,6 +277,41 @@ fn locate_plans_dir() -> Option<std::path::PathBuf> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_pending_diff_target;
+    use tempfile::TempDir;
+
+    #[test]
+    fn resolve_pending_diff_target_accepts_existing_workspace_file() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("src/lib.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "").unwrap();
+
+        let resolved = resolve_pending_diff_target(&file, tmp.path()).unwrap();
+        assert_eq!(resolved, file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_pending_diff_target_rejects_path_without_filename() {
+        let tmp = TempDir::new().unwrap();
+        let resolved = resolve_pending_diff_target(std::path::Path::new(""), tmp.path());
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_pending_diff_target_rejects_outside_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let file = outside.path().join("other.rs");
+        std::fs::write(&file, "").unwrap();
+
+        let resolved = resolve_pending_diff_target(&file, tmp.path());
+        assert!(resolved.is_none());
+    }
 }
 
 fn scan_plans(dir: &std::path::Path) -> Vec<serde_json::Value> {
@@ -264,7 +340,11 @@ fn scan_plans(dir: &std::path::Path) -> Vec<serde_json::Value> {
             let checked = content.matches("- [x]").count() + content.matches("- [X]").count();
             let unchecked = content.matches("- [ ]").count();
             let total = checked + unchecked;
-            let pct: u8 = if total == 0 { 0 } else { ((checked * 100) / total).min(100) as u8 };
+            let pct: u8 = checked
+                .checked_mul(100)
+                .and_then(|v| v.checked_div(total))
+                .map(|v| v.min(100) as u8)
+                .unwrap_or(0);
 
             let status = match (checked, unchecked) {
                 (0, 0) => "no_tasks",
@@ -295,7 +375,10 @@ struct PathQuery {
 
 /// GET /api/git-status?path=<workspace_path>
 async fn handle_git_status(Query(params): Query<PathQuery>) -> impl IntoResponse {
-    let path = params.path.filter(|p| !p.is_empty()).unwrap_or_else(|| ".".to_string());
+    let path = params
+        .path
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| ".".to_string());
 
     let out = std::process::Command::new("git")
         .args(["-C", &path, "status", "--porcelain=v1", "-b"])
@@ -323,8 +406,12 @@ async fn handle_git_status(Query(params): Query<PathQuery>) -> impl IntoResponse
                     if x == '?' && y == '?' {
                         untracked += 1;
                     } else {
-                        if x != ' ' { staged += 1; }
-                        if y != ' ' { modified += 1; }
+                        if x != ' ' {
+                            staged += 1;
+                        }
+                        if y != ' ' {
+                            modified += 1;
+                        }
                     }
                 }
             }
@@ -344,9 +431,8 @@ async fn handle_git_status(Query(params): Query<PathQuery>) -> impl IntoResponse
 /// GET /api/swarm
 /// Lists active (non-terminal) swarm tasks.
 async fn handle_swarm() -> impl IntoResponse {
-    let store = crate::swarm::store::SwarmStore::new(
-        crate::swarm::store::SwarmStore::default_path(),
-    );
+    let store =
+        crate::swarm::store::SwarmStore::new(crate::swarm::store::SwarmStore::default_path());
     let tasks: Vec<_> = store
         .list_active()
         .iter()

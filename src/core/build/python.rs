@@ -1,24 +1,31 @@
+use super::common::{extract_num, failed_result, failed_test, BuildResult, TestResult};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use super::common::{failed_result, failed_test, extract_num, BuildResult, TestResult};
 
 pub fn build_python(dir: &Path) -> BuildResult {
     let start = Instant::now();
-    let out = Command::new("python")
+    let (python, python_args) = crate::core::process::python_command();
+    let out = Command::new(&python)
+        .args(&python_args)
         .args(["-m", "py_compile"])
         .current_dir(dir)
         .output();
     let elapsed = start.elapsed();
 
     match out {
-        Err(e) => failed_result("Python", "python -m py_compile", elapsed, e.to_string()),
+        Err(e) => failed_result(
+            "Python",
+            &format!("{} -m py_compile", python),
+            elapsed,
+            e.to_string(),
+        ),
         Ok(o) => {
             let raw = String::from_utf8_lossy(&o.stderr).into_owned();
             BuildResult {
                 ok: o.status.success(),
                 project_type: "Python".into(),
-                command: "python -m py_compile".into(),
+                command: format!("{} -m py_compile", python),
                 duration_ms: elapsed.as_millis() as u64,
                 warnings: 0,
                 errors: if o.status.success() { 0 } else { 1 },
@@ -31,7 +38,9 @@ pub fn build_python(dir: &Path) -> BuildResult {
 
 pub fn test_python(dir: &Path) -> TestResult {
     let start = Instant::now();
-    let out = Command::new("python")
+    let (python, python_args) = crate::core::process::python_command();
+    let out = Command::new(&python)
+        .args(&python_args)
         .args(["-m", "pytest", "--tb=short", "-q"])
         .current_dir(dir)
         .output();

@@ -1,6 +1,6 @@
+use super::common::{CveIssue, DepsReport, OutdatedDep};
 use std::path::Path;
 use std::process::Command;
-use super::common::{DepsReport, CveIssue, OutdatedDep};
 
 pub fn check_node(dir: &Path) -> DepsReport {
     let mut report = DepsReport::empty("Node");

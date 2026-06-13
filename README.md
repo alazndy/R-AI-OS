@@ -132,7 +132,7 @@ Automatically masks sensitive values (API keys, GCP secrets, PII patterns) befor
 
 ### Session Token Auth
 
-All HTTP API calls require a Bearer token stored at `%APPDATA%/raios/.session_token` (SHA-256, 8h TTL). The Host header is additionally validated to block DNS rebinding attacks.
+All HTTP API calls require a Bearer token stored in the OS config directory under `raios/.session_token` (SHA-256, 8h TTL). The Host header is additionally validated to block DNS rebinding attacks.
 
 ---
 
@@ -153,6 +153,7 @@ All three protocols share one event bus and one security kernel:
 | `GET` | `/api/health` | Daemon health + active agent count |
 | `GET` | `/api/projects` | All tracked projects from DaemonState |
 | `GET` | `/api/tasks` | Tasks from SQLite (grouped by project) |
+| `GET` | `/api/usage` | Local usage/quota signals for Codex, Claude, Gemini, Antigravity |
 | `GET` | `/api/plans` | Plans from `docs/superpowers/plans/*.md` with checkbox progress |
 | `GET` | `/api/git-status?path=<dir>` | Git branch + dirty/staged/modified/untracked for a workspace |
 | `GET` | `/api/swarm` | Active (non-terminal) swarm tasks |
@@ -263,6 +264,24 @@ Start the daemon (powers the TUI, MCP server, and HTTP API):
 aiosd
 ```
 
+Tune background load in `~/.config/raios/config.toml` when needed, especially on Windows:
+
+```toml
+[daemon]
+startup_bm25_indexing = true
+startup_cortex_indexing = false
+enable_health_worker = true
+health_interval_secs = 900
+git_interval_secs = 300
+enable_sentinel_worker = false
+sentinel_interval_secs = 300
+enable_port_monitor = true
+port_monitor_interval_secs = 30
+port_probe_timeout_ms = 75
+```
+
+Windows defaults are now intentionally calmer: no eager Cortex indexing, no periodic Sentinel compile loop, slower health/git/port polling.
+
 Launch the TUI:
 
 ```bash
@@ -285,6 +304,7 @@ raios bootstrap
 | :--- | :--- |
 | `raios health` | Portfolio health dashboard — scans all projects |
 | `raios health <project>` | Single-project health scan |
+| `raios usage` | Show local usage/quota signals across AI tools |
 | `raios search "<query>"` | Semantic search across portfolio |
 | `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules) |
 | `raios task "<description>"` | Route task to best agent |
@@ -322,6 +342,8 @@ raios bootstrap
 | `raios test` | Run test suite |
 | `raios deps` | Dependency audit |
 | `raios env` | Environment variable scan |
+
+`raios usage` intentionally separates exact quota data from local auth metadata. If a provider does not expose remaining/reset counters locally, R-AI-OS prints `unknown` instead of guessing.
 
 ---
 

@@ -3,23 +3,13 @@ use std::io::Write;
 use std::path::Path;
 
 pub fn launch_agent(agent: &str, project_path: &Path) -> String {
-    let path_str = project_path.to_string_lossy().into_owned();
-    // Try Windows Terminal
-    if std::process::Command::new("wt")
-        .args(["-d", &path_str, "--", agent])
-        .spawn()
-        .is_ok()
-    {
-        return format!("{} launched in Windows Terminal", agent);
-    }
-    // Fallback: new cmd window
-    let cmd_str = format!("cd /d \"{}\" && {}", path_str, agent);
-    match std::process::Command::new("cmd")
-        .args(["/c", "start", "cmd", "/k", &cmd_str])
-        .spawn()
-    {
-        Ok(_) => format!("{} launched", agent),
-        Err(e) => format!("Launch error: {}", e),
+    if crate::core::process::launch_in_terminal(agent, project_path) {
+        format!("{} launched", agent)
+    } else {
+        format!(
+            "Launch error: no supported terminal launcher found for {}",
+            agent
+        )
     }
 }
 

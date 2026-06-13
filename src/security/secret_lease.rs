@@ -26,8 +26,14 @@ pub enum SecretLeaseError {
 impl std::fmt::Display for SecretLeaseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound => write!(f, "secret_lease: no active lease found for this tool/env_var pair"),
-            Self::Expired => write!(f, "secret_lease: lease has expired — run `raios secret grant` again"),
+            Self::NotFound => write!(
+                f,
+                "secret_lease: no active lease found for this tool/env_var pair"
+            ),
+            Self::Expired => write!(
+                f,
+                "secret_lease: lease has expired — run `raios secret grant` again"
+            ),
             Self::Db(e) => write!(f, "secret_lease: db error: {e}"),
         }
     }
@@ -55,7 +61,9 @@ pub fn parse_ttl(s: &str) -> Result<u64, String> {
         "h" => 3600,
         "d" => 86400,
         c if c.chars().all(|ch| ch.is_ascii_digit()) => {
-            return s.parse::<u64>().map_err(|_| format!("invalid duration: {s}"));
+            return s
+                .parse::<u64>()
+                .map_err(|_| format!("invalid duration: {s}"));
         }
         _ => return Err(format!("unknown duration suffix '{suffix}' — use s/m/h/d")),
     };
@@ -120,7 +128,12 @@ fn unix_to_iso(secs: u64) -> String {
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /// Grant a new secret lease. Returns the lease ID.
-pub fn grant(conn: &Connection, tool: &str, env_var: &str, ttl_secs: u64) -> rusqlite::Result<String> {
+pub fn grant(
+    conn: &Connection,
+    tool: &str,
+    env_var: &str,
+    ttl_secs: u64,
+) -> rusqlite::Result<String> {
     ensure_table(conn)?;
     let id = new_id();
     let now = now_secs();

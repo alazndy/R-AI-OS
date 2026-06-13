@@ -32,7 +32,6 @@ fn main() -> Result<()> {
     run_tui()
 }
 
-
 fn run_tui() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();

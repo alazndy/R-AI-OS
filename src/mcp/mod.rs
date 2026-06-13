@@ -15,7 +15,6 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
 
 use crate::config::Config;
 use crate::security::quarantine::{self, QuarantineStore};
@@ -52,10 +51,23 @@ pub(super) struct RpcError {
 
 impl RpcResponse {
     pub(super) fn ok(id: Value, result: Value) -> Self {
-        Self { jsonrpc: "2.0", id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
     pub(super) fn err(id: Value, code: i32, message: impl Into<String>) -> Self {
-        Self { jsonrpc: "2.0", id, result: None, error: Some(RpcError { code, message: message.into() }) }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(RpcError {
+                code,
+                message: message.into(),
+            }),
+        }
     }
 }
 
@@ -70,22 +82,14 @@ pub(super) struct McpServer {
 
 impl McpServer {
     fn new() -> Self {
-        let config = Config::load().unwrap_or_else(|| {
-            let detected = Config::auto_detect();
-            Config {
-                dev_ops_path: detected.dev_ops.unwrap_or_else(|| PathBuf::from(".")),
-                master_md_path: detected.master_md.unwrap_or_else(|| PathBuf::from("MASTER.md")),
-                skills_path: detected.skills.unwrap_or_else(|| PathBuf::from(".agents/skills")),
-                vault_projects_path: detected.vault_projects.unwrap_or_default(),
-            }
-        });
+        let config =
+            Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
         let policy = crate::security::PolicyConfig::try_load_default();
-        let rate_limiter = policy.as_ref()
+        let rate_limiter = policy
+            .as_ref()
             .map(|p| RateLimiter::from_policy(p.rate_limits.clone()))
             .unwrap_or_else(RateLimiter::disabled);
-        let quarantine = QuarantineStore::from_policy(
-            policy.and_then(|p| p.quarantine)
-        );
+        let quarantine = QuarantineStore::from_policy(policy.and_then(|p| p.quarantine));
 
         if quarantine.is_enabled() {
             if let Ok(conn) = crate::db::open_db() {
@@ -93,9 +97,8 @@ impl McpServer {
             }
         }
 
-        let manifest_json = serde_json::to_string(
-            &Self::static_tools_manifest()
-        ).unwrap_or_default();
+        let manifest_json =
+            serde_json::to_string(&Self::static_tools_manifest()).unwrap_or_default();
         let pin_broken = match tool_pin::verify_or_pin(&manifest_json) {
             Ok(fresh) => {
                 if fresh {
@@ -109,15 +112,20 @@ impl McpServer {
             }
         };
 
-        Self { config, rate_limiter, quarantine, pin_broken }
+        Self {
+            config,
+            rate_limiter,
+            quarantine,
+            pin_broken,
+        }
     }
 
     fn static_tools_manifest() -> serde_json::Value {
         json!({
             "tools": [
-                "update_state","handover","add_task","get_health","list_projects",
+                "update_state","handover","add_task","get_health","get_inbox","list_projects",
                 "get_stats","semantic_search","project_info","portfolio_status",
-                "disk_usage","list_ports","version_info","version_bump","env_status",
+                "disk_usage","list_ports","usage_status","version_info","version_bump","env_status",
                 "deps_status","run_build","run_tests","git_status","git_log","git_diff",
                 "git_commit","ask_architect","get_validation_errors","session_note",
                 "create_swarm_task","list_swarm_tasks","approve_swarm_task",
@@ -131,17 +139,19 @@ impl McpServer {
         let is_notification = req.id.is_none();
 
         let result = match req.method.as_str() {
-            "initialize"  => self.handle_initialize(&req.params),
+            "initialize" => self.handle_initialize(&req.params),
             "initialized" => return None,
-            "ping"        => Ok(json!({})),
+            "ping" => Ok(json!({})),
             "resources/list" => self.handle_resources_list(),
             "resources/read" => self.handle_resources_read(&req.params),
-            "tools/list"  => self.handle_tools_list(),
-            "tools/call"  => self.handle_tools_call(&req.params),
+            "tools/list" => self.handle_tools_list(),
+            "tools/call" => self.handle_tools_call(&req.params),
             other => Err(format!("method_not_found:{}", other)),
         };
 
-        if is_notification { return None; }
+        if is_notification {
+            return None;
+        }
         Some(match result {
             Ok(v) => RpcResponse::ok(id, v),
             Err(msg) if msg.starts_with("rate_limit:") => RpcResponse::err(id, -32029, msg),

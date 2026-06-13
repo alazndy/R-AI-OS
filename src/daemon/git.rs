@@ -5,7 +5,11 @@ use tokio::sync::{broadcast, RwLock};
 use tokio::time::{sleep, Duration};
 
 /// Background worker that periodically updates Git status for all projects.
-pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>) {
+pub async fn start_git_worker(
+    state: Arc<RwLock<DaemonState>>,
+    tx: broadcast::Sender<String>,
+    interval: Duration,
+) {
     println!("[Daemon] Git Worker started.");
 
     loop {
@@ -103,19 +107,12 @@ pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Se
 
             if updated {
                 println!("[Daemon] Git statuses updated. Broadcasting StateSync.");
-                let msg = serde_json::json!({
-                    "event": "StateSync",
-                    "projects": s.projects,
-                    "health_reports": s.health_reports,
-                    "active_agents": s.active_agents,
-                    "index_ready": s.index.is_some(),
-                    "handover_count": s.handover_count
-                });
+                let msg = s.sync_payload();
                 let _ = tx.send(msg.to_string());
             }
         }
 
         // Wait before next scan (e.g., 2 minutes)
-        sleep(Duration::from_secs(120)).await;
+        sleep(interval).await;
     }
 }

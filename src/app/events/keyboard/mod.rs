@@ -1,12 +1,12 @@
-use crate::app::App;
 use crate::app::state::AppState;
+use crate::app::App;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub mod dashboard;
-pub mod project;
 pub mod editor;
 pub mod health;
+pub mod project;
 pub mod setup;
 
 impl App {
@@ -53,21 +53,24 @@ impl App {
                 }
                 KeyCode::Char('c') | KeyCode::Char('C') => {
                     if let Some(ref proj) = self.projects.active.clone() {
-                        let msg = crate::app::events::helpers::launch_agent("claude", &proj.local_path);
+                        let msg =
+                            crate::app::events::helpers::launch_agent("claude", &proj.local_path);
                         self.system.sync_status = Some(msg);
                     }
                     self.ui.show_launcher = false;
                 }
                 KeyCode::Char('g') | KeyCode::Char('G') => {
                     if let Some(ref proj) = self.projects.active.clone() {
-                        let msg = crate::app::events::helpers::launch_agent("gemini", &proj.local_path);
+                        let msg =
+                            crate::app::events::helpers::launch_agent("gemini", &proj.local_path);
                         self.system.sync_status = Some(msg);
                     }
                     self.ui.show_launcher = false;
                 }
                 KeyCode::Char('x') | KeyCode::Char('X') => {
                     if let Some(ref proj) = self.projects.active.clone() {
-                        let msg = crate::app::events::helpers::launch_agent("codex", &proj.local_path);
+                        let msg =
+                            crate::app::events::helpers::launch_agent("codex", &proj.local_path);
                         self.system.sync_status = Some(msg);
                     }
                     self.ui.show_launcher = false;
@@ -89,8 +92,10 @@ impl App {
                     let tx = self.tx.clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(3));
-                        tx.send(crate::app::state::BgMsg::SyncDone("Auto-Fix Complete: Issues resolved".into()))
-                            .ok();
+                        tx.send(crate::app::state::BgMsg::SyncDone(
+                            "Auto-Fix Complete: Issues resolved".into(),
+                        ))
+                        .ok();
                     });
                 }
             }

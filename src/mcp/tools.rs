@@ -16,6 +16,7 @@ impl McpServer {
             { "name": "portfolio_status","description": "Lightweight status overview of all known projects: name, status, git dirty, health grades, version. Use for getting the big picture before drilling into a specific project.", "inputSchema": { "type": "object", "properties": { "filter": {"type":"string","description":"Filter by project name (optional)"}, "status": {"type":"string","description":"Filter by status: active | archived (optional)"} } } },
             { "name": "disk_usage",      "description": "Analyze disk usage of a project: total size, source files, cache dirs and largest files.", "inputSchema": { "type": "object", "properties": { "project": {"type":"string","description":"Project name or absolute path"} }, "required": ["project"] } },
             { "name": "list_ports",      "description": "List all listening TCP ports on this machine with their PID and process name.", "inputSchema": { "type": "object", "properties": {} } },
+            { "name": "usage_status",    "description": "Show local usage/quota signals for Codex/OpenAI, Claude Code, Gemini CLI, and Antigravity. Returns exact fields when available and marks missing quota data clearly.", "inputSchema": { "type": "object", "properties": {} } },
             { "name": "version_info",    "description": "Get current version, last git tag, and commits since last tag for a project.", "inputSchema": { "type": "object", "properties": { "project": {"type":"string","description":"Project name or absolute path"} }, "required": ["project"] } },
             { "name": "version_bump",    "description": "Bump project semver (patch/minor/major), optionally update CHANGELOG.md and create git tag.", "inputSchema": { "type": "object", "properties": { "project": {"type":"string","description":"Project name or absolute path"}, "level": {"type":"string","description":"patch | minor | major"}, "changelog": {"type":"boolean","description":"Update CHANGELOG.md (default false)"}, "tag": {"type":"boolean","description":"Create git tag (default false)"} }, "required": ["project","level"] } },
             { "name": "env_status",      "description": "Check .env file health: missing keys vs .env.example, empty values, undocumented keys. Never returns secret values — key names only.", "inputSchema": { "type": "object", "properties": { "project": {"type":"string","description":"Project name or absolute path"} }, "required": ["project"] } },
@@ -32,6 +33,7 @@ impl McpServer {
             { "name": "create_swarm_task",    "description": "Create an isolated swarm task in a new git worktree for parallel agent development.", "inputSchema": { "type": "object", "required": ["project_name","project_path","description"], "properties": { "project_name": {"type":"string"}, "project_path": {"type":"string","description":"Absolute path to the project"}, "description": {"type":"string","description":"What the agent should do in this worktree"}, "agent": {"type":"string","description":"Agent name (default: claude)"} } } },
             { "name": "list_swarm_tasks",     "description": "List all active swarm tasks (excludes merged/rejected).", "inputSchema": { "type": "object", "properties": {} } },
             { "name": "approve_swarm_task",   "description": "Approve and merge a completed swarm task into the main branch.", "inputSchema": { "type": "object", "required": ["task_id"], "properties": { "task_id": {"type":"string"} } } },
+            { "name": "get_inbox",                 "description": "Unified operational inbox: all active tasks, pending approvals, and in-progress agent runs sourced from the canonical control plane tables.", "inputSchema": { "type": "object", "properties": {} } },
             { "name": "route_capability",          "description": "Semantically route a natural language query to the best matching raios capability name.", "inputSchema": { "type": "object", "required": ["query"], "properties": { "query": {"type":"string","description":"Natural language description of what you want to do"} } } },
             { "name": "list_evolution_candidates", "description": "List pending instinct candidates learned from agent job outcomes.", "inputSchema": { "type": "object", "properties": { "limit": {"type":"integer","description":"Max results (default: 20)"} } } },
             { "name": "promote_evolution_candidate","description": "Promote a learned instinct candidate to active memory and the instinct store.", "inputSchema": { "type": "object", "required": ["rule"], "properties": { "rule": {"type":"string","description":"The rule text to promote"} } } }
@@ -40,11 +42,9 @@ impl McpServer {
 
     pub(super) fn handle_tools_call(&mut self, params: &Value) -> Result<Value, String> {
         if self.pin_broken {
-            return Err(
-                "tool_pin: manifest tampered — all tool calls blocked. \
+            return Err("tool_pin: manifest tampered — all tool calls blocked. \
                  Run `raios pin-reset` after verifying the binary."
-                    .to_string(),
-            );
+                .to_string());
         }
 
         let name = params["name"].as_str().ok_or("missing tool name")?;
@@ -71,34 +71,36 @@ impl McpServer {
         }
 
         match name {
-            "update_state"    => self.tool_update_state(args),
-            "handover"        => self.tool_handover(args),
-            "add_task"        => self.tool_add_task(args),
-            "get_health"      => self.tool_get_health(args),
-            "list_projects"   => self.tool_list_projects(args),
-            "get_stats"       => self.tool_get_stats(),
+            "update_state" => self.tool_update_state(args),
+            "handover" => self.tool_handover(args),
+            "add_task" => self.tool_add_task(args),
+            "get_health" => self.tool_get_health(args),
+            "list_projects" => self.tool_list_projects(args),
+            "get_stats" => self.tool_get_stats(),
             "semantic_search" => self.tool_semantic_search(args),
-            "ask_architect"   => self.tool_ask_architect(args),
+            "ask_architect" => self.tool_ask_architect(args),
             "get_validation_errors" => self.tool_get_validation_errors(args),
-            "project_info"    => self.tool_project_info(args),
-            "portfolio_status"=> self.tool_portfolio_status(args),
-            "disk_usage"      => self.tool_disk_usage(args),
-            "list_ports"      => self.tool_list_ports(),
-            "version_info"    => self.tool_version_info(args),
-            "version_bump"    => self.tool_version_bump(args),
-            "env_status"      => self.tool_env_status(args),
-            "deps_status"     => self.tool_deps_status(args),
-            "run_build"       => self.tool_run_build(args),
-            "run_tests"       => self.tool_run_tests(args),
-            "git_status"      => self.tool_git_status(args),
-            "git_log"         => self.tool_git_log(args),
-            "git_diff"        => self.tool_git_diff(args),
-            "git_commit"      => self.tool_git_commit(args),
-            "session_note"    => self.tool_session_note(args),
-            "create_swarm_task"         => self.tool_create_swarm_task(args),
-            "list_swarm_tasks"          => self.tool_list_swarm_tasks(),
-            "approve_swarm_task"        => self.tool_approve_swarm_task(args),
-            "route_capability"          => self.tool_route_capability(args),
+            "project_info" => self.tool_project_info(args),
+            "portfolio_status" => self.tool_portfolio_status(args),
+            "disk_usage" => self.tool_disk_usage(args),
+            "list_ports" => self.tool_list_ports(),
+            "usage_status" => self.tool_usage_status(),
+            "version_info" => self.tool_version_info(args),
+            "version_bump" => self.tool_version_bump(args),
+            "env_status" => self.tool_env_status(args),
+            "deps_status" => self.tool_deps_status(args),
+            "run_build" => self.tool_run_build(args),
+            "run_tests" => self.tool_run_tests(args),
+            "git_status" => self.tool_git_status(args),
+            "git_log" => self.tool_git_log(args),
+            "git_diff" => self.tool_git_diff(args),
+            "git_commit" => self.tool_git_commit(args),
+            "session_note" => self.tool_session_note(args),
+            "create_swarm_task" => self.tool_create_swarm_task(args),
+            "list_swarm_tasks" => self.tool_list_swarm_tasks(),
+            "approve_swarm_task" => self.tool_approve_swarm_task(args),
+            "get_inbox" => self.tool_get_inbox(),
+            "route_capability" => self.tool_route_capability(args),
             "list_evolution_candidates" => self.tool_list_evolution_candidates(args),
             "promote_evolution_candidate" => self.tool_promote_evolution_candidate(args),
             _ => Err(format!("Unknown tool: {}", name)),
@@ -108,10 +110,13 @@ impl McpServer {
     pub(super) fn resolve_git_path(&self, args: &Value) -> Result<std::path::PathBuf, String> {
         let project = args["project"].as_str().ok_or("missing project")?;
         let direct = std::path::Path::new(project);
-        if direct.exists() { return Ok(direct.to_path_buf()); }
+        if direct.exists() {
+            return Ok(direct.to_path_buf());
+        }
         if let Ok(conn) = crate::db::open_db() {
             if let Ok(projects) = crate::db::load_all_projects(&conn) {
-                if let Some(found) = projects.iter()
+                if let Some(found) = projects
+                    .iter()
                     .find(|p| p.name.to_lowercase().contains(&project.to_lowercase()))
                 {
                     return Ok(std::path::PathBuf::from(&found.path));

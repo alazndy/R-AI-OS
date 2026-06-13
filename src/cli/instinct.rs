@@ -84,7 +84,9 @@ fn suggest(project: Option<String>, dev_ops: &Path, _json: bool) {
     let projects = crate::entities::load_entities(dev_ops);
     let target = if let Some(ref name) = project {
         let n = name.to_lowercase();
-        projects.into_iter().find(|p| p.name.to_lowercase().contains(&n))
+        projects
+            .into_iter()
+            .find(|p| p.name.to_lowercase().contains(&n))
     } else {
         let cwd = std::env::current_dir().unwrap_or_default();
         projects.into_iter().find(|p| p.local_path == cwd)

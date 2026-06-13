@@ -1,7 +1,9 @@
+use super::common::{
+    extract_num, failed_result, failed_test, BuildDiagnostic, BuildResult, TestResult,
+};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use super::common::{failed_result, failed_test, extract_num, BuildDiagnostic, BuildResult, TestResult};
 
 pub fn build_rust(dir: &Path) -> BuildResult {
     let start = Instant::now();

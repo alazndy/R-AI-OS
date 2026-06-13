@@ -24,7 +24,10 @@ pub fn render_policies(frame: &mut Frame, area: Rect, app: &App) {
     let audit_count = load_audit_count();
 
     let mut lines: Vec<Line> = vec![
-        Line::from(Span::styled(" SECURITY KERNEL", Style::new().fg(MID).bold())),
+        Line::from(Span::styled(
+            " SECURITY KERNEL",
+            Style::new().fg(MID).bold(),
+        )),
         Line::from(""),
     ];
 
@@ -56,14 +59,17 @@ pub fn render_policies(frame: &mut Frame, area: Rect, app: &App) {
     // ── Tool Policy ───────────────────────────────────────────────────────────
     if let Some(ref p) = policy {
         let default_color = match p.tools.default_action {
-            crate::security::policy::PolicyAction::Allow   => GREEN,
+            crate::security::policy::PolicyAction::Allow => GREEN,
             crate::security::policy::PolicyAction::Confirm => AMBER,
-            crate::security::policy::PolicyAction::Deny    => RED,
+            crate::security::policy::PolicyAction::Deny => RED,
         };
         lines.push(Line::from(vec![
             Span::styled("  Tool Policy      ", Style::new().fg(MID)),
             Span::styled(
-                format!("default: {}", p.tools.default_action.as_str().to_uppercase()),
+                format!(
+                    "default: {}",
+                    p.tools.default_action.as_str().to_uppercase()
+                ),
                 Style::new().fg(default_color).bold(),
             ),
         ]));
@@ -78,9 +84,9 @@ pub fn render_policies(frame: &mut Frame, area: Rect, app: &App) {
             .collect();
         for rule in &notable {
             let (tag, col) = match rule.action {
-                crate::security::policy::PolicyAction::Deny    => ("DENY   ", RED),
+                crate::security::policy::PolicyAction::Deny => ("DENY   ", RED),
                 crate::security::policy::PolicyAction::Confirm => ("CONFIRM", AMBER),
-                crate::security::policy::PolicyAction::Allow   => ("ALLOW  ", GREEN),
+                crate::security::policy::PolicyAction::Allow => ("ALLOW  ", GREEN),
             };
             lines.push(Line::from(vec![
                 Span::styled(format!("    [{}] ", tag), Style::new().fg(col)),
@@ -135,7 +141,7 @@ pub fn render_policies(frame: &mut Frame, area: Rect, app: &App) {
     // ── Audit Chain ───────────────────────────────────────────────────────────
     let (chain_label, chain_color) = match audit_count {
         Some(n) => (format!("{} events logged", n), GREEN),
-        None    => ("DB unavailable".to_string(), AMBER),
+        None => ("DB unavailable".to_string(), AMBER),
     };
     lines.push(Line::from(vec![
         Span::styled("  Audit Chain      ", Style::new().fg(MID)),
@@ -153,11 +159,6 @@ pub fn render_policies(frame: &mut Frame, area: Rect, app: &App) {
 
 fn load_audit_count() -> Option<i64> {
     let conn = crate::db::open_db().ok()?;
-    conn.query_row(
-        "SELECT COUNT(*) FROM audit_log",
-        [],
-        |row| row.get(0),
-    )
-    .ok()
+    conn.query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))
+        .ok()
 }
-

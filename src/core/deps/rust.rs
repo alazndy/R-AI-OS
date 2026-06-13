@@ -1,6 +1,6 @@
+use super::common::{cvss_to_severity, CveIssue, DepsReport, OutdatedDep};
 use std::path::Path;
 use std::process::Command;
-use super::common::{DepsReport, CveIssue, OutdatedDep, cvss_to_severity};
 
 pub fn check_rust(dir: &Path) -> DepsReport {
     let mut report = DepsReport::empty("Rust");

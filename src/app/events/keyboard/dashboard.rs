@@ -1,6 +1,6 @@
 use crate::app::events::helpers::*;
-use crate::app::{filtered_palette, App, MENU_ITEMS};
 use crate::app::state::AppState;
+use crate::app::{filtered_palette, App, MENU_ITEMS};
 use crate::filebrowser::FileEntry;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};

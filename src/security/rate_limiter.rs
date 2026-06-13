@@ -25,8 +25,12 @@ pub struct RateLimitConfig {
     pub rules: Vec<ToolRateRule>,
 }
 
-fn default_window() -> u64 { 60 }
-fn default_max() -> u32 { 100 }
+fn default_window() -> u64 {
+    60
+}
+fn default_max() -> u32 {
+    100
+}
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
@@ -98,25 +102,33 @@ pub struct ToolRateStatus {
 
 impl RateLimiter {
     pub fn new(config: RateLimitConfig) -> Self {
-        Self { config, buckets: HashMap::new() }
+        Self {
+            config,
+            buckets: HashMap::new(),
+        }
     }
 
     /// Creates a no-op limiter (enabled = false).
     pub fn disabled() -> Self {
-        Self::new(RateLimitConfig { enabled: false, ..Default::default() })
+        Self::new(RateLimitConfig {
+            enabled: false,
+            ..Default::default()
+        })
     }
 
     /// Build from an optional policy section; falls back to a permissive default.
     pub fn from_policy(config: Option<RateLimitConfig>) -> Self {
         match config {
             Some(c) => Self::new(c),
-            None    => Self::disabled(),
+            None => Self::disabled(),
         }
     }
 
     fn max_for(&self, tool: &str) -> u32 {
         // Exact match first, then wildcard, then default.
-        self.config.rules.iter()
+        self.config
+            .rules
+            .iter()
             .find(|r| r.tool == tool)
             .or_else(|| self.config.rules.iter().find(|r| r.tool == "*"))
             .map(|r| r.max_calls)
@@ -135,10 +147,13 @@ impl RateLimiter {
         let now = Instant::now();
         let max = self.max_for(tool);
 
-        let bucket = self.buckets.entry(tool.to_string()).or_insert(WindowBucket {
-            count: 0,
-            window_start: now,
-        });
+        let bucket = self
+            .buckets
+            .entry(tool.to_string())
+            .or_insert(WindowBucket {
+                count: 0,
+                window_start: now,
+            });
 
         if now.duration_since(bucket.window_start) >= window {
             bucket.count = 0;
@@ -165,17 +180,21 @@ impl RateLimiter {
     pub fn status(&self) -> Vec<ToolRateStatus> {
         let window = std::time::Duration::from_secs(self.config.window_secs);
         let now = Instant::now();
-        let mut out: Vec<ToolRateStatus> = self.buckets.iter().map(|(tool, b)| {
-            let elapsed = now.duration_since(b.window_start);
-            ToolRateStatus {
-                tool: tool.clone(),
-                calls_this_window: b.count,
-                max_calls: self.max_for(tool),
-                window_secs: self.config.window_secs,
-                resets_in_secs: window.saturating_sub(elapsed).as_secs(),
-            }
-        }).collect();
-        out.sort_by(|a, b| b.calls_this_window.cmp(&a.calls_this_window));
+        let mut out: Vec<ToolRateStatus> = self
+            .buckets
+            .iter()
+            .map(|(tool, b)| {
+                let elapsed = now.duration_since(b.window_start);
+                ToolRateStatus {
+                    tool: tool.clone(),
+                    calls_this_window: b.count,
+                    max_calls: self.max_for(tool),
+                    window_secs: self.config.window_secs,
+                    resets_in_secs: window.saturating_sub(elapsed).as_secs(),
+                }
+            })
+            .collect();
+        out.sort_by_key(|b| std::cmp::Reverse(b.calls_this_window));
         out
     }
 
@@ -243,12 +262,15 @@ mod tests {
             enabled: true,
             window_secs: 60,
             default_max: 100,
-            rules: vec![ToolRateRule { tool: "git_commit".to_string(), max_calls: 2 }],
+            rules: vec![ToolRateRule {
+                tool: "git_commit".to_string(),
+                max_calls: 2,
+            }],
         });
         assert!(rl.check("git_commit").is_ok());
         assert!(rl.check("git_commit").is_ok());
         assert!(rl.check("git_commit").is_err()); // limited to 2
-        // other tools still get default 100
+                                                  // other tools still get default 100
         assert!(rl.check("list_projects").is_ok());
     }
 
@@ -258,7 +280,10 @@ mod tests {
             enabled: true,
             window_secs: 60,
             default_max: 100,
-            rules: vec![ToolRateRule { tool: "*".to_string(), max_calls: 1 }],
+            rules: vec![ToolRateRule {
+                tool: "*".to_string(),
+                max_calls: 1,
+            }],
         });
         assert!(rl.check("any_tool").is_ok());
         assert!(rl.check("any_tool").is_err());

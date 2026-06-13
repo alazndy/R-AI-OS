@@ -6,6 +6,11 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Task {
+    /// `Some(uuid)` — bound to a canonical cp_tasks row.
+    /// `None`       — not yet persisted (new draft, markdown fallback, or
+    ///                created before DB sync e.g. from commands.rs literals).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub text: String,
     pub completed: bool,
     pub agent: Option<String>,   // "claude" | "gemini" | "antigravity"
@@ -16,6 +21,22 @@ impl Task {
     /// Display text — raw text without agent/project tags.
     pub fn display(&self) -> &str {
         &self.text
+    }
+
+    /// Returns true when this task has a canonical DB identity.
+    pub fn is_persisted(&self) -> bool {
+        self.id.is_some()
+    }
+
+    /// Construct a Task from a canonical DB row.
+    pub fn from_personal_row(r: crate::db::PersonalTaskRow) -> Self {
+        Self {
+            id: Some(r.id),
+            text: r.title,
+            completed: r.completed,
+            agent: r.assignee_id,
+            project: r.project_name,
+        }
     }
 
     /// Agent short label for the badge.
@@ -92,6 +113,7 @@ fn parse_line(line: &str) -> Option<Task> {
     }
 
     Some(Task {
+        id: None,
         text,
         completed,
         agent,
@@ -113,17 +135,16 @@ fn serialize(task: &Task) -> String {
 
 // ─── I/O ─────────────────────────────────────────────────────────────────────
 
-pub fn load_tasks(dev_ops: &Path) -> Result<Vec<Task>> {
+fn load_from_markdown(dev_ops: &Path) -> Result<Vec<Task>> {
     let path = dev_ops.join("tasks.md");
     if !path.exists() {
         return Ok(vec![]);
     }
     let content = fs::read_to_string(path)?;
-    let tasks = content.lines().filter_map(parse_line).collect();
-    Ok(tasks)
+    Ok(content.lines().filter_map(parse_line).collect())
 }
 
-pub fn save_tasks(dev_ops: &Path, tasks: &[Task]) -> Result<()> {
+fn write_markdown(dev_ops: &Path, tasks: &[Task]) -> Result<()> {
     let path = dev_ops.join("tasks.md");
     let mut out = String::from("# Dev Ops Tasks\n\n");
     for task in tasks {
@@ -134,10 +155,66 @@ pub fn save_tasks(dev_ops: &Path, tasks: &[Task]) -> Result<()> {
     Ok(())
 }
 
+pub fn load_tasks(dev_ops: &Path) -> Result<Vec<Task>> {
+    if let Ok(conn) = crate::db::open_db() {
+        let rows = crate::db::cp_list_personal_tasks(&conn).unwrap_or_default();
+        if !rows.is_empty() {
+            return Ok(rows.into_iter().map(Task::from_personal_row).collect());
+        }
+        // cp_tasks is empty — migrate from tasks.md if it exists
+        let markdown_tasks = load_from_markdown(dev_ops)?;
+        if !markdown_tasks.is_empty() {
+            let source_path = dev_ops.join("tasks.md").to_string_lossy().into_owned();
+            let inputs: Vec<_> = markdown_tasks
+                .iter()
+                .enumerate()
+                .map(|(i, t)| crate::db::PersonalTaskInput {
+                    id: None,
+                    title: t.text.clone(),
+                    completed: t.completed,
+                    agent: t.agent.clone(),
+                    project_name: t.project.clone(),
+                    display_order: i as i64,
+                })
+                .collect();
+            let _ = crate::db::cp_sync_personal_tasks(&conn, &inputs, &source_path);
+            let rows = crate::db::cp_list_personal_tasks(&conn).unwrap_or_default();
+            return Ok(rows.into_iter().map(Task::from_personal_row).collect());
+        }
+        return Ok(vec![]);
+    }
+    // DB unavailable — fall back to markdown (tasks will have id: None)
+    load_from_markdown(dev_ops)
+}
+
+pub fn save_tasks(dev_ops: &Path, tasks: &[Task]) -> Result<()> {
+    if let Ok(conn) = crate::db::open_db() {
+        let source_path = dev_ops.join("tasks.md").to_string_lossy().into_owned();
+        let inputs: Vec<_> = tasks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| crate::db::PersonalTaskInput {
+                id: t.id.clone(),
+                title: t.text.clone(),
+                completed: t.completed,
+                agent: t.agent.clone(),
+                project_name: t.project.clone(),
+                display_order: i as i64,
+            })
+            .collect();
+        if crate::db::cp_sync_personal_tasks(&conn, &inputs, &source_path).is_ok() {
+            let _ = crate::db::cp_rebuild_personal_markdown(&conn, dev_ops);
+            return Ok(());
+        }
+    }
+    // DB unavailable or sync failed — fall back to direct markdown write
+    write_markdown(dev_ops, tasks)
+}
+
 // ─── Agent dispatch ───────────────────────────────────────────────────────────
 
 /// Send a task to an agent:
-/// 1. Copies task text to Windows clipboard (clip.exe)
+/// 1. Copies task text to the host clipboard
 /// 2. Opens the agent in a new terminal, optionally in the project directory
 pub fn dispatch_to_agent(
     task: &Task,
@@ -147,7 +224,7 @@ pub fn dispatch_to_agent(
 ) -> String {
     let task_msg = build_prompt(task, agent, sentinel_errors);
 
-    // Copy to clipboard via clip.exe
+    // Copy to clipboard using the host OS clipboard tool
     let clip_ok = copy_to_clipboard(&task_msg);
 
     // Determine working directory
@@ -203,38 +280,11 @@ fn build_prompt(task: &Task, agent: &str, sentinel_errors: Option<Vec<String>>) 
 }
 
 fn copy_to_clipboard(text: &str) -> bool {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
-    let mut child = match Command::new("clip.exe").stdin(Stdio::piped()).spawn() {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(text.as_bytes());
-    }
-    child.wait().is_ok()
+    crate::core::process::copy_to_clipboard(text)
 }
 
 fn launch_in_terminal(agent_cmd: &str, work_dir: &str) -> bool {
-    use std::process::Command;
-
-    // Try Windows Terminal first
-    if Command::new("wt")
-        .args(["-d", work_dir, "--", agent_cmd])
-        .spawn()
-        .is_ok()
-    {
-        return true;
-    }
-
-    // Fallback: new cmd window
-    let cmd_str = format!("cd /d \"{}\" && {}", work_dir, agent_cmd);
-    Command::new("cmd")
-        .args(["/c", "start", "cmd", "/k", &cmd_str])
-        .spawn()
-        .is_ok()
+    crate::core::process::launch_in_terminal(agent_cmd, std::path::Path::new(work_dir))
 }
 
 fn short_path(path: &str) -> String {

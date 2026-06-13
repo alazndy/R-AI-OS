@@ -27,6 +27,12 @@ A comprehensive guide to the `raios` CLI, including core commands, examples, and
 ### 🤝 [07. Contributing](07-Contributing.md)
 Guidelines for contributors, including the "Anayasa" (Constitution), agent compliance, memory formats, and PR rules.
 
+### 🧭 [Control Plane Blueprint](../superpowers/specs/2026-06-10-control-plane-blueprint.md)
+The control-plane target architecture for evolving R-AI-OS into a dependable project tracker and agent harness. Covers canonical entities, state machines, scheduler design, run contracts, approvals, budgets, and protocol mapping.
+
+### 🗺️ [Control Plane Remaining Work Plan](../superpowers/specs/2026-06-10-control-plane-remaining-work-plan.md)
+The implementation plan for the remaining control-plane migration. Covers ordered phases, file targets, acceptance criteria, and handoff guidance for follow-up coding agents.
+
 ---
 
 ### 🚀 Getting Started

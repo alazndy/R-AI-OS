@@ -4,11 +4,85 @@ use crate::factory::{Factory, Job};
 use crate::proxy_store::{CapabilityProxy, CapabilityStore};
 use crate::session::SessionStore;
 use notify::{RecursiveMode, Watcher};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, RwLock};
+
+fn validate_file_change_target(
+    target: &std::path::Path,
+    workspace: &std::path::Path,
+    blocked_paths: &[String],
+) -> Result<std::path::PathBuf, String> {
+    crate::security::sandbox::SandboxGuard::new(workspace.to_path_buf())
+        .with_blocked_paths(blocked_paths.to_vec())
+        .check(target)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::validate_file_change_target;
+    use tempfile::TempDir;
+
+    #[test]
+    fn validate_file_change_target_allows_workspace_files() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("src/main.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "").unwrap();
+
+        let validated = validate_file_change_target(&file, tmp.path(), &[]).unwrap();
+        assert_eq!(validated, file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn validate_file_change_target_blocks_outside_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let outside_dir = TempDir::new().unwrap();
+        let file = outside_dir.path().join("outside.rs");
+        std::fs::write(&file, "").unwrap();
+
+        let err = validate_file_change_target(&file, tmp.path(), &[]).unwrap_err();
+        assert!(err.contains("outside the allowed workspace"));
+    }
+
+    #[test]
+    fn validate_file_change_target_blocks_explicit_blocked_paths() {
+        let tmp = TempDir::new().unwrap();
+        let blocked_dir = tmp.path().join("secrets");
+        std::fs::create_dir_all(&blocked_dir).unwrap();
+        let file = blocked_dir.join("token.txt");
+        std::fs::write(&file, "").unwrap();
+
+        let err = validate_file_change_target(
+            &file,
+            tmp.path(),
+            &[blocked_dir.to_string_lossy().into_owned()],
+        )
+        .unwrap_err();
+        assert!(err.contains("matches a blocked path"));
+    }
+}
+
+fn policy_blocked_paths() -> Vec<String> {
+    crate::security::PolicyConfig::try_load_default()
+        .map(|p| p.filesystem.blocked_paths)
+        .unwrap_or_default()
+}
+
+fn approval_workflow_ids(
+    approval: &crate::daemon::state::FileChangeApproval,
+) -> Option<crate::control_plane::FileChangeWorkflowIds> {
+    Some(crate::control_plane::FileChangeWorkflowIds {
+        task_id: approval.task_id.clone()?,
+        agent_run_id: approval.agent_run_id.clone()?,
+        artifact_id: approval.artifact_id.clone()?,
+        approval_id: approval.id.clone(), // id IS the canonical approval id
+        project_id: None,
+    })
+}
 
 pub struct Server {
     state: Arc<RwLock<DaemonState>>,
@@ -42,10 +116,14 @@ impl Server {
     }
 
     async fn run_inner(&self, tx: broadcast::Sender<String>) -> anyhow::Result<()> {
+        // Load any pending file-change approvals that survived a restart
+        self.state.write().await.refresh_pending_from_db();
+
         // 1. Generate and save IPC token for security using SessionTokenManager
         let token_mgr = crate::security::SessionTokenManager::new();
         let token = token_mgr.generate_and_save()?;
-        let config_dir = Config::config_file().parent()
+        let config_dir = Config::config_file()
+            .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let token_path = config_dir.join(".session_token");
@@ -62,23 +140,32 @@ impl Server {
 
         let factory = Arc::new(Factory::new(tx.clone()));
 
-        // ... (workers spawn logic unchanged)
+        let config =
+            Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
+        let daemon_cfg = config.daemon.clone();
+
         let health_state = self.state.clone();
         let health_tx = tx.clone();
-        tokio::spawn(async move {
-            super::health::start_health_worker(health_state, health_tx).await;
-        });
+        if daemon_cfg.enable_health_worker {
+            let health_interval = std::time::Duration::from_secs(daemon_cfg.health_interval_secs);
+            tokio::spawn(async move {
+                super::health::start_health_worker(health_state, health_tx, health_interval).await;
+            });
+        }
 
         let git_tx = tx.clone();
         let git_state = self.state.clone();
+        let git_interval = std::time::Duration::from_secs(daemon_cfg.git_interval_secs);
         tokio::spawn(async move {
-            super::git::start_git_worker(git_state, git_tx).await;
+            super::git::start_git_worker(git_state, git_tx, git_interval).await;
         });
 
         let cortex_tx_rx = tx.subscribe();
         let cortex_state = self.state.clone();
+        let eager_cortex_indexing = daemon_cfg.startup_cortex_indexing;
         tokio::spawn(async move {
-            super::cortex::start_cortex_worker(cortex_state, cortex_tx_rx).await;
+            super::cortex::start_cortex_worker(cortex_state, eager_cortex_indexing, cortex_tx_rx)
+                .await;
         });
 
         let validation_tx_rx = tx.subscribe();
@@ -95,21 +182,22 @@ impl Server {
 
         let sentinel_tx = tx.clone();
         let sentinel_state = self.state.clone();
-        tokio::spawn(async move {
-            super::sentinel::start_sentinel_worker(sentinel_state, sentinel_tx).await;
-        });
+        if daemon_cfg.enable_sentinel_worker {
+            let sentinel_interval =
+                std::time::Duration::from_secs(daemon_cfg.sentinel_interval_secs);
+            tokio::spawn(async move {
+                super::sentinel::start_sentinel_worker(
+                    sentinel_state,
+                    sentinel_tx,
+                    sentinel_interval,
+                )
+                .await;
+            });
+        }
 
         let evolution_rx = tx.subscribe();
         tokio::spawn(async move {
             crate::evolution::start_evolution_worker(evolution_rx).await;
-        });
-
-        // Start file watcher
-        let config = Config::load().unwrap_or_else(|| Config {
-            dev_ops_path: PathBuf::from(""),
-            master_md_path: PathBuf::from(""),
-            skills_path: PathBuf::from(""),
-            vault_projects_path: PathBuf::from(""),
         });
 
         let watcher_tx = tx.clone();
@@ -131,31 +219,37 @@ impl Server {
         }
 
         // Port Monitor Task
-        let port_tx = tx.clone();
-        tokio::spawn(async move {
-            let common_ports = [3000, 5173, 8080, 4200];
-            loop {
-                let mut active = Vec::new();
-                for &port in &common_ports {
-                    let addr = format!("127.0.0.1:{}", port);
-                    if tokio::time::timeout(
-                        std::time::Duration::from_millis(100),
-                        tokio::net::TcpStream::connect(&addr),
-                    )
-                    .await
-                    .is_ok()
-                    {
-                        active.push(port);
+        if daemon_cfg.enable_port_monitor {
+            let port_tx = tx.clone();
+            let port_monitor_interval =
+                std::time::Duration::from_secs(daemon_cfg.port_monitor_interval_secs);
+            let port_probe_timeout =
+                std::time::Duration::from_millis(daemon_cfg.port_probe_timeout_ms);
+            tokio::spawn(async move {
+                let common_ports = [3000, 5173, 8080, 4200];
+                loop {
+                    let mut active = Vec::new();
+                    for &port in &common_ports {
+                        let addr = format!("127.0.0.1:{}", port);
+                        if tokio::time::timeout(
+                            port_probe_timeout,
+                            tokio::net::TcpStream::connect(&addr),
+                        )
+                        .await
+                        .is_ok()
+                        {
+                            active.push(port);
+                        }
                     }
+                    let msg = format!(
+                        "{{\"event\":\"ActivePorts\",\"ports\":{}}}",
+                        serde_json::to_string(&active).unwrap()
+                    );
+                    let _ = port_tx.send(msg);
+                    tokio::time::sleep(port_monitor_interval).await;
                 }
-                let msg = format!(
-                    "{{\"event\":\"ActivePorts\",\"ports\":{}}}",
-                    serde_json::to_string(&active).unwrap()
-                );
-                let _ = port_tx.send(msg);
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-            }
-        });
+            });
+        }
 
         loop {
             let (mut socket, addr) = listener.accept().await?;
@@ -169,15 +263,15 @@ impl Server {
             let sessions_for_client = self.sessions.clone();
             let factory_for_client = factory.clone();
             let proxy_for_client_cap = self.proxy.clone();
-            let graph_store_for_client = Arc::new(
-                crate::task_graph::GraphStore::new(crate::task_graph::GraphStore::default_path())
-            );
-            let swarm_store_for_client = Arc::new(
-                crate::swarm::store::SwarmStore::new(crate::swarm::store::SwarmStore::default_path())
-            );
-            let evolution_store_for_client = Arc::new(
-                crate::evolution::CandidateStore::new(crate::evolution::CandidateStore::default_path())
-            );
+            let graph_store_for_client = Arc::new(crate::task_graph::GraphStore::new(
+                crate::task_graph::GraphStore::default_path(),
+            ));
+            let swarm_store_for_client = Arc::new(crate::swarm::store::SwarmStore::new(
+                crate::swarm::store::SwarmStore::default_path(),
+            ));
+            let evolution_store_for_client = Arc::new(crate::evolution::CandidateStore::new(
+                crate::evolution::CandidateStore::default_path(),
+            ));
 
             tokio::spawn(async move {
                 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -327,42 +421,124 @@ impl Server {
                                     let _ = writer.write_all(response.as_bytes()).await;
                                 } else if v["command"] == "GetState" {
                                     let s = state_for_client.read().await;
-                                    let response = serde_json::json!({
-                                        "event": "StateSync",
-                                        "projects": s.projects,
-                                        "health_reports": s.health_reports,
-                                        "active_agents": s.active_agents,
-                                        "index_ready": s.index.is_some(),
-                                        "handover_count": s.handover_count,
-                                        "pending_file_changes": s.pending_file_changes
-                                    });
+                                    let response = s.sync_payload();
                                     let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
                                 } else if v["command"] == "RequestFileChange" {
+                                    let path = v["path"].as_str().unwrap_or("").to_string();
+                                    // Persist to canonical DB first
+                                    if let Ok(conn) = crate::db::open_db() {
+                                        if let Err(err) = crate::db::create_file_change_workflow(
+                                            &conn,
+                                            &path,
+                                            v["original"].as_str().unwrap_or(""),
+                                            v["new"].as_str().unwrap_or(""),
+                                            v["agent"].as_str().unwrap_or("unknown"),
+                                        ) {
+                                            eprintln!(
+                                                "[Daemon] Failed to persist file change workflow: {}",
+                                                err
+                                            );
+                                        }
+                                    }
+                                    // Reload pending list from DB (single source of truth)
                                     let mut s = state_for_client.write().await;
-                                    let approval = crate::daemon::state::FileChangeApproval {
-                                        id: uuid::Uuid::new_v4(),
-                                        path: v["path"].as_str().unwrap_or("").to_string(),
-                                        original_content: v["original"].as_str().unwrap_or("").to_string(),
-                                        new_content: v["new"].as_str().unwrap_or("").to_string(),
-                                        agent_name: v["agent"].as_str().unwrap_or("unknown").to_string(),
-                                    };
-                                    sessions_for_client.record_event(&session_id, "file_change_request", &format!("path={}", approval.path));
-                                    s.pending_file_changes.push(approval.clone());
-
-                                    // Notify TUI to show diff
-                                    let event = serde_json::json!({
-                                        "event": "FileChangeRequested",
-                                        "approval": approval
-                                    });
-                                    let _ = writer.write_all(format!("{}\n", event).as_bytes()).await;
+                                    s.refresh_pending_from_db();
+                                    sessions_for_client.record_event(
+                                        &session_id,
+                                        "file_change_request",
+                                        &format!("path={}", path),
+                                    );
+                                    // Find the newly added approval and broadcast it to the TUI
+                                    if let Some(approval) =
+                                        s.pending_file_changes.iter().find(|a| a.path == path).cloned()
+                                    {
+                                        let event = serde_json::json!({
+                                            "event": "FileChangeRequested",
+                                            "approval": approval
+                                        });
+                                        let _ = writer.write_all(format!("{}\n", event).as_bytes()).await;
+                                    }
                                 } else if v["command"] == "ApproveFileChange" {
                                     if let Some(id_str) = v["id"].as_str() {
-                                        if let Ok(id) = uuid::Uuid::parse_str(id_str) {
+                                        {
                                             let mut s = state_for_client.write().await;
-                                            if let Some(pos) = s.pending_file_changes.iter().position(|a| a.id == id) {
+                                            if let Some(pos) = s.pending_file_changes.iter().position(|a| a.id == id_str) {
                                                 let approval = s.pending_file_changes.remove(pos);
+                                                let approved = v["approved"].as_bool().unwrap_or(true);
+                                                let workflow_ids = approval_workflow_ids(&approval);
+
+                                                if !approved {
+                                                    println!("[Daemon] Rejected file change for: {}", approval.path);
+                                                    if let (Some(ids), Ok(conn)) = (workflow_ids, crate::db::open_db()) {
+                                                        let _ = crate::db::mark_file_change_workflow_rejected(
+                                                            &conn,
+                                                            &ids,
+                                                            "human",
+                                                            "rejected_by_user",
+                                                        );
+                                                    }
+                                                    s.refresh_pending_from_db();
+                                                    continue;
+                                                }
+
                                                 println!("[Daemon] Approved file change for: {}", approval.path);
-                                                let _ = std::fs::write(&approval.path, &approval.new_content);
+                                                match Config::load() {
+                                                    Some(config) => {
+                                                        let blocked_paths = policy_blocked_paths();
+                                                        match validate_file_change_target(
+                                                            std::path::Path::new(&approval.path),
+                                                            &config.dev_ops_path,
+                                                            &blocked_paths,
+                                                        ) {
+                                                            Ok(path) => match std::fs::write(path, &approval.new_content) {
+                                                                Ok(_) => {
+                                                                    if let (Some(ids), Ok(conn)) = (workflow_ids, crate::db::open_db()) {
+                                                                        let _ = crate::db::mark_file_change_workflow_applied(
+                                                                            &conn,
+                                                                            &ids,
+                                                                            "human",
+                                                                        );
+                                                                    }
+                                                                }
+                                                                Err(err) => {
+                                                                    eprintln!("[Daemon] Failed writing approved file change for {}: {}", approval.path, err);
+                                                                    if let (Some(ids), Ok(conn)) = (approval_workflow_ids(&approval), crate::db::open_db()) {
+                                                                        let _ = crate::db::mark_file_change_workflow_apply_failed(
+                                                                            &conn,
+                                                                            &ids,
+                                                                            "human",
+                                                                            &format!("write_failed: {}", err),
+                                                                        );
+                                                                    }
+                                                                }
+                                                            },
+                                                            Err(err) => {
+                                                                eprintln!("[Daemon] Rejected file change for {}: {}", approval.path, err);
+                                                                if let (Some(ids), Ok(conn)) = (approval_workflow_ids(&approval), crate::db::open_db()) {
+                                                                    let _ = crate::db::mark_file_change_workflow_apply_failed(
+                                                                        &conn,
+                                                                        &ids,
+                                                                        "human",
+                                                                        &format!("validation_failed: {}", err),
+                                                                    );
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    None => {
+                                                        eprintln!("[Daemon] Rejected file change for {}: config not loaded", approval.path);
+                                                        if let (Some(ids), Ok(conn)) = (approval_workflow_ids(&approval), crate::db::open_db()) {
+                                                            let _ = crate::db::mark_file_change_workflow_apply_failed(
+                                                                &conn,
+                                                                &ids,
+                                                                "human",
+                                                                "config_not_loaded",
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                                // Reload pending list from DB after processing
+                                                s.refresh_pending_from_db();
                                             }
                                         }
                                     }
@@ -403,12 +579,8 @@ impl Server {
                                             Ok(content) => {
                                                 // Path traversal guard
                                                 let file_path = std::path::Path::new(&diff.file_path);
-                                                let config = Config::load().unwrap_or_else(|| Config {
-                                                    dev_ops_path: PathBuf::from(""),
-                                                    master_md_path: PathBuf::from(""),
-                                                    skills_path: PathBuf::from(""),
-                                                    vault_projects_path: PathBuf::from(""),
-                                                });
+                                                let config = Config::load()
+                                                    .unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
                                                 let allowed_base = match config.dev_ops_path.canonicalize() {
                                                     Ok(p) => p,
                                                     Err(_) => {
@@ -540,8 +712,10 @@ impl Server {
                                             webhook_url.as_deref(),
                                         );
                                         let task = Box::pin(async move {
-                                            let output = tokio::process::Command::new("cmd")
-                                                .args(["/C", &shell_cmd])
+                                            let (program, args) =
+                                                crate::core::process::shell_command(&shell_cmd);
+                                            let output = tokio::process::Command::new(&program)
+                                                .args(&args)
                                                 .output()
                                                 .await?;
                                             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -898,8 +1072,39 @@ async fn execute_graph_async(
             break;
         }
 
-        let ready = store.ready_nodes(&graph_id);
-        if ready.is_empty() {
+        // Step 1: dependency resolution marks tasks ready in cp_tasks
+        let _ = store.ready_nodes(&graph_id);
+
+        // Step 2: canonical scheduler selects what to run
+        let ready_tasks: Vec<(String, String, String)> =
+            if let Ok(conn) = crate::db::open_db() {
+                crate::db::cp_scheduler_list_ready(&conn)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|t| t.plan_id.as_deref() == Some(graph_id.as_str()))
+                    .filter_map(|t| {
+                        let cmd = crate::db::cp_task_graph_shell_cmd(&conn, &t.id)
+                            .ok()
+                            .flatten()?;
+                        let (_, node_id) = crate::db::cp_task_graph_node_ids(&conn, &t.id)
+                            .ok()
+                            .flatten()?;
+                        Some((t.id, node_id, cmd))
+                    })
+                    .collect()
+            } else {
+                // Fallback: derive from legacy ready_nodes when DB is unavailable
+                store
+                    .ready_nodes(&graph_id)
+                    .into_iter()
+                    .filter_map(|n| {
+                        let task_id = n.task_id?;
+                        Some((task_id, n.id, n.shell_cmd))
+                    })
+                    .collect()
+            };
+
+        if ready_tasks.is_empty() {
             if let Some(graph) = store.get(&graph_id) {
                 if graph.status != "pending" && graph.status != "running" {
                     break;
@@ -909,13 +1114,12 @@ async fn execute_graph_async(
             continue;
         }
 
-        for node in ready {
+        for (_task_id, node_id, cmd) in ready_tasks {
             let store2 = store.clone();
             let factory2 = factory.clone();
             let gid = graph_id.clone();
-            let nid = node.id.clone();
-            let cmd = node.shell_cmd.clone();
-            let desc = node.description.clone();
+            let nid = node_id.clone();
+            let desc = format!("Graph node {}", node_id);
 
             let job = crate::factory::Job::new(&desc, "graph-executor", None, None);
             let job_id = job.id;
@@ -925,8 +1129,9 @@ async fn execute_graph_async(
             factory2.submit(
                 job,
                 Box::pin(async move {
-                    let output = tokio::process::Command::new("cmd")
-                        .args(["/C", &cmd])
+                    let (program, args) = crate::core::process::shell_command(&cmd);
+                    let output = tokio::process::Command::new(&program)
+                        .args(&args)
                         .output()
                         .await?;
                     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();

@@ -1,7 +1,7 @@
-use std::path::Path;
-use std::process::Command;
 use super::common::{DepsReport, OutdatedDep};
 use crate::core::build::embedded::{detect_embedded_kind, EmbeddedKind};
+use std::path::Path;
+use std::process::Command;
 
 pub fn check_embedded(dir: &Path) -> DepsReport {
     match detect_embedded_kind(dir) {
@@ -23,9 +23,9 @@ fn check_esp_idf_deps(dir: &Path) -> DepsReport {
         }
     }
     if Command::new("idf.py").arg("--version").output().is_err() {
-        report.tool_missing.push(
-            "idf.py (ESP-IDF not in PATH; source export.sh from ESP-IDF root)".into(),
-        );
+        report
+            .tool_missing
+            .push("idf.py (ESP-IDF not in PATH; source export.sh from ESP-IDF root)".into());
     }
     report
 }
@@ -80,8 +80,12 @@ mod tests {
         let content = "dependencies:\n  idf: \">=5.0\"\n  espressif/button: \"^2.0.0\"\n  esp_lcd_touch: \"1.0.0\"\n";
         let deps = parse_idf_dependencies(content);
         assert_eq!(deps.len(), 2);
-        assert!(deps.iter().any(|d| d.name == "espressif/button" && d.current == "^2.0.0"));
-        assert!(deps.iter().any(|d| d.name == "esp_lcd_touch" && d.current == "1.0.0"));
+        assert!(deps
+            .iter()
+            .any(|d| d.name == "espressif/button" && d.current == "^2.0.0"));
+        assert!(deps
+            .iter()
+            .any(|d| d.name == "esp_lcd_touch" && d.current == "1.0.0"));
     }
 
     #[test]

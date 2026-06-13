@@ -104,21 +104,8 @@ async fn handle_mcp_tcp_client(mut socket: tokio::net::TcpStream) -> Result<()> 
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
 
-    let config = Config::load().unwrap_or_else(|| {
-        let detected = Config::auto_detect();
-        Config {
-            dev_ops_path: detected
-                .dev_ops
-                .unwrap_or_else(|| std::path::PathBuf::from(".")),
-            master_md_path: detected
-                .master_md
-                .unwrap_or_else(|| std::path::PathBuf::from("MASTER.md")),
-            skills_path: detected
-                .skills
-                .unwrap_or_else(|| std::path::PathBuf::from(".agents/skills")),
-            vault_projects_path: detected.vault_projects.unwrap_or_default(),
-        }
-    });
+    let config =
+        Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
 
     let mut session = McpTcpSession::new(config);
 

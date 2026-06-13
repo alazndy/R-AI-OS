@@ -1,6 +1,6 @@
+use super::common::{DepsReport, OutdatedDep};
 use std::path::Path;
 use std::process::Command;
-use super::common::{DepsReport, OutdatedDep};
 
 pub fn check_ios(dir: &Path) -> DepsReport {
     let mut report = DepsReport::empty("iOS");

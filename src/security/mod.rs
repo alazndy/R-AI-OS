@@ -6,9 +6,9 @@ pub mod patterns;
 pub mod policy;
 pub mod quarantine;
 pub mod rate_limiter;
-pub mod secret_lease;
 pub mod sandbox;
 pub mod scanner;
+pub mod secret_lease;
 pub mod tool_pin;
 pub mod verify_chain;
 
@@ -20,10 +20,10 @@ use std::path::PathBuf;
 pub use egress::EgressFilter;
 pub use license::{scan_licenses, LicenseDep, LicenseReport};
 pub use patterns::{scan_file, WATCHED_EXTS};
-pub use scanner::scan_project;
-pub use sandbox::{validate_path, is_path_safe};
 pub use policy::PolicyConfig;
-pub use rate_limiter::{RateLimiter, RateLimitConfig, ToolRateStatus};
+pub use rate_limiter::{RateLimitConfig, RateLimiter, ToolRateStatus};
+pub use sandbox::{is_path_safe, validate_path};
+pub use scanner::scan_project;
 pub use verify_chain::{record_audit_event, verify_chain};
 
 // ─── Types ───────────────────────────────────────────────────────────────────

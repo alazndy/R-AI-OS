@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
-use sha2::{Digest, Sha256};
 
 /// Maximum age of a token before it expires (8 hours)
 const TOKEN_MAX_AGE: Duration = Duration::from_secs(8 * 60 * 60);
@@ -11,6 +11,12 @@ const TOKEN_MAX_AGE: Duration = Duration::from_secs(8 * 60 * 60);
 /// The token is stored at `~/.config/raios/.session_token` with owner-only permissions.
 pub struct SessionTokenManager {
     token_path: PathBuf,
+}
+
+impl Default for SessionTokenManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionTokenManager {

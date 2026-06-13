@@ -70,7 +70,9 @@ impl CandidateStore {
     }
 
     pub fn list_pending(&self, limit: usize) -> Vec<String> {
-        let Ok(conn) = self.connect() else { return vec![]; };
+        let Ok(conn) = self.connect() else {
+            return vec![];
+        };
         let mut stmt = conn
             .prepare(
                 "SELECT rule FROM instinct_candidates
@@ -98,7 +100,9 @@ impl CandidateStore {
     }
 
     pub fn sweep_expired(&self) -> usize {
-        let Ok(conn) = self.connect() else { return 0; };
+        let Ok(conn) = self.connect() else {
+            return 0;
+        };
         conn.execute(
             "DELETE FROM instinct_candidates WHERE expires_at <= datetime('now')",
             [],
@@ -200,7 +204,12 @@ mod tests {
             "result": "117 passed; 0 failed"
         });
 
-        process_job_event(&job_event, "run tests for auth module", "cargo test", &store);
+        process_job_event(
+            &job_event,
+            "run tests for auth module",
+            "cargo test",
+            &store,
+        );
 
         let candidates = store.list_pending(10);
         assert!(!candidates.is_empty());

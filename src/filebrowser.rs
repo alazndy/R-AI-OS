@@ -388,20 +388,27 @@ pub fn get_mempalace_files(dev_ops: &Path) -> Vec<FileEntry> {
 }
 
 pub fn discover_memory_files(base: &Path, limit: usize) -> Vec<FileEntry> {
-    let mut found: Vec<(PathBuf, SystemTime)> = Vec::new();
+    let skip_dirs: &[&str] = &[
+        "node_modules", "target", "dist", "build", ".next", "__pycache__",
+        "vendor", ".turbo", "out", "coverage", "cache", "tmp", "temp",
+        "logs", "log", "runs", "test", "tests", "__tests__", "e2e",
+        "fixtures", "examples", "samples", "gradle", ".gradle",
+        "cmake-build-debug", "cmake-build-release", ".idea", ".vscode",
+    ];
 
     let walker = WalkDir::new(base)
-        .max_depth(5)
+        .max_depth(6)
         .into_iter()
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
-            !name.starts_with('.')
-                && name != "node_modules"
-                && name != "target"
-                && name != "dist"
-                && name != ".next"
+            if name.starts_with('.') {
+                return false;
+            }
+            !skip_dirs.contains(&name.as_ref())
         });
 
+    // Collect all memory.md paths with modification times
+    let mut found: Vec<(PathBuf, SystemTime)> = Vec::new();
     for entry in walker.filter_map(|e| e.ok()) {
         if entry.file_name().to_string_lossy().to_lowercase() == "memory.md" {
             let modified = entry
@@ -413,9 +420,30 @@ pub fn discover_memory_files(base: &Path, limit: usize) -> Vec<FileEntry> {
         }
     }
 
-    found.sort_by_key(|a| std::cmp::Reverse(a.1));
+    // Sort shallowest first to establish parent-before-child order
+    found.sort_by_key(|a| a.0.components().count());
 
-    found
+    // Remove nested memory.md files: if a parent project already accepted,
+    // do not include sub-project memory.md files under that parent
+    let mut accepted_dirs: Vec<PathBuf> = Vec::new();
+    let mut deduped: Vec<(PathBuf, SystemTime)> = Vec::new();
+    for (path, mtime) in found {
+        // The "project dir" is the directory containing memory.md
+        let proj_dir = match path.parent() {
+            Some(d) => d.to_path_buf(),
+            None => continue,
+        };
+        let is_nested = accepted_dirs.iter().any(|a| proj_dir.starts_with(a));
+        if !is_nested {
+            accepted_dirs.push(proj_dir);
+            deduped.push((path, mtime));
+        }
+    }
+
+    // Re-sort by modification time (most recent first) for display
+    deduped.sort_by_key(|a| std::cmp::Reverse(a.1));
+
+    deduped
         .into_iter()
         .take(limit)
         .map(|(path, _)| {

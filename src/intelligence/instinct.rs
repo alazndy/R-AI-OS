@@ -113,19 +113,21 @@ pub fn suggest_from_outcome(description: &str, command: &str, result: &str) -> V
     }
 
     // Build success pattern
-    if (command.contains("build") || command.contains("cargo build") || command.contains("cargo check"))
-        && !result_lower.contains("error") {
-            suggestions.push(format!(
-                "'{}' builds cleanly — run `cargo check` before submitting PRs",
-                truncate(&desc_lower, 40)
-            ));
-        }
+    if (command.contains("build")
+        || command.contains("cargo build")
+        || command.contains("cargo check"))
+        && !result_lower.contains("error")
+    {
+        suggestions.push(format!(
+            "'{}' builds cleanly — run `cargo check` before submitting PRs",
+            truncate(&desc_lower, 40)
+        ));
+    }
 
     // Security scan pattern
     if desc_lower.contains("security") || command.contains("security") {
-        suggestions.push(
-            "Security scan succeeded — run `raios security` before every commit".to_string()
-        );
+        suggestions
+            .push("Security scan succeeded — run `raios security` before every commit".to_string());
     }
 
     suggestions.truncate(2);
@@ -340,7 +342,9 @@ mod tests {
         );
         assert!(!suggestions.is_empty());
         let combined = suggestions.join(" ").to_lowercase();
-        assert!(combined.contains("type") || combined.contains("error") || combined.contains("check"));
+        assert!(
+            combined.contains("type") || combined.contains("error") || combined.contains("check")
+        );
     }
 
     #[test]

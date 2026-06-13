@@ -1,19 +1,19 @@
 use std::path::Path;
 
+pub mod android;
 pub mod common;
-pub mod rust;
+pub mod cpp;
+pub mod dotnet;
+pub mod embedded;
+pub mod flutter;
+pub mod go;
+pub mod iac;
+pub mod ios;
 pub mod node;
 pub mod python;
-pub mod go;
-pub mod flutter;
-pub mod ios;
-pub mod android;
-pub mod embedded;
-pub mod iac;
-pub mod dotnet;
-pub mod cpp;
+pub mod rust;
 
-pub use common::{OutdatedDep, CveIssue, DepsReport};
+pub use common::{CveIssue, DepsReport, OutdatedDep};
 
 pub fn check(dir: &Path) -> DepsReport {
     use crate::core::build::detect_type;

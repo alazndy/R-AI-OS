@@ -92,7 +92,11 @@ fn gradlew_alone_does_not_detect_android() {
 #[test]
 fn detect_flutter_project() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("pubspec.yaml"), "name: myapp\nversion: 1.0.0+1\n").unwrap();
+    std::fs::write(
+        tmp.path().join("pubspec.yaml"),
+        "name: myapp\nversion: 1.0.0+1\n",
+    )
+    .unwrap();
     assert_eq!(detect_type(tmp.path()), ProjectType::Flutter);
 }
 
@@ -168,7 +172,11 @@ fn detect_ios_xcworkspace_dir() {
 #[test]
 fn detect_ios_package_swift() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("Package.swift"), "// swift-tools-version:5.9\n").unwrap();
+    std::fs::write(
+        tmp.path().join("Package.swift"),
+        "// swift-tools-version:5.9\n",
+    )
+    .unwrap();
     assert_eq!(detect_type(tmp.path()), ProjectType::Ios);
 }
 
@@ -252,7 +260,8 @@ fn parse_gradle_build_error_prefix_only() {
 
 #[test]
 fn parse_gradle_build_no_false_positive_on_log_line() {
-    let output = "NOTE: The Kotlin options have changed: error: is now deprecated\nBUILD SUCCESSFUL";
+    let output =
+        "NOTE: The Kotlin options have changed: error: is now deprecated\nBUILD SUCCESSFUL";
     let (ok, errors) = android::parse_gradle_build_output(output);
     assert!(ok);
     assert_eq!(errors, 0);
@@ -304,7 +313,11 @@ fn detect_platformio_project() {
 #[test]
 fn detect_arduino_ino_project() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("mysketch.ino"), "void setup() {}\nvoid loop() {}\n").unwrap();
+    std::fs::write(
+        tmp.path().join("mysketch.ino"),
+        "void setup() {}\nvoid loop() {}\n",
+    )
+    .unwrap();
     assert_eq!(super::detect_type(tmp.path()), super::ProjectType::Embedded);
 }
 

@@ -142,12 +142,7 @@ pub fn changelog(dir: &Path) -> String {
 // ─── Semver ──────────────────────────────────────────────────────────────────
 
 fn bump_semver(version: &str, bump: &BumpType) -> Option<String> {
-    let clean = version.trim_start_matches('v');
-    let parts: Vec<u64> = clean.split('.').filter_map(|p| p.parse().ok()).collect();
-    if parts.len() < 3 {
-        return None;
-    }
-    let (major, minor, patch) = (parts[0], parts[1], parts[2]);
+    let (major, minor, patch) = parse_semver_triplet(version)?;
     Some(match bump {
         BumpType::Major => format!("{}.0.0", major + 1),
         BumpType::Minor => format!("{}.{}.0", major, minor + 1),
@@ -303,8 +298,17 @@ pub(crate) fn read_iac_version(dir: &Path) -> Option<String> {
                     for line in content.lines() {
                         let t = line.trim();
                         if t.starts_with("required_version") && t.contains('=') {
-                            let val = t.split_once('=').map(|x| x.1).unwrap_or("").trim().trim_matches('"');
-                            let version = val.split_whitespace().last().unwrap_or("").trim_matches('"');
+                            let val = t
+                                .split_once('=')
+                                .map(|x| x.1)
+                                .unwrap_or("")
+                                .trim()
+                                .trim_matches('"');
+                            let version = val
+                                .split_whitespace()
+                                .last()
+                                .unwrap_or("")
+                                .trim_matches('"');
                             if looks_like_semver(version) {
                                 return Some(version.to_string());
                             }
@@ -336,7 +340,12 @@ pub(crate) fn read_iac_version(dir: &Path) -> Option<String> {
 
 /// Read version from embedded projects: version.h (#define APP_VERSION), CMakeLists.txt (VERSION), platformio.ini.
 pub(crate) fn read_embedded_version(dir: &Path) -> Option<String> {
-    for candidate in &["version.h", "src/version.h", "main/version.h", "include/version.h"] {
+    for candidate in &[
+        "version.h",
+        "src/version.h",
+        "main/version.h",
+        "include/version.h",
+    ] {
         if let Ok(content) = std::fs::read_to_string(dir.join(candidate)) {
             for line in content.lines() {
                 let t = line.trim();
@@ -445,7 +454,11 @@ fn parse_pubspec_version(content: &str) -> Option<(String, u64)> {
 }
 
 /// Write new version into pubspec.yaml, incrementing the build number.
-pub(crate) fn write_flutter_version(dir: &Path, new_version: &str, new_build: u64) -> Result<(), String> {
+pub(crate) fn write_flutter_version(
+    dir: &Path,
+    new_version: &str,
+    new_build: u64,
+) -> Result<(), String> {
     let path = dir.join("pubspec.yaml");
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let updated: String = content
@@ -471,7 +484,12 @@ pub(crate) fn write_flutter_version(dir: &Path, new_version: &str, new_build: u6
 
 /// Read CFBundleShortVersionString from Info.plist (checks common locations).
 pub(crate) fn read_ios_version(dir: &Path) -> Option<String> {
-    for candidate in &["Info.plist", "Sources/Info.plist", "App/Info.plist", "Resources/Info.plist"] {
+    for candidate in &[
+        "Info.plist",
+        "Sources/Info.plist",
+        "App/Info.plist",
+        "Resources/Info.plist",
+    ] {
         if let Ok(content) = std::fs::read_to_string(dir.join(candidate)) {
             if let Some(v) = extract_plist_key(&content, "CFBundleShortVersionString") {
                 if looks_like_semver(&v) {
@@ -505,7 +523,11 @@ pub(crate) fn extract_plist_key(content: &str, key: &str) -> Option<String> {
 }
 
 /// Update CFBundleShortVersionString in Info.plist.
-pub(crate) fn write_ios_version(dir: &Path, old_version: &str, new_version: &str) -> Result<(), String> {
+pub(crate) fn write_ios_version(
+    dir: &Path,
+    old_version: &str,
+    new_version: &str,
+) -> Result<(), String> {
     for candidate in &["Info.plist", "Sources/Info.plist", "App/Info.plist"] {
         let path = dir.join(candidate);
         if !path.exists() {
@@ -529,7 +551,11 @@ pub(crate) fn write_ios_version(dir: &Path, old_version: &str, new_version: &str
 }
 
 /// Write new versionName and versionCode into app/build.gradle (line-by-line replacement).
-pub(crate) fn write_android_version(dir: &Path, new_name: &str, new_code: u64) -> Result<(), String> {
+pub(crate) fn write_android_version(
+    dir: &Path,
+    new_name: &str,
+    new_code: u64,
+) -> Result<(), String> {
     let path = dir.join("app").join("build.gradle");
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let updated: String = content
@@ -600,8 +626,25 @@ fn write_version(path: &Path, project_type: &str, old: &str, new: &str) -> Resul
     std::fs::write(path, updated).map_err(|e| e.to_string())
 }
 
+fn parse_semver_triplet(s: &str) -> Option<(u64, u64, u64)> {
+    let clean = s.trim().trim_start_matches('v');
+    let core = clean.split_once('-').map(|(head, _)| head).unwrap_or(clean);
+    let core = core.split_once('+').map(|(head, _)| head).unwrap_or(core);
+
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+
+    if parts.next().is_some() {
+        return None;
+    }
+
+    Some((major, minor, patch))
+}
+
 fn looks_like_semver(s: &str) -> bool {
-    s.split('.').count() == 3 && s.split('.').all(|p| p.parse::<u64>().is_ok())
+    parse_semver_triplet(s).is_some()
 }
 
 // ─── Changelog ───────────────────────────────────────────────────────────────
@@ -667,7 +710,10 @@ fn prepend_changelog(dir: &Path, entry: &str) {
     let path = dir.join("CHANGELOG.md");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let updated = if existing.starts_with("# Changelog") {
-        let rest = existing.strip_prefix("# Changelog").unwrap_or(&existing).trim_start();
+        let rest = existing
+            .strip_prefix("# Changelog")
+            .unwrap_or(&existing)
+            .trim_start();
         format!("# Changelog\n\n{}\n{}", entry, rest)
     } else {
         format!("# Changelog\n\n{}\n{}", entry, existing)
@@ -766,7 +812,10 @@ mod tests {
         .unwrap();
         write_android_version(tmp.path(), "4.2.16", 43).unwrap();
         let content = fs::read_to_string(tmp.path().join("app/build.gradle")).unwrap();
-        assert!(content.contains("versionCode 43"), "versionCode not updated: {content}");
+        assert!(
+            content.contains("versionCode 43"),
+            "versionCode not updated: {content}"
+        );
         assert!(
             content.contains("versionName '4.2.16'"),
             "versionName not updated: {content}"
@@ -813,6 +862,8 @@ mod tests {
     fn looks_like_semver_checks() {
         assert!(looks_like_semver("1.2.3"));
         assert!(looks_like_semver("0.0.1"));
+        assert!(looks_like_semver("2.0.0-alpha"));
+        assert!(looks_like_semver("1.2.3+7"));
         assert!(!looks_like_semver("1.2"));
         assert!(!looks_like_semver("abc"));
     }
@@ -873,7 +924,10 @@ mod tests {
         .unwrap();
         write_flutter_version(tmp.path(), "1.0.1", 2).unwrap();
         let content = fs::read_to_string(tmp.path().join("pubspec.yaml")).unwrap();
-        assert!(content.contains("version: 1.0.1+2"), "version not updated: {content}");
+        assert!(
+            content.contains("version: 1.0.1+2"),
+            "version not updated: {content}"
+        );
     }
 
     #[test]
@@ -888,7 +942,10 @@ mod tests {
     #[test]
     fn extract_plist_key_returns_none_for_missing_key() {
         let content = "<key>OtherKey</key>\n<string>value</string>";
-        assert_eq!(extract_plist_key(content, "CFBundleShortVersionString"), None);
+        assert_eq!(
+            extract_plist_key(content, "CFBundleShortVersionString"),
+            None
+        );
     }
 
     #[test]
@@ -907,11 +964,18 @@ mod tests {
         fs::write(
             tmp.path().join("Info.plist"),
             "<key>CFBundleShortVersionString</key>\n<string>1.0.0</string>\n",
-        ).unwrap();
+        )
+        .unwrap();
         write_ios_version(tmp.path(), "1.0.0", "1.0.1").unwrap();
         let content = fs::read_to_string(tmp.path().join("Info.plist")).unwrap();
-        assert!(content.contains("<string>1.0.1</string>"), "not updated: {content}");
-        assert!(!content.contains("<string>1.0.0</string>"), "old version still present");
+        assert!(
+            content.contains("<string>1.0.1</string>"),
+            "not updated: {content}"
+        );
+        assert!(
+            !content.contains("<string>1.0.0</string>"),
+            "old version still present"
+        );
     }
 
     #[test]
@@ -937,7 +1001,8 @@ mod tests {
         fs::write(
             tmp.path().join("App.csproj"),
             "<Project>\n  <Version>1.0.0</Version>\n</Project>\n",
-        ).unwrap();
+        )
+        .unwrap();
         write_dotnet_version(tmp.path(), "1.0.0", "1.0.1").unwrap();
         let content = fs::read_to_string(tmp.path().join("App.csproj")).unwrap();
         assert!(content.contains("<Version>1.0.1</Version>"));
@@ -950,8 +1015,12 @@ mod tests {
         fs::write(
             tmp.path().join("CMakeLists.txt"),
             "project(MyLib VERSION 2.5.0 LANGUAGES CXX)\n",
-        ).unwrap();
-        assert_eq!(read_cpp_cmake_version(tmp.path()), Some("2.5.0".to_string()));
+        )
+        .unwrap();
+        assert_eq!(
+            read_cpp_cmake_version(tmp.path()),
+            Some("2.5.0".to_string())
+        );
     }
 
     #[test]
@@ -960,7 +1029,8 @@ mod tests {
         fs::write(
             tmp.path().join("main.tf"),
             "terraform {\n  required_version = \">= 1.7.0\"\n}\n",
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(read_iac_version(tmp.path()), Some("1.7.0".to_string()));
     }
 
@@ -970,7 +1040,8 @@ mod tests {
         fs::write(
             tmp.path().join("docker-compose.yml"),
             "version: \"3.8\"\nservices:\n  app:\n    image: nginx\n",
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(read_iac_version(tmp.path()), Some("3.8".to_string()));
     }
 

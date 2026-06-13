@@ -95,7 +95,7 @@ pub fn distil(diff: &str) -> String {
 }
 
 fn flush_pending(out: &mut Vec<String>, pending: &mut Vec<String>) {
-    out.extend(pending.drain(..));
+    out.append(pending);
 }
 
 fn flush_omitted(out: &mut Vec<String>, omitted: &mut usize) {
@@ -116,7 +116,8 @@ mod tests {
 
     #[test]
     fn header_lines_are_preserved() {
-        let diff = "diff --git a/foo.rs b/foo.rs\nindex abc..def 100644\n--- a/foo.rs\n+++ b/foo.rs";
+        let diff =
+            "diff --git a/foo.rs b/foo.rs\nindex abc..def 100644\n--- a/foo.rs\n+++ b/foo.rs";
         let result = distil(diff);
         assert!(result.contains("diff --git"), "got: {result}");
         assert!(result.contains("--- a/foo.rs"), "got: {result}");
@@ -134,29 +135,41 @@ mod tests {
     #[test]
     fn excess_context_is_omitted() {
         // Build a hunk with 10 context lines before a change
-        let mut diff = "diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -1,12 +1,12 @@\n".to_string();
+        let mut diff =
+            "diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -1,12 +1,12 @@\n".to_string();
         for _ in 0..10 {
             diff.push_str(" context line\n");
         }
         diff.push_str("-removed\n+added\n");
         let result = distil(&diff);
         // Should only keep MAX_CONTEXT (2) lines before the change
-        let context_count = result.lines().filter(|l| l.trim() == "context line").count();
+        let context_count = result
+            .lines()
+            .filter(|l| l.trim() == "context line")
+            .count();
         assert!(
             context_count <= MAX_CONTEXT * 2 + 1,
             "too many context lines ({context_count}), got: {result}"
         );
-        assert!(result.contains("omitted"), "should note omitted lines, got: {result}");
+        assert!(
+            result.contains("omitted"),
+            "should note omitted lines, got: {result}"
+        );
     }
 
     #[test]
     fn hunk_cap_is_enforced() {
-        let mut diff = "diff --git a/big.rs b/big.rs\n--- a/big.rs\n+++ b/big.rs\n@@ -1,200 +1,200 @@\n".to_string();
+        let mut diff =
+            "diff --git a/big.rs b/big.rs\n--- a/big.rs\n+++ b/big.rs\n@@ -1,200 +1,200 @@\n"
+                .to_string();
         for i in 0..200 {
             diff.push_str(&format!("-old {i}\n+new {i}\n"));
         }
         let result = distil(&diff);
-        let change_lines = result.lines().filter(|l| l.starts_with('+') || l.starts_with('-')).count();
+        let change_lines = result
+            .lines()
+            .filter(|l| l.starts_with('+') || l.starts_with('-'))
+            .count();
         assert!(
             change_lines <= MAX_HUNK_LINES + 4,
             "cap not enforced, got {change_lines} change lines"

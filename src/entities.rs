@@ -27,14 +27,15 @@ pub fn load_entities(dev_ops: &Path) -> Vec<EntityProject> {
     // One-time migration from entities.json
     crate::db::import_from_json(dev_ops, &conn);
 
-    match crate::db::load_all_projects(&conn) {
+    let projects = match crate::db::load_all_projects(&conn) {
         Ok(rows) => rows
             .into_iter()
             .filter(|r| Path::new(&r.path).exists())
             .map(row_to_entity)
             .collect(),
         Err(_) => vec![],
-    }
+    };
+    dedup_nested(projects)
 }
 
 // ─── Save ─────────────────────────────────────────────────────────────────────
@@ -69,17 +70,25 @@ pub fn discover_entities(dev_ops: &Path) -> Vec<EntityProject> {
         Err(_) => return vec![],
     };
 
-    // One-time migration
+    // One-time migration from entities.json (runs only once)
     crate::db::import_from_json(dev_ops, &conn);
 
-    // Scan workspace
+    // Fresh scan — collect only what exists on disk right now
     let rooms = crate::mempalace::build(dev_ops);
-    for room in rooms {
-        for proj in room.projects {
+    let mut fresh_paths: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
+    for room in &rooms {
+        for proj in &room.projects {
             if !proj.path.exists() {
                 continue;
             }
+            // Only track projects that have a memory.md — untracked dirs are ignored
+            if !proj.path.join("memory.md").exists() {
+                continue;
+            }
             let path_str = proj.path.to_string_lossy().to_string();
+            fresh_paths.insert(path_str.clone());
             let _ = crate::db::upsert_project(
                 &conn,
                 &proj.name,
@@ -95,15 +104,16 @@ pub fn discover_entities(dev_ops: &Path) -> Vec<EntityProject> {
         }
     }
 
-    // Return everything that still exists on disk
-    match crate::db::load_all_projects(&conn) {
+    // Return ONLY freshly scanned projects — ignore stale DB accumulation
+    let projects = match crate::db::load_all_projects(&conn) {
         Ok(rows) => rows
             .into_iter()
-            .filter(|r| Path::new(&r.path).exists())
+            .filter(|r| fresh_paths.contains(&r.path) && Path::new(&r.path).exists())
             .map(row_to_entity)
             .collect(),
         Err(_) => vec![],
-    }
+    };
+    dedup_nested(projects)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -120,6 +130,38 @@ fn row_to_entity(r: crate::db::DbProject) -> EntityProject {
         version: r.version,
         version_nickname: r.nickname,
     }
+}
+
+/// Remove projects whose path is a sub-directory of another project in the list.
+/// Sorts by path depth (shallowest first), accepts a project only if no already-accepted
+/// project is an ancestor of it. Also removes canonical-path duplicates (symlinks).
+fn dedup_nested(mut projects: Vec<EntityProject>) -> Vec<EntityProject> {
+    // Resolve canonical paths; drop entries we cannot canonicalize
+    let mut canonical: Vec<(PathBuf, EntityProject)> = projects
+        .drain(..)
+        .filter_map(|p| {
+            p.local_path
+                .canonicalize()
+                .ok()
+                .map(|canon| (canon, p))
+        })
+        .collect();
+
+    // Sort shallowest path first so parents are accepted before children
+    canonical.sort_by_key(|(canon, _)| canon.components().count());
+
+    let mut seen_paths: Vec<PathBuf> = Vec::new();
+    let mut result: Vec<EntityProject> = Vec::new();
+
+    for (canon, proj) in canonical {
+        // Skip if this path is nested inside an already-accepted project
+        let is_nested = seen_paths.iter().any(|accepted| canon.starts_with(accepted));
+        if !is_nested {
+            seen_paths.push(canon);
+            result.push(proj);
+        }
+    }
+    result
 }
 
 /// Fallback: read old entities.json (used if SQLite unavailable)

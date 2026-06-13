@@ -1,7 +1,7 @@
+use super::common::{failed_result, failed_test, BuildResult, TestResult};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use super::common::{failed_result, failed_test, BuildResult, TestResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbeddedKind {
@@ -90,7 +90,10 @@ pub fn build_embedded(dir: &Path) -> BuildResult {
 fn build_esp_idf(dir: &Path) -> BuildResult {
     let cmd_str = "idf.py build";
     let start = Instant::now();
-    let output = Command::new("idf.py").arg("build").current_dir(dir).output();
+    let output = Command::new("idf.py")
+        .arg("build")
+        .current_dir(dir)
+        .output();
     let elapsed = start.elapsed();
     match output {
         Err(e) => failed_result("Embedded/ESP-IDF", cmd_str, elapsed, e.to_string()),
@@ -315,8 +318,15 @@ mod tests {
     #[test]
     fn detect_embedded_kind_arduino() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("sketch.ino"), "void setup(){}\nvoid loop(){}\n").unwrap();
-        assert_eq!(detect_embedded_kind(tmp.path()), Some(EmbeddedKind::Arduino));
+        std::fs::write(
+            tmp.path().join("sketch.ino"),
+            "void setup(){}\nvoid loop(){}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            detect_embedded_kind(tmp.path()),
+            Some(EmbeddedKind::Arduino)
+        );
     }
 
     #[test]
