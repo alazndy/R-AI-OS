@@ -191,6 +191,25 @@ Parallel worktree-based agent execution with coordination primitives:
 - **GitHub Sync:** Live star counts and last-commit timestamps
 - **Auto-Discovery:** Detects new workspace directories and updates `entities.json`
 
+### ⏳ Lifecycle Worker
+
+Background daemon task (`src/daemon/lifecycle.rs`) that keeps project status honest without manual upkeep. Every `lifecycle_interval_secs`, it checks each tracked project's last commit time and transitions status automatically:
+
+| Transition | Trigger |
+| :--- | :--- |
+| `active` → `beklemede` | No commit for `lifecycle_standby_days` (default: 14) |
+| `beklemede` → `archived` | No commit for `lifecycle_archive_days` (default: 90) |
+| `beklemede` / `archived` → `active` | A new commit is detected |
+
+Manually pinned statuses (`production`, `early`, `legacy`) are never touched by the worker — only the automatic active/beklemede/archived cycle is managed. Configure via `~/.config/raios/config.toml`:
+
+```toml
+[daemon]
+lifecycle_standby_days = 14
+lifecycle_archive_days = 90
+lifecycle_interval_secs = 3600
+```
+
 ---
 
 ## 🖥️ VS Code Extension (v0.5.1)
@@ -231,12 +250,26 @@ vscode-extension/
 
 ### Install
 
-```bash
-# From packaged VSIX
-code --install-extension vscode-extension/raios-0.5.1.vsix
+The packaged `.vsix` is committed to the repo (`vscode-extension/raios-0.5.1.vsix`) so it can be installed directly without a Node toolchain:
 
-# Or build from source
-cd vscode-extension && npm run compile && vsce package
+```bash
+code --install-extension vscode-extension/raios-0.5.1.vsix --force
+```
+
+To rebuild from source and reinstall, use the bundled script — it compiles, repackages, **uninstalls any existing `alazndy.raios` install first**, then installs the fresh `.vsix`. This guarantees only one version is ever registered, no matter how many times you re-run it:
+
+```bash
+cd vscode-extension && ./install.sh
+```
+
+Manual equivalent, if you need the individual steps:
+
+```bash
+cd vscode-extension
+npm install        # pulls in typescript + @vscode/vsce devDependencies
+npm run compile
+npx vsce package
+code --uninstall-extension alazndy.raios   # drop the old version first
 code --install-extension raios-*.vsix
 ```
 
@@ -257,6 +290,20 @@ git clone https://github.com/alazndy/R-AI-OS.git
 cd R-AI-OS
 cargo install --path . --force
 ```
+
+### Reinstall / Upgrade (Linux/macOS)
+
+Use the bundled `install.sh` instead of running the steps above by hand. `cargo install --force` already replaces the binary at its single fixed path (`~/.cargo/bin/{raios,aiosd}`) — it physically cannot leave two copies behind — but a previously *running* `aiosd`/`raios-tray` process would otherwise keep serving the old code in memory until restarted. The script handles the full cycle:
+
+```bash
+./install.sh
+```
+
+What it does:
+1. `cargo build --release`
+2. `cargo install --path . --force` — replaces the existing binaries in place
+3. Restarts `aiosd.service` and `raios-tray.service` via `systemctl --user` (if present) so the new binary actually takes effect, not just the file on disk
+4. Warns if a stray `raios`/`aiosd` binary exists earlier on `$PATH` outside cargo's bin dir, which would silently shadow the freshly installed one
 
 Start the daemon (powers the TUI, MCP server, and HTTP API):
 
@@ -397,10 +444,12 @@ vscode-extension/
 - [x] **Phase IDE:** VS Code Extension — Sidebar WebView + TokenBridge + DaemonManager + Refactor Tree
 - [x] **Phase IDE v0.5:** Sidebar v2 — Git Status card, Swarm card with Approve, Quick Actions
 - [x] **Phase 11:** Tool Pinning & Drift Detection — SHA-256 manifest pin, `-32028` on mismatch, `raios pin-reset / pin-status`
-- [ ] **Phase 12:** Secret Leasing — `raios secret grant <tool> <ENV_VAR>` with TTL-based auto-revoke
+- [x] **Phase 12:** Secret Leasing — `raios secret grant/list/revoke <tool> <ENV_VAR>` with TTL-based auto-revoke
 - [x] **Phase 13:** Rate Limiting — Fixed-window counter per tool, `-32029` on exceed, `raios rate-status`
 - [x] **Phase 14:** Quarantine Mode — Pattern-matched quarantine queue, `-32027` on block, `raios quarantine list/approve/deny`
-- [ ] **Phase 15:** Write-Back Bridge — Sidebar Kanban → `memory.md` task state sync
+- [x] **Phase 15:** Write-Back Bridge — Sidebar checkboxes interactive, `raios task-update` CLI syncs back to `memory.md`
+- [x] **Phase 16:** Lifecycle Worker — git-activity-based auto active/beklemede/archived transitions (`src/daemon/lifecycle.rs`)
+- [ ] **Phase 17:** `aiosd` systemd user service auto-start on login (currently started manually / via tray)
 
 ---
 
