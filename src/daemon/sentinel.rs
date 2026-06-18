@@ -16,6 +16,9 @@ pub async fn start_sentinel_worker(
     println!("[Sentinel] Worker started.");
     let radar = RadarChannel::new(tx.clone());
 
+    // Delay first cargo check to avoid startup CPU spike
+    sleep(Duration::from_secs(120)).await;
+
     loop {
         let dirty_projects = {
             let s = state.read().await;

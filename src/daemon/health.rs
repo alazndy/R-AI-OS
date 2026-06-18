@@ -37,6 +37,9 @@ pub async fn start_health_worker(
 ) {
     println!("[Daemon] Health Worker started.");
 
+    // Delay first scan so other workers can settle without CPU contention
+    sleep(Duration::from_secs(30)).await;
+
     loop {
         // 1. Get projects from state
         let projects = {

@@ -213,36 +213,36 @@ pub fn discover_all_agent_rules(dev_ops: &Path) -> Vec<AgentRuleGroup> {
     }
 
     // ── Cursor ────────────────────────────────────────────────────────────────
+    // Only show if Cursor is actually installed (config dir or binary present)
     {
-        let mut g = AgentRuleGroup::new("Cursor", "⊕", "~/.cursor/");
         let cursor_dir = h.join(".cursor");
+        let cursor_binary = crate::core::process::resolve_command_path("cursor").is_some();
+        if cursor_dir.exists() || cursor_binary {
+            let mut g = AgentRuleGroup::new("Cursor", "⊕", "~/.cursor/");
 
-        // ~/.cursor/rules/*.md
-        let rules_dir = cursor_dir.join("rules");
-        if let Ok(entries) = fs::read_dir(&rules_dir) {
-            let mut files: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.is_file())
-                .collect();
-            files.sort();
-            for p in files {
-                let name = format!(
-                    "rules/{}",
-                    p.file_name().unwrap_or_default().to_string_lossy()
-                );
-                g.files.push(FileEntry::new(name, p));
+            let rules_dir = cursor_dir.join("rules");
+            if let Ok(entries) = fs::read_dir(&rules_dir) {
+                let mut files: Vec<PathBuf> = entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.is_file())
+                    .collect();
+                files.sort();
+                for p in files {
+                    let name = format!(
+                        "rules/{}",
+                        p.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                    g.files.push(FileEntry::new(name, p));
+                }
             }
+            let mcp = cursor_dir.join("mcp.json");
+            if mcp.exists() {
+                g.files.push(FileEntry::new("mcp.json", mcp).readonly());
+            }
+            collect_project_rules(dev_ops, ".cursorrules", "cursorrules", &mut g.files, 3);
+            groups.push(g);
         }
-        // ~/.cursor/mcp.json
-        let mcp = cursor_dir.join("mcp.json");
-        if mcp.exists() {
-            g.files.push(FileEntry::new("mcp.json", mcp).readonly());
-        }
-        // .cursorrules files in dev_ops (first 3 found)
-        collect_project_rules(dev_ops, ".cursorrules", "cursorrules", &mut g.files, 3);
-
-        groups.push(g);
     }
 
     // ── Windsurf ──────────────────────────────────────────────────────────────

@@ -195,6 +195,23 @@ impl Server {
             });
         }
 
+        let lifecycle_tx = tx.clone();
+        let lifecycle_state = self.state.clone();
+        let lifecycle_interval =
+            std::time::Duration::from_secs(daemon_cfg.lifecycle_interval_secs);
+        let standby_days = daemon_cfg.lifecycle_standby_days;
+        let archive_days = daemon_cfg.lifecycle_archive_days;
+        tokio::spawn(async move {
+            super::lifecycle::start_lifecycle_worker(
+                lifecycle_state,
+                lifecycle_tx,
+                lifecycle_interval,
+                standby_days,
+                archive_days,
+            )
+            .await;
+        });
+
         let evolution_rx = tx.subscribe();
         tokio::spawn(async move {
             crate::evolution::start_evolution_worker(evolution_rx).await;

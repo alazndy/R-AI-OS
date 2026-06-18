@@ -297,6 +297,15 @@ pub enum Commands {
         #[command(subcommand)]
         action: SecretAction,
     },
+    /// Update a task's status (used by VS Code sidebar write-back)
+    #[command(name = "task-update")]
+    TaskUpdate {
+        /// Task ID (cp_tasks.id)
+        id: String,
+        /// New status: pending | in_progress | completed | cancelled
+        #[arg(long)]
+        status: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -590,6 +599,57 @@ pub fn run(cli: Cli) {
         Commands::PinStatus => security::cmd_pin_status(cli.json),
         Commands::Quarantine { action } => security::cmd_quarantine(action, cli.json),
         Commands::Secret { action } => security::cmd_secret(action, cli.json),
+        Commands::TaskUpdate { id, status } => cmd_task_update(&id, &status, cli.json),
+    }
+}
+
+fn cmd_task_update(id: &str, status: &str, json: bool) {
+    let valid = ["pending", "in_progress", "completed", "cancelled"];
+    if !valid.contains(&status) {
+        if json {
+            eprintln!("{{\"status\":\"error\",\"message\":\"invalid status: {status}\"}}");
+        } else {
+            eprintln!("Invalid status '{status}'. Valid: {}", valid.join(", "));
+        }
+        std::process::exit(1);
+    }
+    match crate::db::open_db() {
+        Ok(conn) => {
+            let now = chrono::Local::now().to_rfc3339();
+            let res = conn.execute(
+                "UPDATE cp_tasks SET status=?1, updated_at=?2 WHERE id=?3",
+                rusqlite::params![status, now, id],
+            );
+            match res {
+                Ok(rows) if rows > 0 => {
+                    if json {
+                        println!("{{\"status\":\"ok\",\"id\":\"{id}\",\"new_status\":\"{status}\"}}");
+                    } else {
+                        println!("Task {id} → {status}");
+                    }
+                }
+                Ok(_) => {
+                    if json {
+                        eprintln!("{{\"status\":\"error\",\"message\":\"task not found: {id}\"}}");
+                    } else {
+                        eprintln!("Task not found: {id}");
+                    }
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    if json {
+                        eprintln!("{{\"status\":\"error\",\"message\":\"{e}\"}}");
+                    } else {
+                        eprintln!("DB error: {e}");
+                    }
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to open DB: {e}");
+            std::process::exit(1);
+        }
     }
 }
 

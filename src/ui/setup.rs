@@ -226,6 +226,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &App) {
             ("Claude Code", s.claude_installed, s.claude_version.as_str()),
             ("Gemini CLI", s.gemini_installed, s.gemini_version.as_str()),
             ("Codex", s.codex_installed, s.codex_version.as_str()),
+            ("AGY (Antigravity)", s.agy_installed, s.agy_version.as_str()),
         ] {
             let (icon, col) = if ok {
                 ("✓", GREEN)

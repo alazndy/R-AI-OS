@@ -46,6 +46,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         term.show();
         return;
       }
+      if (message.type === "toggleTask") {
+        const { taskId, completed } = message;
+        if (!taskId) { return; }
+        const status = completed ? "completed" : "pending";
+        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const term = vscode.window.createTerminal({ name: "R-AI-OS: Task", cwd, hideFromUser: true });
+        term.sendText(`raios task-update "${taskId}" --status ${status} && exit`);
+        // refresh sidebar after a short delay so DB write settles
+        setTimeout(() => this.triggerRefresh(), 1200);
+        return;
+      }
       if (message.type === "startDaemon") {
         const dm = this._daemonManager;
         if (!dm) { return; }
@@ -551,13 +562,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           } else {
             tasksList.innerHTML = tasks.map(t => {
               const done = t.status === "completed" || t.status === "Completed" || t.completed === true;
+              const id = esc(t.id || t.task_id || "");
               return \`<div class="task-item">
-                <input type="checkbox" class="task-checkbox" \${done ? "checked" : ""} disabled />
+                <input type="checkbox" class="task-checkbox" \${done ? "checked" : ""} data-task-id="\${id}" data-done="\${done}" />
                 <div class="task-content">
                   <span class="task-desc \${done ? "completed" : ""}">\${esc(t.description || t.title || "Task")}</span>
                 </div>
               </div>\`;
             }).join("");
+
+            // write-back: toggle task status on checkbox click
+            tasksList.querySelectorAll(".task-checkbox").forEach(cb => {
+              cb.addEventListener("change", (e) => {
+                const el = e.target;
+                const taskId = el.dataset.taskId;
+                const completed = el.checked;
+                if (!taskId) return;
+                vscode.postMessage({ type: "toggleTask", taskId, completed });
+                // optimistic UI update
+                const desc = el.closest(".task-item").querySelector(".task-desc");
+                if (desc) { desc.classList.toggle("completed", completed); }
+              });
+            });
           }
         } catch {
           tasksList.innerHTML = '<div class="empty-state" style="color:var(--error-color)">Load failed</div>';

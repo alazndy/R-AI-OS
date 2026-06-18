@@ -15,14 +15,20 @@ pub struct DaemonConfig {
     pub enable_port_monitor: bool,
     pub port_monitor_interval_secs: u64,
     pub port_probe_timeout_ms: u64,
+    /// Auto-lifecycle: days without commit before → beklemede
+    pub lifecycle_standby_days: u64,
+    /// Auto-lifecycle: days without commit before → archived
+    pub lifecycle_archive_days: u64,
+    /// How often the lifecycle worker runs (seconds)
+    pub lifecycle_interval_secs: u64,
 }
 
 impl Default for DaemonConfig {
     fn default() -> Self {
         let windows = cfg!(target_os = "windows");
         Self {
-            startup_bm25_indexing: true,
-            startup_cortex_indexing: !windows,
+            startup_bm25_indexing: false,
+            startup_cortex_indexing: false,
             enable_health_worker: true,
             health_interval_secs: if windows { 900 } else { 300 },
             git_interval_secs: if windows { 300 } else { 120 },
@@ -31,6 +37,9 @@ impl Default for DaemonConfig {
             enable_port_monitor: true,
             port_monitor_interval_secs: if windows { 30 } else { 10 },
             port_probe_timeout_ms: if windows { 75 } else { 100 },
+            lifecycle_standby_days: 14,
+            lifecycle_archive_days: 90,
+            lifecycle_interval_secs: 3600,
         }
     }
 }
@@ -263,7 +272,7 @@ mod tests {
     #[test]
     fn config_defaults_include_daemon_tuning() {
         let config = Config::default();
-        assert!(config.daemon.startup_bm25_indexing);
+        assert!(!config.daemon.startup_bm25_indexing); // disabled by default to prevent startup CPU spike
         assert!(config.daemon.enable_port_monitor);
         assert!(config.daemon.port_monitor_interval_secs > 0);
     }

@@ -487,7 +487,7 @@ pub fn upsert_project(
          ON CONFLICT(path) DO UPDATE SET
              name=excluded.name, category=excluded.category,
              github=COALESCE(excluded.github, github),
-             status=CASE WHEN excluded.status IN ('production','active','early','legacy') THEN excluded.status ELSE status END,
+             status=CASE WHEN status IN ('beklemede','archived') THEN status WHEN excluded.status IN ('production','active','early','legacy') THEN excluded.status ELSE status END,
              stars=COALESCE(excluded.stars, stars),
              last_commit=COALESCE(excluded.last_commit, last_commit),
              version=COALESCE(excluded.version, version),
@@ -496,6 +496,16 @@ pub fn upsert_project(
         params![name, category, path, github, status, stars, last_commit, version, nickname],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Directly update a project's lifecycle status by path.
+/// Used by the lifecycle worker — bypasses the upsert preserve logic.
+pub fn update_project_status(conn: &Connection, path: &str, status: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE projects SET status = ?1, updated_at = datetime('now') WHERE path = ?2",
+        params![status, path],
+    )?;
+    Ok(())
 }
 
 pub fn project_id_for_path(conn: &Connection, path: &str) -> Option<i64> {

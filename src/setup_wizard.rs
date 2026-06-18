@@ -75,6 +75,8 @@ pub struct AgentStatus {
     pub gemini_version: String,
     pub codex_installed: bool,
     pub codex_version: String,
+    pub agy_installed: bool,
+    pub agy_version: String,
     pub git_installed: bool,
     pub git_version: String,
     pub gh_installed: bool,
@@ -95,6 +97,11 @@ pub fn detect_agents() -> AgentStatus {
     if let Some((ok, v)) = run_version(&["codex", "--version"]) {
         s.codex_installed = ok;
         s.codex_version = v;
+    }
+    // AGY (Antigravity) — binary at ~/.local/bin/agy
+    s.agy_installed = crate::core::process::resolve_command_path("agy").is_some();
+    if s.agy_installed {
+        s.agy_version = "installed".to_string();
     }
     if let Some((ok, v)) = run_version(&["git", "--version"]) {
         s.git_installed = ok;

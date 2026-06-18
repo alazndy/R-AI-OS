@@ -33,7 +33,12 @@ fn ensure_daemon_running() {
         cmd.creation_flags(0x08000000);
     }
 
-    let _ = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    // Spawn daemon and reap it in a background thread to prevent zombie processes
+    if let Ok(mut child) = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
 
     // Give it a second to wake up
     thread::sleep(Duration::from_secs(2));

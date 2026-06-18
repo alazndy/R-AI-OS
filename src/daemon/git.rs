@@ -12,6 +12,9 @@ pub async fn start_git_worker(
 ) {
     println!("[Daemon] Git Worker started.");
 
+    // Stagger startup to avoid CPU spike with health worker
+    sleep(Duration::from_secs(60)).await;
+
     loop {
         let projects = {
             let s = state.read().await;

@@ -3,15 +3,18 @@
 ## Context
 - **Status**: In Development — Alpha Phase (v2.0.0-alpha "Aura Hardened Kernel")
 - **Stack**: Rust 2021 Edition + Ratatui TUI + Tokio async + SQLite (rusqlite) + Axum HTTP + VS Code Extension
-- **Last Milestone**: Control Plane Migration complete (all 8 phases) — 2026-06-10. 378 lib tests green.
+- **Last Milestone**: Lifecycle Worker + ZRAM system optimization — 2026-06-16. 378 lib tests green.
 - **Repo**: https://github.com/alazndy/R-AI-OS
 
 ## Active Objectives
-- [ ] Phase 11: Tool Pinning — MCP tool manifest hash verification (detects supply chain tampering)
-- [ ] Phase 12: Secret Leasing — `raios secret grant <tool> <ENV_VAR>` TTL-based env injection, auto-revoke
-- [ ] Phase 2B: memory.md Write-Back — sidebar task state update via VS Code WebView
-- [ ] Rate Limiting: Tool call frequency limiter (spam protection for AI loops)
-- [ ] Quarantine Mode: Suspend suspicious agent calls, await human approval
+- [x] Phase 11: Tool Pinning — implemented & wired into MCP dispatch (`security/tool_pin.rs`)
+- [x] Phase 12: Secret Leasing — `raios secret grant/list/revoke` fully implemented
+- [x] Phase 2B: memory.md Write-Back — sidebar checkboxes now interactive; `raios task-update` CLI added
+- [x] Rate Limiting — `security/rate_limiter.rs`, configurable via raios-policy.toml
+- [x] Quarantine Mode — `security/quarantine.rs`, MCP dispatch integration complete
+- [x] Lifecycle Worker — auto beklemede/archived/active transitions based on git activity (`daemon/lifecycle.rs`)
+- [x] discover status-preserve fix — beklemede/archived no longer reset by discover
+- [ ] aiosd systemd service — auto-start on login (currently manual start)
 
 ## Technical Decisions
 - **Architecture**: Modular kernel — `src/security/`, `src/kernel/`, `src/control_plane.rs`, `src/swarm/`, `src/cortex/`
@@ -36,8 +39,8 @@
 - **Repo**: `gitrepo.md`
 
 ## Current Focus
-- Start Phase 11 (Tool Pinning): hash the MCP tool manifest at startup, compare on each invocation, warn/block on drift.
-- Reference: `src/mcp/` and `src/security/verify_chain.rs` for the pattern to follow.
+- All planned security phases complete. Project in maintenance/hardening mode.
+- Next: aiosd systemd user service for auto-start, VS Code extension package bump.
 
 ## Change Log & Agent Trail
 - 2026-06-03 [Antigravity Kaira]: Hash-Chained Audit Ledger, Redaction Engine, Sentry SDK integration — v2.0.0-alpha foundation
@@ -45,3 +48,5 @@
 - 2026-06-04 [Antigravity Kaira]: Refactor — events.rs→events/, dashboard.rs→13 panels, build.rs→10 submodules, deps.rs→10 submodules, keyboard.rs→6 submodules. False-positive risk pattern fix in refactor_scan.rs.
 - 2026-06-10 [Claude Kaira]: Control Plane Migration phases 1-8 complete. cp_* is sole source of truth. Legacy tables cache-only. cp_daemon_snapshot() added. 376→378 tests green.
 - 2026-06-13 [Claude Kaira]: memory.md migrated to AGENT_CONSTITUTION v5.0 template. PATH fixed (~/.cargo/bin added to .zshrc). Claude Kaira skills installed.
+- 2026-06-13 [Claude Kaira]: K-AI-RA identity integrated into setup wizard. Project dedup fix (145→52). DB vacuum (88MB→308KB). Zombie aiosd fix. raios-tray built (AppIndicator3, daemon toggle, all-projects popup, agent launcher). Phase 2B write-back implemented (sidebar checkboxes + raios task-update CLI). All backlog phases confirmed complete. 378 tests green.
+- 2026-06-16 [Claude Kaira]: Lifecycle worker added (auto beklemede/archived/active via git activity). DaemonConfig: lifecycle_standby_days/archive_days/interval_secs. upsert_project CASE fix (beklemede/archived preserved on discover). ZRAM 8GB + swappiness=10 system optimization. aiosd config intervals increased (CPU relief). Active project set defined in DB.

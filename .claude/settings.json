@@ -13,7 +13,7 @@
       "TodoWrite(*)",
       "Task(*)",
       "NotebookEdit(*)",
-      "mcp__*(*)"
+      "mcp__*__*"
     ]
   },
   "hooks": {
