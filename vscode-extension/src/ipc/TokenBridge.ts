@@ -1,8 +1,8 @@
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import * as http from "http";
 import * as vscode from "vscode";
+import { raiosConfigDir } from "../utils/raiosBinary";
 
 export class TokenBridge {
   private cachedToken: string | null = null;
@@ -14,18 +14,9 @@ export class TokenBridge {
    * Checks both .session_token and fallback .ipc_token.
    */
   public readToken(): string | null {
-    const configDir = path.join(os.homedir(), ".config", "raios");
-    
-    // Windows path detection (AppData/Roaming/raios)
-    let appDataDir = configDir;
-    if (process.platform === "win32") {
-      const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-      appDataDir = path.join(appData, "raios");
-    }
+    const configDir = raiosConfigDir();
 
     const tokenPaths = [
-      path.join(appDataDir, ".session_token"),
-      path.join(appDataDir, ".ipc_token"),
       path.join(configDir, ".session_token"),
       path.join(configDir, ".ipc_token")
     ];

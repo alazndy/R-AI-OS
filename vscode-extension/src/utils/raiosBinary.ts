@@ -88,12 +88,20 @@ export function resolveAiosdBinary(): string | null {
 }
 
 /**
- * Returns the path where the daemon writes its session token.
+ * Returns the platform-specific R-AI-OS config directory, where the daemon
+ * writes its session/IPC token files.
  */
-export function tokenFilePath(): string {
+export function raiosConfigDir(): string {
   const isWindows = process.platform === "win32";
   const configBase = isWindows
     ? process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming")
     : path.join(os.homedir(), ".config");
-  return path.join(configBase, "raios", ".session_token");
+  return path.join(configBase, "raios");
+}
+
+/**
+ * Returns the path where the daemon writes its session token.
+ */
+export function tokenFilePath(): string {
+  return path.join(raiosConfigDir(), ".session_token");
 }

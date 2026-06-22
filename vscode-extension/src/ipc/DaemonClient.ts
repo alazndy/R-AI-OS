@@ -1,7 +1,7 @@
 import * as net from "net";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
+import { raiosConfigDir } from "../utils/raiosBinary";
 
 type MessageHandler = (msg: Record<string, unknown>) => void;
 
@@ -99,18 +99,11 @@ export class DaemonClient {
   }
 
   private readToken(): string | null {
-    // Windows: %APPDATA%\raios\.ipc_token
-    const windowsPath = path.join(os.homedir(), "AppData", "Roaming", "raios", ".ipc_token");
+    const tokenPath = path.join(raiosConfigDir(), ".ipc_token");
     try {
-      return fs.readFileSync(windowsPath, "utf-8").trim();
+      return fs.readFileSync(tokenPath, "utf-8").trim();
     } catch {
-      // Linux/Mac fallback
-      const unixPath = path.join(os.homedir(), ".config", "raios", ".ipc_token");
-      try {
-        return fs.readFileSync(unixPath, "utf-8").trim();
-      } catch {
-        return null;
-      }
+      return null;
     }
   }
 
