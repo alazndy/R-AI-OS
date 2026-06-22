@@ -1,0 +1,14 @@
+[Unit]
+Description=R-AI-OS System Tray
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/tools/raios-tray
+ExecStart=/usr/bin/env python3 %h/dev/tools/raios-tray/raios-tray.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
