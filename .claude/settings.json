@@ -13,7 +13,10 @@
       "TodoWrite(*)",
       "Task(*)",
       "NotebookEdit(*)",
-      "mcp__*__*"
+      "mcp__raios__*",
+      "mcp__sigmap__*",
+      "mcp__mempalace__*",
+      "mcp__claude_ai_Context7__*"
     ]
   },
   "hooks": {
