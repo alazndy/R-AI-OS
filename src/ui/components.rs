@@ -219,7 +219,7 @@ pub fn render_file_changed_badge(frame: &mut Frame, _app: &App) {
 
 pub fn render_launcher_modal(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    let popup = center_rect(36, 10, area);
+    let popup = center_rect(36, 11, area);
 
     frame.render_widget(
         Block::new().style(Style::new().bg(Color::Rgb(12, 18, 24))),
@@ -253,12 +253,12 @@ pub fn render_launcher_modal(frame: &mut Frame, app: &App) {
             Span::styled("Claude Code", Style::new().fg(MID)),
         ]),
         Line::from(vec![
-            Span::styled("  [G] ", Style::new().fg(CYAN).bold()),
-            Span::styled("Gemini CLI", Style::new().fg(MID)),
-        ]),
-        Line::from(vec![
             Span::styled("  [X] ", Style::new().fg(MAGENTA).bold()),
             Span::styled("Codex", Style::new().fg(MID)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [O] ", Style::new().fg(CYAN).bold()),
+            Span::styled("OpenCode", Style::new().fg(MID)),
         ]),
         Line::from(""),
         Line::from(Span::styled("  [Esc] Cancel", Style::new().fg(DIM))),

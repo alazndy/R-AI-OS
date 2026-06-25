@@ -370,7 +370,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let factory = make_factory(&tmp);
 
-        let job = Job::new("inbox test", "gemini", None, None);
+        let job = Job::new("inbox test", "claude", None, None);
         let id = factory.submit(
             job,
             Box::pin(async {

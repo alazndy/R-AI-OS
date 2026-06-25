@@ -74,12 +74,12 @@ pub(super) fn cmd_task(
                 a
             }
             Ok(None) => {
-                println!("No specific specialist found. Defaulting to gemini.");
-                "gemini".to_string()
+                println!("No specific specialist found.");
+                "claude".to_string()
             }
             Err(e) => {
-                eprintln!("Routing error: {}. Defaulting to gemini.", e);
-                "gemini".to_string()
+                eprintln!("Routing error: {}.", e);
+                "claude".to_string()
             }
         }
     };
@@ -113,32 +113,7 @@ pub(super) fn cmd_bootstrap() {
         }
     }
 
-    println!("--- [2/5] Configuring Gemini CLI (90+ Agents) ---");
-    let _ = std::process::Command::new("gemini")
-        .args([
-            "extensions",
-            "install",
-            "https://github.com/josstei/maestro-orchestrate",
-        ])
-        .status();
-
-    let gemini_settings_path = home_dir.join(".gemini").join("settings.json");
-    if gemini_settings_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&gemini_settings_path) {
-            if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
-                if json.get("experimental").is_none() {
-                    json["experimental"] = serde_json::json!({});
-                }
-                json["experimental"]["enableAgents"] = serde_json::json!(true);
-                if let Ok(updated) = serde_json::to_string_pretty(&json) {
-                    let _ = std::fs::write(&gemini_settings_path, updated);
-                    println!("✓ Gemini Agent Mode Enabled.");
-                }
-            }
-        }
-    }
-
-    println!("--- [3/5] Configuring Claude Code Plugins ---");
+    println!("--- [2/5] Configuring Claude Code Plugins ---");
     for args in [
         vec![
             "plugin",
@@ -189,21 +164,13 @@ pub(super) fn cmd_bootstrap() {
             .status();
     }
 
-    let gemini_skills = home_dir.join(".gemini").join("skills");
-    let gemini_agents = home_dir.join(".gemini").join("agents");
     let claude_rules = home_dir.join(".claude").join("rules");
     let antigravity_rules = home_dir.join(".antigravity").join("rules");
-    for d in [
-        &gemini_skills,
-        &gemini_agents,
-        &claude_rules,
-        &antigravity_rules,
-    ] {
+    let opencode_dir = home_dir.join(".config").join("opencode");
+    for d in [&claude_rules, &antigravity_rules, &opencode_dir] {
         let _ = std::fs::create_dir_all(d);
     }
 
-    copy_dir_recursive(&ecc_temp_path.join("skills"), &gemini_skills);
-    copy_dir_recursive(&ecc_temp_path.join("agents"), &gemini_agents);
     copy_dir_recursive(&ecc_temp_path.join("rules"), &claude_rules);
     copy_dir_recursive(&ecc_temp_path.join("rules"), &antigravity_rules);
 
@@ -264,5 +231,5 @@ API keys never client-side. RLS day 0. Managed services preferred.
 All projects under Dev_Ops_New/, no exceptions.
 
 ## 5. Agent System
-Claude Code: interactive dev | Gemini CLI: research | Antigravity: IDE dev.
+Claude Code: interactive dev | Antigravity: IDE dev.
 "#;

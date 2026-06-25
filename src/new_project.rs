@@ -53,14 +53,6 @@ pub fn create(cfg: &NewProjectConfig) -> NewProjectResult {
 ### Notlar
 - —
 
-## Gemini
-### Yaptıkları
-- —
-### Yapacakları
-- —
-### Notlar
-- —
-
 ## Antigravity
 ### Yaptıkları
 - —

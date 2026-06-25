@@ -143,7 +143,7 @@ impl App {
         let tx = self.tx.clone();
         let github = self.wizard.github.clone();
         let skip_c = self.wizard.skip_claude;
-        let skip_g = self.wizard.skip_gemini;
+        let skip_o = self.wizard.skip_opencode;
         let skip_a = self.wizard.skip_antigravity;
 
         match &self.wizard.step {
@@ -174,19 +174,18 @@ impl App {
                     tx2.send(BgMsg::WizardActions(actions)).ok();
                 });
             }
-            WizardStep::Gemini if !skip_g => {
-                let tx2 = tx.clone();
-                let m = master.clone();
-                thread::spawn(move || {
-                    let actions = crate::setup_wizard::exec_gemini(&m);
-                    tx2.send(BgMsg::WizardActions(actions)).ok();
-                });
-            }
             WizardStep::Codex if !skip_a => {
                 let tx2 = tx.clone();
                 let m = master.clone();
                 thread::spawn(move || {
                     let actions = crate::setup_wizard::exec_codex(&m);
+                    tx2.send(BgMsg::WizardActions(actions)).ok();
+                });
+            }
+            WizardStep::OpenCode if !skip_o => {
+                let tx2 = tx.clone();
+                thread::spawn(move || {
+                    let actions = crate::setup_wizard::exec_opencode();
                     tx2.send(BgMsg::WizardActions(actions)).ok();
                 });
             }

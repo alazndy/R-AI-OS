@@ -298,11 +298,11 @@ impl App {
                     self.mempalace.proj_cursor = None;
                 }
             }
-            KeyCode::Char('C') | KeyCode::Char('G') | KeyCode::Char('A') => {
+            KeyCode::Char('C') | KeyCode::Char('O') | KeyCode::Char('A') => {
                 if let Some(proj) = self.get_selected_mempalace_project() {
                     let agent = match key.code {
                         KeyCode::Char('C') => "claude",
-                        KeyCode::Char('G') => "gemini",
+                        KeyCode::Char('O') => "opencode",
                         _ => "antigravity",
                     };
                     self.add_activity(

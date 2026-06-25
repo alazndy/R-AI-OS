@@ -1,6 +1,7 @@
 mod audit;
 mod dev;
 mod git;
+mod handoff;
 mod health;
 mod instinct;
 mod new;
@@ -174,6 +175,20 @@ pub enum Commands {
         #[arg(short, long)]
         agent: Option<String>,
     },
+    /// Atomically hand a task off to another agent via the control plane (no STATE.json)
+    Handoff {
+        /// Target agent identity
+        #[arg(long)]
+        to: HandoffTarget,
+        /// Outcome of the work being handed off
+        #[arg(long)]
+        status: HandoffStatus,
+        /// Verbatim context for the next agent — no filler
+        #[arg(long)]
+        msg: String,
+        #[arg(short, long)]
+        project: Option<String>,
+    },
     /// Install/Bootstrap the entire ECC, Maestro, and system architecture
     Bootstrap,
     /// Bump project version (semver) and optionally update CHANGELOG
@@ -204,7 +219,7 @@ pub enum Commands {
         #[arg(short, long, default_value = "15")]
         top: usize,
     },
-    /// Show local usage/quota signals for Codex, Claude, Gemini, and Antigravity
+    /// Show local usage/quota signals for Codex, Claude, and Antigravity
     Usage,
     /// Kill a process by port number
     KillPort { port: u16 },
@@ -306,6 +321,42 @@ pub enum Commands {
         #[arg(long)]
         status: String,
     },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandoffTarget {
+    ClaudeKaira,
+    CodexKaira,
+    OpencodeKaira,
+    AntigravityKaira,
+}
+
+impl HandoffTarget {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HandoffTarget::ClaudeKaira => "claude_kaira",
+            HandoffTarget::CodexKaira => "codex_kaira",
+            HandoffTarget::OpencodeKaira => "opencode_kaira",
+            HandoffTarget::AntigravityKaira => "antigravity_kaira",
+        }
+    }
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandoffStatus {
+    Success,
+    Failed,
+    Blocker,
+}
+
+impl HandoffStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HandoffStatus::Success => "SUCCESS",
+            HandoffStatus::Failed => "FAILED",
+            HandoffStatus::Blocker => "BLOCKER",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -547,6 +598,15 @@ pub fn run(cli: Cli) {
             project,
             agent,
         } => new::cmd_task(&description, project, agent),
+        Commands::Handoff {
+            to,
+            status,
+            msg,
+            project,
+        } => {
+            let project_path = resolve_project_path(project, &cfg.dev_ops_path);
+            handoff::cmd_handoff(to, status, msg, &project_path, cli.json);
+        }
         Commands::Bootstrap => new::cmd_bootstrap(),
         Commands::VersionBump {
             level,

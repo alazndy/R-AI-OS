@@ -251,7 +251,7 @@ mod tests {
             .await
             .unwrap();
         let err = mgr
-            .acquire(key.clone(), "gemini", LockPriority::Agent, None)
+            .acquire(key.clone(), "codex", LockPriority::Agent, None)
             .await;
         assert!(err.is_err());
     }
@@ -260,7 +260,7 @@ mod tests {
     async fn user_priority_preempts_agent() {
         let mgr = LockManager::new();
         let key = LockKey::File(PathBuf::from("/foo/bar.rs"));
-        mgr.acquire(key.clone(), "gemini", LockPriority::Agent, None)
+        mgr.acquire(key.clone(), "claude", LockPriority::Agent, None)
             .await
             .unwrap();
         mgr.acquire(key.clone(), "user", LockPriority::User, None)

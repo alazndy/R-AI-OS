@@ -180,12 +180,10 @@ impl App {
         let config = Config::load().unwrap_or_default();
 
         // Boot results (minimal check for starting)
-        let home = dirs::home_dir().unwrap_or_default();
         let master = config.master_md_path.clone();
         thread::spawn(move || {
             let checks: Vec<(String, PathBuf)> = vec![
                 ("MASTER.md".into(), master),
-                ("Global Config".into(), home.join(".gemini/GEMINI.md")),
             ];
             for (i, (name, path)) in checks.iter().enumerate() {
                 let pass = path.exists();

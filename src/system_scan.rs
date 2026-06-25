@@ -90,10 +90,10 @@ pub fn scan_system() -> AiAuditReport {
     let tools = vec![
         check_ollama(),
         check_npm_tool("claude", "Claude Code"),
-        check_npm_tool("gemini", "Gemini CLI"),
         check_cursor(),
         check_lm_studio(),
         check_antigravity(),
+        check_opencode(),
     ];
 
     AiAuditReport {
@@ -108,8 +108,8 @@ fn scan_usage() -> Vec<UsageSnapshot> {
     vec![
         scan_codex_usage(),
         scan_claude_usage(),
-        scan_gemini_usage(),
         scan_antigravity_usage(),
+        scan_opencode_usage(),
     ]
 }
 
@@ -230,7 +230,6 @@ fn scan_env_keys() -> Vec<String> {
     let common = [
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
     ];
     for key in common {
@@ -245,47 +244,6 @@ fn scan_local_models() -> Vec<String> {
     let mut models = Vec::new();
     let home = dirs::home_dir().unwrap_or_default();
 
-    let antigravity_home = home.join(".gemini/antigravity");
-    let antigravity_cli_home = home.join(".gemini/antigravity-cli");
-    let ag_path = if antigravity_home.exists() {
-        Some(antigravity_home)
-    } else if antigravity_cli_home.exists() {
-        Some(antigravity_cli_home)
-    } else {
-        None
-    };
-
-    if let Some(path) = ag_path {
-        models.push(format!("Antigravity Home: {}", path.display()));
-
-        let skills_count = std::fs::read_dir(path.join("skills"))
-            .map(|d| d.count())
-            .unwrap_or(0);
-        if skills_count > 0 {
-            models.push(format!("Antigravity Skills: {} deployed", skills_count));
-        }
-
-        let brain_count = std::fs::read_dir(path.join("brain"))
-            .map(|d| d.count())
-            .unwrap_or(0);
-        if brain_count > 0 {
-            models.push(format!(
-                "Antigravity Brain: {} sessions stored",
-                brain_count
-            ));
-        }
-
-        let knowledge_count = std::fs::read_dir(path.join("knowledge"))
-            .map(|d| d.count())
-            .unwrap_or(0);
-        if knowledge_count > 0 {
-            models.push(format!(
-                "Antigravity Knowledge: {} items cached",
-                knowledge_count
-            ));
-        }
-    }
-
     let ollama_path = home.join(".ollama/models");
     if ollama_path.exists() {
         models.push(format!("Ollama: {}", ollama_path.display()));
@@ -299,13 +257,8 @@ fn scan_local_models() -> Vec<String> {
     models
 }
 
-fn check_antigravity() -> SystemAiTool {
-    let home = dirs::home_dir().unwrap_or_default();
-    let old_home = home.join(".gemini/antigravity");
-    let cli_home = home.join(".gemini/antigravity-cli");
-    let path = crate::core::process::resolve_command_path("antigravity")
-        .or_else(|| old_home.exists().then_some(old_home.clone()))
-        .or_else(|| cli_home.exists().then_some(cli_home.clone()));
+    fn check_antigravity() -> SystemAiTool {
+        let path = crate::core::process::resolve_command_path("antigravity");
 
     if let Some(p) = path {
         SystemAiTool {
@@ -375,44 +328,43 @@ fn scan_claude_usage() -> UsageSnapshot {
     usage
 }
 
-fn scan_gemini_usage() -> UsageSnapshot {
-    let home = dirs::home_dir().unwrap_or_default();
-    let oauth_path = home.join(".gemini/oauth_creds.json");
-    let installed = crate::core::process::resolve_command_path("gemini").is_some()
-        || home.join(".gemini").exists();
-    let mut usage = UsageSnapshot::new("Gemini CLI", installed);
+fn check_opencode() -> SystemAiTool {
+    match crate::core::process::resolve_command_path("opencode") {
+        Some(path) => SystemAiTool {
+            name: "OpenCode".into(),
+            status: ToolStatus::Installed,
+            version: Some("Active".into()),
+            path: Some(path),
+        },
+        None => SystemAiTool {
+            name: "OpenCode".into(),
+            status: ToolStatus::Missing,
+            version: None,
+            path: None,
+        },
+    }
+}
 
-    if std::env::var_os("GEMINI_API_KEY").is_some() || std::env::var_os("GOOGLE_API_KEY").is_some()
-    {
-        usage.authenticated = true;
-        usage.plan = Some("api_key".into());
-        usage.quota_kind = "api".into();
-        usage.source = UsageSource::Env;
-        usage.confidence = UsageConfidence::Estimated;
+fn scan_opencode_usage() -> UsageSnapshot {
+    let installed = crate::core::process::resolve_command_path("opencode").is_some();
+    let mut usage = UsageSnapshot::new("OpenCode", installed);
+
+    if installed {
+        usage.source = UsageSource::Inferred;
         usage.notes.push(
-            "Gemini API key mevcut; exact remaining/reset için remote quota API entegrasyonu gerekir."
+            "OpenCode kurulu; local config üzerinden kullanım takibi yapılıyor."
                 .into(),
         );
-    }
-
-    if let Some(json) = read_json_value(&oauth_path) {
-        apply_gemini_auth_metadata(&mut usage, &json);
     }
 
     usage
 }
 
 fn scan_antigravity_usage() -> UsageSnapshot {
-    let home = dirs::home_dir().unwrap_or_default();
-    let oauth_path = home.join(".gemini/antigravity-cli/antigravity-oauth-token");
-    let installed = crate::core::process::resolve_command_path("antigravity").is_some()
-        || home.join(".gemini/antigravity-cli").exists()
-        || home.join(".gemini/antigravity").exists();
+    let installed = crate::core::process::resolve_command_path("antigravity").is_some();
     let mut usage = UsageSnapshot::new("Antigravity CLI", installed);
 
-    if let Some(json) = read_json_value(&oauth_path) {
-        apply_antigravity_auth_metadata(&mut usage, &json);
-    } else if installed {
+    if installed {
         usage.source = UsageSource::Inferred;
         usage.notes.push(
             "Antigravity kurulu görünüyor; local auth metadata bulunamadığı için quota durumu bilinmiyor."
@@ -510,22 +462,7 @@ fn apply_claude_auth_metadata(usage: &mut UsageSnapshot, auth: &Value) {
     );
 }
 
-fn apply_gemini_auth_metadata(usage: &mut UsageSnapshot, auth: &Value) {
-    usage.authenticated = true;
-    usage.source = UsageSource::LocalAuth;
-    usage.quota_kind = "oauth".into();
-    usage.confidence = UsageConfidence::Estimated;
-
-    if let Some(exp) = auth.get("expiry_date").and_then(value_to_i64) {
-        usage.auth_expires_at = format_epoch_millis(exp);
-    }
-
-    usage.notes.push(
-        "Gemini OAuth metadata bulundu; exact remaining/reset için Google quota telemetry entegrasyonu gerekir."
-            .into(),
-    );
-}
-
+#[allow(dead_code)]
 fn apply_antigravity_auth_metadata(usage: &mut UsageSnapshot, auth: &Value) {
     usage.authenticated = true;
     usage.source = UsageSource::LocalAuth;
@@ -657,20 +594,6 @@ mod tests {
             .notes
             .iter()
             .any(|note| note.contains("Rate limit tier")));
-    }
-
-    #[test]
-    fn gemini_auth_metadata_extracts_oauth_expiry() {
-        let mut usage = UsageSnapshot::new("Gemini CLI", true);
-        let auth = json!({
-            "expiry_date": 1_781_086_385_068_i64
-        });
-
-        apply_gemini_auth_metadata(&mut usage, &auth);
-
-        assert!(usage.authenticated);
-        assert!(usage.auth_expires_at.is_some());
-        assert_eq!(usage.quota_kind, "oauth");
     }
 
     #[test]

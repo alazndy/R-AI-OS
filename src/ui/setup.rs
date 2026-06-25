@@ -86,25 +86,7 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
                 ".agents/skills/",
             ],
         ),
-        WizardStep::Gemini => render_agent(
-            frame,
-            area,
-            app,
-            "GEMINI CLI",
-            app.wizard.skip_gemini,
-            app.wizard
-                .agent_status
-                .as_ref()
-                .map(|s| s.gemini_installed)
-                .unwrap_or(false),
-            app.wizard
-                .agent_status
-                .as_ref()
-                .map(|s| s.gemini_version.as_str())
-                .unwrap_or(""),
-            "https://ai.google.dev/gemini-api/docs/gemini-cli",
-            &["~/.gemini/GEMINI.md", "~/.gemini/settings.json (MCP)"],
-        ),
+
         WizardStep::Codex => render_agent(
             frame,
             area,
@@ -123,6 +105,27 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
                 .unwrap_or(""),
             "https://openai.com/codex",
             &["~/.codex/AGENTS.md", "~/AGENTS.md (symlink)"],
+        ),
+        WizardStep::OpenCode => render_agent(
+            frame,
+            area,
+            app,
+            "OPENCODE",
+            app.wizard.skip_opencode,
+            app.wizard
+                .agent_status
+                .as_ref()
+                .map(|s| s.opencode_installed)
+                .unwrap_or(false),
+            app.wizard
+                .agent_status
+                .as_ref()
+                .map(|s| s.opencode_version.as_str())
+                .unwrap_or(""),
+            "https://opencode.ai",
+            &[
+                "~/.config/opencode/opencode.jsonc (MCP)",
+            ],
         ),
         WizardStep::Skills => render_skills(frame, area, app),
         WizardStep::Initialize => render_initialize(frame, area, app),
@@ -196,9 +199,8 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &App) {
     ];
     for item in &[
         "AGENT_CONSTITUTION.md — K-AI-RA unified constitution",
-        "Workspace symlinks: CLAUDE.md, GEMINI.md, AGENTS.md",
+        "Workspace symlinks: CLAUDE.md, AGENTS.md",
         "Claude Kaira:       ~/.claude/CLAUDE.md + MCP",
-        "Antigravity Kaira:  ~/.gemini/GEMINI.md + MCP",
         "Codex Kaira:        ~/.codex/AGENTS.md",
         "Skills & Hooks:     6 K-AI-RA skill stubs",
         "İlk proje keşfi → entities.json",
@@ -224,8 +226,8 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &App) {
             ("git", s.git_installed, s.git_version.as_str()),
             ("gh (GitHub)", s.gh_installed, s.gh_version.as_str()),
             ("Claude Code", s.claude_installed, s.claude_version.as_str()),
-            ("Gemini CLI", s.gemini_installed, s.gemini_version.as_str()),
             ("Codex", s.codex_installed, s.codex_version.as_str()),
+            ("OpenCode", s.opencode_installed, s.opencode_version.as_str()),
             ("AGY (Antigravity)", s.agy_installed, s.agy_version.as_str()),
         ] {
             let (icon, col) = if ok {
@@ -430,11 +432,11 @@ fn render_master(frame: &mut Frame, area: Rect, app: &App) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "  Tüm AI ajanların tek kaynağı (Claude, Gemini, Codex).",
+            "  Tüm AI ajanların tek kaynağı (Claude, Codex).",
             Style::new().fg(DIM),
         )),
         Line::from(Span::styled(
-            "  CLAUDE.md, GEMINI.md, AGENTS.md bu dosyaya symlink olur.",
+            "  CLAUDE.md, AGENTS.md bu dosyaya symlink olur.",
             Style::new().fg(DIM),
         )),
         Line::from(""),
@@ -617,8 +619,8 @@ fn render_initialize(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
         for (name, active) in [
             ("Claude Code", !app.wizard.skip_claude),
-            ("Gemini CLI", !app.wizard.skip_gemini),
             ("Antigravity", !app.wizard.skip_antigravity),
+            ("OpenCode", !app.wizard.skip_opencode),
         ] {
             lines.push(Line::from(vec![
                 Span::styled(format!("  {:<14}", name), Style::new().fg(DIM)),
@@ -742,4 +744,4 @@ fn render_log(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
-const MASTER_PREVIEW: &str = "# AGENT CONSTITUTION (v5.0)\n# K-AI-RA — Single source of truth\n\n## Identity\n- Claude Kaira  |  Codex Kaira\n- Antigravity Kaira (Gemini)\n\n## RIPER-5\n1. Requirement  2. Investigation\n3. Planning     4. Execution\n5. Review & Refactor\n\n## AgentShield (OWASP)\n- No client-side secrets\n- Parameterized queries only\n- pnpm audit on every commit\n\n## Skills\nraios · search-first · graphify\nprompt-master · ki-snapshot";
+const MASTER_PREVIEW: &str = "# AGENT CONSTITUTION (v5.0)\n# K-AI-RA — Single source of truth\n\n## Identity\n- Claude Kaira  |  Codex Kaira\n\n## RIPER-5\n1. Requirement  2. Investigation\n3. Planning     4. Execution\n5. Review & Refactor\n\n## AgentShield (OWASP)\n- No client-side secrets\n- Parameterized queries only\n- pnpm audit on every commit\n\n## Skills\nraios · search-first · graphify\nprompt-master · ki-snapshot";

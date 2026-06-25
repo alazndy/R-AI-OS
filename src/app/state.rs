@@ -300,7 +300,7 @@ pub struct WizardState {
     pub agent_status: Option<crate::setup_wizard::AgentStatus>,
     pub action_log: Vec<crate::setup_wizard::WizardAction>,
     pub skip_claude: bool,
-    pub skip_gemini: bool,
+    pub skip_opencode: bool,
     pub skip_antigravity: bool,
     pub running: bool,
 }

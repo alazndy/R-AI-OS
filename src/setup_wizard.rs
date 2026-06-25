@@ -10,8 +10,8 @@ pub enum WizardStep {
     Workspace,
     Constitution,
     Claude,
-    Gemini,
     Codex,
+    OpenCode,
     Skills,
     Initialize,
     Done,
@@ -23,9 +23,9 @@ impl WizardStep {
             Self::Welcome => Self::Workspace,
             Self::Workspace => Self::Constitution,
             Self::Constitution => Self::Claude,
-            Self::Claude => Self::Gemini,
-            Self::Gemini => Self::Codex,
-            Self::Codex => Self::Skills,
+            Self::Claude => Self::Codex,
+            Self::Codex => Self::OpenCode,
+            Self::OpenCode => Self::Skills,
             Self::Skills => Self::Initialize,
             Self::Initialize => Self::Done,
             Self::Done => Self::Done,
@@ -38,8 +38,8 @@ impl WizardStep {
             Self::Workspace => 1,
             Self::Constitution => 2,
             Self::Claude => 3,
-            Self::Gemini => 4,
-            Self::Codex => 5,
+            Self::Codex => 4,
+            Self::OpenCode => 5,
             Self::Skills => 6,
             Self::Initialize => 7,
             Self::Done => 8,
@@ -56,8 +56,8 @@ impl WizardStep {
             Self::Workspace => "WORKSPACE",
             Self::Constitution => "AGENT_CONSTITUTION.md",
             Self::Claude => "CLAUDE KAIRA",
-            Self::Gemini => "ANTIGRAVITY KAIRA",
             Self::Codex => "CODEX KAIRA",
+            Self::OpenCode => "OPENCODE",
             Self::Skills => "SKILLS & HOOKS",
             Self::Initialize => "INITIALIZE",
             Self::Done => "DONE",
@@ -71,10 +71,10 @@ impl WizardStep {
 pub struct AgentStatus {
     pub claude_installed: bool,
     pub claude_version: String,
-    pub gemini_installed: bool,
-    pub gemini_version: String,
     pub codex_installed: bool,
     pub codex_version: String,
+    pub opencode_installed: bool,
+    pub opencode_version: String,
     pub agy_installed: bool,
     pub agy_version: String,
     pub git_installed: bool,
@@ -90,13 +90,14 @@ pub fn detect_agents() -> AgentStatus {
         s.claude_installed = ok;
         s.claude_version = v;
     }
-    if let Some((ok, v)) = run_version(&["gemini", "--version"]) {
-        s.gemini_installed = ok;
-        s.gemini_version = v;
-    }
+
     if let Some((ok, v)) = run_version(&["codex", "--version"]) {
         s.codex_installed = ok;
         s.codex_version = v;
+    }
+    if let Some((ok, v)) = run_version(&["opencode", "--version"]) {
+        s.opencode_installed = ok;
+        s.opencode_version = v;
     }
     // AGY (Antigravity) — binary at ~/.local/bin/agy
     s.agy_installed = crate::core::process::resolve_command_path("agy").is_some();
@@ -269,9 +270,9 @@ pub fn exec_master(master_path: &Path, github_user: &str) -> Vec<WizardAction> {
         }
     }
 
-    // Create workspace-level symlinks: CLAUDE.md, GEMINI.md, AGENTS.md
+    // Create workspace-level symlinks: CLAUDE.md, AGENTS.md
     let home = dirs::home_dir().unwrap_or_default();
-    for link_name in &["CLAUDE.md", "GEMINI.md", "AGENTS.md"] {
+    for link_name in &["CLAUDE.md", "AGENTS.md"] {
         let link_path = home.join(link_name);
         if link_path.exists() || link_path.is_symlink() {
             log.push(WizardAction::skip(format!("exists: ~/{}", link_name)));
@@ -347,36 +348,6 @@ pub fn exec_claude(dev_ops: &Path, master_path: &Path) -> Vec<WizardAction> {
     log
 }
 
-/// Set up Gemini CLI: GEMINI.md template.
-pub fn exec_gemini(master_path: &Path) -> Vec<WizardAction> {
-    let mut log = Vec::new();
-    let home = dirs::home_dir().unwrap_or_default();
-    let gemini_dir = home.join(".gemini");
-    let _ = std::fs::create_dir_all(&gemini_dir);
-
-    let gemini_md = gemini_dir.join("GEMINI.md");
-    if gemini_md.exists() {
-        log.push(WizardAction::skip("exists: ~/.gemini/GEMINI.md"));
-    } else {
-        let content = gemini_md_template(master_path);
-        match std::fs::write(&gemini_md, content) {
-            Ok(_) => log.push(WizardAction::ok("created: ~/.gemini/GEMINI.md")),
-            Err(e) => log.push(WizardAction::fail(format!("GEMINI.md: {}", e))),
-        }
-    }
-
-    // GEMINI settings.json — MCP
-    let gemini_settings = gemini_dir.join("settings.json");
-    match register_mcp_gemini(&gemini_settings) {
-        Ok(true) => log.push(WizardAction::ok(
-            "registered: raios MCP in ~/.gemini/settings.json",
-        )),
-        Ok(false) => log.push(WizardAction::skip("already registered: raios MCP (Gemini)")),
-        Err(e) => log.push(WizardAction::fail(format!("Gemini MCP: {}", e))),
-    }
-
-    log
-}
 
 /// Set up Codex Kaira: ~/.codex/AGENTS.md
 pub fn exec_codex(master_path: &Path) -> Vec<WizardAction> {
@@ -393,6 +364,48 @@ pub fn exec_codex(master_path: &Path) -> Vec<WizardAction> {
         match std::fs::write(&agents_md, content) {
             Ok(_) => log.push(WizardAction::ok("created: ~/.codex/AGENTS.md (Codex Kaira)")),
             Err(e) => log.push(WizardAction::fail(format!("AGENTS.md: {}", e))),
+        }
+    }
+
+    log
+}
+
+/// Set up OpenCode: register raios MCP server.
+pub fn exec_opencode() -> Vec<WizardAction> {
+    let mut log = Vec::new();
+
+    // Register raios MCP via opencode mcp add
+    let existing = std::process::Command::new("opencode")
+        .args(["mcp", "list"])
+        .output();
+    let already_registered = existing
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.contains("raios"))
+        .unwrap_or(false);
+
+    if already_registered {
+        log.push(WizardAction::skip("already registered: raios MCP in opencode"));
+    } else {
+        let status = std::process::Command::new("opencode")
+            .args([
+                "mcp",
+                "add",
+                "raios",
+                "--command",
+                "raios",
+                "--args",
+                "mcp-server",
+            ])
+            .status();
+        match status {
+            Ok(s) if s.success() => log.push(WizardAction::ok(
+                "registered: raios MCP in opencode",
+            )),
+            Ok(_) => log.push(WizardAction::fail(
+                "opencode mcp add failed — is opencode installed?",
+            )),
+            Err(e) => log.push(WizardAction::fail(format!("opencode mcp add: {}", e))),
         }
     }
 
@@ -519,33 +532,6 @@ fn register_mcp_claude(settings_path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-fn register_mcp_gemini(settings_path: &Path) -> Result<bool, String> {
-    let mut json: serde_json::Value = if settings_path.exists() {
-        let s = std::fs::read_to_string(settings_path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&s).unwrap_or(serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
-
-    if json.pointer("/mcpServers/raios").is_some() {
-        return Ok(false);
-    }
-
-    let servers = json
-        .as_object_mut()
-        .ok_or("not an object")?
-        .entry("mcpServers")
-        .or_insert(serde_json::json!({}));
-
-    servers["raios"] = serde_json::json!({
-        "command": "raios",
-        "args": ["mcp-server"]
-    });
-
-    let out = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
-    std::fs::write(settings_path, out).map_err(|e| e.to_string())?;
-    Ok(true)
-}
 
 // ─── Templates ────────────────────────────────────────────────────────────────
 
@@ -553,7 +539,7 @@ fn master_template(github_user: &str) -> String {
     let user = if github_user.is_empty() { "User" } else { github_user };
     format!(
         r#"# AGENT CONSTITUTION (v5.0 — Unified)
-# K-AI-RA — Single source of truth for all AI agents (Claude, Gemini, Codex)
+# K-AI-RA — Single source of truth for all AI agents (Claude, Codex, OpenCode)
 # GitHub: {user} | Edit this file; all agents pick up changes automatically.
 
 ---
@@ -563,7 +549,7 @@ fn master_template(github_user: &str) -> String {
 * **Agent Identities:**
   * **Claude:** Claude Kaira
   * **Codex:** Codex Kaira
-  * **Gemini:** Antigravity Kaira
+  * **OpenCode:** OpenCode Kaira
 * **Role:** {user}'s senior partner. Security (OWASP Hardened), Performance, and Premium UX specialist.
 * **Attitude:** Genuine, open to slang and wordplay, hacker-vibe senior dev.
 * **Communication:** Turkish in chat (direct, no filler). English in code and technical docs.
@@ -658,17 +644,6 @@ fn claude_md_template(master_path: &Path) -> String {
     )
 }
 
-fn gemini_md_template(master_path: &Path) -> String {
-    format!(
-        r#"# Antigravity Kaira — Global Gemini Config
-# K-AI-RA system. All rules defined in the unified constitution.
-# Source of truth: {constitution}
-
-@{constitution}
-"#,
-        constitution = master_path.display()
-    )
-}
 
 fn codex_md_template(master_path: &Path) -> String {
     format!(
@@ -744,7 +719,7 @@ System health check for the AI OS setup.
 
 ## Checks
 1. MASTER.md exists and readable
-2. Agent configs (.claude, .gemini, .agents) present
+2. Agent configs (.claude, .agents) present
 3. entities.json valid
 4. tasks.md readable
 5. mempalace.yaml valid

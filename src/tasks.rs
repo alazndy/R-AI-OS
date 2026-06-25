@@ -13,7 +13,7 @@ pub struct Task {
     pub id: Option<String>,
     pub text: String,
     pub completed: bool,
-    pub agent: Option<String>,   // "claude" | "gemini" | "antigravity"
+    pub agent: Option<String>,   // "claude" | "antigravity" | "opencode"
     pub project: Option<String>, // #ProjectName tag
 }
 
@@ -43,8 +43,8 @@ impl Task {
     pub fn agent_label(&self) -> Option<&str> {
         match self.agent.as_deref() {
             Some("claude") => Some("◆C"),
-            Some("gemini") => Some("◈G"),
             Some("codex") => Some("⬣X"),
+            Some("opencode") => Some("◈O"),
             Some("antigravity") => Some("⬡A"),
             _ => None,
         }
@@ -60,7 +60,7 @@ pub fn parse_task_line(line: &str) -> Option<Task> {
 
 /// Parse a markdown checkbox line into a Task.
 ///   - [ ] Fix the login bug @claude #R-AI-OS
-///   - [x] Done task @gemini
+///   - [x] Done task
 fn parse_line(line: &str) -> Option<Task> {
     let t = line.trim();
     let completed;
@@ -88,10 +88,9 @@ fn parse_line(line: &str) -> Option<Task> {
             let a_lower = a.to_lowercase();
             if matches!(
                 a_lower.as_str(),
-                "claude" | "gemini" | "antigravity" | "ag" | "codex" | "cx"
+                "claude" | "antigravity" | "codex" | "cx" | "opencode"
             ) {
                 agent = Some(match a_lower.as_str() {
-                    "ag" => "antigravity".into(),
                     "cx" => "codex".into(),
                     _ => a_lower,
                 });
@@ -234,8 +233,8 @@ pub fn dispatch_to_agent(
 
     // Build the agent command
     let agent_cmd = match agent {
-        "gemini" => "gemini",
         "codex" => "codex",
+        "opencode" => "opencode",
         "antigravity" => "antigravity",
         _ => "claude",
     };

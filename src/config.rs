@@ -222,13 +222,6 @@ fn find_skills(dev_ops: Option<&Path>) -> Option<PathBuf> {
             return Some(candidate);
         }
     }
-    // Try Antigravity/global skills
-    let home = dirs::home_dir()?;
-    let ag = home.join(".gemini").join("antigravity").join("skills");
-    if ag.is_dir() {
-        return Some(ag);
-    }
-
     None
 }
 

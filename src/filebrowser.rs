@@ -119,45 +119,6 @@ pub fn discover_all_agent_rules(dev_ops: &Path) -> Vec<AgentRuleGroup> {
         groups.push(g);
     }
 
-    // ── Gemini CLI ────────────────────────────────────────────────────────────
-    {
-        let mut g = AgentRuleGroup::new("Gemini CLI", "◈", "~/.gemini/");
-        let gemini_dir = h.join(".gemini");
-
-        let gemini_md = gemini_dir.join("GEMINI.md");
-        if gemini_md.exists() {
-            g.files.push(FileEntry::new("GEMINI.md", gemini_md));
-        }
-        // ~/.gemini/policies/*.toml
-        let policies_dir = gemini_dir.join("policies");
-        if let Ok(entries) = fs::read_dir(&policies_dir) {
-            let mut policy_files: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| {
-                    matches!(
-                        p.extension().and_then(|x| x.to_str()),
-                        Some("toml") | Some("md") | Some("json")
-                    )
-                })
-                .collect();
-            policy_files.sort();
-            for p in policy_files {
-                let name = format!(
-                    "policies/{}",
-                    p.file_name().unwrap_or_default().to_string_lossy()
-                );
-                g.files.push(FileEntry::new(name, p).readonly());
-            }
-        }
-        // ~/.gemini/settings.json
-        let gs = gemini_dir.join("settings.json");
-        if gs.exists() {
-            g.files.push(FileEntry::new("settings.json", gs).readonly());
-        }
-        groups.push(g);
-    }
-
     // ── Antigravity ───────────────────────────────────────────────────────────
     {
         let mut g = AgentRuleGroup::new("Antigravity", "⬡", "~/.agents/");
@@ -192,22 +153,40 @@ pub fn discover_all_agent_rules(dev_ops: &Path) -> Vec<AgentRuleGroup> {
                 g.files.push(FileEntry::new(name, p));
             }
         }
-        // ~/.gemini/antigravity/
-        let ag_dir = h.join(".gemini").join("antigravity");
-        if let Ok(entries) = fs::read_dir(&ag_dir) {
-            let mut files: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.is_file())
-                .collect();
-            files.sort();
-            for p in files {
-                let name = format!(
-                    "antigravity/{}",
-                    p.file_name().unwrap_or_default().to_string_lossy()
-                );
-                g.files.push(FileEntry::new(name, p));
-            }
+        groups.push(g);
+    }
+
+    // ── OpenCode ────────────────────────────────────────────────────────────
+    {
+        let mut g = AgentRuleGroup::new("OpenCode", "◈", "~/.config/opencode/");
+        let oc_dir = h.join(".config").join("opencode");
+
+        // opencode.jsonc
+        let config_json = oc_dir.join("opencode.jsonc");
+        if config_json.exists() {
+            g.files.push(FileEntry::new("opencode.jsonc", config_json));
+        }
+        let config_json = oc_dir.join("opencode.json");
+        if config_json.exists() {
+            g.files.push(FileEntry::new("opencode.json", config_json));
+        }
+        // skills dir
+        let skills_dir = oc_dir.join("skills");
+        if skills_dir.is_dir() {
+            g.files
+                .push(FileEntry::new("skills/ (dir)", skills_dir).readonly());
+        }
+        // plugins dir
+        let plugins_dir = oc_dir.join("plugins");
+        if plugins_dir.is_dir() {
+            g.files
+                .push(FileEntry::new("plugins/ (dir)", plugins_dir).readonly());
+        }
+        // AGENTS.md symlink in home
+        let agents_link = h.join("AGENTS.md");
+        if agents_link.exists() {
+            g.files
+                .push(FileEntry::new("AGENTS.md (home symlink)", agents_link));
         }
         groups.push(g);
     }
@@ -362,7 +341,6 @@ pub fn get_master_rule_files(master_md: &Path) -> Vec<FileEntry> {
 pub fn get_agent_config_files() -> Vec<FileEntry> {
     let h = home();
     vec![
-        FileEntry::new("GEMINI.md", h.join(".gemini/GEMINI.md")),
         FileEntry::new("Claude settings.json", h.join(".claude/settings.json")),
         FileEntry::new("Claude hooks", h.join(".agents/hooks")),
     ]
@@ -372,7 +350,6 @@ pub fn get_agent_config_files() -> Vec<FileEntry> {
 pub fn get_policy_files() -> Vec<FileEntry> {
     let h = home();
     vec![
-        FileEntry::new("AI OS Policy", h.join(".gemini/policies/ai-os-policy.toml")).readonly(),
         FileEntry::new("Claude settings.json", h.join(".claude/settings.json")).readonly(),
     ]
 }

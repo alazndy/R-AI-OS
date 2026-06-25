@@ -139,7 +139,7 @@ impl App {
             }
             "/task" => {
                 // /task add <text> [@agent] [#project]
-                // /task send claude|gemini|antigravity
+                // /task send claude|antigravity
                 if arg.starts_with("add ") {
                     let rest = arg.trim_start_matches("add ").trim();
                     // Parse the line using the same parser (add checkbox prefix)

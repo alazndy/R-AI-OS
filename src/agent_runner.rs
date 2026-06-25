@@ -39,32 +39,65 @@ pub fn run_agent(
         }
     }
 
-    // 3. Build the Command
+    // 3. Look up any pending control-plane handoff addressed to this agent identity
+    // (see AGENT_CONSTITUTION.md Section 10 — no STATE.json involved). Resolved here,
+    // before the Command is built, so each agent's native prompt-injection flag can be
+    // used instead of an env var no CLI actually reads.
+    let pending_handoff = canonical_agent_identity(agent).and_then(|identity| {
+        let conn = crate::db::open_db().ok()?;
+        let project_id = project_dir
+            .as_deref()
+            .and_then(|dir| crate::db::project_id_for_file_path(&conn, dir));
+        let ctx = crate::db::cp_take_pending_handoff(&conn, project_id, identity).ok()??;
+        let block = format!(
+            "[HANDOVER CONTEXT]\nFrom: {}  Status: {}\n{}",
+            ctx.from_agent, ctx.status, ctx.context_summary
+        );
+        Some((conn, identity, ctx, block))
+    });
+    let handover_block = pending_handoff.as_ref().map(|(_, _, _, block)| block.clone());
+
+    // 4. Build the Command, wiring the handover into each agent's native prompt flag
+    // (env vars like RAIOS_HANDOVER_CONTEXT are not read by claude/codex/opencode).
     let mut cmd = match agent.to_lowercase().as_str() {
         "claude" => {
             let mut c = Command::new("claude");
-            c.env_remove("GEMINI_API_KEY");
             c.env_remove("OPENAI_API_KEY");
+            if let Some(block) = &handover_block {
+                c.arg("--append-system-prompt").arg(block);
+            }
             c
         }
-        "gemini" => {
-            let mut c = Command::new("gemini");
-            c.env_remove("ANTHROPIC_API_KEY");
-            c.env_remove("OPENAI_API_KEY");
+        "opencode" => {
+            let mut c = Command::new("opencode");
+            if let Some(block) = &handover_block {
+                c.arg("--prompt").arg(block);
+            }
             c
         }
         "cursor" => Command::new("cursor"),
         "antigravity" => Command::new("antigravity"),
+        "codex" => {
+            let mut c = Command::new("codex");
+            if let Some(block) = &handover_block {
+                c.arg(block);
+            }
+            c
+        }
         _ => return Err(format!("Unsupported agent: {}", agent)),
     };
 
-    // 4. Inject Instincts & Budget Info
+    // 5. Inject Instincts & Budget Info
     let instinct_prompt = instinct.get_instinct_prompt();
     if !instinct_prompt.is_empty() {
         cmd.env("RAIOS_INSTINCTS", instinct_prompt);
     }
     if budget_active {
         cmd.env("RAIOS_CONTEXT_MODE", "compact");
+    }
+    // Best-effort env fallback for agents without a verified native flag (e.g. antigravity).
+    if let Some(block) = &handover_block {
+        cmd.env("RAIOS_HANDOVER_CONTEXT", block);
     }
 
     if let Some(dir) = project_dir {
@@ -79,6 +112,12 @@ pub fn run_agent(
         Ok(c) => c,
         Err(e) => return Err(format!("Failed to spawn agent: {}", e)),
     };
+    if let Some((conn, identity, ctx, _)) = &pending_handoff {
+        println!("📨 Handover delivered from {} ({}).", ctx.from_agent, ctx.status);
+        if let Err(e) = crate::db::cp_consume_handoff(conn, ctx, identity) {
+            eprintln!("Warning: failed to mark handoff as consumed: {e}");
+        }
+    }
 
     // 5. Execution & Timeout Loop
     let result = if let Some(timeout) = timeout_secs {
@@ -126,6 +165,19 @@ pub fn run_agent(
     }
 
     result
+}
+
+/// Maps a spawnable agent name to its Kaira identity for handoff lookups.
+/// Agents outside the 4-agent matrix (e.g. "cursor") return `None` — they
+/// still spawn normally, just without handoff delivery.
+fn canonical_agent_identity(agent: &str) -> Option<&'static str> {
+    match agent.to_lowercase().as_str() {
+        "claude" => Some("claude_kaira"),
+        "codex" => Some("codex_kaira"),
+        "opencode" => Some("opencode_kaira"),
+        "antigravity" => Some("antigravity_kaira"),
+        _ => None,
+    }
 }
 
 fn get_dir_size(path: &Path) -> std::io::Result<u64> {

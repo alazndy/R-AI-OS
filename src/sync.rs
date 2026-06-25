@@ -30,7 +30,6 @@ pub fn sync_universe(dev_ops: &Path, master: &Path) -> Result<String> {
             let proj_path = proj_entry.path();
 
             link_file(master, &proj_path.join("CLAUDE.md"));
-            link_file(master, &proj_path.join("GEMINI.md"));
             ensure_memory(&proj_path.join("memory.md"), &proj_name);
 
             count += 1;

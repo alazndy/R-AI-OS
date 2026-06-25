@@ -381,7 +381,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let store = make_store(&tmp);
         fake_task(&store, &tmp, "task a", "claude");
-        fake_task(&store, &tmp, "task b", "gemini");
+        fake_task(&store, &tmp, "task b", "claude");
         assert_eq!(store.list_active().len(), 2);
     }
 
@@ -417,7 +417,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let store = make_store(&tmp);
         let t1 = fake_task(&store, &tmp, "active task", "claude");
-        let t2 = fake_task(&store, &tmp, "merged task", "gemini");
+        let t2 = fake_task(&store, &tmp, "merged task", "claude");
         store.set_status(&t2.id.to_string(), SwarmStatus::Merged);
         let active = store.list_active();
         assert_eq!(active.len(), 1);

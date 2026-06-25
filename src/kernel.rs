@@ -3,7 +3,7 @@
 /// | Protocol     | Port / Transport | Clients                     |
 /// |--------------|------------------|-----------------------------|
 /// | Daemon TCP   | 127.0.0.1:42069  | Antigravity, Codex, UI      |
-/// | MCP-over-TCP | 127.0.0.1:42070  | Claude, Gemini (non-stdio)  |
+/// | MCP-over-TCP | 127.0.0.1:42070  | Claude (non-stdio)  |
 /// | CLI          | (subprocess)     | Shell scripts, human        |
 ///
 /// All three share a single broadcast channel so whispers and state updates

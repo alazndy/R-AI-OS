@@ -1015,14 +1015,6 @@ impl ProviderCapabilities {
                 supports_exact_quota_visibility: false,
             },
             Self {
-                provider: "gemini".into(),
-                supports_tool_calling: true,
-                supports_patch_diff: false,
-                supports_long_running: false,
-                supports_streaming: true,
-                supports_exact_quota_visibility: false,
-            },
-            Self {
                 provider: "codex".into(),
                 supports_tool_calling: false,
                 supports_patch_diff: true,
@@ -1036,6 +1028,14 @@ impl ProviderCapabilities {
                 supports_patch_diff: true,
                 supports_long_running: true,
                 supports_streaming: false,
+                supports_exact_quota_visibility: false,
+            },
+            Self {
+                provider: "opencode".into(),
+                supports_tool_calling: true,
+                supports_patch_diff: true,
+                supports_long_running: true,
+                supports_streaming: true,
                 supports_exact_quota_visibility: false,
             },
             Self {
@@ -1273,7 +1273,7 @@ pub fn cp_route_to_capable_provider(
     needs_long_running: bool,
 ) -> Result<Option<String>> {
     let providers = cp_list_provider_capabilities(conn)?;
-    let preferred = ["claude", "gemini", "codex", "swarm", "shell"];
+    let preferred = ["claude", "codex", "opencode", "swarm", "shell"];
     for name in &preferred {
         if let Some(p) = providers.iter().find(|p| p.provider == *name) {
             if (!needs_tool_calling || p.supports_tool_calling)
@@ -2060,6 +2060,173 @@ pub fn mark_file_change_workflow_apply_failed(
          SET status = 'failed', updated_at = ?1
          WHERE id = ?2",
         params![now, ids.task_id],
+    )?;
+    Ok(())
+}
+
+pub fn create_handoff_workflow(
+    conn: &Connection,
+    project_path: &str,
+    from_agent: &str,
+    to_agent: &str,
+    status: &str,
+    msg: &str,
+) -> Result<crate::control_plane::HandoffWorkflowIds> {
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let project_id = project_id_for_file_path(conn, project_path);
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let agent_run_id = uuid::Uuid::new_v4().to_string();
+    let artifact_id = uuid::Uuid::new_v4().to_string();
+    let approval_id = uuid::Uuid::new_v4().to_string();
+    let status_lc = status.to_lowercase();
+    let title = format!("Handoff → {}", to_agent);
+    let description = format!(
+        "Agent handoff from {} to {} (status: {}): {}",
+        from_agent, to_agent, status_lc, msg
+    );
+    let metadata_json = serde_json::json!({
+        "from": from_agent,
+        "to": to_agent,
+        "status": status_lc,
+        "context_summary": msg,
+        "flow": "agent_handoff"
+    })
+    .to_string();
+
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "INSERT INTO cp_tasks
+            (id, project_id, plan_id, parent_task_id, title, description, priority, status,
+             assignee_kind, assignee_id, acceptance_criteria, created_at, updated_at)
+         VALUES (?1, ?2, NULL, NULL, ?3, ?4, 50, 'awaiting_approval',
+             'agent', ?5, 'deliver handover context to assignee exactly once', ?6, ?6)",
+        params![task_id, project_id, title, description, to_agent, now],
+    )?;
+
+    let run_contract_id = cp_insert_run_contract(
+        &tx,
+        Some(&task_id),
+        project_path,
+        "[]",
+        "[]",
+        "[]",
+        None,
+        None,
+    )?;
+
+    tx.execute(
+        "INSERT INTO cp_agent_runs
+            (id, task_id, project_id, provider, agent_name, run_contract_id, attempt, status, started_at)
+         VALUES (?1, ?2, ?3, 'handoff', ?4, ?5, 1, 'awaiting_approval', ?6)",
+        params![agent_run_id, task_id, project_id, from_agent, run_contract_id, now],
+    )?;
+    tx.execute(
+        "INSERT INTO cp_artifacts
+            (id, task_id, agent_run_id, kind, status, path, content_ref, metadata_json, created_at)
+         VALUES (?1, ?2, ?3, 'handover_note', 'submitted', NULL, NULL, ?4, ?5)",
+        params![artifact_id, task_id, agent_run_id, metadata_json, now],
+    )?;
+    tx.execute(
+        "INSERT INTO cp_approvals
+            (id, project_id, task_id, agent_run_id, artifact_id, approval_type, reason, status, requested_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'handover', ?6, 'pending', ?7)",
+        params![approval_id, project_id, task_id, agent_run_id, artifact_id, msg, now],
+    )?;
+    tx.commit()?;
+
+    Ok(crate::control_plane::HandoffWorkflowIds {
+        task_id,
+        agent_run_id,
+        artifact_id,
+        approval_id,
+        project_id,
+    })
+}
+
+/// Most recent pending handover addressed to `to_agent` (optionally scoped to a project).
+/// Returns `None` when no handover is waiting, so callers can spawn normally.
+pub fn cp_take_pending_handoff(
+    conn: &Connection,
+    project_id: Option<i64>,
+    to_agent: &str,
+) -> Result<Option<crate::control_plane::HandoffContext>> {
+    let row = conn
+        .query_row(
+            "SELECT ap.id, ap.artifact_id, ap.agent_run_id, ap.task_id, art.metadata_json
+             FROM cp_approvals ap
+             JOIN cp_tasks t ON t.id = ap.task_id
+             JOIN cp_artifacts art ON art.id = ap.artifact_id
+             WHERE ap.approval_type = 'handover' AND ap.status = 'pending'
+               AND t.assignee_id = ?1
+               AND (?2 IS NULL OR t.project_id = ?2)
+             ORDER BY ap.requested_at DESC
+             LIMIT 1",
+            params![to_agent, project_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+
+    let Some((approval_id, artifact_id, agent_run_id, task_id, metadata_json)) = row else {
+        return Ok(None);
+    };
+    let metadata: serde_json::Value =
+        serde_json::from_str(&metadata_json).unwrap_or(serde_json::Value::Null);
+    let from_agent = metadata["from"].as_str().unwrap_or_default().to_string();
+    let status = metadata["status"].as_str().unwrap_or_default().to_string();
+    let context_summary = metadata["context_summary"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    Ok(Some(crate::control_plane::HandoffContext {
+        approval_id,
+        artifact_id,
+        agent_run_id,
+        task_id,
+        from_agent,
+        to_agent: to_agent.to_string(),
+        status,
+        context_summary,
+    }))
+}
+
+/// Marks a handover as delivered: approval approved, artifact applied, run + task completed.
+/// Idempotent in effect — once consumed, `cp_take_pending_handoff` no longer returns it.
+pub fn cp_consume_handoff(
+    conn: &Connection,
+    ctx: &crate::control_plane::HandoffContext,
+    resolved_by: &str,
+) -> Result<()> {
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    conn.execute(
+        "UPDATE cp_approvals
+         SET status = 'approved', resolved_at = ?1, resolved_by = ?2
+         WHERE id = ?3",
+        params![now, resolved_by, ctx.approval_id],
+    )?;
+    conn.execute(
+        "UPDATE cp_artifacts SET status = 'applied' WHERE id = ?1",
+        params![ctx.artifact_id],
+    )?;
+    conn.execute(
+        "UPDATE cp_agent_runs
+         SET status = 'succeeded', ended_at = ?1, exit_reason = 'handover_delivered'
+         WHERE id = ?2",
+        params![now, ctx.agent_run_id],
+    )?;
+    conn.execute(
+        "UPDATE cp_tasks
+         SET status = 'completed', updated_at = ?1
+         WHERE id = ?2",
+        params![now, ctx.task_id],
     )?;
     Ok(())
 }
@@ -2896,7 +3063,7 @@ mod tests {
     fn file_change_workflow_round_trip_rejected() {
         let conn = in_memory();
         let ids =
-            create_file_change_workflow(&conn, "/tmp/notes.md", "old", "new", "gemini").unwrap();
+            create_file_change_workflow(&conn, "/tmp/notes.md", "old", "new", "claude").unwrap();
         mark_file_change_workflow_rejected(&conn, &ids, "human", "rejected_by_user").unwrap();
 
         let run_status: String = conn
@@ -2916,6 +3083,82 @@ mod tests {
 
         assert_eq!(run_status, "failed");
         assert_eq!(artifact_status, "rejected");
+    }
+
+    // ── Agent handoff workflow tests ──────────────────────────────────────────
+
+    #[test]
+    fn handoff_workflow_round_trip_consumed() {
+        let conn = in_memory();
+        let project_id = upsert_project(
+            &conn, "RAIOS", "kernel", "/repo", None, "active", None, None, None, None,
+        )
+        .unwrap();
+
+        let ids = create_handoff_workflow(
+            &conn,
+            "/repo",
+            "claude_kaira",
+            "opencode_kaira",
+            "SUCCESS",
+            "skeleton ready, implement auth handlers",
+        )
+        .unwrap();
+        assert_eq!(ids.project_id, Some(project_id));
+
+        let pending = cp_take_pending_handoff(&conn, Some(project_id), "opencode_kaira")
+            .unwrap()
+            .expect("handoff should be pending for the assignee");
+        assert_eq!(pending.from_agent, "claude_kaira");
+        assert_eq!(pending.to_agent, "opencode_kaira");
+        assert_eq!(pending.status, "success");
+        assert_eq!(pending.context_summary, "skeleton ready, implement auth handlers");
+
+        cp_consume_handoff(&conn, &pending, "opencode_kaira").unwrap();
+
+        // Delivered exactly once: a second take must find nothing left pending.
+        let after = cp_take_pending_handoff(&conn, Some(project_id), "opencode_kaira").unwrap();
+        assert!(after.is_none());
+
+        let approval_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_approvals WHERE id = ?1",
+                params![ids.approval_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let task_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_tasks WHERE id = ?1",
+                params![ids.task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(approval_status, "approved");
+        assert_eq!(task_status, "completed");
+    }
+
+    #[test]
+    fn handoff_workflow_not_visible_to_other_agent() {
+        let conn = in_memory();
+        create_handoff_workflow(
+            &conn,
+            "/tmp/unknown-project",
+            "claude_kaira",
+            "opencode_kaira",
+            "BLOCKER",
+            "stuck on flaky test, needs investigation",
+        )
+        .unwrap();
+
+        let for_wrong_agent =
+            cp_take_pending_handoff(&conn, None, "antigravity_kaira").unwrap();
+        assert!(for_wrong_agent.is_none());
+
+        let for_right_agent = cp_take_pending_handoff(&conn, None, "opencode_kaira")
+            .unwrap()
+            .expect("handoff should be visible regardless of project filter when None");
+        assert_eq!(for_right_agent.status, "blocker");
     }
 
     // ── Canonical personal task tests ─────────────────────────────────────────
@@ -3076,10 +3319,9 @@ mod tests {
         let conn = in_memory();
         cp_seed_provider_capabilities(&conn).unwrap();
         let all = cp_list_provider_capabilities(&conn).unwrap();
-        assert!(all.len() >= 5);
+        assert!(all.len() >= 4);
         let names: Vec<&str> = all.iter().map(|c| c.provider.as_str()).collect();
         assert!(names.contains(&"claude"));
-        assert!(names.contains(&"gemini"));
         assert!(names.contains(&"shell"));
     }
 
@@ -3485,7 +3727,7 @@ mod tests {
     fn cp_pending_file_change_approvals_disappears_after_resolve() {
         let conn = in_memory();
         let ids =
-            create_file_change_workflow(&conn, "/proj/src/main.rs", "v1", "v2", "gemini").unwrap();
+            create_file_change_workflow(&conn, "/proj/src/main.rs", "v1", "v2", "claude").unwrap();
 
         // Pre-condition: visible
         assert_eq!(cp_load_pending_file_change_approvals(&conn).unwrap().len(), 1);

@@ -96,9 +96,11 @@ impl App {
             // [Tab] — skip/unskip agent steps
             KeyCode::Tab => match self.wizard.step {
                 WizardStep::Claude => self.wizard.skip_claude = !self.wizard.skip_claude,
-                WizardStep::Gemini => self.wizard.skip_gemini = !self.wizard.skip_gemini,
                 WizardStep::Codex => {
                     self.wizard.skip_antigravity = !self.wizard.skip_antigravity
+                }
+                WizardStep::OpenCode => {
+                    self.wizard.skip_opencode = !self.wizard.skip_opencode
                 }
                 _ => {
                     self.wizard_advance_step();

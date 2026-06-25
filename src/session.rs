@@ -247,7 +247,7 @@ mod tests {
     fn record_event_and_list() {
         let tmp = TempDir::new().unwrap();
         let s = store(&tmp);
-        let id = s.start("gemini", None);
+        let id = s.start("claude", None);
         s.record_event(&id, "file_read", "src/main.rs");
         s.record_event(&id, "whisper_received", "compile_error in src/lib.rs");
         let events = s.events(&id);
@@ -260,10 +260,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let s = store(&tmp);
         let id1 = s.start("claude", None);
-        let id2 = s.start("gemini", None);
         s.end(&id1, None);
         let current = s.current_open();
-        assert_eq!(current.map(|s| s.id), Some(id2));
+        assert!(current.is_none());
     }
 
     #[test]

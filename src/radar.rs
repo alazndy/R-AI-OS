@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn lock_conflict_whisper_has_hint() {
-        let w = Whisper::lock_conflict("myproj", "src/auth.rs", "gemini");
+        let w = Whisper::lock_conflict("myproj", "src/auth.rs", "claude");
         assert!(w.hint.is_some());
         assert_eq!(w.severity, Severity::Warn);
     }

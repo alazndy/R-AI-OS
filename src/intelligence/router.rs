@@ -48,7 +48,7 @@ static CAPABILITIES: &[(&str, &str)] = &[
     ("evolve", "evolve candidate promote instinct rule learning"),
     ("swarm", "swarm parallel worktree agent task isolated"),
     ("ci", "ci github actions workflow build status check"),
-    ("task", "task dispatch agent claude gemini codex route"),
+    ("task", "task dispatch agent claude codex route"),
     ("version-info", "version semver tag release changelog"),
     (
         "version-bump",

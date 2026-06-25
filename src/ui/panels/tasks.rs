@@ -13,7 +13,7 @@ pub fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App) {
     let border_color = if focused { GREEN } else { DIM };
 
     let hint = if focused {
-        " [Space] done  [c] Claude  [g] Gemini  [x] Codex  [a] Antigravity "
+        " [Space] done  [c] Claude  [x] Codex  [o] OpenCode  [a] Antigravity "
     } else {
         " [→] focus "
     };
@@ -79,8 +79,8 @@ pub fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App) {
                 .map(|label| {
                     let color = match task.agent.as_deref() {
                         Some("claude") => GREEN,
-                        Some("gemini") => CYAN,
                         Some("codex") => MAGENTA,
+                        Some("opencode") => CYAN,
                         Some("antigravity") => AMBER,
                         _ => DIM,
                     };

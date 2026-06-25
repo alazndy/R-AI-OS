@@ -30,7 +30,8 @@ pub fn discover_agents() -> Vec<AgentInfo> {
     let npm = h.join("AppData/Roaming/npm");
 
     let c_path = npm.join("claude.cmd");
-    let g_path = npm.join("gemini.cmd");
+    let o_path = crate::core::process::resolve_command_path("opencode")
+        .unwrap_or_else(|| PathBuf::from("opencode"));
     let a_path = h.join("AppData/Local/Programs/cursor/Cursor.exe");
 
     vec![
@@ -40,9 +41,9 @@ pub fn discover_agents() -> Vec<AgentInfo> {
             path: c_path,
         },
         AgentInfo {
-            name: "Gemini CLI",
-            exists: g_path.exists(),
-            path: g_path,
+            name: "OpenCode",
+            exists: crate::core::process::resolve_command_path("opencode").is_some(),
+            path: o_path,
         },
         AgentInfo {
             name: "Antigravity (Cursor)",
@@ -60,13 +61,7 @@ pub fn discover_skills(skills_path: &Path) -> Vec<SkillInfo> {
         scan_dir_for_skills(entries, "Local", &mut skills);
     }
 
-    // Also scan Antigravity's global skills if they exist
-    if let Some(home) = dirs::home_dir() {
-        let ag_skills = home.join(".gemini").join("antigravity").join("skills");
-        if let Ok(entries) = std::fs::read_dir(ag_skills) {
-            scan_dir_for_skills(entries, "Global AI", &mut skills);
-        }
-    }
+
 
     skills
 }

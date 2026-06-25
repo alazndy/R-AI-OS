@@ -211,13 +211,13 @@ impl App {
                 if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
                     self.dispatch_task("claude");
                 }
-            KeyCode::Char('g')
-                if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
-                    self.dispatch_task("gemini");
-                }
             KeyCode::Char('x')
                 if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
                     self.dispatch_task("codex");
+                }
+            KeyCode::Char('o')
+                if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
+                    self.dispatch_task("opencode");
                 }
             KeyCode::Char('a')
                 if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
@@ -276,7 +276,7 @@ impl App {
                         }
                     }
                 }
-            KeyCode::Char('C') | KeyCode::Char('G') | KeyCode::Char('A')
+            KeyCode::Char('C') | KeyCode::Char('O') | KeyCode::Char('A')
                 if self.ui.right_panel_focus => {
                     let project_path = match self.ui.menu_cursor {
                         7 => self.project_at_cursor().map(|p| p.local_path.clone()),
@@ -286,7 +286,7 @@ impl App {
                     if let Some(path) = project_path {
                         let agent = match key.code {
                             KeyCode::Char('C') => "claude",
-                            KeyCode::Char('G') => "gemini",
+                            KeyCode::Char('O') => "opencode",
                             _ => "antigravity",
                         };
                         self.add_activity(

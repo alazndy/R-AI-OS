@@ -78,7 +78,6 @@ impl CapabilityStore {
                 },
                 platforms: vec![
                     "claude".into(),
-                    "gemini".into(),
                     "codex".into(),
                     "antigravity".into(),
                 ],
@@ -91,7 +90,6 @@ impl CapabilityStore {
                 },
                 platforms: vec![
                     "claude".into(),
-                    "gemini".into(),
                     "codex".into(),
                     "antigravity".into(),
                 ],
@@ -104,7 +102,6 @@ impl CapabilityStore {
                 },
                 platforms: vec![
                     "claude".into(),
-                    "gemini".into(),
                     "codex".into(),
                     "antigravity".into(),
                 ],
@@ -115,7 +112,7 @@ impl CapabilityStore {
                 backend: Backend::Shell {
                     command: "raios sentinel --project {input}".into(),
                 },
-                platforms: vec!["claude".into(), "gemini".into()],
+                platforms: vec!["claude".into()],
             },
             Capability {
                 name: "graphify".into(),
@@ -123,7 +120,7 @@ impl CapabilityStore {
                 backend: Backend::Python {
                     script: PathBuf::from("~/.agents/skills/graphify/run.py"),
                 },
-                platforms: vec!["gemini".into(), "claude".into()],
+                platforms: vec!["claude".into()],
             },
             Capability {
                 name: "prompt_master".into(),
@@ -131,7 +128,7 @@ impl CapabilityStore {
                 backend: Backend::Python {
                     script: PathBuf::from("~/.agents/skills/prompt-master/run.py"),
                 },
-                platforms: vec!["claude".into(), "gemini".into(), "antigravity".into()],
+                platforms: vec!["claude".into(), "antigravity".into()],
             },
         ];
 

@@ -165,3 +165,24 @@ pub struct FileChangeWorkflowIds {
     pub approval_id: String,
     pub project_id: Option<i64>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandoffWorkflowIds {
+    pub task_id: String,
+    pub agent_run_id: String,
+    pub artifact_id: String,
+    pub approval_id: String,
+    pub project_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandoffContext {
+    pub approval_id: String,
+    pub artifact_id: String,
+    pub agent_run_id: String,
+    pub task_id: String,
+    pub from_agent: String,
+    pub to_agent: String,
+    pub status: String,
+    pub context_summary: String,
+}

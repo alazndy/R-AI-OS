@@ -59,10 +59,10 @@ impl App {
                     }
                     self.ui.show_launcher = false;
                 }
-                KeyCode::Char('g') | KeyCode::Char('G') => {
+                KeyCode::Char('o') | KeyCode::Char('O') => {
                     if let Some(ref proj) = self.projects.active.clone() {
                         let msg =
-                            crate::app::events::helpers::launch_agent("gemini", &proj.local_path);
+                            crate::app::events::helpers::launch_agent("opencode", &proj.local_path);
                         self.system.sync_status = Some(msg);
                     }
                     self.ui.show_launcher = false;

@@ -16,7 +16,6 @@ pub fn check_requirements() -> Vec<Requirement> {
         check("Rust / Cargo", "cargo", "--version", true),
         check("Git", "git", "--version", false),
         check("Claude Code", "claude", "--version", false),
-        check("Gemini CLI", "gemini", "--version", false),
     ]
 }
 
