@@ -1195,7 +1195,16 @@ class RaiosTray(QObject):
             start_action = QAction("Start aiosd", menu)
             start_action.triggered.connect(self.toggle_daemon)
             menu.addAction(start_action)
-            self._append_cached_projects(menu)
+            cached_projects = self.state.projects or []
+            if cached_projects:
+                menu.addSeparator()
+                cached = QAction(f"Cached Projects ({len(cached_projects)})", menu)
+                cached.setEnabled(False)
+                menu.addAction(cached)
+
+                open_cached = QAction("Open Project Manager...", menu)
+                open_cached.triggered.connect(self.open_manage_projects)
+                menu.addAction(open_cached)
         else:
             daemon_header = QAction("Daemon", menu)
             daemon_header.setEnabled(False)
@@ -1225,37 +1234,24 @@ class RaiosTray(QObject):
             menu.addSeparator()
 
             managed_config = load_projects_config()
-            managed_set: dict[str, bool] = {p["name"]: p.get("pinned", False) for p in managed_config.get("projects", [])}
             pinned = [p for p in managed_config.get("projects", []) if p.get("pinned")]
+            project_count = len(self.state.projects or [])
+            projects_label = "Projects"
+            if self.state.projects_from_cache:
+                projects_label = "Cached Projects"
+            projects_summary = QAction(f"{projects_label}: {project_count}", menu)
+            projects_summary.setEnabled(False)
+            menu.addAction(projects_summary)
 
             if pinned:
-                pin_header = QAction("Pinned Projects", menu)
-                pin_header.setIcon(self.pin_logo)
-                pin_header.setEnabled(False)
-                menu.addAction(pin_header)
-                pinned_display = []
-                for p in pinned:
-                    api_match = next(
-                        (ap for ap in (self.state.projects or []) if ap.get("name") == p["name"]),
-                        None
-                    )
-                    if api_match:
-                        pinned_display.append(api_match)
-                    else:
-                        pinned_display.append({"name": p["name"], "local_path": p["path"]})
-                self._append_project_items(menu, pinned_display, self.state.usage or {}, managed_set)
-                menu.addSeparator()
+                pinned_summary = QAction(f"Pinned: {len(pinned)}", menu)
+                pinned_summary.setIcon(self.pin_logo)
+                pinned_summary.setEnabled(False)
+                menu.addAction(pinned_summary)
 
-            remaining = [
-                p for p in (self.state.projects or [])
-                if p.get("name") not in managed_set
-            ]
-            if remaining or not pinned:
-                section = "Recent Projects" if not self.state.projects_from_cache else "Cached Projects"
-                section_action = QAction(section, menu)
-                section_action.setEnabled(False)
-                menu.addAction(section_action)
-                self._append_project_items(menu, remaining, self.state.usage or {}, managed_set)
+            open_projects = QAction("Open Project Manager...", menu)
+            open_projects.triggered.connect(self.open_manage_projects)
+            menu.addAction(open_projects)
 
         menu.addSeparator()
 
@@ -1286,60 +1282,6 @@ class RaiosTray(QObject):
         quit_action = QAction("Quit", menu)
         quit_action.triggered.connect(self.app.quit)
         menu.addAction(quit_action)
-
-    def _append_cached_projects(self, menu: QMenu) -> None:
-        projects = self.state.projects or []
-        if not projects:
-            return
-        menu.addSeparator()
-        cached = QAction("Cached Projects", menu)
-        cached.setEnabled(False)
-        menu.addAction(cached)
-        self._append_project_items(menu, projects, self.state.usage or {})
-
-    def _append_project_items(self, menu: QMenu, projects: list[dict], usage: dict,
-                               managed_set: dict[str, bool] | None = None) -> None:
-        managed_set = managed_set or {}
-        for project in projects[:MAX_PROJECTS]:
-            name = project.get("name") or Path(project.get("local_path", "")).name or "unknown"
-            path = project.get("local_path", "")
-            count = usage.get(name, 0)
-            is_pinned = managed_set.get(name, False)
-            is_dirty = name in self.state.dirty_projects
-            suffix = " ●" if is_dirty else ""
-            label = f"{name}{suffix} ({count})" if count else f"{name}{suffix}"
-
-            submenu = QMenu(label, menu)
-            if is_pinned:
-                submenu.setIcon(self.pin_logo)
-            self._menu_children.append(submenu)
-
-            vscode_action = QAction("VSCode", submenu)
-            vscode_action.triggered.connect(
-                lambda checked=False, p=path: self._handle_vscode_click(p)
-            )
-            submenu.addAction(vscode_action)
-            self._menu_children.append(vscode_action)
-            submenu.addSeparator()
-
-            agents_header = QAction("Agents", submenu)
-            agents_header.setEnabled(False)
-            submenu.addAction(agents_header)
-            self._menu_children.append(agents_header)
-            for agent in AGENTS:
-                agent_action = QAction(agent.name, submenu)
-                agent_action.triggered.connect(
-                    lambda checked=False, p=path, a=agent, n=name: self._handle_agent_click(p, a, n)
-                )
-                submenu.addAction(agent_action)
-                self._menu_children.append(agent_action)
-            menu.addMenu(submenu)
-
-        if projects:
-            menu.addSeparator()
-            all_projects = QAction(f"All Projects ({len(projects)})", menu)
-            all_projects.triggered.connect(self.show_projects_dialog)
-            menu.addAction(all_projects)
 
     def show_projects_dialog(self) -> None:
         self.open_manage_projects()
