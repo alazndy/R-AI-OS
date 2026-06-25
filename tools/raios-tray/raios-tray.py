@@ -1240,13 +1240,13 @@ class RaiosTray(QObject):
             if self.state.projects_from_cache:
                 projects_label = "Cached Projects"
             projects_summary = QAction(f"{projects_label}: {project_count}", menu)
-            projects_summary.setEnabled(False)
+            projects_summary.triggered.connect(self.open_manage_projects)
             menu.addAction(projects_summary)
 
             if pinned:
                 pinned_summary = QAction(f"Pinned: {len(pinned)}", menu)
                 pinned_summary.setIcon(self.pin_logo)
-                pinned_summary.setEnabled(False)
+                pinned_summary.triggered.connect(self.open_manage_projects)
                 menu.addAction(pinned_summary)
 
             open_projects = QAction("Open Project Manager...", menu)
