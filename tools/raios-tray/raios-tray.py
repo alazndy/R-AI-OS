@@ -10,9 +10,10 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -22,8 +23,8 @@ except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 
 import psutil
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QCursor, QDesktopServices, QIcon
+from PySide6.QtCore import QObject, QTimer, Qt
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -42,6 +44,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStyle,
     QSystemTrayIcon,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -51,6 +54,7 @@ API_BASE = "http://127.0.0.1:42071"
 REFRESH_SECONDS = 15
 MAX_PROJECTS = 10
 APP_NAME = "R-AI-OS Tray"
+DIRTY_CACHE_TTL_SECONDS = 90
 
 CONFIG_TOP_LEVEL_KEYS = (
     "dev_ops_path",
@@ -97,13 +101,14 @@ class TrayState:
     aiosd_cpu: float = 0.0
     aiosd_ram_mb: float = 0.0
     error: str = ""
+    dirty_projects: set[str] = field(default_factory=set)
 
 
 AGENTS: tuple[Agent, ...] = (
     Agent("Claude", ("claude", "/home/alaz/.local/bin/claude")),
-    Agent("Gemini", ("gemini", "/home/linuxbrew/.linuxbrew/bin/gemini")),
     Agent("Codex", ("codex", "/home/alaz/.local/bin/codex")),
     Agent("AGY", ("agy", "/home/alaz/.local/bin/agy")),
+    Agent("OpenCode", ("opencode", "/home/alaz/.opencode/bin/opencode")),
 )
 
 
@@ -170,6 +175,8 @@ TOKEN_CANDIDATES = (
 )
 USAGE_PATH = CONFIG_DIR / "tray-usage.json"
 CACHE_PATH = CONFIG_DIR / "tray-projects-cache.json"
+PROJECTS_CONFIG_PATH = CONFIG_DIR / "tray-projects-config.json"
+DIRTY_STATUS_CACHE: dict[str, tuple[float, bool, tuple[float, float]]] = {}
 
 
 def ensure_parent(path: Path) -> None:
@@ -199,7 +206,7 @@ def api_get(path: str, token: str):
     try:
         with urllib.request.urlopen(request, timeout=4) as response:
             return json.loads(response.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+    except Exception:
         return None
 
 
@@ -232,6 +239,21 @@ def load_cache() -> list[dict]:
 
 def save_cache(projects: list[dict]) -> None:
     save_json(CACHE_PATH, projects)
+
+
+def load_projects_config() -> dict:
+    return load_json(PROJECTS_CONFIG_PATH, {"projects": []})
+
+
+def save_projects_config(config: dict) -> None:
+    save_json(PROJECTS_CONFIG_PATH, config)
+
+
+def get_pin_logo() -> QIcon:
+    icon = QIcon.fromTheme("utilities-terminal")
+    if icon.isNull():
+        icon = QIcon.fromTheme("applications-system")
+    return icon
 
 
 def bump_usage(project_name: str) -> dict:
@@ -309,6 +331,77 @@ def launch_agent(project_path: str, agent: Agent, project_name: str) -> bool:
         return False
     bump_usage(project_name)
     return open_terminal(project_path, shlex.quote(command))
+
+
+def launch_vscode(project_path: str) -> bool:
+    command = find_existing_command(("code",))
+    if not command:
+        return False
+    try:
+        subprocess.Popen([command, project_path])
+        return True
+    except OSError:
+        return False
+
+
+def check_git_dirty(project_path: str) -> bool:
+    if not project_path:
+        return False
+    repo_path = Path(project_path)
+    git_dir = repo_path / ".git"
+    if not git_dir.exists():
+        return False
+    head_path = git_dir / "HEAD"
+    index_path = git_dir / "index"
+    try:
+        signature = (
+            head_path.stat().st_mtime if head_path.exists() else 0.0,
+            index_path.stat().st_mtime if index_path.exists() else 0.0,
+        )
+    except OSError:
+        signature = (0.0, 0.0)
+    now = time.monotonic()
+    cached = DIRTY_STATUS_CACHE.get(project_path)
+    if cached:
+        checked_at, cached_value, cached_signature = cached
+        if cached_signature == signature and (now - checked_at) < DIRTY_CACHE_TTL_SECONDS:
+            return cached_value
+    try:
+        result = subprocess.run(
+            ["git", "-C", project_path, "status", "--porcelain"],
+            capture_output=True, text=True, timeout=2,
+        )
+        is_dirty = bool(result.stdout.strip())
+        DIRTY_STATUS_CACHE[project_path] = (now, is_dirty, signature)
+        return is_dirty
+    except (OSError, subprocess.TimeoutExpired):
+        if cached:
+            return cached[1]
+        return False
+
+
+def merge_projects(api_projects: list[dict], managed_config: dict) -> tuple[list[dict], dict[str, bool]]:
+    managed = managed_config.get("projects", [])
+    managed_names = {p["name"] for p in managed}
+    managed_set = {p["name"]: p.get("pinned", False) for p in managed}
+    pinned = [p for p in managed if p.get("pinned")]
+    unpinned_managed = [p for p in managed if not p.get("pinned")]
+    others = [p for p in api_projects if p.get("name") not in managed_names]
+    pinned_display = []
+    for p in pinned:
+        api_match = next((ap for ap in api_projects if ap.get("name") == p["name"]), None)
+        if api_match:
+            pinned_display.append(api_match)
+        else:
+            pinned_display.append({"name": p["name"], "local_path": p["path"]})
+    unpinned_display = []
+    for p in unpinned_managed:
+        api_match = next((ap for ap in api_projects if ap.get("name") == p["name"]), None)
+        if api_match:
+            unpinned_display.append(api_match)
+        else:
+            unpinned_display.append({"name": p["name"], "local_path": p["path"]})
+    return pinned_display + unpinned_display + others, managed_set
 
 
 def find_aiosd_executable() -> str | None:
@@ -465,40 +558,51 @@ def open_in_file_manager(path: Path) -> bool:
         if detect_platform() == "darwin":
             subprocess.Popen(["open", str(path)])
             return True
-        return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        if QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            return True
+        xdg = shutil.which("xdg-open")
+        if xdg:
+            subprocess.Popen([xdg, str(path)])
+            return True
+        return False
     except OSError:
         return False
 
 
-class FetchWorker(QObject):
-    finished = Signal(object)
+def fetch_state() -> TrayState:
+    token = read_token()
+    health = api_get("/api/health", token)
+    projects_raw = api_get("/api/projects", token)
+    usage = load_usage()
 
-    def run(self) -> None:
-        token = read_token()
-        health = api_get("/api/health", token)
-        projects_raw = api_get("/api/projects", token)
-        usage = load_usage()
+    if isinstance(projects_raw, list) and projects_raw:
+        save_cache(projects_raw)
+        projects = sort_projects(projects_raw, usage)
+        projects_from_cache = False
+    else:
+        projects = sort_projects(load_cache(), usage)
+        projects_from_cache = True
 
-        if isinstance(projects_raw, list) and projects_raw:
-            save_cache(projects_raw)
-            projects = sort_projects(projects_raw, usage)
-            projects_from_cache = False
-        else:
-            projects = sort_projects(load_cache(), usage)
-            projects_from_cache = True
+    dirty_projects: set[str] = set()
+    for p in (projects or []):
+        path = p.get("local_path", "")
+        if path and check_git_dirty(path):
+            name = p.get("name", "") or Path(path).name
+            if name:
+                dirty_projects.add(name)
 
-        aiosd_cpu, aiosd_ram = proc_stats("aiosd")
-        state = TrayState(
-            online=health is not None,
-            health=health or {},
-            projects=projects,
-            projects_from_cache=projects_from_cache,
-            usage=usage,
-            aiosd_cpu=aiosd_cpu,
-            aiosd_ram_mb=aiosd_ram,
-            error="" if health is not None else "R-AI-OS API unreachable",
-        )
-        self.finished.emit(state)
+    aiosd_cpu, aiosd_ram = proc_stats("aiosd")
+    return TrayState(
+        online=health is not None,
+        health=health or {},
+        projects=projects,
+        projects_from_cache=projects_from_cache,
+        usage=usage,
+        aiosd_cpu=aiosd_cpu,
+        aiosd_ram_mb=aiosd_ram,
+        error="" if health is not None else "R-AI-OS API unreachable",
+        dirty_projects=dirty_projects,
+    )
 
 
 class PathInput(QWidget):
@@ -520,10 +624,21 @@ class PathInput(QWidget):
 
     def pick_path(self) -> None:
         current = self.input.text().strip() or str(Path.home())
+        path = ""
         if self.mode == "file":
             path, _ = QFileDialog.getOpenFileName(self, "Choose file", current)
         else:
             path = QFileDialog.getExistingDirectory(self, "Choose directory", current)
+        if not path and shutil.which("zenity"):
+            try:
+                args = ["zenity", "--file-selection", "--filename", current]
+                if self.mode == "dir":
+                    args.insert(2, "--directory")
+                result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+                if result.returncode == 0:
+                    path = result.stdout.strip()
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         if path:
             self.input.setText(path)
 
@@ -690,138 +805,368 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, APP_NAME, "Unable to open config directory.")
 
 
-class ProjectsDialog(QDialog):
-    def __init__(self, parent: QWidget | None, projects: list[dict], usage: dict, on_launch: Callable[[str, Agent, str], bool]):
+class ProjectEditDialog(QDialog):
+    def __init__(self, parent: QWidget | None, name: str = "", path: str = ""):
         super().__init__(parent)
-        self.projects = projects
-        self.usage = usage
-        self.on_launch = on_launch
-        self.rows: list[tuple[QWidget, str]] = []
+        self.setWindowTitle("Project Editor")
+        self.setMinimumWidth(520)
 
-        self.setWindowTitle(f"K-AI-RA Projects ({len(projects)})")
-        self.setMinimumSize(760, 560)
-        self.setModal(False)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout = QFormLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
+        self.name_input = QLineEdit(name, self)
+        self.path_input = PathInput(path, "dir", self)
+
+        layout.addRow("Project Name", self.name_input)
+        layout.addRow("Project Path", self.path_input)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def result(self) -> tuple[str, str]:
+        return self.name_input.text().strip(), self.path_input.value()
+
+
+class ProjectManagerDialog(QDialog):
+    def __init__(self, parent: QWidget | None, projects: list[dict], usage: dict, managed_config: dict,
+                 on_launch: Callable[[str, Agent, str], bool], on_vscode: Callable[[str], bool],
+                 dirty_projects: set[str] | None = None):
+        super().__init__(parent)
+        self.api_projects = projects
+        self.usage = usage
+        self.managed_config = managed_config
+        self.on_launch = on_launch
+        self.on_vscode = on_vscode
+        self.dirty_projects = dirty_projects or set()
+        self.rows: list[tuple[QWidget, str]] = []
+        self._menu_refs: list[QMenu | QAction] = []
+
+        self.setWindowTitle("Manage Projects")
+        self.setMinimumSize(860, 600)
+        self.setModal(False)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(10)
+
+        header = QHBoxLayout()
         self.search = QLineEdit(self)
         self.search.setPlaceholderText("Search projects...")
         self.search.textChanged.connect(self.filter_rows)
-        layout.addWidget(self.search)
+        header.addWidget(self.search, stretch=1)
+
+        add_btn = QPushButton("+ Add Project", self)
+        add_btn.clicked.connect(self.add_project)
+        header.addWidget(add_btn)
+        outer.addLayout(header)
 
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         container = QWidget(scroll)
-        self.rows_layout = QVBoxLayout(container)
+        self.rows_layout = QGridLayout(container)
         self.rows_layout.setContentsMargins(0, 0, 0, 0)
-        self.rows_layout.setSpacing(8)
+        self.rows_layout.setHorizontalSpacing(10)
+        self.rows_layout.setVerticalSpacing(10)
         scroll.setWidget(container)
-        layout.addWidget(scroll)
+        outer.addWidget(scroll)
+
+        hint = QLabel("Right-click or use buttons to manage. Pinned projects appear at top of tray menu.", self)
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666; font-style: italic;")
+        outer.addWidget(hint)
 
         self._populate()
 
+    def _all_entries(self) -> list[dict]:
+        managed = self.managed_config.get("projects", [])
+        managed_names = {p["name"] for p in managed}
+        entries = list(managed)
+        for ap in self.api_projects:
+            name = ap.get("name", "")
+            if name not in managed_names:
+                entries.append({"name": name, "path": ap.get("local_path", ""), "pinned": False, "_api": True})
+        return entries
+
     def _populate(self) -> None:
-        for project in self.projects:
-            name = project.get("name") or Path(project.get("local_path", "")).name or "unknown"
-            path = project.get("local_path", "")
-            count = self.usage.get(name, 0)
+        self._menu_refs.clear()
+        while self.rows_layout.count():
+            item = self.rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.rows.clear()
+
+        entries = self._all_entries()
+        for index, entry in enumerate(entries):
+            name = entry.get("name", "?")
+            path = entry.get("path", "")
+            is_pinned = entry.get("pinned", False)
+            is_api = entry.get("_api", False)
+            is_dirty = name in self.dirty_projects
 
             row = QWidget(self)
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(8, 8, 8, 8)
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(10, 10, 10, 10)
+            row_layout.setSpacing(8)
+            row.setStyleSheet(
+                "background: #f8f9fa; border-radius: 6px;" if is_pinned
+                else "background: #fcfcfc; border: 1px solid #ececec; border-radius: 6px;"
+            )
 
+            top_row = QHBoxLayout()
+            top_row.setSpacing(8)
             info = QVBoxLayout()
-            name_label = QLabel(name, row)
+            name_text = f"{name} ●" if is_dirty else name
+            name_label = QLabel(name_text, row)
+            name_font = name_label.font()
+            name_font.setBold(is_pinned)
+            name_label.setFont(name_font)
+            if is_dirty:
+                name_label.setStyleSheet("color: #c94c4c;")
             path_label = QLabel(path, row)
+            path_label.setWordWrap(True)
             path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            path_label.setStyleSheet("color: #666;")
+            path_label.setStyleSheet("color: #888; font-size: 11px;")
             info.addWidget(name_label)
             info.addWidget(path_label)
-            row_layout.addLayout(info, stretch=1)
+            top_row.addLayout(info, stretch=1)
 
+            meta = QVBoxLayout()
+            meta.setSpacing(4)
+
+            if is_dirty:
+                dirty_tag = QLabel("dirty", row)
+                dirty_tag.setStyleSheet("color: #c94c4c; font-size: 10px; font-weight: bold; padding: 0 4px;")
+                meta.addWidget(dirty_tag, alignment=Qt.AlignRight)
+            elif is_api:
+                api_tag = QLabel("API", row)
+                api_tag.setStyleSheet("color: #999; font-size: 10px; padding: 0 4px;")
+                meta.addWidget(api_tag, alignment=Qt.AlignRight)
+
+            count = self.usage.get(name, 0)
             if count:
-                row_layout.addWidget(QLabel(f"Used {count}x", row))
+                meta.addWidget(QLabel(f"{count}x", row), alignment=Qt.AlignRight)
+            top_row.addLayout(meta)
+            row_layout.addLayout(top_row)
 
+            primary_actions = QHBoxLayout()
+            primary_actions.setSpacing(6)
+
+            pin_btn = QPushButton("📌" if is_pinned else "Pin", row)
+            if is_pinned:
+                pin_btn.setIcon(get_pin_logo())
+                pin_btn.setText("")
+            else:
+                pin_btn.setIcon(QIcon())
+            pin_btn.setToolTip("Pin/Unpin project")
+            pin_btn.clicked.connect(lambda _, n=name: self.toggle_pin(n))
+            primary_actions.addWidget(pin_btn)
+
+            if not is_api:
+                edit_btn = QPushButton("Edit", row)
+                edit_btn.clicked.connect(lambda _, n=name: self.edit_project(n))
+                primary_actions.addWidget(edit_btn)
+
+                remove_btn = QPushButton("Remove", row)
+                remove_btn.clicked.connect(lambda _, n=name: self.remove_project(n))
+                primary_actions.addWidget(remove_btn)
+            else:
+                primary_actions.addStretch(1)
+            row_layout.addLayout(primary_actions)
+
+            secondary_actions = QHBoxLayout()
+            secondary_actions.setSpacing(6)
+
+            vscode_btn = QPushButton("VSCode", row)
+            vscode_btn.clicked.connect(lambda _, p=path: self._handle_vscode(p))
+            secondary_actions.addWidget(vscode_btn)
+
+            agent_menu = QToolButton(row)
+            agent_menu.setText("Agent")
+            agent_menu.setPopupMode(QToolButton.InstantPopup)
+
+            agent_dropdown = QMenu(agent_menu)
             for agent in AGENTS:
-                button = QPushButton(agent.name, row)
-                button.clicked.connect(
-                    lambda _=False, p=path, a=agent, n=name: self._handle_launch(p, a, n)
-                )
-                row_layout.addWidget(button)
+                action = QAction(agent.name, agent_dropdown)
+                action.triggered.connect(lambda _, a=agent, p=path, n=name: self._handle_launch(p, a, n))
+                agent_dropdown.addAction(action)
+                self._menu_refs.append(action)
+            agent_menu.setMenu(agent_dropdown)
+            self._menu_refs.append(agent_dropdown)
+            secondary_actions.addWidget(agent_menu)
+            secondary_actions.addStretch(1)
+            row_layout.addLayout(secondary_actions)
 
-            self.rows_layout.addWidget(row)
+            self.rows_layout.addWidget(row, index // 2, index % 2)
             self.rows.append((row, name.lower()))
-
-        self.rows_layout.addStretch(1)
+        self.rows_layout.setColumnStretch(0, 1)
+        self.rows_layout.setColumnStretch(1, 1)
 
     def filter_rows(self, text: str) -> None:
         query = text.strip().lower()
         for row, search_text in self.rows:
             row.setVisible(not query or query in search_text)
 
+    def add_project(self) -> None:
+        dialog = ProjectEditDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        name, path = dialog.result()
+        if not name or not path:
+            QMessageBox.warning(self, APP_NAME, "Both name and path are required.")
+            return
+        managed = self.managed_config.get("projects", [])
+        if any(p["name"] == name for p in managed):
+            QMessageBox.warning(self, APP_NAME, f"Project '{name}' already exists.")
+            return
+        managed.append({"name": name, "path": path, "pinned": False})
+        self.managed_config["projects"] = managed
+        save_projects_config(self.managed_config)
+        self._populate()
+
+    def edit_project(self, name: str) -> None:
+        managed = self.managed_config.get("projects", [])
+        entry = next((p for p in managed if p["name"] == name), None)
+        if not entry:
+            return
+        dialog = ProjectEditDialog(self, entry["name"], entry["path"])
+        if dialog.exec() != QDialog.Accepted:
+            return
+        new_name, new_path = dialog.result()
+        if not new_name or not new_path:
+            QMessageBox.warning(self, APP_NAME, "Both name and path are required.")
+            return
+        if new_name != name and any(p["name"] == new_name for p in managed):
+            QMessageBox.warning(self, APP_NAME, f"Project '{new_name}' already exists.")
+            return
+        entry["name"] = new_name
+        entry["path"] = new_path
+        save_projects_config(self.managed_config)
+        self._populate()
+
+    def remove_project(self, name: str) -> None:
+        reply = QMessageBox.question(
+            self, APP_NAME, f"Remove '{name}' from managed projects?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        managed = self.managed_config.get("projects", [])
+        self.managed_config["projects"] = [p for p in managed if p["name"] != name]
+        save_projects_config(self.managed_config)
+        self._populate()
+
+    def toggle_pin(self, name: str) -> None:
+        managed = self.managed_config.get("projects", [])
+        entry = next((p for p in managed if p["name"] == name), None)
+        if entry:
+            entry["pinned"] = not entry.get("pinned", False)
+        else:
+            api_entry = next((p for p in self.api_projects if p.get("name") == name), None)
+            if api_entry:
+                managed.append({
+                    "name": name,
+                    "path": api_entry.get("local_path", ""),
+                    "pinned": True,
+                })
+        self.managed_config["projects"] = managed
+        save_projects_config(self.managed_config)
+        self._populate()
+
     def _handle_launch(self, project_path: str, agent: Agent, project_name: str) -> None:
         if self.on_launch(project_path, agent, project_name):
             self.hide()
             return
-        QMessageBox.warning(self, APP_NAME, f"{agent.name} command not found on this machine.")
+        QMessageBox.warning(self, APP_NAME, f"{agent.name} command not found.")
+
+    def _handle_vscode(self, project_path: str) -> None:
+        if self.on_vscode(project_path):
+            return
+        QMessageBox.warning(self, APP_NAME, "VSCode (code) command not found.")
 
 
 class RaiosTray(QObject):
     def __init__(self, app: QApplication):
         super().__init__()
         self.app = app
-        self.icon = QSystemTrayIcon(self._build_icon(), app)
+        self.base_pixmap = self._build_base_pixmap()
+        self.pin_logo = get_pin_logo()
+        self.icon = QSystemTrayIcon(QIcon(self.base_pixmap), app)
         self.icon.setToolTip(APP_NAME)
         self.icon.activated.connect(self._handle_activation)
         self.state = TrayState(projects=[], usage={}, health={})
         self.projects_dialog: ProjectsDialog | None = None
-        self.fetch_thread: QThread | None = None
-        self.fetch_worker: FetchWorker | None = None
+        self.menu = QMenu()
+        self._menu_children: list = []
+        self._menu_ready = False
+        self._fetching = False
 
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setInterval(REFRESH_SECONDS * 1000)
         self.refresh_timer.timeout.connect(self.refresh)
 
+        self.icon.setContextMenu(self.menu)
         self.rebuild_menu()
         self.icon.show()
         self.refresh_timer.start()
-        self.refresh()
+        QTimer.singleShot(0, self.refresh)
 
-    def _build_icon(self) -> QIcon:
+    def _build_base_pixmap(self) -> QPixmap:
         icon = QIcon.fromTheme("utilities-system-monitor")
         if icon.isNull():
             icon = self.app.style().standardIcon(QStyle.SP_ComputerIcon)
-        return icon
+        return icon.pixmap(24, 24)
+
+    def _update_icon(self, dirty_count: int) -> None:
+        pixmap = self.base_pixmap.copy()
+        if dirty_count > 0:
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+
+            badge_size = 14
+            x = pixmap.width() - badge_size + 2
+            y = -2
+            painter.setBrush(QColor(255, 204, 0))
+            painter.setPen(QPen(QColor(200, 160, 0), 1))
+            painter.drawEllipse(x, y, badge_size, badge_size)
+
+            painter.setPen(QColor(120, 80, 0))
+            font = QFont("sans-serif", 8, QFont.Bold)
+            painter.setFont(font)
+            text = f"!{dirty_count}" if dirty_count < 10 else "!9+"
+            painter.drawText(x, y, badge_size, badge_size, Qt.AlignCenter, text)
+            painter.end()
+        self.icon.setIcon(QIcon(pixmap))
 
     def _handle_activation(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.Context):
-            menu = self.icon.contextMenu()
-            if menu:
-                menu.popup(QCursor.pos())
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show_projects_dialog()
 
     def refresh(self) -> None:
-        if self.fetch_thread and self.fetch_thread.isRunning():
+        if hasattr(self, '_fetching') and self._fetching:
             return
-
-        self.fetch_thread = QThread(self)
-        self.fetch_worker = FetchWorker()
-        self.fetch_worker.moveToThread(self.fetch_thread)
-        self.fetch_thread.started.connect(self.fetch_worker.run)
-        self.fetch_worker.finished.connect(self._apply_state)
-        self.fetch_worker.finished.connect(self.fetch_thread.quit)
-        self.fetch_worker.finished.connect(self.fetch_worker.deleteLater)
-        self.fetch_thread.finished.connect(self.fetch_thread.deleteLater)
-        self.fetch_thread.start()
+        self._fetching = True
+        try:
+            self._apply_state(fetch_state())
+        finally:
+            self._fetching = False
 
     def _apply_state(self, state: TrayState) -> None:
         self.state = state
         count = len(state.projects or [])
+        dirty = len(state.dirty_projects)
         if state.online:
-            self.icon.setToolTip(f"{APP_NAME} ({count} projects)")
+            tip = f"{APP_NAME} ({count} projects)"
+            if dirty:
+                tip += f"  ● {dirty} dirty"
+            self.icon.setToolTip(tip)
         else:
             self.icon.setToolTip(f"{APP_NAME} (offline)")
+            dirty = 0
+        self._update_icon(dirty)
         self.rebuild_menu()
         if self.projects_dialog and self.projects_dialog.isVisible():
             self.projects_dialog.close()
@@ -829,7 +1174,9 @@ class RaiosTray(QObject):
             self.projects_dialog.show()
 
     def rebuild_menu(self) -> None:
-        menu = QMenu()
+        self.menu.clear()
+        self._menu_children.clear()
+        menu = self.menu
 
         header = QAction("R-AI-OS / K-AI-RA", menu)
         header.setEnabled(False)
@@ -870,12 +1217,51 @@ class RaiosTray(QObject):
             stop_action.triggered.connect(self.toggle_daemon)
             menu.addAction(stop_action)
 
+            if self.state.dirty_projects:
+                dirty_action = QAction(f"● {len(self.state.dirty_projects)} dirty projects", menu)
+                dirty_action.setEnabled(False)
+                menu.addAction(dirty_action)
+
             menu.addSeparator()
-            section = "Recent Projects" if not self.state.projects_from_cache else "Cached Projects"
-            section_action = QAction(section, menu)
-            section_action.setEnabled(False)
-            menu.addAction(section_action)
-            self._append_project_items(menu, self.state.projects or [], self.state.usage or {})
+
+            managed_config = load_projects_config()
+            managed_set: dict[str, bool] = {p["name"]: p.get("pinned", False) for p in managed_config.get("projects", [])}
+            pinned = [p for p in managed_config.get("projects", []) if p.get("pinned")]
+
+            if pinned:
+                pin_header = QAction("Pinned Projects", menu)
+                pin_header.setIcon(self.pin_logo)
+                pin_header.setEnabled(False)
+                menu.addAction(pin_header)
+                pinned_display = []
+                for p in pinned:
+                    api_match = next(
+                        (ap for ap in (self.state.projects or []) if ap.get("name") == p["name"]),
+                        None
+                    )
+                    if api_match:
+                        pinned_display.append(api_match)
+                    else:
+                        pinned_display.append({"name": p["name"], "local_path": p["path"]})
+                self._append_project_items(menu, pinned_display, self.state.usage or {}, managed_set)
+                menu.addSeparator()
+
+            remaining = [
+                p for p in (self.state.projects or [])
+                if p.get("name") not in managed_set
+            ]
+            if remaining or not pinned:
+                section = "Recent Projects" if not self.state.projects_from_cache else "Cached Projects"
+                section_action = QAction(section, menu)
+                section_action.setEnabled(False)
+                menu.addAction(section_action)
+                self._append_project_items(menu, remaining, self.state.usage or {}, managed_set)
+
+        menu.addSeparator()
+
+        manage_projects_action = QAction("Manage Projects...", menu)
+        manage_projects_action.triggered.connect(self.open_manage_projects)
+        menu.addAction(manage_projects_action)
 
         menu.addSeparator()
 
@@ -901,8 +1287,6 @@ class RaiosTray(QObject):
         quit_action.triggered.connect(self.app.quit)
         menu.addAction(quit_action)
 
-        self.icon.setContextMenu(menu)
-
     def _append_cached_projects(self, menu: QMenu) -> None:
         projects = self.state.projects or []
         if not projects:
@@ -913,20 +1297,42 @@ class RaiosTray(QObject):
         menu.addAction(cached)
         self._append_project_items(menu, projects, self.state.usage or {})
 
-    def _append_project_items(self, menu: QMenu, projects: list[dict], usage: dict) -> None:
+    def _append_project_items(self, menu: QMenu, projects: list[dict], usage: dict,
+                               managed_set: dict[str, bool] | None = None) -> None:
+        managed_set = managed_set or {}
         for project in projects[:MAX_PROJECTS]:
             name = project.get("name") or Path(project.get("local_path", "")).name or "unknown"
             path = project.get("local_path", "")
             count = usage.get(name, 0)
-            label = f"{name} ({count})" if count else name
+            is_pinned = managed_set.get(name, False)
+            is_dirty = name in self.state.dirty_projects
+            suffix = " ●" if is_dirty else ""
+            label = f"{name}{suffix} ({count})" if count else f"{name}{suffix}"
 
             submenu = QMenu(label, menu)
+            if is_pinned:
+                submenu.setIcon(self.pin_logo)
+            self._menu_children.append(submenu)
+
+            vscode_action = QAction("VSCode", submenu)
+            vscode_action.triggered.connect(
+                lambda checked=False, p=path: self._handle_vscode_click(p)
+            )
+            submenu.addAction(vscode_action)
+            self._menu_children.append(vscode_action)
+            submenu.addSeparator()
+
+            agents_header = QAction("Agents", submenu)
+            agents_header.setEnabled(False)
+            submenu.addAction(agents_header)
+            self._menu_children.append(agents_header)
             for agent in AGENTS:
-                action = QAction(agent.name, submenu)
-                action.triggered.connect(
+                agent_action = QAction(agent.name, submenu)
+                agent_action.triggered.connect(
                     lambda checked=False, p=path, a=agent, n=name: self._handle_agent_click(p, a, n)
                 )
-                submenu.addAction(action)
+                submenu.addAction(agent_action)
+                self._menu_children.append(agent_action)
             menu.addMenu(submenu)
 
         if projects:
@@ -936,15 +1342,27 @@ class RaiosTray(QObject):
             menu.addAction(all_projects)
 
     def show_projects_dialog(self) -> None:
-        self.projects_dialog = ProjectsDialog(None, self.state.projects or [], self.state.usage or {}, self._launch_agent)
-        self.projects_dialog.show()
-        self.projects_dialog.raise_()
-        self.projects_dialog.activateWindow()
+        self.open_manage_projects()
+
+    def _handle_vscode_click(self, project_path: str) -> None:
+        if launch_vscode(project_path):
+            return
+        self.icon.showMessage(APP_NAME, "VSCode (code) command not found on this machine.")
 
     def _handle_agent_click(self, project_path: str, agent: Agent, project_name: str) -> None:
         if self._launch_agent(project_path, agent, project_name):
             return
         self.icon.showMessage(APP_NAME, f"{agent.name} command not found on this machine.")
+
+    def open_manage_projects(self) -> None:
+        managed_config = load_projects_config()
+        dialog = ProjectManagerDialog(
+            None, self.state.projects or [], self.state.usage or {},
+            managed_config, self._launch_agent, launch_vscode,
+            dirty_projects=self.state.dirty_projects,
+        )
+        dialog.exec()
+        self.refresh()
 
     def _launch_agent(self, project_path: str, agent: Agent, project_name: str) -> bool:
         launched = launch_agent(project_path, agent, project_name)

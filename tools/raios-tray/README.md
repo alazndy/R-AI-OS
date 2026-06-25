@@ -1,5 +1,7 @@
 # raios-tray
 
+Canonical source of truth for the R-AI-OS tray.
+
 Cross-platform system tray for R-AI-OS. The app talks to the local `aiosd` HTTP API, shows daemon health and recent projects, can launch supported agents inside a platform-appropriate terminal, and now includes an in-app settings panel for `aiosd` tuning.
 
 ## Supported Platforms

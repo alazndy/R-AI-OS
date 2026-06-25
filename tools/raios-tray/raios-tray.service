@@ -4,8 +4,8 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/dev/tools/raios-tray
-ExecStart=/usr/bin/env python3 %h/dev/tools/raios-tray/raios-tray.py
+WorkingDirectory=%h/dev/core/R-AI-OS/tools/raios-tray
+ExecStart=/usr/bin/env python3 %h/dev/core/R-AI-OS/tools/raios-tray/raios-tray.py
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
