@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.0.0 — 2026-06-25
+### Added
+- **4-agent identity matrix**: Claude Kaira, Codex Kaira, OpenCode Kaira, Antigravity Kaira — Gemini CLI fully retired (Google shut it down).
+- **`raios handoff`** — atomic agent-to-agent handoff built entirely on the existing control plane (`cp_tasks` / `cp_agent_runs` / `cp_artifacts` / `cp_approvals`), no separate state file. `--to`/`--status` are clap-validated; `--msg` is heuristically scanned for secrets (AWS/Anthropic/OpenAI/GitHub keys, PEM blocks) and refused before it ever touches the DB. Auto-attaches `git diff --stat HEAD` so the receiving agent sees what changed without being told. A new handoff to the same `(agent, project)` atomically supersedes any still-pending one instead of letting stale handoffs pile up.
+- **Real prompt delivery, not a dead env var** — `raios run`/`raios task` deliver the pending `[HANDOVER CONTEXT]` via each CLI's actual prompt-injection surface: `claude --append-system-prompt`, `codex <positional prompt>`, `opencode --prompt`, `agy --prompt-interactive`. Delivered exactly once (consumed only after the child process actually spawns).
+- **`agy` (Antigravity CLI) support** — `raios run agy`/`raios run antigravity` now spawn the real `agy` binary instead of erroring "Unsupported agent".
+- **TUI Inbox panel** — new 14th menu screen showing pending approvals (handoffs included), active agent runs, and blocked tasks straight from the control plane; previously this data was only reachable via the `get_inbox` MCP tool, invisible at the terminal.
+### Fixed
+- `create_handoff_workflow` now runs inside a real SQLite transaction (`unchecked_transaction`) instead of unguarded sequential inserts.
+- `run_agent` only marks a handoff "consumed" after `cmd.spawn()` actually succeeds, not before.
+- `cp_list_personal_tasks` was leaking workflow tasks (file-change-approval, handoff) into the personal-task checklist sidebar; now excludes any task with an attached `cp_approvals` row.
+- Superseding a stale pending handoff now also cancels its `cp_agent_runs` row — previously it lingered as `awaiting_approval` forever, cluttering the Inbox panel.
+- A stale, never-committed `lock_manager.rs` test left broken by the gemini→claude rename was asserting against itself.
+
 ## v1.5.1 — 2026-05-21
 - (no commits since last tag)
 

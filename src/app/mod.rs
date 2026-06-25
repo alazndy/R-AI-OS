@@ -112,6 +112,7 @@ pub const MENU_ITEMS: &[&str] = &[
     "Sentinel Hub",
     "Help",
     "AI System Audit",
+    "Inbox",
 ];
 
 pub struct App {

@@ -49,10 +49,13 @@ pub fn run_agent(
             .as_deref()
             .and_then(|dir| crate::db::project_id_for_file_path(&conn, dir));
         let ctx = crate::db::cp_take_pending_handoff(&conn, project_id, identity).ok()??;
-        let block = format!(
+        let mut block = format!(
             "[HANDOVER CONTEXT]\nFrom: {}  Status: {}\n{}",
             ctx.from_agent, ctx.status, ctx.context_summary
         );
+        if let Some(diff_stat) = &ctx.diff_stat {
+            block.push_str(&format!("\n\n[Changed files since handoff]\n{diff_stat}"));
+        }
         Some((conn, identity, ctx, block))
     });
     let handover_block = pending_handoff.as_ref().map(|(_, _, _, block)| block.clone());
@@ -76,7 +79,13 @@ pub fn run_agent(
             c
         }
         "cursor" => Command::new("cursor"),
-        "antigravity" => Command::new("antigravity"),
+        "antigravity" | "agy" => {
+            let mut c = Command::new("agy");
+            if let Some(block) = &handover_block {
+                c.arg("--prompt-interactive").arg(block);
+            }
+            c
+        }
         "codex" => {
             let mut c = Command::new("codex");
             if let Some(block) = &handover_block {
@@ -95,7 +104,7 @@ pub fn run_agent(
     if budget_active {
         cmd.env("RAIOS_CONTEXT_MODE", "compact");
     }
-    // Best-effort env fallback for agents without a verified native flag (e.g. antigravity).
+    // Best-effort env fallback for "cursor" and any future agent without a native flag yet.
     if let Some(block) = &handover_block {
         cmd.env("RAIOS_HANDOVER_CONTEXT", block);
     }
@@ -175,7 +184,7 @@ fn canonical_agent_identity(agent: &str) -> Option<&'static str> {
         "claude" => Some("claude_kaira"),
         "codex" => Some("codex_kaira"),
         "opencode" => Some("opencode_kaira"),
-        "antigravity" => Some("antigravity_kaira"),
+        "antigravity" | "agy" => Some("antigravity_kaira"),
         _ => None,
     }
 }

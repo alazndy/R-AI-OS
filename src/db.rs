@@ -731,6 +731,7 @@ pub struct PersonalTaskInput {
     pub display_order: i64,
 }
 
+#[derive(Debug)]
 pub struct PersonalTaskRow {
     pub id: String,
     pub title: String,
@@ -747,6 +748,7 @@ pub fn cp_list_personal_tasks(conn: &Connection) -> Result<Vec<PersonalTaskRow>>
          FROM cp_tasks t
          LEFT JOIN cp_task_list_items li ON li.task_id = t.id
          WHERE t.plan_id IS NULL AND t.parent_task_id IS NULL AND t.status != 'cancelled'
+           AND NOT EXISTS (SELECT 1 FROM cp_approvals ap WHERE ap.task_id = t.id)
          ORDER BY display_order ASC, t.created_at ASC",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -1616,6 +1618,10 @@ const ORIGIN_EXPR: &str = "
         SELECT 1 FROM cp_agent_runs ar
         WHERE ar.task_id = t.id AND ar.provider = 'swarm'
       ) THEN 'swarm'
+      WHEN EXISTS (
+        SELECT 1 FROM cp_approvals ap
+        WHERE ap.task_id = t.id AND ap.approval_type = 'handover'
+      ) THEN 'agent_handoff'
       ELSE 'personal'
     END";
 
@@ -2071,6 +2077,7 @@ pub fn create_handoff_workflow(
     to_agent: &str,
     status: &str,
     msg: &str,
+    diff_stat: Option<&str>,
 ) -> Result<crate::control_plane::HandoffWorkflowIds> {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let project_id = project_id_for_file_path(conn, project_path);
@@ -2089,11 +2096,53 @@ pub fn create_handoff_workflow(
         "to": to_agent,
         "status": status_lc,
         "context_summary": msg,
+        "diff_stat": diff_stat,
         "flow": "agent_handoff"
     })
     .to_string();
 
     let tx = conn.unchecked_transaction()?;
+
+    // One active handoff per (project, assignee): supersede whatever this one replaces
+    // instead of letting stale pending handovers pile up for the same agent.
+    tx.execute(
+        "UPDATE cp_approvals
+         SET status = 'expired', resolved_at = ?1, resolved_by = 'superseded'
+         WHERE approval_type = 'handover' AND status = 'pending'
+           AND task_id IN (
+               SELECT id FROM cp_tasks
+               WHERE assignee_id = ?2 AND (?3 IS NULL OR project_id = ?3)
+           )",
+        params![now, to_agent, project_id],
+    )?;
+    tx.execute(
+        "UPDATE cp_artifacts
+         SET status = 'superseded'
+         WHERE kind = 'handover_note' AND status = 'submitted'
+           AND task_id IN (
+               SELECT id FROM cp_tasks
+               WHERE assignee_id = ?1 AND (?2 IS NULL OR project_id = ?2)
+           )",
+        params![to_agent, project_id],
+    )?;
+    tx.execute(
+        "UPDATE cp_agent_runs
+         SET status = 'cancelled', ended_at = ?1, exit_reason = 'superseded'
+         WHERE provider = 'handoff' AND status = 'awaiting_approval'
+           AND task_id IN (
+               SELECT id FROM cp_tasks
+               WHERE assignee_id = ?2 AND (?3 IS NULL OR project_id = ?3)
+           )",
+        params![now, to_agent, project_id],
+    )?;
+    tx.execute(
+        "UPDATE cp_tasks
+         SET status = 'cancelled', updated_at = ?1
+         WHERE assignee_id = ?2 AND status = 'awaiting_approval'
+           AND (?3 IS NULL OR project_id = ?3)",
+        params![now, to_agent, project_id],
+    )?;
+
     tx.execute(
         "INSERT INTO cp_tasks
             (id, project_id, plan_id, parent_task_id, title, description, priority, status,
@@ -2185,6 +2234,7 @@ pub fn cp_take_pending_handoff(
         .as_str()
         .unwrap_or_default()
         .to_string();
+    let diff_stat = metadata["diff_stat"].as_str().map(|s| s.to_string());
 
     Ok(Some(crate::control_plane::HandoffContext {
         approval_id,
@@ -2195,6 +2245,7 @@ pub fn cp_take_pending_handoff(
         to_agent: to_agent.to_string(),
         status,
         context_summary,
+        diff_stat,
     }))
 }
 
@@ -3102,6 +3153,7 @@ mod tests {
             "opencode_kaira",
             "SUCCESS",
             "skeleton ready, implement auth handlers",
+            Some(" src/db.rs | 12 ++++++++----"),
         )
         .unwrap();
         assert_eq!(ids.project_id, Some(project_id));
@@ -3113,6 +3165,10 @@ mod tests {
         assert_eq!(pending.to_agent, "opencode_kaira");
         assert_eq!(pending.status, "success");
         assert_eq!(pending.context_summary, "skeleton ready, implement auth handlers");
+        assert_eq!(
+            pending.diff_stat.as_deref(),
+            Some(" src/db.rs | 12 ++++++++----")
+        );
 
         cp_consume_handoff(&conn, &pending, "opencode_kaira").unwrap();
 
@@ -3148,6 +3204,7 @@ mod tests {
             "opencode_kaira",
             "BLOCKER",
             "stuck on flaky test, needs investigation",
+            None,
         )
         .unwrap();
 
@@ -3159,6 +3216,102 @@ mod tests {
             .unwrap()
             .expect("handoff should be visible regardless of project filter when None");
         assert_eq!(for_right_agent.status, "blocker");
+    }
+
+    #[test]
+    fn newer_handoff_supersedes_stale_pending_one_for_same_assignee() {
+        let conn = in_memory();
+        let project_id = upsert_project(
+            &conn, "RAIOS", "kernel", "/repo", None, "active", None, None, None, None,
+        )
+        .unwrap();
+
+        let stale = create_handoff_workflow(
+            &conn,
+            "/repo",
+            "claude_kaira",
+            "opencode_kaira",
+            "BLOCKER",
+            "stale note nobody picked up",
+            None,
+        )
+        .unwrap();
+        let fresh = create_handoff_workflow(
+            &conn,
+            "/repo",
+            "claude_kaira",
+            "opencode_kaira",
+            "SUCCESS",
+            "fresh note replaces the stale one",
+            None,
+        )
+        .unwrap();
+
+        // Only the fresh handoff should be deliverable.
+        let pending = cp_take_pending_handoff(&conn, Some(project_id), "opencode_kaira")
+            .unwrap()
+            .expect("fresh handoff should be pending");
+        assert_eq!(pending.context_summary, "fresh note replaces the stale one");
+        assert_eq!(pending.task_id, fresh.task_id);
+
+        let stale_approval_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_approvals WHERE id = ?1",
+                params![stale.approval_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let stale_artifact_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_artifacts WHERE id = ?1",
+                params![stale.artifact_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let stale_task_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_tasks WHERE id = ?1",
+                params![stale.task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let stale_run_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_agent_runs WHERE id = ?1",
+                params![stale.agent_run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale_approval_status, "expired");
+        assert_eq!(stale_artifact_status, "superseded");
+        assert_eq!(stale_task_status, "cancelled");
+        assert_eq!(
+            stale_run_status, "cancelled",
+            "superseded handoff's agent_run must not linger as awaiting_approval forever"
+        );
+    }
+
+    #[test]
+    fn handoff_tasks_do_not_leak_into_personal_task_list() {
+        let conn = in_memory();
+        create_handoff_workflow(
+            &conn,
+            "/repo",
+            "claude_kaira",
+            "codex_kaira",
+            "SUCCESS",
+            "this is a workflow task, not a personal todo",
+            None,
+        )
+        .unwrap();
+
+        // Same NULL plan_id/parent_task_id shape as a real personal task, but it carries
+        // a cp_approvals row — that's what must exclude it from the sidebar checklist.
+        let personal = cp_list_personal_tasks(&conn).unwrap();
+        assert!(
+            personal.is_empty(),
+            "handoff task leaked into personal tasks: {personal:?}"
+        );
     }
 
     // ── Canonical personal task tests ─────────────────────────────────────────

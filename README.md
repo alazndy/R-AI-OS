@@ -15,7 +15,7 @@
     ║║   ▀█▄  ───│   · │ · │───  ▄█▀            ║║
     ║║      ▀█▄  └─────────┘  ▄█▀               ║║
   ╔═╝║         ▀█████████████▀                  ║╚═╗
-  ║ ╔╝   · · ·   R - A I - O S   KERNEL  v2.0   ╚╗ ║
+  ║ ╔╝   · · ·   R - A I - O S   KERNEL  v3.0   ╚╗ ║
   ╚═╝ ══════════════════════════════════════════ ╚═╝
 </pre>
 </p>
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v2.0.0--alpha-blue?style=for-the-badge" alt="Version"></a>
+  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.0.0-blue?style=for-the-badge" alt="Version"></a>
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
@@ -47,7 +47,7 @@
 
 ## 🔭 The Vision
 
-R-AI-OS is not a CLI tool — it is a **Kernel**. While traditional operating systems manage hardware, R-AI-OS manages the **AI layer**: a decentralized swarm of 90+ autonomous specialists running across Claude Code, Gemini CLI, and any MCP-compatible agent.
+R-AI-OS is not a CLI tool — it is a **Kernel**. While traditional operating systems manage hardware, R-AI-OS manages the **AI layer**: a decentralized swarm of 90+ autonomous specialists running across Claude Code, Codex CLI, OpenCode, Antigravity (`agy`), and any MCP-compatible agent.
 
 It solves the fundamental problem of **unsupervised agent execution**: agents that run unchecked can leak secrets, corrupt files, and make unauthorized network calls. R-AI-OS sits between the human and the swarm as a hardened control plane — enforcing policies, auditing every action, and managing context economics.
 
@@ -153,7 +153,7 @@ All three protocols share one event bus and one security kernel:
 | `GET` | `/api/health` | Daemon health + active agent count |
 | `GET` | `/api/projects` | All tracked projects from DaemonState |
 | `GET` | `/api/tasks` | Tasks from SQLite (grouped by project) |
-| `GET` | `/api/usage` | Local usage/quota signals for Codex, Claude, Gemini, Antigravity |
+| `GET` | `/api/usage` | Local usage/quota signals for Claude, Codex, OpenCode, Antigravity |
 | `GET` | `/api/plans` | Plans from `docs/superpowers/plans/*.md` with checkbox progress |
 | `GET` | `/api/git-status?path=<dir>` | Git branch + dirty/staged/modified/untracked for a workspace |
 | `GET` | `/api/swarm` | Active (non-terminal) swarm tasks |
@@ -190,6 +190,20 @@ Parallel worktree-based agent execution with coordination primitives:
 - **Health Scanner:** Background scan for `memory.md` compliance, security leaks, git drift
 - **GitHub Sync:** Live star counts and last-commit timestamps
 - **Auto-Discovery:** Detects new workspace directories and updates `entities.json`
+
+### 📨 Agent Handoff — Atomic, Control-Plane-Backed
+
+Agents hand work to each other through the same control plane that already tracks tasks, runs, artifacts, and approvals — not a side-channel state file:
+
+```bash
+raios handoff --to codex-kaira --status success --msg "skeleton ready, implement auth handlers"
+```
+
+- `--msg` is scanned for obvious secrets (AWS/Anthropic/OpenAI/GitHub keys, PEM blocks) and refused before it touches the DB or a process argument list.
+- `git diff --stat HEAD` is attached automatically — the receiving agent sees what changed without being told.
+- A new handoff to the same agent/project supersedes any still-pending one (old approval → `expired`, artifact → `superseded`, task → `cancelled`), so the queue never accumulates stale notes.
+- Delivery is real, not an unread env var: the next `raios run`/`raios task` for that agent injects the `[HANDOVER CONTEXT]` via the CLI's own prompt flag — `claude --append-system-prompt`, `codex <prompt>`, `opencode --prompt`, `agy --prompt-interactive` — and marks it consumed only once the process actually starts.
+- Visible at the terminal via the **Inbox** TUI panel (pending approvals, active runs, blocked tasks) or programmatically via the `get_inbox` MCP tool.
 
 ### ⏳ Lifecycle Worker
 
@@ -355,6 +369,7 @@ raios bootstrap
 | `raios search "<query>"` | Semantic search across portfolio |
 | `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules) |
 | `raios task "<description>"` | Route task to best agent |
+| `raios handoff --to <agent> --status <SUCCESS\|FAILED\|BLOCKER> --msg "<text>"` | Atomic agent-to-agent handoff via the control plane |
 | `raios bootstrap` | Replicate AI factory on a new machine |
 
 ### Security
@@ -418,7 +433,7 @@ src/
 ├── server/               # HTTP/WebSocket server (Axum, :42071)
 ├── swarm/                # Parallel worktree agent management + SQLite store
 └── ui/
-    └── panels/           # TUI panels (13 modules — dashboard, security, etc.)
+    └── panels/           # TUI panels (14 modules — dashboard, security, inbox, etc.)
 
 vscode-extension/
 ├── src/
@@ -449,7 +464,8 @@ vscode-extension/
 - [x] **Phase 14:** Quarantine Mode — Pattern-matched quarantine queue, `-32027` on block, `raios quarantine list/approve/deny`
 - [x] **Phase 15:** Write-Back Bridge — Sidebar checkboxes interactive, `raios task-update` CLI syncs back to `memory.md`
 - [x] **Phase 16:** Lifecycle Worker — git-activity-based auto active/beklemede/archived transitions (`src/daemon/lifecycle.rs`)
-- [ ] **Phase 17:** `aiosd` systemd user service auto-start on login (currently started manually / via tray)
+- [x] **Phase 17:** 4-Agent Matrix & Atomic Handoff — Gemini CLI retired; Claude/Codex/OpenCode/Antigravity (`agy`) as canonical identities; `raios handoff` on the control plane with real per-CLI prompt injection, secret scanning, diff-stat attachment, and stale-handoff supersede; new TUI **Inbox** panel
+- [ ] **Phase 18:** `aiosd` systemd user service auto-start on login (currently started manually / via tray)
 
 ---
 

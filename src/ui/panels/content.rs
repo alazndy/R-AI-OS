@@ -74,6 +74,7 @@ pub fn render_content_body(frame: &mut Frame, area: Rect, app: &App) {
         10 => render_sentinel_hub(frame, inner, app),
         11 => render_help(frame, inner, app),
         12 => render_system_audit(frame, inner, app),
+        13 => render_inbox(frame, inner, app),
         _ => {}
     }
 }

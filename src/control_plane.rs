@@ -185,4 +185,5 @@ pub struct HandoffContext {
     pub to_agent: String,
     pub status: String,
     pub context_summary: String,
+    pub diff_stat: Option<String>,
 }
