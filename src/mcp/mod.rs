@@ -20,6 +20,7 @@ use crate::config::Config;
 use crate::security::quarantine::{self, QuarantineStore};
 use crate::security::rate_limiter::RateLimiter;
 use crate::security::tool_pin;
+use crate::security::Umai;
 
 // ─── JSON-RPC types ───────────────────────────────────────────────────────────
 
@@ -78,6 +79,7 @@ pub(super) struct McpServer {
     rate_limiter: RateLimiter,
     quarantine: QuarantineStore,
     pin_broken: bool,
+    umai: Umai,
 }
 
 impl McpServer {
@@ -85,6 +87,7 @@ impl McpServer {
         let config =
             Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
         let policy = crate::security::PolicyConfig::try_load_default();
+        let umai = Umai::new(policy.clone());
         let rate_limiter = policy
             .as_ref()
             .map(|p| RateLimiter::from_policy(p.rate_limits.clone()))
@@ -117,6 +120,7 @@ impl McpServer {
             rate_limiter,
             quarantine,
             pin_broken,
+            umai,
         }
     }
 
@@ -154,6 +158,8 @@ impl McpServer {
         }
         Some(match result {
             Ok(v) => RpcResponse::ok(id, v),
+            Err(msg) if msg.starts_with("umai:") => RpcResponse::err(id, -32026, msg),
+            Err(msg) if msg.starts_with("umai_confirm:") => RpcResponse::err(id, -32025, msg),
             Err(msg) if msg.starts_with("rate_limit:") => RpcResponse::err(id, -32029, msg),
             Err(msg) if msg.starts_with("tool_pin:") => RpcResponse::err(id, -32028, msg),
             Err(msg) if msg.starts_with("quarantine:") => RpcResponse::err(id, -32027, msg),

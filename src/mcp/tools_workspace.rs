@@ -100,25 +100,28 @@ impl McpServer {
     }
 
     pub(super) fn tool_handover(&self, args: &Value) -> Result<Value, String> {
-        use std::io::Write;
         let target = args["target"].as_str().unwrap_or("unknown");
         let instruction = args["instruction"].as_str().unwrap_or("");
         let context = args["context"].as_str().unwrap_or("(no context)");
-        let notes_path = self.config.dev_ops_path.join("_session_notes.md");
-        let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-        let entry = format!(
-            "- [{}] HANDOVER → {}: {}\n  Context: {}\n",
-            now, target, instruction, context
-        );
-        let existing = std::fs::read_to_string(&notes_path).unwrap_or_default();
-        let _ = crate::safe_io::safe_write(&notes_path, &format!("{}{}", existing, entry));
-        if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:42069") {
-            let msg = json!({ "command": "Handover", "target": target, "instruction": instruction, "project_path": self.config.dev_ops_path.to_str().unwrap_or("") });
-            let _ = stream.write_all(format!("{}\n", msg).as_bytes());
-        }
-        Ok(
-            json!({ "content": [{ "type": "text", "text": format!("Handover logged and sent to R-AI-OS Daemon → {}.\nInstruction: {}\nContext saved to _session_notes.md", target, instruction) }] }),
+        let project_path = self.config.dev_ops_path.to_str().unwrap_or(".");
+        let msg = format!("{}\n\nContext: {}", instruction, context);
+
+        let conn = crate::db::open_db().map_err(|e| e.to_string())?;
+        let ids = crate::db::create_handoff_workflow(
+            &conn,
+            project_path,
+            "claude_kaira",
+            target,
+            "SUCCESS",
+            &msg,
+            None,
         )
+        .map_err(|e| e.to_string())?;
+
+        Ok(json!({ "content": [{ "type": "text", "text": format!(
+            "Handoff registered in control plane → {}.\nTask: {}\nInstruction: {}\nContext: {}",
+            target, ids.task_id, instruction, context
+        ) }] }))
     }
 
     pub(super) fn tool_get_inbox(&self) -> Result<Value, String> {

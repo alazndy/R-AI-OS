@@ -57,6 +57,125 @@ action = "confirm"
 name = "version_bump"
 action = "confirm"
 
+# ─── Daemon WebSocket Commands ────────────────────────────────────────────────
+# These map to v["command"] values in the daemon TCP protocol.
+# default_action = "confirm" blocks anything not listed — ensure all legitimate
+# WS commands are explicitly set here.
+
+# Read-only / safe protocol commands
+[[tools.rules]]
+name = "AgentInfo"
+action = "allow"
+
+[[tools.rules]]
+name = "Search"
+action = "allow"
+
+[[tools.rules]]
+name = "VectorSearch"
+action = "allow"
+
+[[tools.rules]]
+name = "HealthScan"
+action = "allow"
+
+[[tools.rules]]
+name = "GetState"
+action = "allow"
+
+[[tools.rules]]
+name = "GetPendingDiffs"
+action = "allow"
+
+[[tools.rules]]
+name = "GetJob"
+action = "allow"
+
+[[tools.rules]]
+name = "ListInbox"
+action = "allow"
+
+[[tools.rules]]
+name = "ListRunning"
+action = "allow"
+
+[[tools.rules]]
+name = "RouteCapability"
+action = "allow"
+
+[[tools.rules]]
+name = "ListCapabilities"
+action = "allow"
+
+[[tools.rules]]
+name = "ListInstinctCandidates"
+action = "allow"
+
+[[tools.rules]]
+name = "GetTaskGraph"
+action = "allow"
+
+[[tools.rules]]
+name = "GetSwarmTask"
+action = "allow"
+
+[[tools.rules]]
+name = "ListSwarmTasks"
+action = "allow"
+
+# Mutating / high-risk daemon commands — require explicit confirmation
+[[tools.rules]]
+name = "Handover"
+action = "confirm"
+
+[[tools.rules]]
+name = "RequestFileChange"
+action = "confirm"
+
+[[tools.rules]]
+name = "ApproveFileChange"
+action = "confirm"
+
+[[tools.rules]]
+name = "ApproveDiff"
+action = "confirm"
+
+[[tools.rules]]
+name = "RejectDiff"
+action = "confirm"
+
+[[tools.rules]]
+name = "SubmitJob"
+action = "confirm"
+
+[[tools.rules]]
+name = "ExecuteCapability"
+action = "confirm"
+
+[[tools.rules]]
+name = "PromoteInstinct"
+action = "confirm"
+
+[[tools.rules]]
+name = "CreateTaskGraph"
+action = "confirm"
+
+[[tools.rules]]
+name = "ExecuteTaskGraph"
+action = "confirm"
+
+[[tools.rules]]
+name = "CreateSwarmTask"
+action = "confirm"
+
+[[tools.rules]]
+name = "ApproveSwarmTask"
+action = "confirm"
+
+[[tools.rules]]
+name = "HumanApproval"
+action = "confirm"
+
 # ─── Egress (Network) Filtering ───────────────────────────────────────────────
 # Controls outbound HTTP calls made by MCP tools (e.g. CI status, GitHub API).
 # Domains not in allowed_domains are BLOCKED (fail-closed).

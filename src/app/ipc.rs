@@ -251,6 +251,51 @@ fn dispatch_event(tx: &Sender<BgMsg>, v: &serde_json::Value) {
                 tx.send(BgMsg::NewLog(log)).ok();
             }
         }
+        Some("AgentStarted") => {
+            if let (Some(id), Some(name), Some(path)) = (
+                v["agent_id"].as_str(),
+                v["name"].as_str(),
+                v["project_path"].as_str(),
+            ) {
+                tx.send(BgMsg::AgentStarted {
+                    agent_id: id.into(),
+                    name: name.into(),
+                    project_path: path.into(),
+                })
+                .ok();
+            }
+        }
+        Some("AgentStopped") => {
+            if let (Some(id), Some(name), Some(status)) = (
+                v["agent_id"].as_str(),
+                v["name"].as_str(),
+                v["final_status"].as_str(),
+            ) {
+                tx.send(BgMsg::AgentStopped {
+                    agent_id: id.into(),
+                    name: name.into(),
+                    final_status: status.into(),
+                })
+                .ok();
+            }
+        }
+        Some("HealthDelta") => {
+            if let Ok(r) =
+                serde_json::from_value::<Vec<crate::health::ProjectHealth>>(v["report"].clone())
+            {
+                tx.send(BgMsg::HealthDelta(r)).ok();
+            }
+        }
+        Some("UmaiBlocked") => {
+            if let Some(reason) = v["reason"].as_str() {
+                tx.send(BgMsg::NewLog(crate::app::state::LogEntry {
+                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                    sender: "UMAI".into(),
+                    content: format!("Blocked: {}", reason),
+                }))
+                .ok();
+            }
+        }
         _ => {}
     }
 }

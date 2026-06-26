@@ -39,11 +39,23 @@ pub struct AgentProcess {
 #[derive(Clone)]
 pub struct ExecutionProxy {
     state: Arc<RwLock<DaemonState>>,
+    event_tx: Option<tokio::sync::broadcast::Sender<String>>,
 }
 
 impl ExecutionProxy {
     pub fn new(state: Arc<RwLock<DaemonState>>) -> Self {
-        Self { state }
+        Self { state, event_tx: None }
+    }
+
+    pub fn with_event_tx(mut self, tx: tokio::sync::broadcast::Sender<String>) -> Self {
+        self.event_tx = Some(tx);
+        self
+    }
+
+    fn push_event(&self, event: serde_json::Value) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(event.to_string());
+        }
     }
 
     /// Spawns an agent in an isolated environment with a Death Timer.
@@ -69,6 +81,13 @@ impl ExecutionProxy {
             state_lock.active_agents.push(agent_proc.clone());
         }
 
+        self.push_event(serde_json::json!({
+            "event": "AgentStarted",
+            "agent_id": process_id.to_string(),
+            "name": agent_name,
+            "project_path": project_path,
+        }));
+
         println!(
             "[Proxy] Spawning agent '{}' (ID: {}) with {}s death timer",
             agent_name, process_id, timeout_secs
@@ -77,6 +96,7 @@ impl ExecutionProxy {
         let agent_name_cloned = agent_name.to_string();
         let path_cloned = project_path.to_string();
         let state_cloned = self.state.clone();
+        let event_tx_cloned = self.event_tx.clone();
 
         // Spawn a background task to handle the process execution
         tokio::spawn(async move {
@@ -150,6 +170,15 @@ impl ExecutionProxy {
                 .find(|a| a.id == process_id)
             {
                 agent.status = result.to_string();
+            }
+
+            if let Some(tx) = &event_tx_cloned {
+                let _ = tx.send(serde_json::json!({
+                    "event": "AgentStopped",
+                    "agent_id": process_id.to_string(),
+                    "name": agent_name_cloned,
+                    "final_status": result,
+                }).to_string());
             }
 
             println!(

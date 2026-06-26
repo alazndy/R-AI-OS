@@ -442,6 +442,40 @@ impl App {
                     }
                 }
             }
+            BgMsg::AgentStarted { agent_id, name, project_path } => {
+                self.system.active_agents.push(crate::daemon::proxy::AgentProcess {
+                    id: uuid::Uuid::parse_str(&agent_id).unwrap_or_default(),
+                    name: name.clone(),
+                    status: "Running".into(),
+                    started_at: std::time::SystemTime::now(),
+                    logs: vec![],
+                });
+                self.add_activity(
+                    "Agent",
+                    &format!("{} started in {}", name, project_path),
+                    "Info",
+                );
+            }
+            BgMsg::AgentStopped { agent_id, name, final_status } => {
+                if let Ok(id) = uuid::Uuid::parse_str(&agent_id) {
+                    if let Some(agent) = self.system.active_agents.iter_mut().find(|a| a.id == id) {
+                        agent.status = final_status.clone();
+                    }
+                }
+                self.add_activity(
+                    "Agent",
+                    &format!("{} stopped — {}", name, final_status),
+                    if final_status.contains("Error") || final_status.contains("Killed") {
+                        "Warning"
+                    } else {
+                        "Info"
+                    },
+                );
+            }
+            BgMsg::HealthDelta(report) => {
+                self.health.report = report;
+                self.add_activity("Health", "Health delta received from daemon", "Info");
+            }
         }
     }
 }

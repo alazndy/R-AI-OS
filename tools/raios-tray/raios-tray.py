@@ -1148,6 +1148,7 @@ class ProjectManagerDialog(QDialog):
 
     def _handle_vscode(self, project_path: str) -> None:
         if self.on_vscode(project_path):
+            self.hide()
             return
         QMessageBox.warning(self, APP_NAME, "VSCode (code) command not found.")
 

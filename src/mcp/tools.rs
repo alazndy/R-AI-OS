@@ -50,6 +50,17 @@ impl McpServer {
         let name = params["name"].as_str().ok_or("missing tool name")?;
         let args = &params["arguments"];
 
+        let raw_args = serde_json::to_string(args).unwrap_or_default();
+        match self.umai.check(name, Some(&raw_args)) {
+            crate::security::UmaiDecision::Allow => {}
+            crate::security::UmaiDecision::Deny(reason) => {
+                return Err(format!("umai:{}", reason));
+            }
+            crate::security::UmaiDecision::Confirm(reason) => {
+                return Err(format!("umai_confirm:{}", reason));
+            }
+        }
+
         if let Err(e) = self.rate_limiter.check(name) {
             return Err(e.to_string());
         }

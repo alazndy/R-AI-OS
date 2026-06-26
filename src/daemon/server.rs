@@ -116,6 +116,10 @@ impl Server {
     }
 
     async fn run_inner(&self, tx: broadcast::Sender<String>) -> anyhow::Result<()> {
+        // Telemetry channel: lossy, low-priority (FileChanged, port events).
+        // Capacity 64 — lagged receivers are silently dropped rather than stalling control flow.
+        let (telem_tx, _) = broadcast::channel::<String>(64);
+
         // Load any pending file-change approvals that survived a restart
         self.state.write().await.refresh_pending_from_db();
 
@@ -217,7 +221,7 @@ impl Server {
             crate::evolution::start_evolution_worker(evolution_rx).await;
         });
 
-        let watcher_tx = tx.clone();
+        let watcher_tx = telem_tx.clone();
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             if let Ok(event) = res {
                 for path in event.paths {
@@ -237,7 +241,7 @@ impl Server {
 
         // Port Monitor Task
         if daemon_cfg.enable_port_monitor {
-            let port_tx = tx.clone();
+            let port_tx = telem_tx.clone();
             let port_monitor_interval =
                 std::time::Duration::from_secs(daemon_cfg.port_monitor_interval_secs);
             let port_probe_timeout =
@@ -273,8 +277,10 @@ impl Server {
             println!("Client connected: {}", addr);
 
             let mut rx = tx.subscribe();
+            let mut telem_rx = telem_tx.subscribe();
             let state_for_client = self.state.clone();
-            let proxy_for_client = self.execution_proxy.clone();
+            let proxy_for_client = self.execution_proxy.clone()
+                .with_event_tx(tx.clone());
             let _tx_sender = tx.clone();
             let server_token = token.clone();
             let sessions_for_client = self.sessions.clone();
@@ -289,6 +295,8 @@ impl Server {
             let evolution_store_for_client = Arc::new(crate::evolution::CandidateStore::new(
                 crate::evolution::CandidateStore::default_path(),
             ));
+
+            let umai = crate::security::Umai::from_default_policy();
 
             tokio::spawn(async move {
                 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -335,6 +343,22 @@ impl Server {
                         res = reader.read_line(&mut line) => {
                             if res.unwrap_or(0) == 0 { break; }
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+                                let cmd_name = v["command"].as_str().unwrap_or("");
+                                let raw_payload = v.get("input")
+                                    .or_else(|| v.get("query"))
+                                    .or_else(|| v.get("shell_cmd"))
+                                    .and_then(|p| p.as_str());
+                                let umai_result = umai.check(cmd_name, raw_payload);
+                                if !umai_result.is_allowed() {
+                                    let _ = writer
+                                        .write_all(
+                                            format!("{}\n", umai_result.into_error_json()).as_bytes(),
+                                        )
+                                        .await;
+                                    line.clear();
+                                    continue;
+                                }
+
                                 if v["command"] == "AgentInfo" {
                                     if let Some(agent) = v["agent"].as_str() {
                                         let project = v["project"].as_str();
@@ -433,9 +457,12 @@ impl Server {
                                     sessions_for_client.record_event(&session_id, "handover", &format!("target={target}"));
                                 } else if v["command"] == "HealthScan" {
                                     let s = state_for_client.read().await;
-                                    let response = format!("{{\"event\":\"HealthReport\",\"report\":{}}}\n",
-                                        serde_json::to_string(&s.health_reports).unwrap());
+                                    let report_json = serde_json::to_string(&s.health_reports).unwrap();
+                                    let response = format!("{{\"event\":\"HealthReport\",\"report\":{}}}\n", report_json);
                                     let _ = writer.write_all(response.as_bytes()).await;
+                                    // Delta broadcast: push health update to all connected clients
+                                    let delta = format!("{{\"event\":\"HealthDelta\",\"report\":{}}}", report_json);
+                                    let _ = _tx_sender.send(delta);
                                 } else if v["command"] == "GetState" {
                                     let s = state_for_client.read().await;
                                     let response = s.sync_payload();
@@ -1036,7 +1063,7 @@ impl Server {
                             line.clear();
                         }
 
-                        // Read from broadcast
+                        // Control channel — guaranteed delivery, high priority
                         msg_res = rx.recv() => {
                             if let Ok(msg) = msg_res {
                                 let mut payload = msg.clone();
@@ -1045,6 +1072,22 @@ impl Server {
                                     break;
                                 }
                             }
+                        }
+                    }
+
+                    // Telemetry channel — lossy, drain without blocking
+                    loop {
+                        match telem_rx.try_recv() {
+                            Ok(msg) => {
+                                let mut payload = msg;
+                                payload.push('\n');
+                                if writer.write_all(payload.as_bytes()).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => break,
+                            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
                         }
                     }
                 }

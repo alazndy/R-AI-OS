@@ -98,6 +98,17 @@ pub enum BgMsg {
     },
     StatsReady(PortfolioStats),
     AgentStatusReady(AgentStatus),
+    AgentStarted {
+        agent_id: String,
+        name: String,
+        project_path: String,
+    },
+    AgentStopped {
+        agent_id: String,
+        name: String,
+        final_status: String,
+    },
+    HealthDelta(Vec<crate::health::ProjectHealth>),
     WizardActions(Vec<WizardAction>),
     WizardDone,
     GitActionDone {
