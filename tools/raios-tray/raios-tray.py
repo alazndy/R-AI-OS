@@ -1098,6 +1098,7 @@ class RaiosTray(QObject):
         self.icon.setToolTip(APP_NAME)
         self.icon.activated.connect(self._handle_activation)
         self.state = TrayState(projects=[], usage={}, health={})
+        self._manage_dialog: ProjectManagerDialog | None = None
         self.menu = QMenu()
         self._menu_children: list = []
         self._menu_ready = False
@@ -1292,13 +1293,24 @@ class RaiosTray(QObject):
         self.icon.showMessage(APP_NAME, f"{agent.name} command not found on this machine.")
 
     def open_manage_projects(self) -> None:
+        if self._manage_dialog and self._manage_dialog.isVisible():
+            self._manage_dialog.raise_()
+            self._manage_dialog.activateWindow()
+            return
         managed_config = load_projects_config()
         dialog = ProjectManagerDialog(
             None, self.state.projects or [], self.state.usage or {},
             managed_config, self._launch_agent, launch_vscode,
             dirty_projects=self.state.dirty_projects,
         )
-        dialog.exec()
+        self._manage_dialog = dialog
+        dialog.finished.connect(self._on_manage_closed)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_manage_closed(self) -> None:
+        self._manage_dialog = None
         self.refresh()
 
     def _launch_agent(self, project_path: str, agent: Agent, project_name: str) -> bool:
@@ -1311,7 +1323,14 @@ class RaiosTray(QObject):
 
     def open_settings(self) -> None:
         dialog = SettingsDialog()
-        if dialog.exec() != QDialog.Accepted:
+        dialog.finished.connect(lambda result: self._on_settings_closed(dialog, result))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_settings_closed(self, dialog: SettingsDialog, result: int) -> None:
+        if result != QDialog.Accepted:
+            self.refresh()
             return
         if dialog.restart_requested:
             ok, message = restart_aiosd()
