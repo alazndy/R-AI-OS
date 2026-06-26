@@ -24,7 +24,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 import psutil
 from PySide6.QtCore import QObject, QTimer, Qt, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QIcon
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -105,6 +105,45 @@ DAEMON_INT_FIELDS = (
     ("lifecycle_archive_days", "Archive after days", 1, 3650),
     ("lifecycle_interval_secs", "Lifecycle interval (sec)", 60, 604800),
 )
+
+
+def _is_dark_mode() -> bool:
+    for args in (
+        ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+        ["gsettings", "get", "org.gnome.desktop.interface", "gtk-theme"],
+    ):
+        try:
+            out = subprocess.run(args, capture_output=True, text=True, timeout=1).stdout.lower()
+            if "dark" in out:
+                return True
+        except Exception:
+            pass
+    try:
+        return QApplication.palette().color(QPalette.Window).lightness() < 128
+    except Exception:
+        return False
+
+
+def _card_theme() -> dict[str, str]:
+    if _is_dark_mode():
+        return {
+            "pinned_bg":  "#2e3140",
+            "card_bg":    "#252836",
+            "border":     "#3e4257",
+            "muted":      "#8b8fa8",
+            "hint":       "#6b6f8a",
+            "dirty":      "#f87171",
+            "api_tag":    "#6b6f8a",
+        }
+    return {
+        "pinned_bg":  "#eef2ff",
+        "card_bg":    "#ffffff",
+        "border":     "#e5e7eb",
+        "muted":      "#6b7280",
+        "hint":       "#9ca3af",
+        "dirty":      "#dc2626",
+        "api_tag":    "#9ca3af",
+    }
 
 
 @dataclass(frozen=True)
@@ -687,7 +726,7 @@ class SettingsDialog(QDialog):
             self,
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: #666;")
+        note.setStyleSheet(f"color: {_card_theme()['hint']};")
         outer.addWidget(note)
 
         scroll = QScrollArea(self)
@@ -769,7 +808,7 @@ class SettingsDialog(QDialog):
             group,
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666;")
+        hint.setStyleSheet(f"color: {_card_theme()['hint']};")
         layout.addWidget(hint)
         return group
 
@@ -897,7 +936,7 @@ class ProjectManagerDialog(QDialog):
 
         hint = QLabel("Right-click or use buttons to manage. Pinned projects appear at top of tray menu.", self)
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666; font-style: italic;")
+        hint.setStyleSheet(f"color: {_card_theme()['hint']}; font-style: italic;")
         outer.addWidget(hint)
 
         self._populate()
@@ -921,6 +960,7 @@ class ProjectManagerDialog(QDialog):
                 widget.deleteLater()
         self.rows.clear()
 
+        tc = _card_theme()
         entries = self._all_entries()
         for index, entry in enumerate(entries):
             name = entry.get("name", "?")
@@ -934,8 +974,8 @@ class ProjectManagerDialog(QDialog):
             row_layout.setContentsMargins(10, 10, 10, 10)
             row_layout.setSpacing(8)
             row.setStyleSheet(
-                "background: #f8f9fa; border-radius: 6px;" if is_pinned
-                else "background: #fcfcfc; border: 1px solid #ececec; border-radius: 6px;"
+                f"background: {tc['pinned_bg']}; border-radius: 6px;" if is_pinned
+                else f"background: {tc['card_bg']}; border: 1px solid {tc['border']}; border-radius: 6px;"
             )
 
             top_row = QHBoxLayout()
@@ -947,11 +987,11 @@ class ProjectManagerDialog(QDialog):
             name_font.setBold(is_pinned)
             name_label.setFont(name_font)
             if is_dirty:
-                name_label.setStyleSheet("color: #c94c4c;")
+                name_label.setStyleSheet(f"color: {tc['dirty']};")
             path_label = QLabel(path, row)
             path_label.setWordWrap(True)
             path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            path_label.setStyleSheet("color: #888; font-size: 11px;")
+            path_label.setStyleSheet(f"color: {tc['muted']}; font-size: 11px;")
             info.addWidget(name_label)
             info.addWidget(path_label)
             top_row.addLayout(info, stretch=1)
@@ -961,11 +1001,13 @@ class ProjectManagerDialog(QDialog):
 
             if is_dirty:
                 dirty_tag = QLabel("dirty", row)
-                dirty_tag.setStyleSheet("color: #c94c4c; font-size: 10px; font-weight: bold; padding: 0 4px;")
+                dirty_tag.setStyleSheet(
+                    f"color: {tc['dirty']}; font-size: 10px; font-weight: bold; padding: 0 4px;"
+                )
                 meta.addWidget(dirty_tag, alignment=Qt.AlignRight)
             elif is_api:
                 api_tag = QLabel("API", row)
-                api_tag.setStyleSheet("color: #999; font-size: 10px; padding: 0 4px;")
+                api_tag.setStyleSheet(f"color: {tc['api_tag']}; font-size: 10px; padding: 0 4px;")
                 meta.addWidget(api_tag, alignment=Qt.AlignRight)
 
             count = self.usage.get(name, 0)
@@ -1326,6 +1368,30 @@ def validate_environment() -> str | None:
     return None
 
 
+def _apply_dark_palette(app: QApplication) -> None:
+    pal = QPalette()
+    c = QColor
+    pal.setColor(QPalette.Window,          c("#252836"))
+    pal.setColor(QPalette.WindowText,      c("#e0e0e6"))
+    pal.setColor(QPalette.Base,            c("#1e2030"))
+    pal.setColor(QPalette.AlternateBase,   c("#252836"))
+    pal.setColor(QPalette.Text,            c("#e0e0e6"))
+    pal.setColor(QPalette.BrightText,      c("#ffffff"))
+    pal.setColor(QPalette.Button,          c("#2e3140"))
+    pal.setColor(QPalette.ButtonText,      c("#e0e0e6"))
+    pal.setColor(QPalette.Highlight,       c("#5c6bc0"))
+    pal.setColor(QPalette.HighlightedText, c("#ffffff"))
+    pal.setColor(QPalette.Mid,             c("#3e4257"))
+    pal.setColor(QPalette.Dark,            c("#1a1c26"))
+    pal.setColor(QPalette.Shadow,          c("#111320"))
+    pal.setColor(QPalette.PlaceholderText, c("#8b8fa8"))
+    pal.setColor(QPalette.Link,            c("#7b8fff"))
+    pal.setColor(QPalette.Disabled, QPalette.Text,       c("#555770"))
+    pal.setColor(QPalette.Disabled, QPalette.ButtonText, c("#555770"))
+    pal.setColor(QPalette.Disabled, QPalette.WindowText, c("#555770"))
+    app.setPalette(pal)
+
+
 def main() -> int:
     # GTK must be initialized before QApplication grabs the display
     Gtk.init([])
@@ -1335,6 +1401,10 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName(APP_NAME)
+    app.setStyle("Fusion")
+
+    if _is_dark_mode():
+        _apply_dark_palette(app)
 
     RaiosTray(app)
     return app.exec()
