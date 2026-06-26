@@ -1098,7 +1098,6 @@ class RaiosTray(QObject):
         self.icon.setToolTip(APP_NAME)
         self.icon.activated.connect(self._handle_activation)
         self.state = TrayState(projects=[], usage={}, health={})
-        self.projects_dialog: ProjectsDialog | None = None
         self.menu = QMenu()
         self._menu_children: list = []
         self._menu_ready = False
@@ -1168,10 +1167,6 @@ class RaiosTray(QObject):
             dirty = 0
         self._update_icon(dirty)
         self.rebuild_menu()
-        if self.projects_dialog and self.projects_dialog.isVisible():
-            self.projects_dialog.close()
-            self.projects_dialog = ProjectsDialog(None, state.projects or [], state.usage or {}, self._launch_agent)
-            self.projects_dialog.show()
 
     def rebuild_menu(self) -> None:
         self.menu.clear()
