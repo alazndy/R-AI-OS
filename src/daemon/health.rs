@@ -1,10 +1,14 @@
 use crate::daemon::state::DaemonState;
-use crate::health::check_project;
+use crate::health::check_project_fast;
 use crate::radar::{RadarChannel, Whisper};
-use crate::security::{scan_project, SecurityReport, Severity as SecSev};
+use crate::security::{scan_project_fast, SecurityReport, Severity as SecSev};
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, RwLock, Semaphore};
 use tokio::time::{sleep, Duration};
+
+/// Max concurrent spawn_blocking health scans.
+/// Prevents parallel `cargo audit` / `pnpm audit` processes from spiking RAM.
+const MAX_CONCURRENT_SCANS: usize = 3;
 
 /// Emit Radar whispers for Critical/High security issues found in a report.
 pub(crate) fn emit_security_whispers(
@@ -53,55 +57,72 @@ pub async fn start_health_worker(
             continue;
         }
 
+        // Skip inactive projects from the expensive dependency audit.
+        let (active, inactive): (Vec<_>, Vec<_>) = projects
+            .iter()
+            .partition(|p| !matches!(p.status.as_str(), "beklemede" | "archived"));
+
         println!(
-            "[Daemon] Scanning health for {} projects...",
-            projects.len()
+            "[Daemon] Scanning health for {} active projects ({} inactive skipped)...",
+            active.len(),
+            inactive.len(),
         );
 
         let tx_clone = tx.clone();
         let state_clone = state.clone();
+        let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_SCANS));
 
-        // Use a task set or similar to run in parallel
         let mut handles = vec![];
-        for proj in projects.clone() {
+        for proj in active {
+            let proj = proj.clone();
             let tx_log = tx.clone();
             let radar_clone = RadarChannel::new(tx.clone());
             let proj_name_clone = proj.name.clone();
             let proj_path_clone = proj.local_path.clone();
-            handles.push(tokio::task::spawn_blocking(move || {
-                let report = check_project(&proj);
-                let sec_report = scan_project(&proj_path_clone);
-                emit_security_whispers(&proj_name_clone, &sec_report, &radar_clone);
-                let log_msg = serde_json::json!({
-                    "event": "NewLog",
-                    "log": {
-                        "timestamp": chrono::Local::now().format("%H:%M:%S").to_string(),
-                        "sender": "HealthWorker",
-                        "content": format!("Checked: {}", proj.name)
-                    }
-                });
-                let _ = tx_log.send(log_msg.to_string());
-                report
+            let sem_clone = sem.clone();
+            handles.push(tokio::spawn(async move {
+                // Acquire permit — blocks until a slot is free
+                let _permit = sem_clone.acquire().await;
+                tokio::task::spawn_blocking(move || {
+                    let report = check_project_fast(&proj);
+                    let sec_report = scan_project_fast(&proj_path_clone);
+                    emit_security_whispers(&proj_name_clone, &sec_report, &radar_clone);
+                    let log_msg = serde_json::json!({
+                        "event": "NewLog",
+                        "log": {
+                            "timestamp": chrono::Local::now().format("%H:%M:%S").to_string(),
+                            "sender": "HealthWorker",
+                            "content": format!("Checked: {}", proj_name_clone)
+                        }
+                    });
+                    let _ = tx_log.send(log_msg.to_string());
+                    report
+                })
+                .await
+                .ok()
             }));
         }
 
         let mut reports = Vec::new();
         for handle in handles {
-            if let Ok(report) = handle.await {
+            if let Ok(Some(report)) = handle.await {
                 reports.push(report);
             }
         }
 
-        // 2. Update state with new reports
+        // 2. Update state
         {
             let mut s = state_clone.write().await;
             s.health_reports = reports.clone();
             println!("[Daemon] Health scan complete. Reports updated.");
-
-            // 3. Broadcast new state
-            let msg = s.sync_payload();
-            let _ = tx_clone.send(msg.to_string());
         }
+
+        // 3. Broadcast delta — not full StateSync
+        let delta = serde_json::json!({
+            "event": "HealthDelta",
+            "report": reports,
+        });
+        let _ = tx_clone.send(delta.to_string());
 
         // Wait before next scan (e.g., 5 minutes)
         sleep(interval).await;

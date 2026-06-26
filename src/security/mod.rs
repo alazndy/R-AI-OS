@@ -25,7 +25,7 @@ pub use patterns::{scan_file, WATCHED_EXTS};
 pub use policy::PolicyConfig;
 pub use rate_limiter::{RateLimitConfig, RateLimiter, ToolRateStatus};
 pub use sandbox::{is_path_safe, validate_path};
-pub use scanner::scan_project;
+pub use scanner::{scan_project, scan_project_fast};
 pub use verify_chain::{record_audit_event, verify_chain};
 
 // ─── Types ───────────────────────────────────────────────────────────────────

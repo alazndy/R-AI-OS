@@ -22,7 +22,19 @@ fn strip_cfg_test_tail<'a>(content: &'a str, ext: &str) -> &'a str {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+/// Full scan: static patterns + semgrep + dependency audit (`cargo audit` / `pnpm audit`).
+/// Use for `raios security` — heavy, may spike RAM on large workspaces.
 pub fn scan_project(path: &Path) -> SecurityReport {
+    scan_project_impl(path, true)
+}
+
+/// Fast scan: static patterns only — no semgrep, no dependency audit.
+/// Use for the background health worker to avoid `cargo audit` RAM spikes.
+pub fn scan_project_fast(path: &Path) -> SecurityReport {
+    scan_project_impl(path, false)
+}
+
+fn scan_project_impl(path: &Path, include_dep_audit: bool) -> SecurityReport {
     let project_type = detect_project_type(path);
     let mut issues = Vec::new();
     let mut checks_run = 0;
@@ -31,14 +43,21 @@ pub fn scan_project(path: &Path) -> SecurityReport {
     check_env_in_git(path, &mut issues);
     checks_run += 1;
 
-    if run_semgrep(path, &mut issues) {
-        checks_run += 1;
+    if include_dep_audit {
+        if run_semgrep(path, &mut issues) {
+            checks_run += 1;
+        }
     }
 
-    let audit_output = run_dependency_audit(path, &project_type);
-    if let Some(ref output) = audit_output {
-        parse_audit_issues(output, &project_type, &mut issues);
-    }
+    let audit_output = if include_dep_audit {
+        let out = run_dependency_audit(path, &project_type);
+        if let Some(ref output) = out {
+            parse_audit_issues(output, &project_type, &mut issues);
+        }
+        out
+    } else {
+        None
+    };
 
     let deductions: i32 = issues.iter().map(|i| i.severity.deduction()).sum();
     let score = (100i32 - deductions).clamp(0, 100) as u8;

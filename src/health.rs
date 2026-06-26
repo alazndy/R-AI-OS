@@ -46,6 +46,79 @@ const CONSTITUTION_RULES: &[(&str, &str)] = &[
     ("sigmap", "SIGMAP.md context map"),
 ];
 
+/// Fast variant for the background health worker.
+/// Skips GitHub CI API calls and refactor file walk — those run on demand via `raios health`.
+pub fn check_project_fast(proj: &EntityProject) -> ProjectHealth {
+    let path = &proj.local_path;
+
+    let git_dirty = crate::filebrowser::git_is_dirty(path);
+    let remote_url = crate::filebrowser::git_get_remote_url(path);
+    let has_memory = path.join("memory.md").exists();
+    let has_sigmap = path.join("SIGMAP.md").exists();
+    let (compliance_score, compliance_grade) = compute_compliance(path);
+    let constitution_issues = check_constitution(path);
+    let (graphify_done, graph_report) = check_graphify(path);
+
+    let health = ProjectHealth {
+        name: proj.name.clone(),
+        path: path.clone(),
+        status: proj.status.clone(),
+        git_dirty,
+        remote_url: remote_url.clone(),
+        compliance_score,
+        compliance_grade: compliance_grade.to_string(),
+        has_memory,
+        has_sigmap,
+        constitution_issues: constitution_issues
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        graphify_done,
+        graph_report,
+        security_score: None,
+        security_grade: None,
+        security_issue_count: 0,
+        security_critical: 0,
+        refactor_score: 0,
+        refactor_grade: String::new(),
+        refactor_high_count: 0,
+        refactor_medium_count: 0,
+        ci_status: None,
+        ci_url: None,
+        build_ok: None,
+        test_passed: None,
+        test_failed: None,
+        deps_outdated: None,
+        deps_cve: None,
+    };
+
+    // Write to SQLite health_cache (best-effort)
+    if let Ok(conn) = crate::db::open_db() {
+        let path_str = path.to_string_lossy().to_string();
+        if let Some(project_id) = crate::db::project_id_for_path(&conn, &path_str) {
+            let _ = crate::db::upsert_health(
+                &conn,
+                project_id,
+                compliance_grade,
+                compliance_score,
+                None,
+                None,
+                0,
+                0,
+                git_dirty.unwrap_or(false),
+                has_memory,
+                has_sigmap,
+                remote_url.as_deref(),
+                "",
+                0,
+                0,
+            );
+        }
+    }
+
+    health
+}
+
 pub fn check_project(proj: &EntityProject) -> ProjectHealth {
     let path = &proj.local_path;
 
