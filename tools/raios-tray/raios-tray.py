@@ -23,8 +23,8 @@ except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 
 import psutil
-from PySide6.QtCore import QObject, QTimer, Qt
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QObject, QTimer, Qt, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -42,13 +42,35 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
-    QStyle,
-    QSystemTrayIcon,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import QUrl
+
+# GTK + AyatanaAppIndicator3 (native Wayland tray on GNOME)
+_gi_path = "/usr/lib/python3/dist-packages"
+if _gi_path not in sys.path:
+    sys.path.insert(0, _gi_path)
+os.environ.setdefault("GI_TYPELIB_PATH", "/usr/lib/x86_64-linux-gnu/girepository-1.0")
+
+import gi  # noqa: E402
+gi.require_version("Gtk", "3.0")
+from gi.repository import GLib, Gtk  # noqa: E402
+
+try:
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+except ValueError:
+    gi.require_version("AppIndicator3", "0.1")
+    from gi.repository import AppIndicator3
+
+try:
+    gi.require_version("Notify", "0.7")
+    from gi.repository import Notify as _GtkNotify
+    _GTK_NOTIFY = True
+except ValueError:
+    _GtkNotify = None
+    _GTK_NOTIFY = False
 
 API_BASE = "http://127.0.0.1:42071"
 REFRESH_SECONDS = 15
@@ -1092,61 +1114,76 @@ class RaiosTray(QObject):
     def __init__(self, app: QApplication):
         super().__init__()
         self.app = app
-        self.base_pixmap = self._build_base_pixmap()
-        self.pin_logo = get_pin_logo()
-        self.icon = QSystemTrayIcon(QIcon(self.base_pixmap), app)
-        self.icon.setToolTip(APP_NAME)
-        self.icon.activated.connect(self._handle_activation)
         self.state = TrayState(projects=[], usage={}, health={})
         self._manage_dialog: ProjectManagerDialog | None = None
-        self.menu = QMenu()
-        self._menu_children: list = []
-        self._menu_ready = False
         self._fetching = False
 
+        # Native AppIndicator3 icon
+        self._indicator = AppIndicator3.Indicator.new(
+            "raios-tray",
+            "utilities-system-monitor",
+            AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
+        )
+        self._indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+        self._indicator.set_title(APP_NAME)
+
+        # GTK menu
+        self._gtk_menu = Gtk.Menu()
+        self._indicator.set_menu(self._gtk_menu)
+
+        # Pump GTK events every 50 ms so GTK menu callbacks fire on Qt's main thread
+        self._gtk_pump = QTimer(self)
+        self._gtk_pump.timeout.connect(self._pump_gtk)
+        self._gtk_pump.start(50)
+
+        # Data refresh
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setInterval(REFRESH_SECONDS * 1000)
         self.refresh_timer.timeout.connect(self.refresh)
 
-        self.icon.setContextMenu(self.menu)
         self.rebuild_menu()
-        self.icon.show()
         self.refresh_timer.start()
         QTimer.singleShot(0, self.refresh)
 
-    def _build_base_pixmap(self) -> QPixmap:
-        icon = QIcon.fromTheme("utilities-system-monitor")
-        if icon.isNull():
-            icon = self.app.style().standardIcon(QStyle.SP_ComputerIcon)
-        return icon.pixmap(24, 24)
+    # ── GTK helpers ──────────────────────────────────────────────────────────
+
+    def _pump_gtk(self) -> None:
+        ctx = GLib.MainContext.default()
+        while ctx.pending():
+            ctx.iteration(False)
+
+    def _gtk_item(self, label: str, cb=None, sensitive: bool = True) -> Gtk.MenuItem:
+        item = Gtk.MenuItem(label=label)
+        item.set_sensitive(sensitive)
+        if cb:
+            item.connect("activate", lambda _: cb())
+        return item
+
+    def _notify(self, message: str) -> None:
+        if _GTK_NOTIFY:
+            try:
+                n = _GtkNotify.Notification.new(APP_NAME, message, "utilities-system-monitor")
+                n.show()
+            except Exception:
+                pass
+
+    # ── icon ─────────────────────────────────────────────────────────────────
 
     def _update_icon(self, dirty_count: int) -> None:
-        pixmap = self.base_pixmap.copy()
         if dirty_count > 0:
-            painter = QPainter(pixmap)
-            painter.setRenderHint(QPainter.Antialiasing)
+            self._indicator.set_icon_full(
+                "software-update-urgent",
+                f"R-AI-OS – {dirty_count} dirty",
+            )
+            self._indicator.set_title(f"{APP_NAME}  ●{dirty_count}")
+        else:
+            self._indicator.set_icon_full("utilities-system-monitor", APP_NAME)
+            self._indicator.set_title(APP_NAME)
 
-            badge_size = 14
-            x = pixmap.width() - badge_size + 2
-            y = -2
-            painter.setBrush(QColor(255, 204, 0))
-            painter.setPen(QPen(QColor(200, 160, 0), 1))
-            painter.drawEllipse(x, y, badge_size, badge_size)
-
-            painter.setPen(QColor(120, 80, 0))
-            font = QFont("sans-serif", 8, QFont.Bold)
-            painter.setFont(font)
-            text = f"!{dirty_count}" if dirty_count < 10 else "!9+"
-            painter.drawText(x, y, badge_size, badge_size, Qt.AlignCenter, text)
-            painter.end()
-        self.icon.setIcon(QIcon(pixmap))
-
-    def _handle_activation(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        if reason == QSystemTrayIcon.DoubleClick:
-            self.show_projects_dialog()
+    # ── refresh ───────────────────────────────────────────────────────────────
 
     def refresh(self) -> None:
-        if hasattr(self, '_fetching') and self._fetching:
+        if self._fetching:
             return
         self._fetching = True
         try:
@@ -1156,141 +1193,70 @@ class RaiosTray(QObject):
 
     def _apply_state(self, state: TrayState) -> None:
         self.state = state
-        count = len(state.projects or [])
-        dirty = len(state.dirty_projects)
-        if state.online:
-            tip = f"{APP_NAME} ({count} projects)"
-            if dirty:
-                tip += f"  ● {dirty} dirty"
-            self.icon.setToolTip(tip)
-        else:
-            self.icon.setToolTip(f"{APP_NAME} (offline)")
-            dirty = 0
+        dirty = len(state.dirty_projects) if state.online else 0
         self._update_icon(dirty)
         self.rebuild_menu()
 
-    def rebuild_menu(self) -> None:
-        self.menu.clear()
-        self._menu_children.clear()
-        menu = self.menu
+    # ── menu ──────────────────────────────────────────────────────────────────
 
-        header = QAction("R-AI-OS / K-AI-RA", menu)
-        header.setEnabled(False)
-        menu.addAction(header)
-        menu.addSeparator()
+    def rebuild_menu(self) -> None:
+        for child in self._gtk_menu.get_children():
+            self._gtk_menu.remove(child)
+
+        self._gtk_menu.append(self._gtk_item("R-AI-OS / K-AI-RA", sensitive=False))
+        self._gtk_menu.append(Gtk.SeparatorMenuItem())
 
         if not self.state.projects and not self.state.health:
-            loading = QAction("Loading...", menu)
-            loading.setEnabled(False)
-            menu.addAction(loading)
+            self._gtk_menu.append(self._gtk_item("Loading...", sensitive=False))
+
         elif not self.state.online:
-            offline = QAction("aiosd offline", menu)
-            offline.setEnabled(False)
-            menu.addAction(offline)
+            self._gtk_menu.append(self._gtk_item("aiosd offline", sensitive=False))
+            self._gtk_menu.append(self._gtk_item("Start aiosd", self.toggle_daemon))
+            cached = self.state.projects or []
+            if cached:
+                self._gtk_menu.append(Gtk.SeparatorMenuItem())
+                self._gtk_menu.append(self._gtk_item(f"Cached Projects ({len(cached)})", sensitive=False))
+                self._gtk_menu.append(self._gtk_item("Open Project Manager...", self.open_manage_projects))
 
-            start_action = QAction("Start aiosd", menu)
-            start_action.triggered.connect(self.toggle_daemon)
-            menu.addAction(start_action)
-            cached_projects = self.state.projects or []
-            if cached_projects:
-                menu.addSeparator()
-                cached = QAction(f"Cached Projects ({len(cached_projects)})", menu)
-                cached.setEnabled(False)
-                menu.addAction(cached)
-
-                open_cached = QAction("Open Project Manager...", menu)
-                open_cached.triggered.connect(self.open_manage_projects)
-                menu.addAction(open_cached)
         else:
-            daemon_header = QAction("Daemon", menu)
-            daemon_header.setEnabled(False)
-            menu.addAction(daemon_header)
-
-            stats = QAction(
-                f"aiosd CPU {self.state.aiosd_cpu:.1f}%  {self.state.aiosd_ram_mb:.0f} MB",
-                menu,
-            )
-            stats.setEnabled(False)
-            menu.addAction(stats)
-
+            self._gtk_menu.append(self._gtk_item("Daemon", sensitive=False))
+            self._gtk_menu.append(self._gtk_item(
+                f"aiosd  CPU {self.state.aiosd_cpu:.1f}%  {self.state.aiosd_ram_mb:.0f} MB",
+                sensitive=False,
+            ))
             if (self.state.health or {}).get("needs_human_approval"):
-                approval = QAction("Human approval required", menu)
-                approval.setEnabled(False)
-                menu.addAction(approval)
-
-            stop_action = QAction("Stop aiosd", menu)
-            stop_action.triggered.connect(self.toggle_daemon)
-            menu.addAction(stop_action)
+                self._gtk_menu.append(self._gtk_item("Human approval required", sensitive=False))
+            self._gtk_menu.append(self._gtk_item("Stop aiosd", self.toggle_daemon))
 
             if self.state.dirty_projects:
-                dirty_action = QAction(f"● {len(self.state.dirty_projects)} dirty projects", menu)
-                dirty_action.setEnabled(False)
-                menu.addAction(dirty_action)
+                self._gtk_menu.append(self._gtk_item(
+                    f"● {len(self.state.dirty_projects)} dirty projects", sensitive=False,
+                ))
 
-            menu.addSeparator()
+            self._gtk_menu.append(Gtk.SeparatorMenuItem())
 
             managed_config = load_projects_config()
             pinned = [p for p in managed_config.get("projects", []) if p.get("pinned")]
             project_count = len(self.state.projects or [])
-            projects_label = "Projects"
-            if self.state.projects_from_cache:
-                projects_label = "Cached Projects"
-            projects_summary = QAction(f"{projects_label}: {project_count}", menu)
-            projects_summary.triggered.connect(self.open_manage_projects)
-            menu.addAction(projects_summary)
-
+            lbl = "Cached Projects" if self.state.projects_from_cache else "Projects"
+            self._gtk_menu.append(self._gtk_item(f"{lbl}: {project_count}", self.open_manage_projects))
             if pinned:
-                pinned_summary = QAction(f"Pinned: {len(pinned)}", menu)
-                pinned_summary.setIcon(self.pin_logo)
-                pinned_summary.triggered.connect(self.open_manage_projects)
-                menu.addAction(pinned_summary)
+                self._gtk_menu.append(self._gtk_item(f"Pinned: {len(pinned)}", self.open_manage_projects))
+            self._gtk_menu.append(self._gtk_item("Open Project Manager...", self.open_manage_projects))
 
-            open_projects = QAction("Open Project Manager...", menu)
-            open_projects.triggered.connect(self.open_manage_projects)
-            menu.addAction(open_projects)
+        self._gtk_menu.append(Gtk.SeparatorMenuItem())
+        self._gtk_menu.append(self._gtk_item("Manage Projects...", self.open_manage_projects))
+        self._gtk_menu.append(Gtk.SeparatorMenuItem())
+        self._gtk_menu.append(self._gtk_item("aiosd Settings", self.open_settings))
+        self._gtk_menu.append(self._gtk_item("Open Config Directory", self.open_config_directory))
+        self._gtk_menu.append(self._gtk_item("Open raios", self.open_raios_cli))
+        self._gtk_menu.append(self._gtk_item("Refresh", self.refresh))
+        self._gtk_menu.append(Gtk.SeparatorMenuItem())
+        self._gtk_menu.append(self._gtk_item("Quit", self.app.quit))
 
-        menu.addSeparator()
+        self._gtk_menu.show_all()
 
-        manage_projects_action = QAction("Manage Projects...", menu)
-        manage_projects_action.triggered.connect(self.open_manage_projects)
-        menu.addAction(manage_projects_action)
-
-        menu.addSeparator()
-
-        settings_action = QAction("aiosd Settings", menu)
-        settings_action.triggered.connect(self.open_settings)
-        menu.addAction(settings_action)
-
-        open_config_action = QAction("Open Config Directory", menu)
-        open_config_action.triggered.connect(self.open_config_directory)
-        menu.addAction(open_config_action)
-
-        open_cli = QAction("Open raios", menu)
-        open_cli.triggered.connect(self.open_raios_cli)
-        menu.addAction(open_cli)
-
-        refresh_action = QAction("Refresh", menu)
-        refresh_action.triggered.connect(self.refresh)
-        menu.addAction(refresh_action)
-
-        menu.addSeparator()
-
-        quit_action = QAction("Quit", menu)
-        quit_action.triggered.connect(self.app.quit)
-        menu.addAction(quit_action)
-
-    def show_projects_dialog(self) -> None:
-        self.open_manage_projects()
-
-    def _handle_vscode_click(self, project_path: str) -> None:
-        if launch_vscode(project_path):
-            return
-        self.icon.showMessage(APP_NAME, "VSCode (code) command not found on this machine.")
-
-    def _handle_agent_click(self, project_path: str, agent: Agent, project_name: str) -> None:
-        if self._launch_agent(project_path, agent, project_name):
-            return
-        self.icon.showMessage(APP_NAME, f"{agent.name} command not found on this machine.")
+    # ── dialogs ───────────────────────────────────────────────────────────────
 
     def open_manage_projects(self) -> None:
         if self._manage_dialog and self._manage_dialog.isVisible():
@@ -1316,8 +1282,7 @@ class RaiosTray(QObject):
     def _launch_agent(self, project_path: str, agent: Agent, project_name: str) -> bool:
         launched = launch_agent(project_path, agent, project_name)
         if launched:
-            usage = load_usage()
-            self.state.usage = usage
+            self.state.usage = load_usage()
             self.rebuild_menu()
         return launched
 
@@ -1334,45 +1299,42 @@ class RaiosTray(QObject):
             return
         if dialog.restart_requested:
             ok, message = restart_aiosd()
-            self.icon.showMessage(APP_NAME, message)
+            self._notify(message)
             if not ok:
                 QMessageBox.warning(None, APP_NAME, message)
         else:
-            self.icon.showMessage(APP_NAME, "Config saved. Restart aiosd to apply worker changes.")
+            self._notify("Config saved. Restart aiosd to apply worker changes.")
         self.refresh()
 
     def toggle_daemon(self) -> None:
         ok, message = toggle_aiosd()
-        self.icon.showMessage(APP_NAME, message)
+        self._notify(message)
         if not ok:
             QMessageBox.warning(None, APP_NAME, message)
         self.refresh()
 
     def open_raios_cli(self) -> None:
-        opened = open_terminal(str(Path.home()), "raios")
-        if not opened:
-            self.icon.showMessage(APP_NAME, "Unable to open terminal for raios.")
+        if not open_terminal(str(Path.home()), "raios"):
+            self._notify("Unable to open terminal for raios.")
 
     def open_config_directory(self) -> None:
         if not open_in_file_manager(CONFIG_DIR):
-            self.icon.showMessage(APP_NAME, "Unable to open config directory.")
+            self._notify("Unable to open config directory.")
 
 
 def validate_environment() -> str | None:
-    if not QSystemTrayIcon.isSystemTrayAvailable():
-        return "System tray is not available in this desktop session."
     return None
 
 
 def main() -> int:
+    # GTK must be initialized before QApplication grabs the display
+    Gtk.init([])
+    if _GTK_NOTIFY:
+        _GtkNotify.init(APP_NAME)
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName(APP_NAME)
-
-    error = validate_environment()
-    if error:
-        QMessageBox.critical(None, APP_NAME, error)
-        return 1
 
     RaiosTray(app)
     return app.exec()
