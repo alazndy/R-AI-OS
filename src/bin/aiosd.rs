@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 let mut s = state_for_index.write().await;
                 s.projects = projects;
-                println!("[Kernel] Projects ready (index failed — cortex feature not enabled).");
+                println!("[Kernel] Projects ready (BM25 index build failed).");
             }
         } else {
             let mut s = state_for_index.write().await;

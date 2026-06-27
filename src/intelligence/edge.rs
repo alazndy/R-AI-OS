@@ -76,19 +76,19 @@ mod tests {
         let descriptions = vec![
             (
                 "health_check".to_string(),
-                "Run health scan on a project".to_string(),
+                "Scan and report project health status, missing docs, dirty files".to_string(),
             ),
             (
                 "search_codebase".to_string(),
-                "Search across all indexed files semantically".to_string(),
+                "Semantic search and find code snippets, files, and symbols across the workspace or codebase".to_string(),
             ),
             (
                 "run_sentinel".to_string(),
-                "Run compile and lint checks on project".to_string(),
+                "Compile, build, lint, and run static analysis checks for code quality errors".to_string(),
             ),
             (
                 "list_projects".to_string(),
-                "List all known projects in workspace".to_string(),
+                "List and enumerate all known projects in the workspace portfolio".to_string(),
             ),
         ];
         EdgeRouter::new(descriptions)

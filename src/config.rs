@@ -21,6 +21,8 @@ pub struct DaemonConfig {
     pub lifecycle_archive_days: u64,
     /// How often the lifecycle worker runs (seconds)
     pub lifecycle_interval_secs: u64,
+    pub enable_scheduler_worker: bool,
+    pub scheduler_interval_secs: u64,
 }
 
 impl Default for DaemonConfig {
@@ -28,7 +30,7 @@ impl Default for DaemonConfig {
         let windows = cfg!(target_os = "windows");
         Self {
             startup_bm25_indexing: false,
-            startup_cortex_indexing: false,
+            startup_cortex_indexing: cfg!(feature = "cortex"),
             enable_health_worker: true,
             health_interval_secs: if windows { 900 } else { 300 },
             git_interval_secs: if windows { 300 } else { 120 },
@@ -40,6 +42,8 @@ impl Default for DaemonConfig {
             lifecycle_standby_days: 14,
             lifecycle_archive_days: 90,
             lifecycle_interval_secs: 3600,
+            enable_scheduler_worker: true,
+            scheduler_interval_secs: 60,
         }
     }
 }

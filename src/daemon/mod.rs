@@ -7,3 +7,4 @@ pub mod sentinel;
 pub mod server;
 pub mod state;
 pub mod validation;
+pub mod scheduler;

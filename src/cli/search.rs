@@ -4,7 +4,7 @@ pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, dev_ops: &Pat
     let mut cortex = match crate::cortex::Cortex::init() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Cortex init failed: {e}");
+            eprintln!("Cortex init failed: {e:?}");
             return;
         }
     };
@@ -91,7 +91,7 @@ pub(super) fn cmd_cortex_index(force: bool, dev_ops: &Path, json: bool) {
     let mut cortex = match crate::cortex::Cortex::init() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Cortex init failed: {e}");
+            eprintln!("Cortex init failed: {e:?}");
             std::process::exit(1);
         }
     };
@@ -100,11 +100,18 @@ pub(super) fn cmd_cortex_index(force: bool, dev_ops: &Path, json: bool) {
         if json {
             println!(
                 "{}",
-                serde_json::json!({"status":"already_indexed","chunks":cortex.chunk_count()})
+                serde_json::json!({
+                    "status":"already_indexed",
+                    "mode": embedding_mode(),
+                    "files": cortex.file_count(),
+                    "chunks": cortex.chunk_count()
+                })
             );
         } else {
             println!(
-                "Cortex already indexed ({} chunks). Use --force to re-index.",
+                "Cortex index — embedding mode: {}\nFiles indexed: {} | Chunks: {}",
+                embedding_mode(),
+                cortex.file_count(),
                 cortex.chunk_count()
             );
         }
@@ -119,16 +126,34 @@ pub(super) fn cmd_cortex_index(force: bool, dev_ops: &Path, json: bool) {
             if json {
                 println!(
                     "{}",
-                    serde_json::json!({"status":"ok","indexed":n,"total_chunks":cortex.chunk_count()})
+                    serde_json::json!({
+                        "status":"ok",
+                        "mode": embedding_mode(),
+                        "files": cortex.file_count(),
+                        "chunks": cortex.chunk_count(),
+                        "indexed": n
+                    })
                 );
             } else {
                 println!(
-                    "✓ Indexed {} files ({} chunks total)",
-                    n,
+                    "Cortex index — embedding mode: {}\nFiles indexed: {} | Chunks: {}",
+                    embedding_mode(),
+                    cortex.file_count(),
                     cortex.chunk_count()
                 );
             }
         }
         Err(e) => eprintln!("Indexing failed: {e}"),
+    }
+}
+
+fn embedding_mode() -> &'static str {
+    #[cfg(feature = "cortex")]
+    {
+        "real (all-MiniLM-L6-v2)"
+    }
+    #[cfg(not(feature = "cortex"))]
+    {
+        "fallback"
     }
 }

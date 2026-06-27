@@ -216,6 +216,21 @@ impl Server {
             .await;
         });
 
+        let scheduler_tx = tx.clone();
+        let scheduler_state = self.state.clone();
+        if daemon_cfg.enable_scheduler_worker {
+            let sched_interval =
+                std::time::Duration::from_secs(daemon_cfg.scheduler_interval_secs);
+            tokio::spawn(async move {
+                super::scheduler::start_scheduler_worker(
+                    scheduler_state,
+                    scheduler_tx,
+                    sched_interval,
+                )
+                .await;
+            });
+        }
+
         let evolution_rx = tx.subscribe();
         tokio::spawn(async move {
             crate::evolution::start_evolution_worker(evolution_rx).await;

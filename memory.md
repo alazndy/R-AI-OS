@@ -19,7 +19,8 @@
 - [x] Clean up the disconnected legacy `tool_handover` MCP tool — rewired to create_handoff_workflow cp_*
 - [x] UMAI — Universal Multi-agent Access & Isolation-guard (security/umai.rs), wired to WS daemon + MCP
 - [x] Delta events — AgentStarted/AgentStopped/HealthDelta broadcast; TUI handlers added
-- [x] Channel separation — telem_tx (cap 64, lossy) for FileChanged/ActivePorts; ctrl tx for control events
+- [x] Plan A: Cortex Real Embeddings & hf-hub Redirect Fix
+- [x] Plan B: Autonomous Scheduler (`raios cron` CLI + background daemon worker)
 
 ## Technical Decisions
 - **Architecture**: Modular kernel — `src/security/`, `src/kernel/`, `src/control_plane.rs`, `src/swarm/`, `src/cortex/`
@@ -67,3 +68,6 @@
 - 2026-06-27 [Claude Kaira]: Health worker RAM spike fixed — `scan_project_fast` added to `security/scanner.rs` skipping `cargo audit`/semgrep in background scans. Peak dropped 5.8GB → 1.1GB. 386 tests green.
 - 2026-06-27 [Claude Kaira]: UMAI (Universal Multi-agent Access & Isolation-guard) added — `src/security/umai.rs`, wired as middleware in WS daemon dispatch and MCP tool dispatch. AgentStarted/AgentStopped/HealthDelta delta events added with proxy broadcast + TUI handler chain. Telemetry channel separated (telem_tx cap 64, lossy) from control channel. tool_handover legacy rewritten to use create_handoff_workflow cp_*. aiosd.service hardened (RestartPreventExitStatus=SIGTERM, PATH env). raios-policy.toml: explicit WS command rules added. 386 tests green.
 - 2026-06-25 [Claude Kaira]: Version bump `2.0.0-alpha` → `3.0.0` (`raios version-bump major . --changelog --tag`) for the 4-agent handoff milestone. Replaced the auto-generated CHANGELOG entry (it dumped the *entire* git history since no prior tag existed) with a curated v3.0.0 section. README updated: version badges, ASCII banner, dropped remaining Gemini CLI mentions (`/api/usage` table, vision blurb), added a "📨 Agent Handoff" module section, `raios handoff` CLI reference row, Phase 17 roadmap entry, panel count 13→14. Git tag `v3.0.0` deliberately deleted and not yet recreated — it was created by the bump command against the pre-existing HEAD (Codex's `bebff1b`), before this round's commit existed; needs to be re-tagged against the actual 3.0.0 commit.
+- 2026-06-28 [Antigravity]: Implemented background scheduler worker and `raios cron` subcommands (add, list, remove, pause, resume, run). Created `cp_scheduled_jobs` database schema with atomic claiming, crash recovery, and cron job activation controls. Added 4 unit tests. Fixed negative time interval parsing in sqlite. 390 green tests (with 1 unrelated failure). Manual integration validated. Implemented adaptive CPU throttling in Cortex search indexing (`embed_batch`), chunking requests dynamically based on available cores and `/proc/loadavg` load to prevent CPU spikes and maintain system stability.
+
+

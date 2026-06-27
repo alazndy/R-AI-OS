@@ -11,6 +11,7 @@ mod security;
 mod swarm;
 mod version;
 mod workspace;
+mod cron;
 
 use crate::config::Config;
 use clap::{Parser, Subcommand};
@@ -321,6 +322,38 @@ pub enum Commands {
         #[arg(long)]
         status: String,
     },
+    /// Manage autonomous scheduled agent jobs
+    Cron {
+        #[command(subcommand)]
+        action: CronAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum CronAction {
+    /// Schedule a new recurring agent job
+    Add {
+        title: String,
+        /// Interval: 30s | 5m | 6h | 1d
+        #[arg(long)]
+        every: String,
+        /// Agent: claude | codex | opencode | agy
+        #[arg(long, default_value = "claude")]
+        agent: String,
+        /// Task description injected as the agent's prompt
+        #[arg(long)]
+        task: String,
+    },
+    /// List all active scheduled jobs
+    List,
+    /// Remove a scheduled job (soft delete)
+    Remove { id: String },
+    /// Pause a scheduled job
+    Pause { id: String },
+    /// Resume a paused scheduled job
+    Resume { id: String },
+    /// Immediately trigger a job (bypasses next_run_at, fires via daemon on next tick)
+    Run { id: String },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -660,6 +693,7 @@ pub fn run(cli: Cli) {
         Commands::Quarantine { action } => security::cmd_quarantine(action, cli.json),
         Commands::Secret { action } => security::cmd_secret(action, cli.json),
         Commands::TaskUpdate { id, status } => cmd_task_update(&id, &status, cli.json),
+        Commands::Cron { action } => cron::cmd_cron(action, cli.json),
     }
 }
 

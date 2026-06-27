@@ -10,7 +10,9 @@
 - [x] Add tray-side editor for `aiosd` config paths and worker intervals
 - [x] Project Manager — add/edit/remove/pin projects, VSCode + agent launch
 - [x] Git dirty status indicators per project, dirty count warning in tray
-- [ ] Validate the new PySide6 tray on Linux, macOS, and Windows
+- [x] Native Wayland tray (AyatanaAppIndicator3 + Gtk.Menu, GTK pump via QTimer)
+- [x] Light/dark mode adaptive dialogs (Fusion palette, gsettings detection)
+- [ ] Validate on macOS and Windows
 - [ ] Install platform-specific startup integration files
 
 ## Technical Decisions
@@ -26,7 +28,7 @@
 - **API**: `http://127.0.0.1:42069 (health) / 42071 (agents)` — endpoints: /api/health, /api/projects, /api/usage
 
 ## Current Focus
-- Validate settings dialog and daemon restart flow on live platforms
+- Boot crash + session-end crash fixed. Ready for validation across boots.
 
 ## Change Log & Agent Trail
 - [2026-06-25] Codex Kaira: Promoted this directory to the canonical raios-tray source of truth. External copies must launch or mirror from here instead of diverging.
@@ -41,3 +43,5 @@
 - [2026-06-25] Codex Kaira: Replaced pin emoji markers with themed logo icons in the tray/menu UI and cached git dirty checks by repo state + TTL to reduce menu lag during refreshes.
 - [2026-06-25] Codex Kaira: Refactored Manage Projects into a two-column card grid with stacked action rows so the dialog stays within smaller screens instead of overflowing horizontally.
 - [2026-06-25] Codex Kaira: Removed the legacy `ProjectsDialog` path and routed `All Projects` to `ProjectManagerDialog`, ensuring the two-column layout plus VSCode and agent actions appear consistently from every menu entry.
+- [2026-06-26] Claude Kaira: Fixed two recurring crash patterns. (1) Boot crash: added `ExecStartPre` display-wait loop (up to 30s) so service no longer ABRTs when XWayland isn't ready. (2) Session-end crash: added `PartOf=graphical-session.target` so systemd stops tray before X11 dies on logout. Also removed `ProjectsDialog` dead code (ghost type annotation + unreachable `_apply_state` block for the deleted class).
+- [2026-06-26] Claude Kaira: Switched tray stack to native Wayland. (1) `QT_QPA_PLATFORM=xcb→wayland` in service file. (2) `QSystemTrayIcon` replaced with `AyatanaAppIndicator3 + Gtk.Menu`; GTK events pumped every 50ms via QTimer so both toolkits share the main thread. (3) All dialogs (ProjectManagerDialog, SettingsDialog) switched from `exec()` to `show()+raise_()+activateWindow()` for Wayland focus. (4) Full light/dark mode: `_is_dark_mode()` via gsettings, `_card_theme()` palette, Fusion style + `_apply_dark_palette()` in main().

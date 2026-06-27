@@ -44,10 +44,16 @@ regex = "1.10"
 axum = { version = "0.7", features = ["ws"] }
 # Cortex / Vector Engine — optional (enable with --features cortex)
 fastembed = { version = "3", features = ["online"], optional = true }
+ort-sys = { version = "=2.0.0-rc.4", optional = true }
+hf-hub = { version = "0.4.0", optional = true }
 instant-distance = "0.6"
 
 [features]
-cortex = ["fastembed"]
+default = ["cortex"]
+cortex = ["fastembed", "ort-sys", "hf-hub"]
 
 [dev-dependencies]
 tempfile = "3"
+
+[patch.crates-io]
+hf-hub = { path = ".tmp/hf-hub-0.3.2" }

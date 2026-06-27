@@ -356,6 +356,26 @@ fn migrate(conn: &Connection) -> Result<()> {
         ",
     )?;
 
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS cp_scheduled_jobs (
+            id               TEXT PRIMARY KEY,
+            title            TEXT NOT NULL,
+            agent            TEXT NOT NULL,
+            task_description TEXT NOT NULL,
+            project_id       TEXT,
+            interval_secs    INTEGER NOT NULL,
+            status           TEXT NOT NULL DEFAULT 'active',
+            last_run_at      TEXT,
+            next_run_at      TEXT NOT NULL,
+            created_at       TEXT NOT NULL,
+            run_count        INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_cp_scheduled_jobs_status   ON cp_scheduled_jobs(status);
+        CREATE INDEX IF NOT EXISTS idx_cp_scheduled_jobs_next_run ON cp_scheduled_jobs(next_run_at);
+        ",
+    )?;
+
     Ok(())
 }
 
@@ -2865,6 +2885,171 @@ pub fn cp_load_pending_file_change_approvals(
     Ok(rows)
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScheduledJob {
+    pub id: String,
+    pub title: String,
+    pub agent: String,
+    pub task_description: String,
+    pub project_id: Option<String>,
+    pub interval_secs: i64,
+    pub status: String,
+    pub last_run_at: Option<String>,
+    pub next_run_at: String,
+    pub created_at: String,
+    pub run_count: i64,
+}
+
+pub fn cp_scheduled_job_create(
+    conn: &Connection,
+    title: &str,
+    agent: &str,
+    task_description: &str,
+    interval_secs: i64,
+) -> Result<String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO cp_scheduled_jobs (
+            id, title, agent, task_description, project_id, interval_secs, status,
+            last_run_at, next_run_at, created_at, run_count
+         ) VALUES (
+            ?1, ?2, ?3, ?4, NULL, ?5, 'active',
+            NULL, strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?5 || ' seconds'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 0
+         )",
+        params![id, title, agent, task_description, interval_secs],
+    )?;
+    Ok(id)
+}
+
+pub fn cp_scheduled_jobs_list(conn: &Connection) -> Result<Vec<ScheduledJob>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, agent, task_description, project_id, interval_secs, status, last_run_at, next_run_at, created_at, run_count
+         FROM cp_scheduled_jobs
+         WHERE status != 'deleted'
+         ORDER BY created_at DESC"
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ScheduledJob {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            agent: row.get(2)?,
+            task_description: row.get(3)?,
+            project_id: row.get(4)?,
+            interval_secs: row.get(5)?,
+            status: row.get(6)?,
+            last_run_at: row.get(7)?,
+            next_run_at: row.get(8)?,
+            created_at: row.get(9)?,
+            run_count: row.get(10)?,
+        })
+    })?;
+    let mut jobs = Vec::new();
+    for r in rows {
+        jobs.push(r?);
+    }
+    Ok(jobs)
+}
+
+pub fn cp_scheduled_jobs_claim_due(conn: &Connection) -> Result<Vec<ScheduledJob>> {
+    let mut stmt = conn.prepare(
+        "UPDATE cp_scheduled_jobs
+         SET status = 'firing'
+         WHERE status = 'active' AND next_run_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         RETURNING id, title, agent, task_description, project_id, interval_secs, status, last_run_at, next_run_at, created_at, run_count"
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ScheduledJob {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            agent: row.get(2)?,
+            task_description: row.get(3)?,
+            project_id: row.get(4)?,
+            interval_secs: row.get(5)?,
+            status: row.get(6)?,
+            last_run_at: row.get(7)?,
+            next_run_at: row.get(8)?,
+            created_at: row.get(9)?,
+            run_count: row.get(10)?,
+        })
+    })?;
+    let mut jobs = Vec::new();
+    for r in rows {
+        jobs.push(r?);
+    }
+    Ok(jobs)
+}
+
+pub fn cp_scheduled_job_mark_fired(conn: &Connection, id: &str, interval_secs: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE cp_scheduled_jobs
+         SET status = 'active',
+             last_run_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+             next_run_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?2 || ' seconds'),
+             run_count = run_count + 1
+         WHERE id = ?1",
+        params![id, interval_secs],
+    )?;
+    Ok(())
+}
+
+pub fn cp_scheduled_job_revert_firing(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE cp_scheduled_jobs
+         SET status = 'active'
+         WHERE id = ?1 AND status = 'firing'",
+        params![id],
+    )?;
+    Ok(())
+}
+
+pub fn cp_scheduled_jobs_reset_firing(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "UPDATE cp_scheduled_jobs
+         SET status = 'active'
+         WHERE status = 'firing'",
+        [],
+    )?;
+    Ok(())
+}
+
+pub fn cp_scheduled_job_delete(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE cp_scheduled_jobs
+         SET status = 'deleted'
+         WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(())
+}
+
+pub fn cp_scheduled_job_set_status(conn: &Connection, id: &str, status: &str) -> Result<()> {
+    if status != "active" && status != "paused" {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Status must be active or paused",
+            )),
+        ));
+    }
+    conn.execute(
+        "UPDATE cp_scheduled_jobs
+         SET status = ?2
+         WHERE id = ?1 AND status != 'deleted'",
+        params![id, status],
+    )?;
+    Ok(())
+}
+
+pub fn cp_scheduled_job_trigger_now(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE cp_scheduled_jobs
+         SET next_run_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         WHERE id = ?1 AND status != 'deleted'",
+        params![id],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3895,5 +4080,64 @@ mod tests {
 
         // Post-condition: no longer pending
         assert_eq!(cp_load_pending_file_change_approvals(&conn).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn scheduled_job_create_sets_correct_next_run_at() {
+        let conn = in_memory();
+        let id = cp_scheduled_job_create(&conn, "Test Job", "claude", "desc", 60).unwrap();
+        let jobs = cp_scheduled_jobs_list(&conn).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, id);
+        assert_eq!(jobs[0].title, "Test Job");
+        assert_eq!(jobs[0].interval_secs, 60);
+        assert_eq!(jobs[0].status, "active");
+        assert!(jobs[0].next_run_at > jobs[0].created_at);
+    }
+
+    #[test]
+    fn scheduled_job_claim_due_is_atomic() {
+        let conn = in_memory();
+        let id = cp_scheduled_job_create(&conn, "Test Job", "claude", "desc", -5).unwrap();
+
+        let due_jobs = cp_scheduled_jobs_claim_due(&conn).unwrap();
+        assert_eq!(due_jobs.len(), 1);
+        assert_eq!(due_jobs[0].id, id);
+        assert_eq!(due_jobs[0].status, "firing");
+
+        let due_jobs_again = cp_scheduled_jobs_claim_due(&conn).unwrap();
+        assert!(due_jobs_again.is_empty());
+    }
+
+    #[test]
+    fn scheduled_job_mark_fired_advances_next_run() {
+        let conn = in_memory();
+        let id = cp_scheduled_job_create(&conn, "Test Job", "claude", "desc", 60).unwrap();
+
+        conn.execute("UPDATE cp_scheduled_jobs SET next_run_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-10 seconds') WHERE id = ?1", params![id]).unwrap();
+
+        let claimed = cp_scheduled_jobs_claim_due(&conn).unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        cp_scheduled_job_mark_fired(&conn, &id, 60).unwrap();
+
+        let jobs = cp_scheduled_jobs_list(&conn).unwrap();
+        assert_eq!(jobs[0].status, "active");
+        assert_eq!(jobs[0].run_count, 1);
+        assert!(jobs[0].last_run_at.is_some());
+    }
+
+    #[test]
+    fn scheduled_jobs_reset_firing_on_restart() {
+        let conn = in_memory();
+        let _id = cp_scheduled_job_create(&conn, "Test Job", "claude", "desc", -5).unwrap();
+
+        let claimed = cp_scheduled_jobs_claim_due(&conn).unwrap();
+        assert_eq!(claimed[0].status, "firing");
+
+        cp_scheduled_jobs_reset_firing(&conn).unwrap();
+
+        let jobs = cp_scheduled_jobs_list(&conn).unwrap();
+        assert_eq!(jobs[0].status, "active");
     }
 }

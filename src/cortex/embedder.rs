@@ -28,18 +28,52 @@ mod real {
 
     impl Embedder {
         pub fn init() -> Result<Self> {
-            let opts =
-                InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true);
+            let opts = InitOptions {
+                model_name: EmbeddingModel::AllMiniLML6V2,
+                show_download_progress: true,
+                ..Default::default()
+            };
             let model = TextEmbedding::try_new(opts).context("fastembed init failed")?;
             Ok(Self { model })
         }
 
         pub fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Embedding>> {
-            let raw: Vec<Vec<f32>> = self
-                .model
-                .embed(texts, None)
-                .context("embedding inference failed")?;
-            Ok(raw.into_iter().map(|v| norm(v)).collect())
+            let cores = std::thread::available_parallelism()
+                .map(|p| p.get())
+                .unwrap_or(4);
+
+            let load_1m = std::fs::read_to_string("/proc/loadavg")
+                .ok()
+                .and_then(|s| s.split_whitespace().next().and_then(|val| val.parse::<f32>().ok()))
+                .unwrap_or(0.0);
+
+            // Determine chunk size and sleep interval dynamically
+            let (chunk_size, sleep_ms) = if load_1m > (cores as f32) * 0.8 {
+                (2, 80) // Heavy load: very small chunks, long sleep
+            } else if load_1m > (cores as f32) * 0.4 {
+                (8, 30) // Moderate load: small chunks, short sleep
+            } else {
+                (32, 0) // Low load: normal chunks, no sleep
+            };
+
+            let mut results = Vec::with_capacity(texts.len());
+            for chunk in texts.chunks(chunk_size) {
+                let chunk_vec = chunk.to_vec();
+                let raw: Vec<Vec<f32>> = self
+                    .model
+                    .embed(chunk_vec, Some(chunk_size))
+                    .context("embedding inference failed")?;
+                
+                for v in raw {
+                    results.push(norm(v));
+                }
+
+                if sleep_ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                }
+            }
+
+            Ok(results)
         }
 
         pub fn embed_one(&self, text: &str) -> Result<Embedding> {

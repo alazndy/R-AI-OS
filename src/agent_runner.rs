@@ -176,6 +176,75 @@ pub fn run_agent(
     result
 }
 
+/// Spawn an agent without waiting for it to exit.
+/// Returns the child PID on success.
+/// Does NOT do handoff lookup — caller provides the full prompt.
+pub fn spawn_agent_detached(
+    agent: &str,
+    task_prompt: &str,
+    project_dir: Option<&str>,
+) -> Result<u32, String> {
+    let shield = AgentShield::init();
+    let instinct = InstinctEngine::init();
+
+    // 1. Pre-flight Security Check
+    if let Some(dir) = project_dir {
+        let warnings = shield.preflight_check(Path::new(dir));
+        for warning in warnings {
+            println!("{}", warning);
+        }
+    }
+
+    // 2. Per-agent command build
+    let mut cmd = match agent.to_lowercase().as_str() {
+        "claude" => {
+            let mut c = Command::new("claude");
+            c.env_remove("OPENAI_API_KEY");
+            c.arg("--append-system-prompt").arg(task_prompt);
+            c
+        }
+        "opencode" => {
+            let mut c = Command::new("opencode");
+            c.arg("--prompt").arg(task_prompt);
+            c
+        }
+        "cursor" => Command::new("cursor"),
+        "antigravity" | "agy" => {
+            let mut c = Command::new("agy");
+            c.arg("--prompt-interactive").arg(task_prompt);
+            c
+        }
+        "codex" => {
+            let mut c = Command::new("codex");
+            c.arg(task_prompt);
+            c
+        }
+        _ => return Err(format!("Unsupported agent: {}", agent)),
+    };
+
+    // 3. Inject Instincts env
+    let instinct_prompt = instinct.get_instinct_prompt();
+    if !instinct_prompt.is_empty() {
+        cmd.env("RAIOS_INSTINCTS", instinct_prompt);
+    }
+
+    if let Some(dir) = project_dir {
+        cmd.current_dir(dir);
+    }
+
+    println!(
+        "🚀 Raios Kernel: Spawning detached agent '{}' under Shield protection...",
+        agent
+    );
+
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return Err(format!("Failed to spawn agent: {}", e)),
+    };
+
+    Ok(child.id())
+}
+
 /// Maps a spawnable agent name to its Kaira identity for handoff lookups.
 /// Agents outside the 4-agent matrix (e.g. "cursor") return `None` — they
 /// still spawn normally, just without handoff delivery.
