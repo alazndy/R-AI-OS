@@ -3,7 +3,7 @@
   "publisher": "alazndy",
   "displayName": "R-AI-OS",
   "description": "R-AI-OS Kernel integration for VS Code",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "icon": "icon128.png",
   "repository": {
     "type": "git",
@@ -79,6 +79,22 @@
       {
         "command": "raios.showRefactorView",
         "title": "R-AI-OS: Show Refactor Panel"
+      },
+      {
+        "command": "raios.cronList",
+        "title": "R-AI-OS: List Scheduled Jobs"
+      },
+      {
+        "command": "raios.cronAdd",
+        "title": "R-AI-OS: Add Scheduled Job"
+      },
+      {
+        "command": "raios.handoff",
+        "title": "R-AI-OS: Handoff to Agent"
+      },
+      {
+        "command": "raios.inboxStatus",
+        "title": "R-AI-OS: Inbox Status"
       }
     ],
     "menus": {

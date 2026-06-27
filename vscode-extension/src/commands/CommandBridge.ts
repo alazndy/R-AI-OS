@@ -46,6 +46,18 @@ export class CommandBridge {
       ),
       vscode.commands.registerCommand("raios.openMemory", () =>
         this.openMemory()
+      ),
+      vscode.commands.registerCommand("raios.cronList", () =>
+        this.runCliWithOutput(["--json", "cron", "list"], "Scheduler jobs loaded")
+      ),
+      vscode.commands.registerCommand("raios.cronAdd", () =>
+        this.cronAddFlow()
+      ),
+      vscode.commands.registerCommand("raios.handoff", () =>
+        this.handoffFlow()
+      ),
+      vscode.commands.registerCommand("raios.inboxStatus", () =>
+        this.runCliWithOutput(["--json", "health"], "Inbox status loaded")
       )
     );
   }
@@ -155,6 +167,63 @@ export class CommandBridge {
     } catch {
       vscode.window.showWarningMessage("R-AI-OS: memory.md not found in this project");
     }
+  }
+
+  private async cronAddFlow(): Promise<void> {
+    const title = await vscode.window.showInputBox({
+      prompt: "Job title",
+      placeHolder: "Daily health check",
+    });
+    if (!title?.trim()) return;
+
+    const every = await vscode.window.showInputBox({
+      prompt: "Interval (e.g. 30s, 5m, 6h, 1d)",
+      placeHolder: "24h",
+      validateInput: (v) =>
+        /^\d+[smhd]$/.test(v.trim()) ? null : "Format: <number><s|m|h|d>",
+    });
+    if (!every?.trim()) return;
+
+    const agent = await vscode.window.showQuickPick(
+      ["claude", "codex", "opencode", "agy"],
+      { placeHolder: "Select agent" }
+    );
+    if (!agent) return;
+
+    const task = await vscode.window.showInputBox({
+      prompt: "Task description (injected as agent prompt)",
+      placeHolder: "Check all projects for health issues and report",
+    });
+    if (!task?.trim()) return;
+
+    this.runCli(
+      ["cron", "add", title.trim(), "--every", every.trim(), "--agent", agent, "--task", task.trim()],
+      `Scheduled job "${title.trim()}" created`
+    );
+  }
+
+  private async handoffFlow(): Promise<void> {
+    const target = await vscode.window.showQuickPick(
+      ["claude-kaira", "codex-kaira", "opencode-kaira", "antigravity-kaira"],
+      { placeHolder: "Hand off to agent" }
+    );
+    if (!target) return;
+
+    const status = await vscode.window.showQuickPick(["success", "failed", "blocker"], {
+      placeHolder: "Handoff status",
+    });
+    if (!status) return;
+
+    const msg = await vscode.window.showInputBox({
+      prompt: "Context message for receiving agent",
+      placeHolder: "Auth module refactored, tests passing, review edge cases",
+    });
+    if (!msg?.trim()) return;
+
+    this.runCli(
+      ["handoff", "--to", target, "--status", status, "--msg", msg.trim()],
+      `Handoff delivered to ${target}`
+    );
   }
 
   private currentProjectPath(): string | null {

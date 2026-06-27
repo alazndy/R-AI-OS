@@ -12,6 +12,7 @@ pub mod recent;
 pub mod rules;
 pub mod stats;
 pub mod tasks;
+pub mod scheduler;
 pub mod timeline;
 
 pub use agents::*;
@@ -26,6 +27,7 @@ pub use menu::*;
 pub use policies::*;
 pub use recent::*;
 pub use rules::*;
+pub use scheduler::*;
 pub use stats::*;
 pub use tasks::*;
 pub use timeline::*;
