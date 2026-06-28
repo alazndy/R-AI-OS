@@ -135,6 +135,7 @@ pub fn run_agent(
     }
 
     // Open a session row in the DB so wrapper-routed sessions are always traceable.
+    let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let session_ids = {
         let identity = canonical_agent_identity(agent).unwrap_or(agent);
         let conn_res = crate::db::open_db();
@@ -150,6 +151,16 @@ pub fn run_agent(
             Err(_) => None,
         }
     };
+
+    // For claude: inject session block into ~/.claude/CLAUDE.md so it's visible
+    // inside Claude Code's own UI (system context, /status). Stripped on exit.
+    let injected_claude_md = agent.to_lowercase() == "claude";
+    if injected_claude_md {
+        if let Some((_, run_id)) = &session_ids {
+            let identity = canonical_agent_identity(agent).unwrap_or(agent);
+            inject_session_to_claude_md(run_id, identity, &now_str);
+        }
+    }
 
     // Wrapper-active indicator — always printed so the user can confirm routing is live.
     let session_label = session_ids.as_ref()
@@ -212,6 +223,9 @@ pub fn run_agent(
     };
 
     // 6. Close session row in DB and print post-session summary.
+    if injected_claude_md {
+        strip_session_from_claude_md();
+    }
     let success = result.is_ok();
     if let Some((task_id, run_id)) = &session_ids {
         if let Ok(conn) = crate::db::open_db() {
@@ -311,6 +325,52 @@ pub fn spawn_agent_detached(
     };
 
     Ok(child.id())
+}
+
+/// Inject a RAIOS session block into ~/.claude/CLAUDE.md so the session ID
+/// and tracking info appear inside Claude Code's own UI (visible via /status
+/// and referenced in the system context). Strips any stale block first.
+fn inject_session_to_claude_md(run_id: &str, agent_identity: &str, started_at: &str) {
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let path = Path::new(&home).join(".claude/CLAUDE.md");
+    let Ok(content) = std::fs::read_to_string(&path) else { return };
+    let stripped = strip_session_block(&content);
+    let block = format!(
+        "\n<!-- raios-session-begin -->\n\
+# RAIOS WRAPPER SESSION\n\
+- Session ID: `{}`\n\
+- Agent: {}\n\
+- Started: {}\n\
+- Tracking: `raios sessions` | `raios sessions --agent claude`\n\
+<!-- raios-session-end -->\n",
+        &run_id[..8],
+        agent_identity,
+        started_at,
+    );
+    let _ = std::fs::write(&path, format!("{}{}", stripped.trim_end(), block));
+}
+
+/// Remove the RAIOS session block from ~/.claude/CLAUDE.md.
+fn strip_session_from_claude_md() {
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let path = Path::new(&home).join(".claude/CLAUDE.md");
+    let Ok(content) = std::fs::read_to_string(&path) else { return };
+    let stripped = strip_session_block(&content);
+    if stripped != content {
+        let _ = std::fs::write(&path, stripped.trim_end().to_string() + "\n");
+    }
+}
+
+fn strip_session_block(content: &str) -> String {
+    const BEGIN: &str = "<!-- raios-session-begin -->";
+    const END: &str = "<!-- raios-session-end -->";
+    if let (Some(start), Some(end_off)) = (content.find(BEGIN), content.rfind(END)) {
+        let before = content[..start].trim_end_matches('\n');
+        let after = &content[end_off + END.len()..];
+        format!("{}\n{}", before, after.trim_start_matches('\n'))
+    } else {
+        content.to_string()
+    }
 }
 
 /// Maps a spawnable agent name to its Kaira identity for handoff lookups.
