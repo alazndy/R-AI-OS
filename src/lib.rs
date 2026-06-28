@@ -1,4 +1,5 @@
 pub mod agent_runner;
+pub mod agent_wrapper;
 pub mod app;
 pub mod cli;
 pub mod compliance;

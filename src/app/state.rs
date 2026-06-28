@@ -314,6 +314,8 @@ pub struct WizardState {
     pub skip_opencode: bool,
     pub skip_antigravity: bool,
     pub running: bool,
+    /// 0 = install for all agents, 1 = skip
+    pub agent_wrapper_choice: usize,
 }
 
 #[derive(Debug, Default)]

@@ -67,6 +67,9 @@ pub struct Config {
     /// GitHub username
     #[serde(default)]
     pub github_user: String,
+    /// Whether agent wrapper shell functions are installed
+    #[serde(default)]
+    pub agent_wrapper_enabled: bool,
     #[serde(default)]
     pub daemon: DaemonConfig,
 }
@@ -80,6 +83,7 @@ impl Default for Config {
             vault_projects_path: PathBuf::new(),
             system_name: Self::default_system_name(),
             github_user: String::new(),
+            agent_wrapper_enabled: false,
             daemon: DaemonConfig::default(),
         }
     }
@@ -155,6 +159,7 @@ impl Config {
             vault_projects_path: detected.vault_projects.unwrap_or_default(),
             system_name: Self::default_system_name(),
             github_user: String::new(),
+            agent_wrapper_enabled: false,
             daemon: DaemonConfig::default(),
         }
     }

@@ -197,6 +197,16 @@ impl App {
                     tx2.send(BgMsg::WizardActions(actions)).ok();
                 });
             }
+            WizardStep::AgentWrapper => {
+                let tx2 = tx.clone();
+                // Copy choice from field_cursor before advancing
+                let choice = self.wizard.field_cursor;
+                self.wizard.agent_wrapper_choice = choice;
+                thread::spawn(move || {
+                    let actions = crate::setup_wizard::exec_agent_wrapper(choice);
+                    tx2.send(BgMsg::WizardActions(actions)).ok();
+                });
+            }
             _ => {}
         }
 
@@ -214,6 +224,7 @@ impl App {
         };
         let skills = dev_ops.join(".agents").join("skills");
         let tx = self.tx.clone();
+        let agent_wrapper_enabled = self.wizard.agent_wrapper_choice == 0;
 
         if dev_ops.as_os_str().is_empty() {
             return;
@@ -221,8 +232,13 @@ impl App {
 
         self.wizard.running = true;
         thread::spawn(move || {
-            let actions =
-                crate::setup_wizard::exec_initialize(&dev_ops, &master, &skills, vault.as_deref());
+            let actions = crate::setup_wizard::exec_initialize(
+                &dev_ops,
+                &master,
+                &skills,
+                vault.as_deref(),
+                agent_wrapper_enabled,
+            );
             tx.send(BgMsg::WizardActions(actions)).ok();
             tx.send(BgMsg::WizardDone).ok();
         });

@@ -128,6 +128,7 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
             ],
         ),
         WizardStep::Skills => render_skills(frame, area, app),
+        WizardStep::AgentWrapper => render_agent_wrapper(frame, area, app),
         WizardStep::Initialize => render_initialize(frame, area, app),
         WizardStep::Done => render_done(frame, area, app),
     }
@@ -139,6 +140,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         WizardStep::Done => " [Enter] Dashboard'ı Aç ",
         WizardStep::Initialize if app.wizard.running => " Kurulum çalışıyor... ",
         WizardStep::Initialize => " [Enter] Kurulumu Başlat  [q] Çık ",
+        WizardStep::AgentWrapper => " [↑↓] Seç  [s] Devam  [q] Çık ",
         _ if app.wizard.editing => " [Enter] Onayla  [Esc] İptal ",
         _ => " [Enter] Düzenle  [s] İleri  [Tab] Ajanı Atla  [↑↓] Alan  [q] Çık ",
     };
@@ -583,6 +585,119 @@ fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
     render_log(frame, right, app);
 }
 
+fn render_agent_wrapper(frame: &mut Frame, area: Rect, app: &App) {
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
+
+    let choice = app.wizard.field_cursor; // 0 = All, 1 = Skip
+
+    let choices: &[(&str, &str)] = &[
+        (
+            "Evet — tümü  (claude, codex, opencode, agy)",
+            "Önerilen",
+        ),
+        ("Hayır — atla", ""),
+    ];
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  AGENT WRAPPER",
+            Style::new().fg(MID).bold(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Ajanlar herzaman raios üzerinden çalışsın mı?",
+            Style::new().fg(MID),
+        )),
+        Line::from(Span::styled(
+            "  (UMAI shield + handoff inject + session capture)",
+            Style::new().fg(DIM),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, (label, badge)) in choices.iter().enumerate() {
+        let selected = i == choice;
+        let radio = if selected { "◉" } else { "○" };
+        let (fg, bg) = if selected {
+            (ACCENT, Style::new().fg(ACCENT).bold())
+        } else {
+            (DIM, Style::new().fg(DIM))
+        };
+
+        let mut spans = vec![
+            Span::styled(
+                format!("  {} ", radio),
+                Style::new().fg(fg),
+            ),
+            Span::styled(*label, bg),
+        ];
+        if !badge.is_empty() {
+            spans.push(Span::styled(
+                format!("  [{}]", badge),
+                Style::new().fg(GREEN),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Shell function olarak ~/.zshrc / ~/.bashrc'a eklenir.",
+        Style::new().fg(DIM),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Sonradan: raios agent-wrapper status / remove",
+        Style::new().fg(DIM),
+    )));
+
+    frame.render_widget(Paragraph::new(Text::from(lines)), left);
+
+    // Right panel: explain what will be written
+    let mut r = vec![
+        Line::from(Span::styled(
+            "  NE YAZILIR",
+            Style::new().fg(DIM).bold(),
+        )),
+        Line::from(""),
+    ];
+    if choice == 0 {
+        for agent in crate::agent_wrapper::ALL_AGENTS {
+            r.push(Line::from(vec![
+                Span::styled("  + ", Style::new().fg(ACCENT)),
+                Span::styled(
+                    format!("{}() {{ raios run {} \"$@\"; }}", agent, agent),
+                    Style::new().fg(Color::Rgb(100, 130, 110)),
+                ),
+            ]));
+        }
+        r.push(Line::from(""));
+        r.push(Line::from(Span::styled(
+            "  → ~/.zshrc'a eklenir",
+            Style::new().fg(DIM),
+        )));
+        r.push(Line::from(Span::styled(
+            "  Terminal yeniden başlatılınca aktif olur.",
+            Style::new().fg(DIM),
+        )));
+    } else {
+        r.push(Line::from(Span::styled(
+            "  Hiçbir şey yazılmaz.",
+            Style::new().fg(DIM),
+        )));
+        r.push(Line::from(""));
+        r.push(Line::from(Span::styled(
+            "  Sonradan aktifleştirmek için:",
+            Style::new().fg(DIM),
+        )));
+        r.push(Line::from(Span::styled(
+            "  raios agent-wrapper install",
+            Style::new().fg(CYAN),
+        )));
+    }
+    frame.render_widget(Paragraph::new(Text::from(r)), right);
+}
+
 fn render_initialize(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
@@ -631,6 +746,15 @@ fn render_initialize(frame: &mut Frame, area: Rect, app: &App) {
                 },
             ]));
         }
+        let wrapper_active = app.wizard.agent_wrapper_choice == 0;
+        lines.push(Line::from(vec![
+            Span::styled("  Agent Wrapper ", Style::new().fg(DIM)),
+            if wrapper_active {
+                Span::styled("✓ tümü", Style::new().fg(GREEN))
+            } else {
+                Span::styled("⊘ atlandı", Style::new().fg(DIM))
+            },
+        ]));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  [Enter] → Kurulumu Başlat",
@@ -682,8 +806,14 @@ fn render_done(frame: &mut Frame, area: Rect, app: &App) {
         Style::new().fg(DIM),
     )));
     lines.push(Line::from(""));
+    let wrapper_active = app.wizard.agent_wrapper_choice == 0;
+    let step1_text = if wrapper_active {
+        "Terminali yeniden başlat (MCP + wrapper aktifleşir)"
+    } else {
+        "Claude Code'u yeniden başlat (MCP aktifleşir)"
+    };
     for (n, text) in [
-        ("1.", "Claude Code'u yeniden başlat (MCP aktifleşir)"),
+        ("1.", step1_text),
         ("2.", "raios health   — proje sağlık raporu"),
         ("3.", "raios new <ad> — ilk projeyi oluştur"),
     ] {

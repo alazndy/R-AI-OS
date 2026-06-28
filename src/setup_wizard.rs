@@ -13,6 +13,7 @@ pub enum WizardStep {
     Codex,
     OpenCode,
     Skills,
+    AgentWrapper,
     Initialize,
     Done,
 }
@@ -26,7 +27,8 @@ impl WizardStep {
             Self::Claude => Self::Codex,
             Self::Codex => Self::OpenCode,
             Self::OpenCode => Self::Skills,
-            Self::Skills => Self::Initialize,
+            Self::Skills => Self::AgentWrapper,
+            Self::AgentWrapper => Self::Initialize,
             Self::Initialize => Self::Done,
             Self::Done => Self::Done,
         }
@@ -41,13 +43,14 @@ impl WizardStep {
             Self::Codex => 4,
             Self::OpenCode => 5,
             Self::Skills => 6,
-            Self::Initialize => 7,
-            Self::Done => 8,
+            Self::AgentWrapper => 7,
+            Self::Initialize => 8,
+            Self::Done => 9,
         }
     }
 
     pub fn total() -> usize {
-        8
+        9
     }
 
     pub fn title(&self) -> &'static str {
@@ -59,6 +62,7 @@ impl WizardStep {
             Self::Codex => "CODEX KAIRA",
             Self::OpenCode => "OPENCODE",
             Self::Skills => "SKILLS & HOOKS",
+            Self::AgentWrapper => "AGENT WRAPPER",
             Self::Initialize => "INITIALIZE",
             Self::Done => "DONE",
         }
@@ -463,12 +467,24 @@ pub fn exec_skills(dev_ops: &Path) -> Vec<WizardAction> {
     log
 }
 
+/// Install agent wrapper shell functions (or skip if choice != 0).
+pub fn exec_agent_wrapper(choice: usize) -> Vec<WizardAction> {
+    if choice != 0 {
+        return vec![WizardAction::skip("agent wrapper: skipped")];
+    }
+    crate::agent_wrapper::install(crate::agent_wrapper::ALL_AGENTS)
+        .into_iter()
+        .map(|r| WizardAction { desc: r.desc, ok: r.ok, skipped: r.skipped })
+        .collect()
+}
+
 /// Write config.toml and run initial discover.
 pub fn exec_initialize(
     dev_ops: &Path,
     master_path: &Path,
     skills_path: &Path,
     vault_path: Option<&Path>,
+    agent_wrapper_enabled: bool,
 ) -> Vec<WizardAction> {
     let mut log = Vec::new();
 
@@ -479,6 +495,7 @@ pub fn exec_initialize(
         vault_projects_path: vault_path.map(|p| p.to_path_buf()).unwrap_or_default(),
         system_name: "k-ai-ra".to_string(),
         github_user: String::new(),
+        agent_wrapper_enabled,
         daemon: Default::default(),
     };
 

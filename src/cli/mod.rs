@@ -1,3 +1,4 @@
+mod agent_wrapper;
 mod audit;
 mod dev;
 mod git;
@@ -327,6 +328,28 @@ pub enum Commands {
         #[command(subcommand)]
         action: CronAction,
     },
+    /// Install/remove shell wrapper functions that route agent commands through raios
+    #[command(name = "agent-wrapper")]
+    AgentWrapper {
+        #[command(subcommand)]
+        action: AgentWrapperCmd,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum AgentWrapperCmd {
+    /// Install shell functions routing agent commands through raios (all agents by default)
+    Install {
+        /// Specific agents to wrap (omit for all: claude codex opencode agy)
+        agents: Vec<String>,
+    },
+    /// Remove wrapper shell functions (all agents by default)
+    Remove {
+        /// Specific agents to remove (omit for all)
+        agents: Vec<String>,
+    },
+    /// Show wrapper status for all agents
+    Status,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -694,6 +717,18 @@ pub fn run(cli: Cli) {
         Commands::Secret { action } => security::cmd_secret(action, cli.json),
         Commands::TaskUpdate { id, status } => cmd_task_update(&id, &status, cli.json),
         Commands::Cron { action } => cron::cmd_cron(action, cli.json),
+        Commands::AgentWrapper { action } => {
+            let a = match action {
+                AgentWrapperCmd::Install { agents } => {
+                    agent_wrapper::AgentWrapperAction::Install { agents }
+                }
+                AgentWrapperCmd::Remove { agents } => {
+                    agent_wrapper::AgentWrapperAction::Remove { agents }
+                }
+                AgentWrapperCmd::Status => agent_wrapper::AgentWrapperAction::Status,
+            };
+            agent_wrapper::cmd_agent_wrapper(a, cli.json);
+        }
     }
 }
 

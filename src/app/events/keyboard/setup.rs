@@ -41,7 +41,11 @@ impl App {
                 self.wizard.field_cursor -= 1;
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.wizard.field_cursor += 1;
+                // AgentWrapper has 2 choices (0 = All, 1 = Skip), cap at 1
+                let max = if self.wizard.step == WizardStep::AgentWrapper { 1 } else { usize::MAX };
+                if self.wizard.field_cursor < max {
+                    self.wizard.field_cursor += 1;
+                }
             }
 
             // Enter: begin editing or advance step
@@ -69,6 +73,7 @@ impl App {
                                 vault_projects_path: vault,
                                 system_name: "k-ai-ra".to_string(),
                                 github_user: String::new(),
+                                agent_wrapper_enabled: self.wizard.agent_wrapper_choice == 0,
                                 daemon: Default::default(),
                             };
                             let _ = cfg.save();
