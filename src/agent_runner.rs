@@ -1,5 +1,6 @@
 use crate::instinct::InstinctEngine;
 use crate::shield::AgentShield;
+use std::io::{self, BufRead};
 use std::path::Path;
 use std::process::Command;
 use std::thread;
@@ -63,13 +64,24 @@ pub fn run_agent(
     // 4. Build the Command, wiring the handover into each agent's native prompt flag.
     // NOTE: --append-system-prompt on claude only works with --print (non-interactive).
     // For interactive `raios run claude`, we print the context as a terminal banner
-    // instead — the user sees it, the DB record is consumed, no flag collision.
+    // and pause for Enter — the user reads the handoff, then the agent starts.
+    // This ensures the context is visible in the terminal before the agent TUI takes over.
     if let Some(block) = &handover_block {
-        println!("\n\x1b[1;33m╔══ HANDOVER CONTEXT ══════════════════════════════════════╗\x1b[0m");
+        let width = 62usize;
+        let border = "═".repeat(width);
+        println!("\n\x1b[1;33m╔{border}╗\x1b[0m");
+        println!("\x1b[1;33m║\x1b[0m  \x1b[1;33m✦ HANDOVER CONTEXT\x1b[0m{}\x1b[1;33m║\x1b[0m", " ".repeat(width - 20));
+        println!("\x1b[1;33m╠{border}╣\x1b[0m");
         for line in block.lines() {
-            println!("\x1b[33m║\x1b[0m  {}", line);
+            let truncated: String = line.chars().take(width - 2).collect();
+            let pad = width.saturating_sub(truncated.chars().count() + 2);
+            println!("\x1b[33m║\x1b[0m  {}{} \x1b[33m║\x1b[0m", truncated, " ".repeat(pad));
         }
-        println!("\x1b[1;33m╚═══════════════════════════════════════════════════════════╝\x1b[0m\n");
+        println!("\x1b[1;33m╚{border}╝\x1b[0m");
+        println!("\n  \x1b[90mHandoff alındı — devam etmek için \x1b[37m[Enter]\x1b[0m\x1b[90m'a bas...\x1b[0m");
+        let stdin = io::stdin();
+        let _ = stdin.lock().lines().next();
+        println!();
     }
 
     let mut cmd = match agent.to_lowercase().as_str() {
