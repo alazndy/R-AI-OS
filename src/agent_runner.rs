@@ -4,7 +4,7 @@ use std::io::{self, BufRead};
 use std::path::Path;
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const BUDGET_LIMIT_KB: u64 = 300;
 
@@ -135,6 +135,7 @@ pub fn run_agent(
     }
 
     // Open a session row in the DB so wrapper-routed sessions are always traceable.
+    let session_start_time = SystemTime::now();
     let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let session_ids = {
         let identity = canonical_agent_identity(agent).unwrap_or(agent);
@@ -253,6 +254,13 @@ pub fn run_agent(
     if success {
         instinct.data.session_count += 1;
         let _ = instinct.save();
+    }
+
+    // 8. For claude: offer to auto-generate a memory.md entry from the session transcript.
+    if success && agent.to_lowercase() == "claude" {
+        if let Some(ref dir) = project_dir {
+            crate::session_memory::post_session_memory_prompt(dir, session_start_time);
+        }
     }
 
     result

@@ -1,5 +1,6 @@
 pub mod agent_runner;
 pub mod agent_wrapper;
+pub mod session_memory;
 pub mod app;
 pub mod cli;
 pub mod compliance;

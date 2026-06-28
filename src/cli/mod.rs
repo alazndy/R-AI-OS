@@ -342,6 +342,12 @@ pub enum Commands {
         #[arg(short = 'n', long, default_value = "15")]
         top: usize,
     },
+    /// Generate a memory.md Change Log entry from the last Claude session transcript
+    #[command(name = "memory-gen")]
+    MemoryGen {
+        /// Project path or name (omit for current directory)
+        project: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -738,6 +744,9 @@ pub fn run(cli: Cli) {
             agent_wrapper::cmd_agent_wrapper(a, cli.json);
         }
         Commands::Sessions { agent, top } => cmd_sessions(agent.as_deref(), top, cli.json),
+        Commands::MemoryGen { project } => {
+            crate::session_memory::cmd_memory_gen(project.as_deref(), cli.json);
+        }
     }
 }
 
