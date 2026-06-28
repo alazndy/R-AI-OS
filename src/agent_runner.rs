@@ -130,14 +130,37 @@ pub fn run_agent(
         cmd.env("RAIOS_HANDOVER_CONTEXT", block);
     }
 
-    if let Some(dir) = project_dir {
+    if let Some(dir) = &project_dir {
         cmd.current_dir(dir);
     }
 
+    // Open a session row in the DB so wrapper-routed sessions are always traceable.
+    let session_ids = {
+        let identity = canonical_agent_identity(agent).unwrap_or(agent);
+        let conn_res = crate::db::open_db();
+        match conn_res {
+            Ok(conn) => {
+                let project_id = project_dir.as_deref()
+                    .and_then(|dir| crate::db::project_id_for_file_path(&conn, dir));
+                match crate::db::cp_session_start(&conn, identity, project_id) {
+                    Ok(ids) => Some((ids.0, ids.1)),
+                    Err(_) => None,
+                }
+            }
+            Err(_) => None,
+        }
+    };
+
+    // Wrapper-active indicator — always printed so the user can confirm routing is live.
+    let session_label = session_ids.as_ref()
+        .map(|(_, run_id)| format!("  session: {}", &run_id[..8]))
+        .unwrap_or_default();
     println!(
-        "🚀 Raios Kernel: Starting agent '{}' under Shield protection...",
-        agent
+        "\x1b[32m⟦ RAIOS WRAPPER ✓ ⟧\x1b[0m  agent: {}{}",
+        canonical_agent_identity(agent).unwrap_or(agent),
+        session_label
     );
+
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return Err(format!("Failed to spawn agent: {}", e)),
@@ -188,8 +211,32 @@ pub fn run_agent(
         }
     };
 
-    // 6. Post-session Instinct Learning
-    if result.is_ok() {
+    // 6. Close session row in DB and print post-session summary.
+    let success = result.is_ok();
+    if let Some((task_id, run_id)) = &session_ids {
+        if let Ok(conn) = crate::db::open_db() {
+            let _ = crate::db::cp_session_end(&conn, task_id, run_id, success);
+        }
+    }
+    let session_short = session_ids.as_ref()
+        .map(|(_, run_id)| format!("  \x1b[90mrun: {}\x1b[0m", &run_id[..8]))
+        .unwrap_or_default();
+    let identity = canonical_agent_identity(agent).unwrap_or(agent);
+    if success {
+        println!(
+            "\x1b[32m✓ Session ended\x1b[0m{}\n  \x1b[90mHandoff:\x1b[0m raios handoff --to {}-kaira --status success --msg \"...\"",
+            session_short, agent
+        );
+    } else {
+        println!(
+            "\x1b[31m✗ Session ended (non-zero)\x1b[0m{}\n  \x1b[90mHandoff:\x1b[0m raios handoff --to {}-kaira --status failed --msg \"...\"",
+            session_short, identity
+        );
+    }
+    let _ = identity;
+
+    // 7. Post-session Instinct Learning
+    if success {
         instinct.data.session_count += 1;
         let _ = instinct.save();
     }
