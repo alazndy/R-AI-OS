@@ -60,15 +60,24 @@ pub fn run_agent(
     });
     let handover_block = pending_handoff.as_ref().map(|(_, _, _, block)| block.clone());
 
-    // 4. Build the Command, wiring the handover into each agent's native prompt flag
-    // (env vars like RAIOS_HANDOVER_CONTEXT are not read by claude/codex/opencode).
+    // 4. Build the Command, wiring the handover into each agent's native prompt flag.
+    // NOTE: --append-system-prompt on claude only works with --print (non-interactive).
+    // For interactive `raios run claude`, we print the context as a terminal banner
+    // instead — the user sees it, the DB record is consumed, no flag collision.
+    if let Some(block) = &handover_block {
+        println!("\n\x1b[1;33m╔══ HANDOVER CONTEXT ══════════════════════════════════════╗\x1b[0m");
+        for line in block.lines() {
+            println!("\x1b[33m║\x1b[0m  {}", line);
+        }
+        println!("\x1b[1;33m╚═══════════════════════════════════════════════════════════╝\x1b[0m\n");
+    }
+
     let mut cmd = match agent.to_lowercase().as_str() {
         "claude" => {
             let mut c = Command::new("claude");
             c.env_remove("OPENAI_API_KEY");
-            if let Some(block) = &handover_block {
-                c.arg("--append-system-prompt").arg(block);
-            }
+            // No --append-system-prompt here: that flag implies --print mode and breaks
+            // interactive sessions. Context is already printed as a banner above.
             c
         }
         "opencode" => {
