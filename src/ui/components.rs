@@ -14,7 +14,7 @@ pub fn render_boot(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(PANEL_BG)), area);
 
-    let total = 5u16;
+    let total = 1u16;
     let done = app.system.boot_results.len() as u16;
     #[allow(clippy::manual_checked_ops)]
     let progress = if total > 0 {

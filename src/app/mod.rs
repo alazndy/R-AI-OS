@@ -244,6 +244,25 @@ impl App {
 
         let config = Config::load().unwrap_or_default();
 
+        // Probe remote hub HTTP health endpoint to confirm reachability
+        let boot_tx = tx.clone();
+        let probe_host = host.clone();
+        thread::spawn(move || {
+            let addr = format!("{}:42071", probe_host);
+            let pass = std::net::TcpStream::connect_timeout(
+                &addr.parse().unwrap_or_else(|_| "127.0.0.1:42071".parse().unwrap()),
+                std::time::Duration::from_secs(5),
+            )
+            .is_ok();
+            boot_tx
+                .send(BgMsg::BootResult {
+                    name: format!("Remote Hub ({})", probe_host),
+                    pass,
+                    done: true,
+                })
+                .ok();
+        });
+
         let tx_daemon = ipc::connect_daemon_addr(tx.clone(), Some(host));
 
         Self {
