@@ -1,6 +1,9 @@
 # R-AI-OS Security Policy Configuration
 
 [server]
+[server.hub]
+api_key_hash = "1d41b48bbf183a496eea3b6a40336d4dc9aeb138788e4ec4763988081744fd89"
+
 http_port = 42071 # Axum HTTP/WebSocket API adapter port
 
 [filesystem]

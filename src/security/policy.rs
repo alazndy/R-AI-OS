@@ -23,6 +23,36 @@ pub struct PolicyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerPolicy {
     pub http_port: Option<u16>,
+    /// Optional hub (remote access) configuration
+    pub hub: Option<HubPolicy>,
+}
+
+/// Controls how the Cortex Hub exposes its ports to the network.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubPolicy {
+    /// "localhost" (default) | "tailscale" | "all"
+    #[serde(default = "HubPolicy::default_bind_mode")]
+    pub bind_mode: String,
+    /// Trusted CIDR for remote clients (default: Tailscale range 100.64.0.0/10)
+    #[serde(default = "HubPolicy::default_trusted_cidr")]
+    pub trusted_cidr: String,
+    /// SHA-256 hex hash of the remote API key (never store the key in plaintext)
+    pub api_key_hash: Option<String>,
+}
+
+impl HubPolicy {
+    fn default_bind_mode() -> String { "localhost".into() }
+    fn default_trusted_cidr() -> String { "100.64.0.0/10".into() }
+}
+
+impl Default for HubPolicy {
+    fn default() -> Self {
+        Self {
+            bind_mode: Self::default_bind_mode(),
+            trusted_cidr: Self::default_trusted_cidr(),
+            api_key_hash: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

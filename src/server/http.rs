@@ -42,6 +42,41 @@ fn resolve_pending_diff_target(
     resolved.starts_with(allowed_base).then_some(resolved)
 }
 
+/// Resolve the bind address for the HTTP server based on hub policy.
+pub fn resolve_bind_addr(port: u16) -> SocketAddr {
+    let hub = crate::security::PolicyConfig::try_load_default()
+        .and_then(|p| p.server)
+        .and_then(|s| s.hub);
+
+    let mode = hub
+        .as_ref()
+        .map(|h| h.bind_mode.as_str())
+        .unwrap_or("localhost");
+
+    let ip: std::net::IpAddr = match mode {
+        "all" => "0.0.0.0".parse().unwrap(),
+        "tailscale" => detect_tailscale_ip().unwrap_or_else(|| {
+            eprintln!("[Kernel] Tailscale IP not found, falling back to localhost");
+            "127.0.0.1".parse().unwrap()
+        }),
+        _ => "127.0.0.1".parse().unwrap(),
+    };
+
+    SocketAddr::new(ip, port)
+}
+
+/// Call `tailscale ip --1` and parse the result.
+pub fn detect_tailscale_ip() -> Option<std::net::IpAddr> {
+    let out = std::process::Command::new("tailscale")
+        .args(["ip", "--1"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// Start the Axum HTTP & WebSocket API Server.
 pub async fn start_http_server(
     port: u16,
@@ -65,7 +100,7 @@ pub async fn start_http_server(
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(app_state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = resolve_bind_addr(port);
     println!("[Kernel] HTTP API Adapter listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -74,48 +109,91 @@ pub async fn start_http_server(
     Ok(())
 }
 
-/// HTTP middleware to enforce the secure bootstrap token auth.
-/// Host header is also validated to block DNS rebinding attacks.
+/// HTTP middleware — dual-path auth:
+///   localhost (127.0.0.1)  → ephemeral session token (existing behaviour)
+///   Tailscale / remote     → persistent API key (SHA-256 hashed in policy.toml)
 async fn auth_middleware(
     headers: HeaderMap,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<Response, StatusCode> {
-    // 1. Verify Host header is strictly localhost or 127.0.0.1
-    if let Some(host) = headers.get(header::HOST) {
-        let host_str = host.to_str().unwrap_or("").to_lowercase();
-        if !host_str.starts_with("localhost") && !host_str.starts_with("127.0.0.1") {
-            eprintln!(
-                "[HTTP Auth] Blocked request due to foreign Host header: {}",
-                host_str
-            );
+    // 1. Determine source IP from connection info or X-Real-IP
+    let source_ip = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<std::net::IpAddr>().ok());
+
+    let is_localhost = source_ip
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(true); // no header → assume local (unix socket / 127.0.0.1 bind)
+
+    // 2. Validate Host header — block DNS rebinding unless remote mode is enabled
+    if is_localhost {
+        if let Some(host) = headers.get(header::HOST) {
+            let host_str = host.to_str().unwrap_or("").to_lowercase();
+            if !host_str.starts_with("localhost") && !host_str.starts_with("127.0.0.1") {
+                eprintln!("[HTTP Auth] DNS rebinding attempt: {host_str}");
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        } else {
             return Err(StatusCode::BAD_REQUEST);
         }
-    } else {
-        return Err(StatusCode::BAD_REQUEST);
     }
 
-    // 2. Validate session token via Authorization header
-    let auth_header = headers
+    // 3. Extract bearer token
+    let bearer = headers
         .get(header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok());
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(str::to_owned);
 
-    let token = match auth_header {
-        Some(h) if h.starts_with("Bearer ") => &h[7..],
-        _ => {
-            eprintln!("[HTTP Auth] Blocked request due to missing Bearer token");
-            return Err(StatusCode::UNAUTHORIZED);
-        }
+    let Some(token) = bearer else {
+        eprintln!("[HTTP Auth] Missing Bearer token");
+        return Err(StatusCode::UNAUTHORIZED);
     };
 
-    let token_manager = SessionTokenManager::new();
-    if !token_manager.validate_token(token) {
-        eprintln!("[HTTP Auth] Blocked request: Invalid or expired token");
-        return Err(StatusCode::UNAUTHORIZED);
+    // 4. Route to the appropriate validator
+    if is_localhost {
+        let mgr = SessionTokenManager::new();
+        if !mgr.validate_token(&token) {
+            eprintln!("[HTTP Auth] Invalid session token (localhost)");
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    } else {
+        if !validate_api_key(&token) {
+            eprintln!("[HTTP Auth] Invalid API key (remote)");
+            return Err(StatusCode::UNAUTHORIZED);
+        }
     }
 
-    // Proceed to next handler
     Ok(next.run(req).await)
+}
+
+/// Validate a remote API key by comparing its SHA-256 hash against policy.toml.
+fn validate_api_key(provided: &str) -> bool {
+    use sha2::{Digest, Sha256};
+
+    let stored_hash = crate::security::PolicyConfig::try_load_default()
+        .and_then(|p| p.server)
+        .and_then(|s| s.hub)
+        .and_then(|h| h.api_key_hash);
+
+    let Some(stored) = stored_hash else {
+        eprintln!("[HTTP Auth] No api_key_hash configured in raios-policy.toml [server.hub]");
+        return false;
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(provided.as_bytes());
+    let computed = format!("{:x}", hasher.finalize());
+
+    // Constant-time comparison
+    computed.len() == stored.len()
+        && computed
+            .bytes()
+            .zip(stored.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
 }
 
 /// GET /api/health

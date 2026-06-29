@@ -139,8 +139,10 @@ impl Server {
         // Also write legacy token for backwards compatibility with any existing tools
         let _ = std::fs::write(config_dir.join(".ipc_token"), &token);
 
-        println!("Server is listening on 127.0.0.1:42069...");
-        let listener = TcpListener::bind("127.0.0.1:42069").await?;
+        let bind_ip = crate::server::http::resolve_bind_addr(42069).ip();
+        let daemon_addr = format!("{bind_ip}:42069");
+        println!("Server is listening on {daemon_addr}...");
+        let listener = TcpListener::bind(&daemon_addr).await?;
 
         let factory = Arc::new(Factory::new(tx.clone()));
 

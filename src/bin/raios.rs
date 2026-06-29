@@ -24,15 +24,17 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let remote = cli.remote.clone();
+
     if cli.command.is_some() {
         cli::run(cli);
         return Ok(());
     }
 
-    run_tui()
+    run_tui(remote)
 }
 
-fn run_tui() -> Result<()> {
+fn run_tui(remote: Option<String>) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -40,7 +42,7 @@ fn run_tui() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal);
+    let result = run_app(&mut terminal, remote);
 
     disable_raw_mode()?;
     execute!(
@@ -53,8 +55,11 @@ fn run_tui() -> Result<()> {
     result
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    let mut app = App::new();
+fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, remote: Option<String>) -> Result<()> {
+    let mut app = match remote {
+        Some(host) => App::new_remote(host),
+        None => App::new(),
+    };
 
     loop {
         app.tick();

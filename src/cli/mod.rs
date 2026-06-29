@@ -4,6 +4,7 @@ mod dev;
 mod git;
 mod handoff;
 mod health;
+mod hub;
 mod instinct;
 mod new;
 mod refactor;
@@ -34,6 +35,9 @@ pub struct Cli {
     /// Quick scan of the current directory for refactor candidates
     #[arg(long)]
     pub refactor: bool,
+    /// Connect TUI to a remote R-AI-OS Hub (e.g. 100.x.x.x or cortex.ts.net)
+    #[arg(long, global = true)]
+    pub remote: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -346,6 +350,101 @@ pub enum Commands {
     #[command(name = "memory-gen")]
     MemoryGen {
         /// Project path or name (omit for current directory)
+        project: Option<String>,
+    },
+    /// Manage the always-on R-AI-OS Cortex Hub (aiosd daemon)
+    Hub {
+        #[command(subcommand)]
+        action: HubAction,
+    },
+    /// Manage raios-native memory items (stored in raios DB, LLM-independent)
+    #[command(name = "mem")]
+    Mem {
+        #[command(subcommand)]
+        action: MemAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum HubAction {
+    /// Start aiosd in the background and write PID
+    Start,
+    /// Stop the running hub daemon
+    Stop,
+    /// Show hub status: PID, uptime, port health
+    Status,
+    /// Generate and install a systemd user service for auto-start at boot
+    Install {
+        /// Immediately enable and start via systemctl
+        #[arg(long)]
+        enable: bool,
+    },
+    /// Stream daemon logs (last 50 lines + follow)
+    Logs {
+        /// Number of historical lines to show before following
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+    },
+    /// Manage the remote access API key
+    ApiKey {
+        #[command(subcommand)]
+        action: HubApiKeyAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum HubApiKeyAction {
+    /// Generate a new API key (write key file + hash to policy.toml)
+    Generate {
+        /// Overwrite existing key
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the current API key
+    Show,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum MemAction {
+    /// List memory items for a project
+    List {
+        /// Project path (omit for current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Filter by type: user|feedback|project|reference
+        #[arg(short = 't', long)]
+        item_type: Option<String>,
+    },
+    /// Show a single memory item by slug
+    Get {
+        slug: String,
+        #[arg(short, long)]
+        project: Option<String>,
+    },
+    /// Add or update a memory item
+    Add {
+        #[arg(long)]
+        item_type: String,
+        #[arg(long)]
+        slug: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long, default_value = "")]
+        description: String,
+        #[arg(long, allow_hyphen_values = true)]
+        body: String,
+        #[arg(short, long)]
+        project: Option<String>,
+    },
+    /// Delete a memory item by slug
+    Delete {
+        slug: String,
+        #[arg(short, long)]
+        project: Option<String>,
+    },
+    /// Export all DB memory items to ~/.claude/projects/<key>/memory/ markdown files
+    Export {
+        #[arg(short, long)]
         project: Option<String>,
     },
 }
@@ -746,6 +845,120 @@ pub fn run(cli: Cli) {
         Commands::Sessions { agent, top } => cmd_sessions(agent.as_deref(), top, cli.json),
         Commands::MemoryGen { project } => {
             crate::session_memory::cmd_memory_gen(project.as_deref(), cli.json);
+        }
+        Commands::Mem { action } => cmd_mem(action, cli.json),
+        Commands::Hub { action } => match action {
+            HubAction::Start => hub::cmd_start(cli.json),
+            HubAction::Stop => hub::cmd_stop(cli.json),
+            HubAction::Status => hub::cmd_status(cli.json),
+            HubAction::Install { enable } => hub::cmd_install(enable, cli.json),
+            HubAction::Logs { lines } => hub::cmd_logs(lines),
+            HubAction::ApiKey { action } => match action {
+                HubApiKeyAction::Generate { force } => hub::cmd_api_key_generate(force),
+                HubApiKeyAction::Show => hub::cmd_api_key_show(),
+            },
+        },
+    }
+}
+
+fn cmd_mem(action: MemAction, json: bool) {
+    let project_key_for = |project: &Option<String>| -> String {
+        let path = project
+            .as_deref()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| ".".to_string())
+            });
+        path.replace('/', "-")
+    };
+
+    let conn = match crate::db::open_db() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("DB error: {e}");
+            return;
+        }
+    };
+
+    match action {
+        MemAction::List { project, item_type } => {
+            let key = project_key_for(&project);
+            let items = crate::db::mem_list(&conn, &key).unwrap_or_default();
+            let items: Vec<_> = if let Some(t) = &item_type {
+                items.into_iter().filter(|i| &i.item_type == t).collect()
+            } else {
+                items
+            };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default());
+                return;
+            }
+            if items.is_empty() {
+                println!("  No memory items for {}", key);
+                return;
+            }
+            println!("\n  MEMORY ITEMS  {}\n", key);
+            for i in &items {
+                println!("  [{:<10}] {}  \x1b[90m{}\x1b[0m", i.item_type, i.slug, i.description);
+            }
+            println!();
+        }
+        MemAction::Get { slug, project } => {
+            let key = project_key_for(&project);
+            match crate::db::mem_get(&conn, &key, &slug) {
+                Ok(Some(item)) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&item).unwrap_or_default());
+                    } else {
+                        println!("\n  [{}/{}]\n  Type: {}\n  Description: {}\n\n{}\n",
+                            item.project_key, item.slug, item.item_type,
+                            item.description, item.body);
+                    }
+                }
+                Ok(None) => eprintln!("  Not found: {}", slug),
+                Err(e) => eprintln!("  Error: {e}"),
+            }
+        }
+        MemAction::Add { item_type, slug, title, description, body, project } => {
+            let key = project_key_for(&project);
+            match crate::db::mem_upsert(&conn, &key, &item_type, &slug, &title, &description, &body, None) {
+                Ok(()) => {
+                    if json {
+                        println!("{{\"ok\":true,\"slug\":\"{}\"}}", slug);
+                    } else {
+                        println!("  \x1b[32m✓\x1b[0m  {}/{}", key, slug);
+                    }
+                }
+                Err(e) => eprintln!("  \x1b[31m✗\x1b[0m  {e}"),
+            }
+        }
+        MemAction::Delete { slug, project } => {
+            let key = project_key_for(&project);
+            match crate::db::mem_delete(&conn, &key, &slug) {
+                Ok(true) => println!("  \x1b[32m✓\x1b[0m  deleted {}/{}", key, slug),
+                Ok(false) => eprintln!("  Not found: {}", slug),
+                Err(e) => eprintln!("  \x1b[31m✗\x1b[0m  {e}"),
+            }
+        }
+        MemAction::Export { project } => {
+            let key = project_key_for(&project);
+            let home = std::env::var("HOME").unwrap_or_default();
+            let memory_dir = std::path::PathBuf::from(&home)
+                .join(".claude/projects")
+                .join(&key)
+                .join("memory");
+            match crate::db::mem_export(&conn, &key, &memory_dir) {
+                Ok(n) => {
+                    if json {
+                        println!("{{\"exported\":{}}}", n);
+                    } else {
+                        println!("  \x1b[32m✓\x1b[0m  {} item(s) → {}", n, memory_dir.display());
+                    }
+                }
+                Err(e) => eprintln!("  \x1b[31m✗\x1b[0m  {e}"),
+            }
         }
     }
 }

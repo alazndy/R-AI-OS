@@ -12,13 +12,16 @@ use crate::indexer::SearchResult;
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 
-const DAEMON_ADDR: &str = "127.0.0.1:42069";
+const LOCAL_DAEMON_ADDR: &str = "127.0.0.1:42069";
 const RETRY_INTERVAL: Duration = Duration::from_secs(8);
 const MAX_RETRIES: u32 = 10;
 
-fn ensure_daemon_running() {
-    // Check if port is already open
-    if TcpStream::connect_timeout(&DAEMON_ADDR.parse().unwrap(), Duration::from_millis(200)).is_ok()
+fn ensure_local_daemon_running() {
+    if TcpStream::connect_timeout(
+        &LOCAL_DAEMON_ADDR.parse().unwrap(),
+        Duration::from_millis(200),
+    )
+    .is_ok()
     {
         return;
     }
@@ -29,37 +32,64 @@ fn ensure_daemon_running() {
 
     #[cfg(windows)]
     {
-        // 0x08000000 = CREATE_NO_WINDOW
         cmd.creation_flags(0x08000000);
     }
 
-    // Spawn daemon and reap it in a background thread to prevent zombie processes
     if let Ok(mut child) = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         thread::spawn(move || {
             let _ = child.wait();
         });
     }
 
-    // Give it a second to wake up
     thread::sleep(Duration::from_secs(2));
 }
 
+/// Read the auth token appropriate for the target address.
+///   local  → ~/.config/raios/.ipc_token  (session token, short-lived)
+///   remote → ~/.config/raios/.hub_api_key (persistent API key)
+fn read_auth_token(is_remote: bool) -> Option<String> {
+    let config_dir = dirs::config_dir()?.join("raios");
+    let filename = if is_remote { ".hub_api_key" } else { ".ipc_token" };
+    std::fs::read_to_string(config_dir.join(filename))
+        .ok()
+        .map(|s| s.trim().to_owned())
+}
+
+/// Connect to the local daemon (localhost).
 pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
+    connect_daemon_addr(tx, None)
+}
+
+/// Connect to daemon at an explicit address.
+/// Pass `Some("100.x.x.x")` for remote Tailscale Hub access.
+pub fn connect_daemon_addr(tx: Sender<BgMsg>, remote_host: Option<String>) -> Option<Sender<String>> {
+    let daemon_addr = match &remote_host {
+        Some(h) => {
+            if h.contains(':') {
+                h.clone()
+            } else {
+                format!("{h}:42069")
+            }
+        }
+        None => LOCAL_DAEMON_ADDR.to_string(),
+    };
+    let is_remote = remote_host.is_some();
+
     let (tx_daemon_local, rx_daemon_local) = mpsc::channel::<String>();
 
     thread::spawn(move || {
-        ensure_daemon_running();
+        // Only auto-spawn aiosd when connecting locally
+        if !is_remote {
+            ensure_local_daemon_running();
+        }
 
         let mut attempts = 0u32;
         loop {
-            match TcpStream::connect(DAEMON_ADDR) {
+            match TcpStream::connect(&daemon_addr) {
                 Ok(mut stream) => {
                     // Auth handshake
-                    if let Some(config_dir) = crate::config::Config::config_file().parent() {
-                        let token_path = config_dir.join(".ipc_token");
-                        if let Ok(token) = std::fs::read_to_string(token_path) {
-                            let _ = stream.write_all(format!("AUTH {}\n", token.trim()).as_bytes());
-                        }
+                    if let Some(token) = read_auth_token(is_remote) {
+                        let _ = stream.write_all(format!("AUTH {}\n", token).as_bytes());
                     }
 
                     let stream_clone = match stream.try_clone() {
@@ -74,7 +104,7 @@ pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
                     tx.send(BgMsg::NewLog(crate::app::state::LogEntry {
                         timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
                         sender: "IPC".into(),
-                        content: "Connected to aiosd daemon".into(),
+                        content: format!("Connected to aiosd @ {daemon_addr}"),
                     }))
                     .ok();
 
@@ -118,8 +148,7 @@ pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
                             timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
                             sender: "IPC".into(),
                             content: format!(
-                                "aiosd not reachable after {} attempts — offline mode",
-                                MAX_RETRIES
+                                "aiosd@{daemon_addr} not reachable after {MAX_RETRIES} attempts — offline mode"
                             ),
                         }))
                         .ok();

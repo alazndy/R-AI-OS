@@ -83,8 +83,10 @@ impl Kernel {
 /// because MCP clients typically trust localhost connections; the daemon TCP
 /// uses token-based auth for higher-privilege operations.
 async fn run_mcp_tcp(tx: broadcast::Sender<String>) -> Result<()> {
-    let listener = TcpListener::bind(format!("127.0.0.1:{MCP_TCP_PORT}")).await?;
-    println!("[Kernel] MCP-over-TCP listening on 127.0.0.1:{MCP_TCP_PORT}");
+    let bind_ip = crate::server::http::resolve_bind_addr(MCP_TCP_PORT).ip();
+    let addr = format!("{bind_ip}:{MCP_TCP_PORT}");
+    let listener = TcpListener::bind(&addr).await?;
+    println!("[Kernel] MCP-over-TCP listening on {addr}");
 
     loop {
         let (socket, addr) = listener.accept().await?;

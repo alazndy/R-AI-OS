@@ -22,7 +22,7 @@ use std::path::PathBuf;
 pub use egress::EgressFilter;
 pub use license::{scan_licenses, LicenseDep, LicenseReport};
 pub use patterns::{scan_file, WATCHED_EXTS};
-pub use policy::PolicyConfig;
+pub use policy::{HubPolicy, PolicyConfig};
 pub use rate_limiter::{RateLimitConfig, RateLimiter, ToolRateStatus};
 pub use sandbox::{is_path_safe, validate_path};
 pub use scanner::{scan_project, scan_project_fast};

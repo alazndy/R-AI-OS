@@ -203,10 +203,48 @@ impl App {
         // --- Connect to aiosd Daemon (or spawn embedded workers if offline) ---
         let tx_daemon = ipc::connect_daemon(tx.clone());
 
-        // Spawn embedded workers when aiosd is not available
+        // Spawn embedded workers when aiosd is not available (local only)
         if !config.dev_ops_path.as_os_str().is_empty() {
             crate::workers::spawn_embedded_workers(tx.clone(), config.dev_ops_path.clone());
         }
+
+        Self {
+            state: AppState::Booting,
+            should_quit: false,
+            tick: 0,
+            config,
+            setup: SetupState::default(),
+            search: SearchState::default(),
+            system: SystemState::default(),
+            ui: UIState::default(),
+            inventory: InventoryState {
+                system_rules: crate::app::state::system_rules(),
+                ..Default::default()
+            },
+            editor: EditorState::default(),
+            health: HealthState::default(),
+            projects: ProjectState::default(),
+            tx,
+            rx,
+            tx_daemon,
+            width: 80,
+            height: 24,
+            timeline: TimelineState::default(),
+            mempalace: MempalaceState::default(),
+            tasks: TaskState::default(),
+            _watcher: None,
+            wizard: WizardState::default(),
+        }
+    }
+
+    /// Launch TUI connected to a remote Cortex Hub over Tailscale.
+    /// Skips local daemon auto-spawn and embedded workers.
+    pub fn new_remote(host: String) -> Self {
+        let (tx, rx) = mpsc::channel::<BgMsg>();
+
+        let config = Config::load().unwrap_or_default();
+
+        let tx_daemon = ipc::connect_daemon_addr(tx.clone(), Some(host));
 
         Self {
             state: AppState::Booting,
