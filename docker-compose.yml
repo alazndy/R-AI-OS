@@ -1,0 +1,27 @@
+services:
+  raios-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: raios-hub
+    restart: unless-stopped
+
+    # Share host network — Tailscale interface is automatically available,
+    # no port mapping needed. bind_mode = "all" in policy.toml is sufficient.
+    network_mode: host
+
+    volumes:
+      # Persistent config, DB, API keys, session token
+      - ${HOME}/.config/raios:/data/.config/raios
+
+      # Project workspace (read-only — hub reads, doesn't write)
+      - ${HOME}/dev:/data/dev:ro
+
+    environment:
+      HOME: /data
+      XDG_CONFIG_HOME: /data/.config
+
+    logging:
+      driver: journald
+      options:
+        tag: raios-hub

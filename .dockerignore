@@ -1,0 +1,8 @@
+target/
+.git/
+.fastembed_cache/
+.tmp/
+*.log
+*.pid
+docs/
+tools/
