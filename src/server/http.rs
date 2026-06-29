@@ -88,6 +88,7 @@ pub async fn start_http_server(
 
     // Define router with auth middleware
     let app = Router::new()
+        .route("/health", get(handle_health))
         .route("/api/health", get(handle_health))
         .route("/api/projects", get(handle_projects))
         .route("/api/tasks", get(handle_tasks))
@@ -123,6 +124,12 @@ async fn auth_middleware(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<Response, StatusCode> {
+    // Public endpoints — bypass auth entirely
+    let path = req.uri().path();
+    if path == "/health" || path == "/api/health" {
+        return Ok(next.run(req).await);
+    }
+
     // 1. Determine if request is local from the actual TCP peer address
     let is_localhost = peer.ip().is_loopback();
 
