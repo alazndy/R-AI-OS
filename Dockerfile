@@ -19,7 +19,7 @@ RUN sed -i '/^\[patch\.crates-io\]/,/^hf-hub.*\.tmp.*/d' Cargo.toml
 RUN cargo build --release --bin raios --bin aiosd --no-default-features
 
 # ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
