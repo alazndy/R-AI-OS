@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
         use r_ai_os::config::Config;
         use r_ai_os::indexer::ProjectIndex;
 
-        let config = Config::load().unwrap();
+        let config = Config::load().unwrap_or_default();
 
         println!("[Kernel] Discovering projects...");
         let projects = r_ai_os::entities::discover_entities(&config.dev_ops_path);
