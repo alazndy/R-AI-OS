@@ -38,11 +38,29 @@ fn is_alive(pid: u32) -> bool {
 }
 
 fn probe_port(port: u16) -> bool {
-    TcpStream::connect_timeout(
+    // Try localhost first, then Tailscale IP if configured
+    let addrs: &[&str] = &["127.0.0.1", "0.0.0.0"];
+
+    // Check localhost
+    if TcpStream::connect_timeout(
         &format!("127.0.0.1:{port}").parse().unwrap(),
         Duration::from_millis(200),
-    )
-    .is_ok()
+    ).is_ok() {
+        return true;
+    }
+
+    // Try Tailscale IP from policy
+    if let Some(ip) = crate::server::http::detect_tailscale_ip() {
+        if TcpStream::connect_timeout(
+            &format!("{ip}:{port}").parse().unwrap(),
+            Duration::from_millis(200),
+        ).is_ok() {
+            return true;
+        }
+    }
+
+    let _ = addrs; // suppress warning
+    false
 }
 
 // ─── start ────────────────────────────────────────────────────────────────────
