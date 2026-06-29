@@ -1,5 +1,6 @@
 use axum::{
     extract::{
+        connect_info::ConnectInfo,
         ws::{Message, WebSocket, WebSocketUpgrade},
         Query, State,
     },
@@ -104,7 +105,11 @@ pub async fn start_http_server(
     println!("[Kernel] HTTP API Adapter listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -113,26 +118,20 @@ pub async fn start_http_server(
 ///   localhost (127.0.0.1)  → ephemeral session token (existing behaviour)
 ///   Tailscale / remote     → persistent API key (SHA-256 hashed in policy.toml)
 async fn auth_middleware(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<Response, StatusCode> {
-    // 1. Determine source IP from connection info or X-Real-IP
-    let source_ip = headers
-        .get("x-real-ip")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<std::net::IpAddr>().ok());
+    // 1. Determine if request is local from the actual TCP peer address
+    let is_localhost = peer.ip().is_loopback();
 
-    let is_localhost = source_ip
-        .map(|ip| ip.is_loopback())
-        .unwrap_or(true); // no header → assume local (unix socket / 127.0.0.1 bind)
-
-    // 2. Validate Host header — block DNS rebinding unless remote mode is enabled
+    // 2. DNS rebinding guard — only for localhost connections
     if is_localhost {
         if let Some(host) = headers.get(header::HOST) {
             let host_str = host.to_str().unwrap_or("").to_lowercase();
             if !host_str.starts_with("localhost") && !host_str.starts_with("127.0.0.1") {
-                eprintln!("[HTTP Auth] DNS rebinding attempt: {host_str}");
+                eprintln!("[HTTP Auth] DNS rebinding attempt from {peer}: {host_str}");
                 return Err(StatusCode::BAD_REQUEST);
             }
         } else {
