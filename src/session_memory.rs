@@ -1,6 +1,15 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
+
+struct HeuristicItem {
+    item_type: &'static str,
+    slug: String,
+    title: String,
+    description: String,
+    body: String,
+}
 
 /// Convert an absolute project path to Claude's directory naming convention.
 /// `/home/alaz/dev/core/R-AI-OS` → `-home-alaz-dev-core-R-AI-OS`
@@ -12,13 +21,13 @@ fn claude_project_dir_name(project_path: &str) -> String {
 /// optionally requiring it to have been modified at or after `min_mtime`.
 pub fn find_latest_conversation(
     project_path: &str,
-    min_mtime: Option<std::time::SystemTime>,
+    min_mtime: Option<SystemTime>,
 ) -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let dir_name = claude_project_dir_name(project_path);
     let claude_dir = Path::new(&home).join(".claude/projects").join(&dir_name);
 
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    let mut best: Option<(SystemTime, PathBuf)> = None;
 
     for entry in std::fs::read_dir(&claude_dir).ok()?.flatten() {
         let path = entry.path();
@@ -155,7 +164,7 @@ pub fn append_to_memory_md(project_path: &str, entry: &str) -> std::io::Result<(
 
 /// Interactive post-session prompt. Called by agent_runner after a claude session.
 /// Finds the conversation JSONL, optionally summarizes it, and appends to memory.md.
-pub fn post_session_memory_prompt(project_path: &str, session_started: std::time::SystemTime) {
+pub fn post_session_memory_prompt(project_path: &str, session_started: SystemTime) {
     // Find the JSONL that was written during this session
     let Some(jsonl) = find_latest_conversation(project_path, Some(session_started)) else {
         return;
@@ -267,4 +276,269 @@ pub fn cmd_memory_gen(project: Option<&str>, json: bool) {
     } else {
         println!("  Atlandı.");
     }
+}
+
+// ─── Auto-sync: raios-native heuristic memory extraction ─────────────────────
+
+fn to_slug(text: &str, max_words: usize) -> String {
+    text.split_whitespace()
+        .take(max_words)
+        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn first_n_words(text: &str, n: usize) -> String {
+    text.split_whitespace().take(n).collect::<Vec<_>>().join(" ")
+}
+
+fn heuristic_extract(transcript: &str) -> Vec<HeuristicItem> {
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let date_compact = date.replace('-', "");
+
+    let mut feedback_lines: Vec<String> = Vec::new();
+    let mut decision_lines: Vec<String> = Vec::new();
+    let mut user_lines: Vec<String> = Vec::new();
+
+    for line in transcript.lines() {
+        let (role, text) = if let Some(t) = line.strip_prefix("User: ") {
+            ("user", t)
+        } else {
+            continue;
+        };
+        let _ = role;
+        let lower = text.to_lowercase();
+
+        // Feedback — user corrects or confirms a non-obvious approach
+        if ["don't ", "do not ", "stop ", "avoid ", "no, ", "wrong", "not that", "incorrect", "please don't"]
+            .iter()
+            .any(|p| lower.contains(p))
+        {
+            feedback_lines.push(format!("- {}", first_n_words(text, 30)));
+        }
+
+        // Project decisions / architecture choices
+        if ["we'll use", "we're using", "we decided", "let's use", "going with", "we chose", "architecture is", "we're building"]
+            .iter()
+            .any(|p| lower.contains(p))
+        {
+            decision_lines.push(format!("- {}", first_n_words(text, 30)));
+        }
+
+        // User background
+        if ["i'm a ", "i am a ", "i work ", "i've been", "my role", "my stack", "my background", "i specialize"]
+            .iter()
+            .any(|p| lower.contains(p))
+        {
+            user_lines.push(first_n_words(text, 40));
+        }
+    }
+
+    let mut items: Vec<HeuristicItem> = Vec::new();
+
+    if !feedback_lines.is_empty() {
+        let body = feedback_lines.join("\n");
+        let title = format!("Session feedback ({})", date);
+        let slug = format!("feedback-{}", date_compact);
+        items.push(HeuristicItem {
+            item_type: "feedback",
+            description: format!("{} correction/confirmation(s) detected", feedback_lines.len()),
+            slug,
+            title,
+            body,
+        });
+    }
+
+    if !decision_lines.is_empty() {
+        let body = decision_lines.join("\n");
+        let slug = format!("decision-{}", date_compact);
+        let title = format!("Decisions ({})", date);
+        items.push(HeuristicItem {
+            item_type: "project",
+            description: format!("{} decision(s) detected", decision_lines.len()),
+            slug,
+            title,
+            body,
+        });
+    }
+
+    if !user_lines.is_empty() {
+        let body = user_lines.join("\n");
+        let slug = to_slug(&user_lines[0], 4);
+        let slug = if slug.is_empty() { "user-background".to_string() } else { format!("user-{}", slug) };
+        let title = format!("User background ({})", date);
+        items.push(HeuristicItem {
+            item_type: "user",
+            description: "User background/role information".to_string(),
+            slug,
+            title,
+            body,
+        });
+    }
+
+    items
+}
+
+// ─── Per-agent transcript readers ────────────────────────────────────────────
+
+fn started_secs(t: SystemTime) -> u64 {
+    t.duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn read_codex_transcript(path: &Path, since_secs: u64) -> String {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    for line in content.lines() {
+        let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if obj["ts"].as_u64().unwrap_or(0) < since_secs {
+            continue;
+        }
+        if let Some(text) = obj["text"].as_str() {
+            if !text.trim().is_empty() {
+                parts.push(format!("User: {}", truncate(text, 600)));
+            }
+        }
+    }
+    parts.join("\n\n")
+}
+
+fn read_agy_transcript(path: &Path, workspace: &str, since_secs: u64) -> String {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    for line in content.lines() {
+        let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if obj["timestamp"].as_u64().unwrap_or(0) / 1000 < since_secs {
+            continue;
+        }
+        if let Some(ws) = obj["workspace"].as_str() {
+            if !workspace.is_empty() && ws != workspace {
+                continue;
+            }
+        }
+        if let Some(display) = obj["display"].as_str() {
+            if !display.trim().is_empty() {
+                parts.push(format!("User: {}", truncate(display, 600)));
+            }
+        }
+    }
+    parts.join("\n\n")
+}
+
+fn read_opencode_transcript(path: &Path, since_secs: u64) -> String {
+    // opencode prompt-history has no per-entry timestamps; use file mtime as gate.
+    let Ok(meta) = std::fs::metadata(path) else {
+        return String::new();
+    };
+    if let Ok(mtime) = meta.modified() {
+        if started_secs(mtime) < since_secs {
+            return String::new();
+        }
+    }
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    let mut parts: Vec<String> = content
+        .lines()
+        .rev()
+        .take(60)
+        .filter_map(|line| {
+            let obj = serde_json::from_str::<serde_json::Value>(line).ok()?;
+            let input = obj["input"].as_str()?;
+            if input.trim().is_empty() { return None; }
+            Some(format!("User: {}", truncate(input, 600)))
+        })
+        .collect();
+    parts.reverse();
+    parts.join("\n\n")
+}
+
+fn collect_transcript(agent: &str, project_path: &str, session_started: SystemTime) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let since = started_secs(session_started);
+    match agent.to_lowercase().as_str() {
+        "claude" => find_latest_conversation(project_path, Some(session_started))
+            .map(|p| extract_transcript(&p))
+            .unwrap_or_default(),
+        "codex" => read_codex_transcript(
+            &PathBuf::from(&home).join(".codex/history.jsonl"),
+            since,
+        ),
+        "agy" | "antigravity" => read_agy_transcript(
+            &PathBuf::from(&home).join(".gemini/antigravity-cli/history.jsonl"),
+            project_path,
+            since,
+        ),
+        "opencode" => read_opencode_transcript(
+            &PathBuf::from(&home).join(".local/state/opencode/prompt-history.jsonl"),
+            since,
+        ),
+        _ => String::new(),
+    }
+}
+
+/// Agent-agnostic memory sync: heuristic extraction → raios DB → markdown export.
+/// Works for claude, codex, opencode, and agy. No LLM dependency.
+/// `verbose = false` during periodic background syncs (TUI is live); `true` at session end.
+pub fn auto_sync_agent_memory(
+    agent: &str,
+    project_path: &str,
+    session_started: SystemTime,
+    verbose: bool,
+) {
+    let transcript = collect_transcript(agent, project_path, session_started);
+    if transcript.is_empty() {
+        return;
+    }
+
+    let items = heuristic_extract(&transcript);
+    if items.is_empty() {
+        return;
+    }
+
+    let project_key = claude_project_dir_name(project_path);
+    let Ok(conn) = crate::db::open_db() else { return };
+
+    for item in &items {
+        let _ = crate::db::mem_upsert(
+            &conn,
+            &project_key,
+            item.item_type,
+            &item.slug,
+            &item.title,
+            &item.description,
+            &item.body,
+            None,
+        );
+    }
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let memory_dir = PathBuf::from(&home)
+        .join(".claude/projects")
+        .join(&project_key)
+        .join("memory");
+
+    if let Ok(n) = crate::db::mem_export(&conn, &project_key, &memory_dir) {
+        if verbose && n > 0 {
+            println!(
+                "  \x1b[32m✦ memory sync\x1b[0m  [{agent}]  {} item(s) → DB + {}/memory/",
+                n, project_key
+            );
+        }
+    }
+}
+
+/// Backward-compat shim used by memory-gen flow.
+pub fn auto_sync_claude_memory(project_path: &str, session_started: SystemTime) {
+    auto_sync_agent_memory("claude", project_path, session_started, true);
 }
