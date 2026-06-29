@@ -3,10 +3,8 @@ FROM rust:1.96-slim AS builder
 
 WORKDIR /build
 
-# musl toolchain + OpenSSL vendored build deps
+# musl toolchain + OpenSSL vendored build deps (no system libssl needed)
 RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
     musl-tools \
     perl \
     make \
