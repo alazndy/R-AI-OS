@@ -1,4 +1,5 @@
 pub mod cortex;
+pub mod handlers;
 pub mod git;
 pub mod health;
 pub mod lifecycle;
