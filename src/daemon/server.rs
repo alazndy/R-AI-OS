@@ -146,6 +146,44 @@ impl Server {
 
         let factory = Arc::new(Factory::new(tx.clone()));
 
+        // ── Log ring-buffer writer ────────────────────────────────────────────
+        // Subscribes to the broadcast channel and persists NewLog + job events
+        // to cp_logs so late-connecting TUI clients can replay history.
+        {
+            let mut log_rx = tx.subscribe();
+            tokio::spawn(async move {
+                loop {
+                    match log_rx.recv().await {
+                        Ok(msg) => {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg) {
+                                let event = v["event"].as_str().unwrap_or("");
+                                let entry: Option<(&str, String)> = match event {
+                                    "NewLog" => {
+                                        let sender = v["log"]["sender"].as_str().unwrap_or("daemon");
+                                        let content = v["log"]["content"].as_str().unwrap_or("").to_string();
+                                        if content.is_empty() { None } else { Some((sender, content)) }
+                                    }
+                                    "JobSubmitted" => {
+                                        let job_id = v["job_id"].as_str().unwrap_or("?");
+                                        let short = &job_id[..8.min(job_id.len())];
+                                        Some(("RUN", format!("⏳ Job queued [{}]", short)))
+                                    }
+                                    _ => None,
+                                };
+                                if let Some((sender, content)) = entry {
+                                    if let Ok(conn) = crate::db::open_db() {
+                                        let _ = crate::db::cp_log_append(&conn, sender, &content);
+                                    }
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
+
         let config =
             Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
         let daemon_cfg = config.daemon.clone();
@@ -354,6 +392,25 @@ impl Server {
                     .write_all(format!("{}\n", session_msg).as_bytes())
                     .await;
 
+                // Replay last 200 log entries so TUI has history on connect
+                if let Ok(conn) = crate::db::open_db() {
+                    if let Ok(entries) = crate::db::cp_logs_replay(&conn, 200) {
+                        for (ts, sender, content) in entries {
+                            let replay = serde_json::json!({
+                                "event": "NewLog",
+                                "log": {
+                                    "timestamp": &ts[11..19].replace('T', "").chars().take(8).collect::<String>(),
+                                    "sender": sender,
+                                    "content": content
+                                }
+                            });
+                            if writer.write_all(format!("{}\n", replay).as_bytes()).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+
                 loop {
                     tokio::select! {
                         // Read from socket
@@ -484,6 +541,25 @@ impl Server {
                                     let s = state_for_client.read().await;
                                     let response = s.sync_payload();
                                     let _ = writer.write_all(format!("{}\n", response).as_bytes()).await;
+                                } else if v["command"] == "GetLogs" {
+                                    let limit = v["limit"].as_u64().unwrap_or(200) as usize;
+                                    if let Ok(conn) = crate::db::open_db() {
+                                        if let Ok(entries) = crate::db::cp_logs_replay(&conn, limit) {
+                                            for (ts, sender, content) in entries {
+                                                let msg = serde_json::json!({
+                                                    "event": "NewLog",
+                                                    "log": {
+                                                        "timestamp": &ts[11..].chars().take(8).collect::<String>(),
+                                                        "sender": sender,
+                                                        "content": content
+                                                    }
+                                                });
+                                                if writer.write_all(format!("{}\n", msg).as_bytes()).await.is_err() {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
                                 } else if v["command"] == "RequestFileChange" {
                                     let path = v["path"].as_str().unwrap_or("").to_string();
                                     // Persist to canonical DB first

@@ -149,6 +149,11 @@ impl App {
             "/logs" | "/log" => {
                 self.ui.menu_cursor = 9;
                 self.ui.right_panel_focus = false;
+                // Request fresh log replay from daemon (restores history after reconnect)
+                if let Some(ref tx) = self.tx_daemon {
+                    let limit = if arg.is_empty() { 200 } else { arg.parse::<u64>().unwrap_or(200) };
+                    let _ = tx.send(format!("{{\"command\":\"GetLogs\",\"limit\":{}}}", limit));
+                }
             }
             "/help" | "/?" => {
                 self.state = AppState::HelpView;

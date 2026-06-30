@@ -204,6 +204,14 @@ impl Factory {
             "completed_at": now,
         });
         let _ = self.tx.send(msg.to_string());
+        // Persist each output line to the log ring buffer
+        if let Ok(conn) = crate::db::open_db() {
+            let short_id = &id.to_string()[..8];
+            for line in result.lines().filter(|l| !l.trim().is_empty()) {
+                let _ = crate::db::cp_log_append(&conn, "RUN", line);
+            }
+            let _ = crate::db::cp_log_append(&conn, "RUN", &format!("✓ [{}] done", short_id));
+        }
 
         // Fire webhook if configured
         if let Some(job) = self.get(id) {
@@ -231,6 +239,10 @@ impl Factory {
             "completed_at": now,
         });
         let _ = self.tx.send(msg.to_string());
+        if let Ok(conn) = crate::db::open_db() {
+            let short_id = &id.to_string()[..8];
+            let _ = crate::db::cp_log_append(&conn, "RUN", &format!("✗ [{}] {}", short_id, error));
+        }
     }
 
     pub fn get(&self, id: &Uuid) -> Option<Job> {

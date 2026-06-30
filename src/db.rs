@@ -376,6 +376,19 @@ fn migrate(conn: &Connection) -> Result<()> {
         ",
     )?;
 
+    // ─── Log Ring Buffer ─────────────────────────────────────────────────────
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS cp_logs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            sender      TEXT    NOT NULL,
+            content     TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cp_logs_ts ON cp_logs(id DESC);
+        ",
+    )?;
+
     // ─── Agent Memory Items ───────────────────────────────────────────────────
     conn.execute_batch(
         "
@@ -398,6 +411,43 @@ fn migrate(conn: &Connection) -> Result<()> {
     )?;
 
     Ok(())
+}
+
+// ─── cp_logs helpers ─────────────────────────────────────────────────────────
+
+const LOG_RING_MAX: usize = 2000;
+
+/// Append a log entry and prune oldest rows above the ring limit.
+pub fn cp_log_append(conn: &Connection, sender: &str, content: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO cp_logs (sender, content) VALUES (?1, ?2)",
+        params![sender, content],
+    )?;
+    // Prune oldest entries so table never exceeds LOG_RING_MAX rows
+    conn.execute(
+        "DELETE FROM cp_logs WHERE id <= (
+            SELECT id FROM cp_logs ORDER BY id DESC LIMIT 1 OFFSET ?1
+        )",
+        params![LOG_RING_MAX as i64],
+    )?;
+    Ok(())
+}
+
+/// Return the last `limit` log entries in chronological order.
+pub fn cp_logs_replay(conn: &Connection, limit: usize) -> Result<Vec<(String, String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT ts, sender, content FROM cp_logs ORDER BY id DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut entries: Vec<(String, String, String)> = rows.flatten().collect();
+    entries.reverse(); // oldest first
+    Ok(entries)
 }
 
 pub fn migrate_existing(conn: &Connection) -> Result<()> {
