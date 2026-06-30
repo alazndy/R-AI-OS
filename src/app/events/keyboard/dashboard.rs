@@ -104,6 +104,69 @@ impl App {
                     self.projects.sort = self.projects.sort.next();
                     self.projects.cursor = 0;
                 }
+            // ── Extensions panel keyboard (menu_cursor == 15) ────────────────
+            KeyCode::Tab if self.ui.menu_cursor == 15 => {
+                self.ext.focus = if self.ext.focus == crate::app::state::ExtFocus::Commands {
+                    crate::app::state::ExtFocus::Config
+                } else {
+                    crate::app::state::ExtFocus::Commands
+                };
+            }
+            KeyCode::Enter
+                if self.ui.menu_cursor == 15
+                    && self.ext.focus == crate::app::state::ExtFocus::Commands
+                    && !self.ext.extensions.is_empty() =>
+            {
+                self.run_ext_cmd();
+            }
+            KeyCode::Char('e')
+                if self.ui.menu_cursor == 15
+                    && self.ext.focus == crate::app::state::ExtFocus::Config
+                    && !self.ext.editing =>
+            {
+                if let Some(ext) = self.ext.extensions.get(self.ext.ext_cursor) {
+                    if let Some(field) = ext.config_schema.get(self.ext.cfg_cursor) {
+                        self.ext.input = if field.masked { String::new() } else { field.value.clone() };
+                        self.ext.editing = true;
+                    }
+                }
+            }
+            KeyCode::Enter
+                if self.ui.menu_cursor == 15
+                    && self.ext.focus == crate::app::state::ExtFocus::Config
+                    && self.ext.editing =>
+            {
+                self.save_ext_config_field();
+            }
+            KeyCode::Esc if self.ui.menu_cursor == 15 && self.ext.editing => {
+                self.ext.editing = false;
+                self.ext.input.clear();
+            }
+            KeyCode::Char(c) if self.ui.menu_cursor == 15 && self.ext.editing => {
+                self.ext.input.push(c);
+            }
+            KeyCode::Backspace if self.ui.menu_cursor == 15 && self.ext.editing => {
+                self.ext.input.pop();
+            }
+            KeyCode::Left
+                if self.ui.menu_cursor == 15
+                    && !self.ext.editing
+                    && self.ext.ext_cursor > 0 =>
+            {
+                self.ext.ext_cursor -= 1;
+                self.ext.cmd_cursor = 0;
+                self.ext.cfg_cursor = 0;
+            }
+            KeyCode::Right
+                if self.ui.menu_cursor == 15
+                    && !self.ext.editing
+                    && self.ext.ext_cursor + 1 < self.ext.extensions.len() =>
+            {
+                self.ext.ext_cursor += 1;
+                self.ext.cmd_cursor = 0;
+                self.ext.cfg_cursor = 0;
+            }
+            // ── End Extensions ───────────────────────────────────────────────
             KeyCode::Char('/') | KeyCode::Tab => {
                 self.ui.command_mode = true;
                 self.ui.palette_cursor = 0;
@@ -115,7 +178,13 @@ impl App {
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.ui.right_panel_focus {
+                if self.ui.menu_cursor == 15 && !self.ext.editing {
+                    if self.ext.focus == crate::app::state::ExtFocus::Commands {
+                        if self.ext.cmd_cursor > 0 { self.ext.cmd_cursor -= 1; }
+                    } else if self.ext.cfg_cursor > 0 {
+                        self.ext.cfg_cursor -= 1;
+                    }
+                } else if self.ui.right_panel_focus {
                     match self.ui.menu_cursor {
                         0 => {
                             if self.tasks.cursor > 0 {
@@ -148,7 +217,19 @@ impl App {
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.ui.right_panel_focus {
+                if self.ui.menu_cursor == 15 && !self.ext.editing {
+                    if self.ext.focus == crate::app::state::ExtFocus::Commands {
+                        let max = self.ext.extensions.get(self.ext.ext_cursor)
+                            .map(|e| e.commands.len().saturating_sub(1))
+                            .unwrap_or(0);
+                        if self.ext.cmd_cursor < max { self.ext.cmd_cursor += 1; }
+                    } else {
+                        let max = self.ext.extensions.get(self.ext.ext_cursor)
+                            .map(|e| e.config_schema.len().saturating_sub(1))
+                            .unwrap_or(0);
+                        if self.ext.cfg_cursor < max { self.ext.cfg_cursor += 1; }
+                    }
+                } else if self.ui.right_panel_focus {
                     match self.ui.menu_cursor {
                         0 => {
                             let max = self.tasks.list.len().saturating_sub(1);
@@ -182,6 +263,10 @@ impl App {
                     self.search.cursor = 0;
                     self.ui.right_panel_scroll = 0;
                     self.ui.right_panel_focus = false;
+                    // Lazy-load extensions when navigating to the Extensions panel
+                    if self.ui.menu_cursor == 15 && !self.ext.loaded {
+                        self.load_extensions();
+                    }
                 }
             }
             KeyCode::Right | KeyCode::Char('l') => {

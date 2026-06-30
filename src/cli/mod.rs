@@ -1,6 +1,7 @@
 mod agent_wrapper;
 mod audit;
 mod dev;
+mod ext;
 mod git;
 mod handoff;
 mod health;
@@ -372,6 +373,14 @@ pub enum Commands {
     PreFlight {
         /// Project name or path (omit for current directory)
         project: Option<String>,
+    },
+    /// Run a raios extension command  (raios ext <name> <subcommand> [args...])
+    Ext {
+        /// Extension name, or 'list' to show all discovered extensions
+        name: String,
+        /// Subcommand and its arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 }
 
@@ -875,6 +884,7 @@ pub fn run(cli: Cli) {
                 std::process::exit(1);
             }
         }
+        Commands::Ext { name, args } => ext::cmd_ext(&name, &args, &cfg.dev_ops_path, cli.json),
     }
 }
 

@@ -5,6 +5,55 @@ use crate::filebrowser::{AgentRuleGroup, FileEntry, RecentProject};
 use crate::indexer::{ProjectIndex, SearchResult};
 use crate::requirements::Requirement;
 
+// ─── Extension State ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct ExtCmdInfo {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtConfigField {
+    pub key: String,
+    pub label: String,
+    pub field_type: String,
+    pub description: String,
+    pub value: String,
+    pub masked: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtensionInfo {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub path: PathBuf,
+    pub commands: Vec<ExtCmdInfo>,
+    pub config_schema: Vec<ExtConfigField>,
+    pub services: Vec<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Clone)]
+pub enum ExtFocus {
+    #[default]
+    Commands,
+    Config,
+}
+
+#[derive(Debug, Default)]
+pub struct ExtState {
+    pub extensions: Vec<ExtensionInfo>,
+    pub ext_cursor: usize,
+    pub focus: ExtFocus,
+    pub cmd_cursor: usize,
+    pub cfg_cursor: usize,
+    pub editing: bool,
+    pub input: String,
+    pub status: Option<String>,
+    pub loaded: bool,
+}
+
 // ─── State ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,6 +168,12 @@ pub enum BgMsg {
     },
     RemoteCommandResult {
         output: String,
+    },
+    ExtensionsLoaded(Vec<ExtensionInfo>),
+    ExtCmdOutput {
+        ext: String,
+        cmd: String,
+        line: String,
     },
 }
 

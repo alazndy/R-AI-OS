@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod content;
 pub mod dashboard_main;
+pub mod extensions;
 pub mod git_diff;
 pub mod header;
 pub mod help;
@@ -18,6 +19,7 @@ pub mod timeline;
 pub use agents::*;
 pub use content::*;
 pub use dashboard_main::*;
+pub use extensions::*;
 pub use git_diff::*;
 pub use header::*;
 pub use help::*;

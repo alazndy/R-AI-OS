@@ -114,6 +114,7 @@ pub const MENU_ITEMS: &[&str] = &[
     "AI System Audit",
     "Inbox",
     "Scheduler",
+    "Extensions",
 ];
 
 pub struct App {
@@ -164,6 +165,9 @@ pub struct App {
 
     // Tasks
     pub tasks: TaskState,
+
+    // Extensions
+    pub ext: ExtState,
 
     // File Watcher
     pub _watcher: Option<Box<dyn Watcher>>,
@@ -238,6 +242,7 @@ impl App {
             timeline: TimelineState::default(),
             mempalace: MempalaceState::default(),
             tasks: TaskState::default(),
+            ext: ExtState::default(),
             _watcher: None,
             wizard: WizardState::default(),
         }
@@ -297,6 +302,7 @@ impl App {
             timeline: TimelineState::default(),
             mempalace: MempalaceState::default(),
             tasks: TaskState::default(),
+            ext: ExtState::default(),
             _watcher: None,
             wizard: WizardState::default(),
         }

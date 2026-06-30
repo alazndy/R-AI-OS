@@ -309,6 +309,13 @@ impl App {
                         Some("Open a project detail first to run /heal".into());
                 }
             }
+            "/ext" | "/extensions" => {
+                self.ui.menu_cursor = 15;
+                self.ui.right_panel_focus = false;
+                if !self.ext.loaded {
+                    self.load_extensions();
+                }
+            }
             // Remote-only: execute a raios subcommand on the hub server
             // Usage: /run health myproject | /run reflect | /run pre-flight kaira-mix
             "/run" if self.is_remote && !arg.is_empty() => {

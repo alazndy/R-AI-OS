@@ -487,6 +487,19 @@ impl App {
                     .collect::<String>();
                 self.system.sync_status = Some(format!("✓ {}", preview));
             }
+            BgMsg::ExtensionsLoaded(exts) => {
+                self.ext.extensions = exts;
+                self.ext.loaded = true;
+                self.ext.ext_cursor = 0;
+            }
+            BgMsg::ExtCmdOutput { ext, cmd, line } => {
+                self.ext.status = Some(format!("[{}:{}] {}", ext, cmd, &line.chars().take(60).collect::<String>()));
+                self.timeline.logs.push(LogEntry {
+                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                    sender: format!("EXT:{}", ext.to_uppercase()),
+                    content: line,
+                });
+            }
         }
     }
 }

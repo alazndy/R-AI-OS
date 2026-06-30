@@ -76,6 +76,7 @@ pub fn render_content_body(frame: &mut Frame, area: Rect, app: &App) {
         12 => render_system_audit(frame, inner, app),
         13 => render_inbox(frame, inner, app),
         14 => render_scheduler(frame, inner, app),
+        15 => render_extensions(frame, inner, app),
         _ => {}
     }
 }
