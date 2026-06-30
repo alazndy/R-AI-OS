@@ -469,6 +469,15 @@ pub enum MemAction {
         #[arg(short, long)]
         project: Option<String>,
     },
+    /// Heuristic sync: scan latest agent transcript → extract items → write to DB + markdown
+    Sync {
+        /// Agent name (default: claude)
+        #[arg(short, long, default_value = "claude")]
+        agent: String,
+        /// Project path (omit for current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -990,6 +999,20 @@ fn cmd_mem(action: MemAction, json: bool) {
                 }
                 Err(e) => eprintln!("  \x1b[31m✗\x1b[0m  {e}"),
             }
+        }
+        MemAction::Sync { agent, project } => {
+            let project_path = project.unwrap_or_else(|| {
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| ".".to_string())
+            });
+            println!("  \x1b[90mScanning transcript for [{}] → {}…\x1b[0m", agent, project_path);
+            crate::session_memory::auto_sync_agent_memory(
+                &agent,
+                &project_path,
+                std::time::SystemTime::UNIX_EPOCH,
+                true,
+            );
         }
     }
 }

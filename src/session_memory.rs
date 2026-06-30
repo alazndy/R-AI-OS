@@ -27,8 +27,38 @@ pub fn find_latest_conversation(
     let dir_name = claude_project_dir_name(project_path);
     let claude_dir = Path::new(&home).join(".claude/projects").join(&dir_name);
 
-    let mut best: Option<(SystemTime, PathBuf)> = None;
+    // CCR sessions (CLAUDE_JOB_DIR is set) always write their JSONL to the home-level
+    // project dir (~/.claude/projects/-home-alaz/) regardless of the working project.
+    // The job ID is the leading path component of CLAUDE_JOB_DIR and matches the
+    // filename prefix of the JSONL (e.g. job 9b3cbb27 → 9b3cbb27-<uuid>.jsonl).
+    // Prioritize the CCR JSONL over the primary dir — it is the authoritative transcript
+    // for the current session and is always more recent than any leftover project JSONL.
+    if let Some(job_dir) = std::env::var("CLAUDE_JOB_DIR").ok() {
+        let job_id = Path::new(&job_dir).file_name()?.to_string_lossy().into_owned();
+        let ccr_dir = Path::new(&home).join(".claude/projects/-home-alaz");
+        if ccr_dir != claude_dir {
+            // Search for the exact JSONL belonging to this job.
+            for entry in std::fs::read_dir(&ccr_dir).ok()?.flatten() {
+                let path = entry.path();
+                let fname = path.file_name().unwrap_or_default().to_string_lossy();
+                if path.extension().map(|e| e == "jsonl").unwrap_or(false)
+                    && fname.starts_with(&*job_id)
+                {
+                    if let Ok(meta) = entry.metadata() {
+                        if let Ok(mtime) = meta.modified() {
+                            if min_mtime.map(|m| mtime >= m).unwrap_or(true) {
+                                return Some(path);
+                            }
+                        }
+                    }
+                }
+            }
+            // Job JSONL not found (not yet created or older than min_mtime) — fall through
+            // to the primary dir scan below.
+        }
+    }
 
+    let mut best: Option<(SystemTime, PathBuf)> = None;
     for entry in std::fs::read_dir(&claude_dir).ok()?.flatten() {
         let path = entry.path();
         if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
@@ -46,7 +76,6 @@ pub fn find_latest_conversation(
             }
         }
     }
-
     best.map(|(_, p)| p)
 }
 
