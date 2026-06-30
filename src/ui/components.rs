@@ -287,14 +287,14 @@ pub fn render_handover_modal(frame: &mut Frame, app: &App) {
             .title(" ⚠️ Human Approval Required: Bouncing Limit ")
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
-            .border_style(Style::default().fg(Color::Rgb(255, 100, 20))) // AMBER
+            .border_style(Style::default().fg(AMBER)) // AMBER
             .style(Style::default().bg(Color::Rgb(8, 12, 16)));
 
         let mut lines = Vec::new();
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             " The agents are bouncing tasks too much.",
-            Style::default().fg(Color::Rgb(255, 100, 20)).bold(),
+            Style::default().fg(AMBER).bold(),
         )]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
@@ -304,7 +304,7 @@ pub fn render_handover_modal(frame: &mut Frame, app: &App) {
             ),
             Span::styled(
                 target.clone(),
-                Style::default().fg(Color::Rgb(0, 255, 136)).bold(),
+                Style::default().fg(GREEN).bold(),
             ),
         ]));
         lines.push(Line::from(""));
@@ -338,11 +338,11 @@ pub fn render_handover_modal(frame: &mut Frame, app: &App) {
         lines.push(Line::from(vec![
             Span::styled(
                 " [Y] Approve",
-                Style::default().fg(Color::Rgb(0, 255, 136)).bold(),
+                Style::default().fg(GREEN).bold(),
             ),
             Span::styled(
                 "    [N] Reject",
-                Style::default().fg(Color::Rgb(255, 80, 80)).bold(),
+                Style::default().fg(RED).bold(),
             ),
         ]));
 

@@ -97,7 +97,7 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
 
     // --- Table Content ---
     let header_style = Style::new().fg(MID).bold();
-    let selected_style = Style::new().bg(Color::Rgb(0, 40, 30)).fg(GREEN).bold();
+    let selected_style = Style::new().bg(Color::Rgb(0, 35, 55)).fg(GREEN).bold();
 
     let rows: Vec<Row> = app
         .health

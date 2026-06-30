@@ -12,9 +12,22 @@ pub fn render_recent(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
 
+    let gradient = [
+        Color::Rgb(255, 90, 0),    // Vibrant Orange-Red
+        Color::Rgb(255, 145, 0),   // Orange
+        Color::Rgb(210, 100, 160), // Purple-Pink
+        Color::Rgb(150, 90, 230),  // Violet
+        Color::Rgb(80, 120, 255),  // Royal Blue
+        Color::Rgb(0, 180, 255),   // Cyan-Blue
+    ];
+
     let banner_lines: Vec<Line> = BANNER
         .lines()
-        .map(|l| Line::from(Span::styled(l, Style::new().fg(GREEN))))
+        .enumerate()
+        .map(|(i, l)| {
+            let color = gradient[i % gradient.len()];
+            Line::from(Span::styled(l, Style::new().fg(color)))
+        })
         .collect();
 
     let mut lines = banner_lines;

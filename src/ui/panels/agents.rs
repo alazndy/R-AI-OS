@@ -100,8 +100,8 @@ pub fn render_agents(frame: &mut Frame, area: Rect, app: &App) {
         for s in &app.inventory.skills {
             let color = match s.category {
                 "Global AI" => Color::Rgb(30, 140, 255),
-                "Local" => Color::Yellow,
-                _ => Color::Magenta,
+                "Local" => Color::Rgb(255, 170, 0),
+                _ => Color::Rgb(160, 80, 255),
             };
             lines.push(Line::from(vec![
                 Span::styled(format!("  ◈ {} ", s.name), Style::new().fg(color)),

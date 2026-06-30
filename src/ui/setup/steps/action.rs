@@ -192,7 +192,7 @@ pub fn render_agent_wrapper(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled("  + ", Style::new().fg(ACCENT)),
                 Span::styled(
                     format!("{}() {{ raios run {} \"$@\"; }}", agent, agent),
-                    Style::new().fg(Color::Rgb(100, 130, 110)),
+                    Style::new().fg(Color::Rgb(100, 120, 140)),
                 ),
             ]));
         }

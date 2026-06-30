@@ -170,9 +170,9 @@ pub fn render_workspace(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(Span::styled(
             disp,
             if edit {
-                Style::new().fg(GREEN).bg(Color::Rgb(0, 25, 10))
+                Style::new().fg(GREEN).bg(Color::Rgb(0, 25, 45))
             } else if val.is_empty() {
-                Style::new().fg(Color::Rgb(120, 60, 60)).italic()
+                Style::new().fg(Color::Rgb(200, 80, 50)).italic()
             } else {
                 Style::new().fg(GREEN)
             },
@@ -328,7 +328,7 @@ pub fn render_master(frame: &mut Frame, area: Rect, app: &App) {
     for l in MASTER_PREVIEW.lines() {
         r.push(Line::from(Span::styled(
             format!("  {}", l),
-            Style::new().fg(Color::Rgb(100, 130, 110)),
+            Style::new().fg(Color::Rgb(100, 120, 140)),
         )));
     }
     frame.render_widget(Paragraph::new(Text::from(r)), right);
