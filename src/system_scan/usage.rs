@@ -1,283 +1,12 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Local, TimeZone};
-use serde::Serialize;
 use serde_json::Value;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct SystemAiTool {
-    pub name: String,
-    pub status: ToolStatus,
-    pub version: Option<String>,
-    pub path: Option<PathBuf>,
-}
+use super::{UsageConfidence, UsageSnapshot, UsageSource};
 
-#[derive(Debug, Clone, Serialize)]
-pub enum ToolStatus {
-    Running,
-    Installed,
-    Missing,
-    #[allow(dead_code)]
-    Error(String),
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UsageConfidence {
-    Exact,
-    Estimated,
-    Unavailable,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UsageSource {
-    LocalAuth,
-    Env,
-    LocalLog,
-    Inferred,
-    Unavailable,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct UsageSnapshot {
-    pub provider: String,
-    pub installed: bool,
-    pub authenticated: bool,
-    pub plan: Option<String>,
-    pub quota_kind: String,
-    pub used: Option<String>,
-    pub remaining: Option<String>,
-    pub reset_at: Option<String>,
-    pub renews_at: Option<String>,
-    pub auth_expires_at: Option<String>,
-    pub confidence: UsageConfidence,
-    pub source: UsageSource,
-    pub notes: Vec<String>,
-}
-
-impl UsageSnapshot {
-    fn new(provider: &str, installed: bool) -> Self {
-        Self {
-            provider: provider.into(),
-            installed,
-            authenticated: false,
-            plan: None,
-            quota_kind: "unknown".into(),
-            used: None,
-            remaining: None,
-            reset_at: None,
-            renews_at: None,
-            auth_expires_at: None,
-            confidence: UsageConfidence::Unavailable,
-            source: UsageSource::Unavailable,
-            notes: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AiAuditReport {
-    pub tools: Vec<SystemAiTool>,
-    pub env_keys: Vec<String>,
-    pub local_models: Vec<String>,
-    pub usage: Vec<UsageSnapshot>,
-}
-
-pub fn scan_system() -> AiAuditReport {
-    let tools = vec![
-        check_ollama(),
-        check_npm_tool("claude", "Claude Code"),
-        check_cursor(),
-        check_lm_studio(),
-        check_antigravity(),
-        check_opencode(),
-    ];
-
-    AiAuditReport {
-        tools,
-        env_keys: scan_env_keys(),
-        local_models: scan_local_models(),
-        usage: scan_usage(),
-    }
-}
-
-fn scan_usage() -> Vec<UsageSnapshot> {
-    vec![
-        scan_codex_usage(),
-        scan_claude_usage(),
-        scan_antigravity_usage(),
-        scan_opencode_usage(),
-    ]
-}
-
-fn check_ollama() -> SystemAiTool {
-    let output = Command::new("ollama").arg("list").output();
-    match output {
-        Ok(out) if out.status.success() => SystemAiTool {
-            name: "Ollama (Local LLM)".into(),
-            status: ToolStatus::Running,
-            version: Some("Active".into()),
-            path: None,
-        },
-        _ => SystemAiTool {
-            name: "Ollama".into(),
-            status: ToolStatus::Missing,
-            version: None,
-            path: None,
-        },
-    }
-}
-
-fn check_npm_tool(cmd: &str, name: &str) -> SystemAiTool {
-    match crate::core::process::resolve_command_path(cmd) {
-        Some(path) => SystemAiTool {
-            name: name.into(),
-            status: ToolStatus::Installed,
-            version: None,
-            path: Some(path),
-        },
-        None => SystemAiTool {
-            name: name.into(),
-            status: ToolStatus::Missing,
-            version: None,
-            path: None,
-        },
-    }
-}
-
-fn check_cursor() -> SystemAiTool {
-    if let Some(p) = find_existing_path(&cursor_candidates()) {
-        SystemAiTool {
-            name: "Cursor IDE".into(),
-            status: ToolStatus::Installed,
-            version: None,
-            path: Some(p),
-        }
-    } else {
-        SystemAiTool {
-            name: "Cursor IDE".into(),
-            status: ToolStatus::Missing,
-            version: None,
-            path: None,
-        }
-    }
-}
-
-fn check_lm_studio() -> SystemAiTool {
-    if let Some(p) = find_existing_path(&lm_studio_candidates()) {
-        SystemAiTool {
-            name: "LM Studio".into(),
-            status: ToolStatus::Installed,
-            version: None,
-            path: Some(p),
-        }
-    } else {
-        SystemAiTool {
-            name: "LM Studio".into(),
-            status: ToolStatus::Missing,
-            version: None,
-            path: None,
-        }
-    }
-}
-
-fn find_existing_path(candidates: &[PathBuf]) -> Option<PathBuf> {
-    candidates.iter().find(|p| p.exists()).cloned()
-}
-
-fn cursor_candidates() -> Vec<PathBuf> {
-    let home = dirs::home_dir().unwrap_or_default();
-    let mut paths = Vec::new();
-
-    if let Some(path) = crate::core::process::resolve_command_path("cursor") {
-        paths.push(path);
-    }
-
-    paths.push(home.join("AppData/Local/Programs/cursor/Cursor.exe"));
-    paths.push(PathBuf::from("/Applications/Cursor.app"));
-    paths.push(home.join("Applications/Cursor.app"));
-    paths.push(PathBuf::from("/usr/bin/cursor"));
-    paths.push(PathBuf::from("/usr/local/bin/cursor"));
-    paths.push(home.join(".local/bin/cursor"));
-    paths
-}
-
-fn lm_studio_candidates() -> Vec<PathBuf> {
-    let home = dirs::home_dir().unwrap_or_default();
-    let mut paths = Vec::new();
-
-    if let Some(path) = crate::core::process::resolve_command_path("lmstudio") {
-        paths.push(path);
-    }
-    if let Some(path) = crate::core::process::resolve_command_path("lm-studio") {
-        paths.push(path);
-    }
-
-    paths.push(home.join("AppData/Local/LM-Studio/LM Studio.exe"));
-    paths.push(PathBuf::from("/Applications/LM Studio.app"));
-    paths.push(home.join("Applications/LM Studio.app"));
-    paths.push(PathBuf::from("/usr/bin/lmstudio"));
-    paths.push(PathBuf::from("/usr/local/bin/lmstudio"));
-    paths.push(home.join(".local/bin/lmstudio"));
-    paths
-}
-
-fn scan_env_keys() -> Vec<String> {
-    let mut keys = Vec::new();
-    let common = [
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GOOGLE_API_KEY",
-    ];
-    for key in common {
-        if std::env::var(key).is_ok() {
-            keys.push(key.to_string());
-        }
-    }
-    keys
-}
-
-fn scan_local_models() -> Vec<String> {
-    let mut models = Vec::new();
-    let home = dirs::home_dir().unwrap_or_default();
-
-    let ollama_path = home.join(".ollama/models");
-    if ollama_path.exists() {
-        models.push(format!("Ollama: {}", ollama_path.display()));
-    }
-
-    let hf_path = home.join(".cache/huggingface/hub");
-    if hf_path.exists() {
-        models.push(format!("HuggingFace Cache: {}", hf_path.display()));
-    }
-
-    models
-}
-
-    fn check_antigravity() -> SystemAiTool {
-        let path = crate::core::process::resolve_command_path("antigravity");
-
-    if let Some(p) = path {
-        SystemAiTool {
-            name: "Antigravity Assistant".into(),
-            status: ToolStatus::Running,
-            version: Some("Active".into()),
-            path: Some(p),
-        }
-    } else {
-        SystemAiTool {
-            name: "Antigravity Assistant".into(),
-            status: ToolStatus::Missing,
-            version: None,
-            path: None,
-        }
-    }
-}
-
-fn scan_codex_usage() -> UsageSnapshot {
+pub(super) fn scan_codex_usage() -> UsageSnapshot {
     let home = dirs::home_dir().unwrap_or_default();
     let auth_path = home.join(".codex/auth.json");
     let installed = crate::core::process::resolve_command_path("codex").is_some()
@@ -302,7 +31,7 @@ fn scan_codex_usage() -> UsageSnapshot {
     usage
 }
 
-fn scan_claude_usage() -> UsageSnapshot {
+pub(super) fn scan_claude_usage() -> UsageSnapshot {
     let home = dirs::home_dir().unwrap_or_default();
     let creds_path = home.join(".claude/.credentials.json");
     let installed = crate::core::process::resolve_command_path("claude").is_some()
@@ -328,39 +57,21 @@ fn scan_claude_usage() -> UsageSnapshot {
     usage
 }
 
-fn check_opencode() -> SystemAiTool {
-    match crate::core::process::resolve_command_path("opencode") {
-        Some(path) => SystemAiTool {
-            name: "OpenCode".into(),
-            status: ToolStatus::Installed,
-            version: Some("Active".into()),
-            path: Some(path),
-        },
-        None => SystemAiTool {
-            name: "OpenCode".into(),
-            status: ToolStatus::Missing,
-            version: None,
-            path: None,
-        },
-    }
-}
-
-fn scan_opencode_usage() -> UsageSnapshot {
+pub(super) fn scan_opencode_usage() -> UsageSnapshot {
     let installed = crate::core::process::resolve_command_path("opencode").is_some();
     let mut usage = UsageSnapshot::new("OpenCode", installed);
 
     if installed {
         usage.source = UsageSource::Inferred;
         usage.notes.push(
-            "OpenCode kurulu; local config üzerinden kullanım takibi yapılıyor."
-                .into(),
+            "OpenCode kurulu; local config üzerinden kullanım takibi yapılıyor.".into(),
         );
     }
 
     usage
 }
 
-fn scan_antigravity_usage() -> UsageSnapshot {
+pub(super) fn scan_antigravity_usage() -> UsageSnapshot {
     let installed = crate::core::process::resolve_command_path("antigravity").is_some();
     let mut usage = UsageSnapshot::new("Antigravity CLI", installed);
 
