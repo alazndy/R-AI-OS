@@ -7,6 +7,8 @@ mod health;
 mod hub;
 mod instinct;
 mod new;
+mod preflight;
+mod reflect;
 mod refactor;
 mod search;
 mod security;
@@ -362,6 +364,14 @@ pub enum Commands {
     Mem {
         #[command(subcommand)]
         action: MemAction,
+    },
+    /// Workspace-wide health reflection: dirty projects, stale docs, score
+    Reflect,
+    /// Pre-commit gate: staged check, secrets, CVE audit, security scan
+    #[command(name = "pre-flight")]
+    PreFlight {
+        /// Project name or path (omit for current directory)
+        project: Option<String>,
     },
 }
 
@@ -858,6 +868,13 @@ pub fn run(cli: Cli) {
                 HubApiKeyAction::Show => hub::cmd_api_key_show(),
             },
         },
+        Commands::Reflect => reflect::cmd_reflect(&cfg.dev_ops_path, cli.json),
+        Commands::PreFlight { project } => {
+            let ok = preflight::cmd_preflight(project, &cfg.dev_ops_path);
+            if !ok {
+                std::process::exit(1);
+            }
+        }
     }
 }
 
