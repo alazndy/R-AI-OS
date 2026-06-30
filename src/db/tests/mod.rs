@@ -1,0 +1,14 @@
+pub use super::*;
+pub use rusqlite::{params, Connection};
+
+mod handoff;
+mod integration;
+mod schema;
+mod tasks;
+
+pub fn in_memory() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    migrate_existing(&conn).unwrap();
+    conn
+}
