@@ -28,7 +28,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     );
     // Normalize any legacy garbage status values → 'active' (idempotent)
     let _ = conn.execute_batch(
-        "UPDATE projects SET status = 'active' WHERE status NOT IN ('production','active','early','legacy')",
+        "UPDATE projects SET status = 'active' WHERE status NOT IN ('production','active','early','legacy','waiting','beklemede','archived')",
     );
     let _ = conn.execute_batch("ALTER TABLE health_cache ADD COLUMN refactor_score INTEGER");
     let _ = conn.execute_batch(
@@ -578,7 +578,7 @@ pub fn upsert_project(
          ON CONFLICT(path) DO UPDATE SET
              name=excluded.name, category=excluded.category,
              github=COALESCE(excluded.github, github),
-             status=CASE WHEN status IN ('beklemede','archived') THEN status WHEN excluded.status IN ('production','active','early','legacy') THEN excluded.status ELSE status END,
+             status=CASE WHEN status IN ('beklemede','archived','waiting') THEN status WHEN excluded.status IN ('production','active','early','legacy','waiting') THEN excluded.status ELSE status END,
              stars=COALESCE(excluded.stars, stars),
              last_commit=COALESCE(excluded.last_commit, last_commit),
              version=COALESCE(excluded.version, version),

@@ -3,8 +3,11 @@ use crate::shield::AgentShield;
 use std::io::{self, BufRead};
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
+
+const MEMORY_SYNC_INTERVAL_SECS: u64 = 90;
 
 const BUDGET_LIMIT_KB: u64 = 300;
 
@@ -184,6 +187,25 @@ pub fn run_agent(
         }
     }
 
+    // Periodic background memory sync (silent — TUI may be live).
+    let stop_sync = Arc::new(AtomicBool::new(false));
+    let sync_thread = {
+        let stop = Arc::clone(&stop_sync);
+        let agent_name = agent.to_string();
+        let dir = project_dir.clone();
+        let started = session_start_time;
+        thread::spawn(move || {
+            let period = Duration::from_secs(MEMORY_SYNC_INTERVAL_SECS);
+            loop {
+                thread::sleep(period);
+                if stop.load(Ordering::Relaxed) { break; }
+                if let Some(ref d) = dir {
+                    crate::session_memory::auto_sync_agent_memory(&agent_name, d, started, false);
+                }
+            }
+        })
+    };
+
     // 5. Execution & Timeout Loop
     let result = if let Some(timeout) = timeout_secs {
         println!("⏱️ Death timer active: {} seconds.", timeout);
@@ -223,6 +245,10 @@ pub fn run_agent(
         }
     };
 
+    // Stop periodic sync thread before doing the final verbose sync below.
+    stop_sync.store(true, Ordering::Relaxed);
+    let _ = sync_thread.join();
+
     // 6. Close session row in DB and print post-session summary.
     if injected_claude_md {
         strip_session_from_claude_md();
@@ -256,10 +282,14 @@ pub fn run_agent(
         let _ = instinct.save();
     }
 
-    // 8. For claude: offer to auto-generate a memory.md entry from the session transcript.
-    if success && agent.to_lowercase() == "claude" {
+    // 8. Auto-sync memory for all agents (raios-native, no LLM).
+    //    project memory.md interactive prompt is claude-only (uses claude --print).
+    if success {
         if let Some(ref dir) = project_dir {
-            crate::session_memory::post_session_memory_prompt(dir, session_start_time);
+            crate::session_memory::auto_sync_agent_memory(agent, dir, session_start_time, true);
+            if agent.to_lowercase() == "claude" {
+                crate::session_memory::post_session_memory_prompt(dir, session_start_time);
+            }
         }
     }
 

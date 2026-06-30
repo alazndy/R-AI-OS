@@ -30,7 +30,7 @@ pub fn load_entities(dev_ops: &Path) -> Vec<EntityProject> {
     let projects = match crate::db::load_all_projects(&conn) {
         Ok(rows) => rows
             .into_iter()
-            .filter(|r| Path::new(&r.path).exists())
+            .filter(|r| Path::new(&r.path).exists() && r.status != "waiting" && r.status != "beklemede")
             .map(row_to_entity)
             .collect(),
         Err(_) => vec![],
@@ -108,7 +108,12 @@ pub fn discover_entities(dev_ops: &Path) -> Vec<EntityProject> {
     let projects = match crate::db::load_all_projects(&conn) {
         Ok(rows) => rows
             .into_iter()
-            .filter(|r| fresh_paths.contains(&r.path) && Path::new(&r.path).exists())
+            .filter(|r| {
+                fresh_paths.contains(&r.path)
+                    && Path::new(&r.path).exists()
+                    && r.status != "waiting"
+                    && r.status != "beklemede"
+            })
             .map(row_to_entity)
             .collect(),
         Err(_) => vec![],

@@ -8,6 +8,7 @@ import os
 import platform
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -163,6 +164,8 @@ class TrayState:
     aiosd_ram_mb: float = 0.0
     error: str = ""
     dirty_projects: set[str] = field(default_factory=set)
+    mem_items: list[dict] = field(default_factory=list)
+    tasks: list[dict] = field(default_factory=list)
 
 
 AGENTS: tuple[Agent, ...] = (
@@ -230,6 +233,7 @@ def default_raios_config() -> dict:
 
 CONFIG_DIR = config_dir()
 CONFIG_PATH = CONFIG_DIR / "config.toml"
+RAIOS_DB_PATH = CONFIG_DIR / "workspace.db"
 TOKEN_CANDIDATES = (
     CONFIG_DIR / ".session_token",
     CONFIG_DIR / ".ipc_token",
@@ -238,6 +242,19 @@ USAGE_PATH = CONFIG_DIR / "tray-usage.json"
 CACHE_PATH = CONFIG_DIR / "tray-projects-cache.json"
 PROJECTS_CONFIG_PATH = CONFIG_DIR / "tray-projects-config.json"
 DIRTY_STATUS_CACHE: dict[str, tuple[float, bool, tuple[float, float]]] = {}
+
+MEM_TYPE_COLORS_DARK = {
+    "feedback":  "#f0a500",
+    "project":   "#4caf50",
+    "user":      "#60a5fa",
+    "reference": "#c084fc",
+}
+MEM_TYPE_COLORS_LIGHT = {
+    "feedback":  "#d97706",
+    "project":   "#16a34a",
+    "user":      "#2563eb",
+    "reference": "#7c3aed",
+}
 
 
 def ensure_parent(path: Path) -> None:
@@ -308,6 +325,86 @@ def load_projects_config() -> dict:
 
 def save_projects_config(config: dict) -> None:
     save_json(PROJECTS_CONFIG_PATH, config)
+
+
+def load_mem_items(project_key: str | None = None, limit: int = 100) -> list[dict]:
+    if not RAIOS_DB_PATH.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{RAIOS_DB_PATH}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        if project_key:
+            rows = conn.execute(
+                "SELECT * FROM mem_items WHERE project_key = ? ORDER BY updated_at DESC LIMIT ?",
+                (project_key, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM mem_items ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def load_tasks(limit: int = 50) -> list[dict]:
+    if not RAIOS_DB_PATH.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{RAIOS_DB_PATH}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM tasks WHERE completed = 0 ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def add_task(text: str, project: str | None = None) -> bool:
+    if not RAIOS_DB_PATH.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(RAIOS_DB_PATH))
+        conn.execute(
+            "INSERT INTO tasks (text, completed, agent, project) VALUES (?, 0, ?, ?)",
+            (text.strip(), "raios-tray", project or None),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def complete_task(task_id: int) -> bool:
+    if not RAIOS_DB_PATH.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(RAIOS_DB_PATH))
+        conn.execute("UPDATE tasks SET completed = 1 WHERE id = ?", (task_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def delete_task(task_id: int) -> bool:
+    if not RAIOS_DB_PATH.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(RAIOS_DB_PATH))
+        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
 
 
 def get_pin_logo() -> QIcon:
@@ -653,6 +750,8 @@ def fetch_state() -> TrayState:
                 dirty_projects.add(name)
 
     aiosd_cpu, aiosd_ram = proc_stats("aiosd")
+    mem_items = load_mem_items()
+    tasks = load_tasks()
     return TrayState(
         online=health is not None,
         health=health or {},
@@ -663,6 +762,8 @@ def fetch_state() -> TrayState:
         aiosd_ram_mb=aiosd_ram,
         error="" if health is not None else "R-AI-OS API unreachable",
         dirty_projects=dirty_projects,
+        mem_items=mem_items,
+        tasks=tasks,
     )
 
 
@@ -864,6 +965,331 @@ class SettingsDialog(QDialog):
     def open_config_dir(self) -> None:
         if not open_in_file_manager(CONFIG_DIR):
             QMessageBox.warning(self, APP_NAME, "Unable to open config directory.")
+
+
+class MemoryBrowserDialog(QDialog):
+    def __init__(self, items: list[dict], parent: QWidget | None = None):
+        super().__init__(parent)
+        self._all_items = items
+        self.setWindowTitle("Memory Browser — raios")
+        self.setMinimumSize(720, 540)
+        self.setModal(False)
+
+        tc = _card_theme()
+        dark = _is_dark_mode()
+        type_colors = MEM_TYPE_COLORS_DARK if dark else MEM_TYPE_COLORS_LIGHT
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(8)
+
+        # Header: search + export
+        header = QHBoxLayout()
+        self._search = QLineEdit(self)
+        self._search.setPlaceholderText("Search memory items…")
+        self._search.textChanged.connect(self._filter)
+        header.addWidget(self._search, stretch=1)
+
+        export_btn = QPushButton("Export All", self)
+        export_btn.setToolTip("raios mem export — regenerate markdown files from DB")
+        export_btn.clicked.connect(self._export)
+        header.addWidget(export_btn)
+        outer.addLayout(header)
+
+        count_text = f"{len(items)} item(s)" if items else "No memory items yet"
+        self._count_label = QLabel(count_text, self)
+        self._count_label.setStyleSheet(f"color: {tc['muted']}; font-size: 11px;")
+        outer.addWidget(self._count_label)
+
+        # Scrollable card list
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        container = QWidget(scroll)
+        self._cards_layout = QVBoxLayout(container)
+        self._cards_layout.setContentsMargins(0, 0, 0, 0)
+        self._cards_layout.setSpacing(8)
+        self._cards_layout.addStretch(1)
+        scroll.setWidget(container)
+        outer.addWidget(scroll)
+
+        self._card_widgets: list[tuple[QWidget, str]] = []  # (widget, search_text)
+        for item in items:
+            card = self._make_card(item, tc, type_colors)
+            self._cards_layout.insertWidget(self._cards_layout.count() - 1, card)
+            search_text = " ".join([
+                item.get("slug", ""),
+                item.get("title", ""),
+                item.get("description", ""),
+                item.get("body", ""),
+                item.get("item_type", ""),
+            ]).lower()
+            self._card_widgets.append((card, search_text))
+
+        # Bottom bar
+        bottom = QHBoxLayout()
+        bottom.addStretch(1)
+        close_btn = QPushButton("Close", self)
+        close_btn.clicked.connect(self.close)
+        bottom.addWidget(close_btn)
+        outer.addLayout(bottom)
+
+    def _make_card(self, item: dict, tc: dict, type_colors: dict) -> QWidget:
+        card = QWidget(self)
+        card.setStyleSheet(
+            f"background: {tc['card_bg']}; border: 1px solid {tc['border']}; border-radius: 6px;"
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
+
+        # Top: type badge + title
+        top = QHBoxLayout()
+        top.setSpacing(8)
+
+        itype = item.get("item_type", "?")
+        color = type_colors.get(itype, tc["muted"])
+        badge = QLabel(f"[{itype}]", card)
+        badge.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 11px;")
+        top.addWidget(badge)
+
+        title = QLabel(item.get("title", item.get("slug", "?")), card)
+        title_font = title.font()
+        title_font.setBold(True)
+        title.setFont(title_font)
+        top.addWidget(title, stretch=1)
+
+        ts = item.get("updated_at", "")[:10]
+        if ts:
+            ts_label = QLabel(ts, card)
+            ts_label.setStyleSheet(f"color: {tc['hint']}; font-size: 10px;")
+            top.addWidget(ts_label)
+        layout.addLayout(top)
+
+        # Description
+        desc = item.get("description", "")
+        if desc:
+            desc_label = QLabel(desc, card)
+            desc_label.setWordWrap(True)
+            desc_label.setStyleSheet(f"color: {tc['muted']}; font-style: italic; font-size: 11px;")
+            layout.addWidget(desc_label)
+
+        # Body (full text, selectable)
+        body = item.get("body", "").strip()
+        if body:
+            body_label = QLabel(body, card)
+            body_label.setWordWrap(True)
+            body_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            body_label.setStyleSheet(f"font-size: 12px; padding-top: 4px;")
+            layout.addWidget(body_label)
+
+        return card
+
+    def _filter(self, text: str) -> None:
+        query = text.strip().lower()
+        visible = 0
+        for card, search_text in self._card_widgets:
+            show = not query or query in search_text
+            card.setVisible(show)
+            if show:
+                visible += 1
+        total = len(self._card_widgets)
+        self._count_label.setText(
+            f"{visible}/{total} item(s)" if query else f"{total} item(s)"
+        )
+
+    def _export(self) -> None:
+        raios = shutil.which("raios")
+        if not raios:
+            QMessageBox.warning(self, APP_NAME, "raios binary not found in PATH.")
+            return
+        try:
+            result = subprocess.run(
+                [raios, "mem", "export"],
+                capture_output=True, text=True, timeout=10,
+            )
+            msg = result.stdout.strip() or result.stderr.strip() or "Done."
+            QMessageBox.information(self, APP_NAME, msg)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            QMessageBox.critical(self, APP_NAME, f"Export failed: {exc}")
+
+
+class QuickAddTaskDialog(QDialog):
+    def __init__(self, projects: list[dict], parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Add Task — raios")
+        self.setMinimumWidth(440)
+        self.setModal(True)
+
+        tc = _card_theme()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 12)
+        layout.setSpacing(10)
+
+        lbl = QLabel("New task:", self)
+        lbl.setStyleSheet("font-weight: bold;")
+        layout.addWidget(lbl)
+
+        self._text = QLineEdit(self)
+        self._text.setPlaceholderText("What needs to be done?")
+        self._text.returnPressed.connect(self._submit)
+        layout.addWidget(self._text)
+
+        proj_row = QHBoxLayout()
+        proj_lbl = QLabel("Project:", self)
+        proj_row.addWidget(proj_lbl)
+        self._project = QLineEdit(self)
+        self._project.setPlaceholderText("(optional)")
+        proj_row.addWidget(self._project, stretch=1)
+        layout.addLayout(proj_row)
+
+        hint = QLabel("Enter or click Add to save.", self)
+        hint.setStyleSheet(f"color: {tc['muted']}; font-size: 11px;")
+        layout.addWidget(hint)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        btns.button(QDialogButtonBox.Ok).setText("Add")
+        btns.accepted.connect(self._submit)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+        self._text.setFocus()
+
+        # Pre-fill project from pinned/most-used if only one
+        if len(projects) == 1:
+            self._project.setText(projects[0].get("name", ""))
+
+    def _submit(self) -> None:
+        text = self._text.text().strip()
+        if not text:
+            return
+        project = self._project.text().strip() or None
+        if add_task(text, project):
+            self.accept()
+        else:
+            QMessageBox.warning(self, APP_NAME, "Failed to save task to database.")
+
+
+class TaskListDialog(QDialog):
+    def __init__(self, tasks: list[dict], projects: list[dict], parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Tasks — raios")
+        self.setMinimumSize(520, 420)
+        self.setModal(False)
+
+        self._tc = _card_theme()
+        self._projects = projects
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(8)
+
+        header = QHBoxLayout()
+        self._count_lbl = QLabel(self)
+        self._count_lbl.setStyleSheet(f"color: {self._tc['muted']}; font-size: 11px;")
+        header.addWidget(self._count_lbl, stretch=1)
+        add_btn = QPushButton("+ Add Task", self)
+        add_btn.clicked.connect(self._on_add)
+        header.addWidget(add_btn)
+        outer.addLayout(header)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        self._container = QWidget(scroll)
+        self._cards_layout = QVBoxLayout(self._container)
+        self._cards_layout.setContentsMargins(0, 0, 0, 0)
+        self._cards_layout.setSpacing(6)
+        self._cards_layout.addStretch(1)
+        scroll.setWidget(self._container)
+        outer.addWidget(scroll)
+
+        bottom = QHBoxLayout()
+        bottom.addStretch(1)
+        close_btn = QPushButton("Close", self)
+        close_btn.clicked.connect(self.close)
+        bottom.addWidget(close_btn)
+        outer.addLayout(bottom)
+
+        self._reload(tasks)
+
+    def _reload(self, tasks: list[dict]) -> None:
+        while self._cards_layout.count() > 1:
+            item = self._cards_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        for task in tasks:
+            self._cards_layout.insertWidget(
+                self._cards_layout.count() - 1, self._make_card(task)
+            )
+
+        n = len(tasks)
+        self._count_lbl.setText(f"{n} pending task(s)" if n else "No pending tasks")
+
+    def _make_card(self, task: dict) -> QWidget:
+        tc = self._tc
+        card = QWidget(self._container)
+        card.setStyleSheet(
+            f"background: {tc['card_bg']}; border: 1px solid {tc['border']}; border-radius: 6px;"
+        )
+        row = QHBoxLayout(card)
+        row.setContentsMargins(12, 8, 8, 8)
+        row.setSpacing(8)
+
+        text_col = QVBoxLayout()
+        text_lbl = QLabel(task.get("text", ""), card)
+        text_lbl.setWordWrap(True)
+        text_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        text_col.addWidget(text_lbl)
+
+        meta_parts: list[str] = []
+        proj = task.get("project")
+        if proj:
+            meta_parts.append(proj)
+        ts = (task.get("created_at") or "")[:10]
+        if ts:
+            meta_parts.append(ts)
+        if meta_parts:
+            meta_lbl = QLabel("  ".join(meta_parts), card)
+            meta_lbl.setStyleSheet(f"color: {tc['muted']}; font-size: 10px;")
+            text_col.addWidget(meta_lbl)
+        row.addLayout(text_col, stretch=1)
+
+        tid: int = task["id"]
+
+        done_btn = QPushButton("✓", card)
+        done_btn.setToolTip("Mark as done")
+        done_btn.setFixedSize(28, 28)
+        done_btn.setStyleSheet(
+            "QPushButton{color:#4ade80;font-weight:bold;border:1px solid #4ade80;border-radius:4px;}"
+            "QPushButton:hover{background:#4ade80;color:#000;}"
+        )
+        done_btn.clicked.connect(lambda _c, t=tid: self._on_done(t))
+        row.addWidget(done_btn)
+
+        del_btn = QPushButton("✕", card)
+        del_btn.setToolTip("Delete task")
+        del_btn.setFixedSize(28, 28)
+        del_btn.setStyleSheet(
+            "QPushButton{color:#f87171;font-weight:bold;border:1px solid #f87171;border-radius:4px;}"
+            "QPushButton:hover{background:#f87171;color:#000;}"
+        )
+        del_btn.clicked.connect(lambda _c, t=tid: self._on_delete(t))
+        row.addWidget(del_btn)
+
+        return card
+
+    def _on_done(self, task_id: int) -> None:
+        complete_task(task_id)
+        self._reload(load_tasks())
+
+    def _on_delete(self, task_id: int) -> None:
+        delete_task(task_id)
+        self._reload(load_tasks())
+
+    def _on_add(self) -> None:
+        dlg = QuickAddTaskDialog(self._projects, self)
+        if dlg.exec() == QDialog.Accepted:
+            self._reload(load_tasks())
 
 
 class ProjectEditDialog(QDialog):
@@ -1159,6 +1585,8 @@ class RaiosTray(QObject):
         self.app = app
         self.state = TrayState(projects=[], usage={}, health={})
         self._manage_dialog: ProjectManagerDialog | None = None
+        self._memory_dialog: MemoryBrowserDialog | None = None
+        self._task_dialog: TaskListDialog | None = None
         self._fetching = False
 
         # Native AppIndicator3 icon
@@ -1289,6 +1717,33 @@ class RaiosTray(QObject):
 
         self._gtk_menu.append(Gtk.SeparatorMenuItem())
         self._gtk_menu.append(self._gtk_item("Manage Projects...", self.open_manage_projects))
+
+        # ── Memory section ────────────────────────────────────────────────────
+        self._gtk_menu.append(Gtk.SeparatorMenuItem())
+        mem_items = self.state.mem_items
+        if mem_items:
+            latest = mem_items[0]
+            itype = latest.get("item_type", "?")
+            title = latest.get("title", latest.get("slug", "?"))
+            label = f"✦ [{itype}] {title[:48]}"
+            self._gtk_menu.append(self._gtk_item(label, sensitive=False))
+            self._gtk_menu.append(
+                self._gtk_item(f"Browse Memory ({len(mem_items)})…", self.open_memory_browser)
+            )
+        else:
+            self._gtk_menu.append(self._gtk_item("Memory (empty)", self.open_memory_browser))
+
+        # ── Tasks section ─────────────────────────────────────────────────────
+        self._gtk_menu.append(Gtk.SeparatorMenuItem())
+        pending = self.state.tasks
+        if pending:
+            self._gtk_menu.append(self._gtk_item(
+                f"☑ {len(pending)} task(s) pending", self.open_task_list
+            ))
+        else:
+            self._gtk_menu.append(self._gtk_item("Tasks (empty)", self.open_task_list))
+        self._gtk_menu.append(self._gtk_item("+ Add Task...", self.open_quick_add_task))
+
         self._gtk_menu.append(Gtk.SeparatorMenuItem())
         self._gtk_menu.append(self._gtk_item("aiosd Settings", self.open_settings))
         self._gtk_menu.append(self._gtk_item("Open Config Directory", self.open_config_directory))
@@ -1363,6 +1818,45 @@ class RaiosTray(QObject):
     def open_config_directory(self) -> None:
         if not open_in_file_manager(CONFIG_DIR):
             self._notify("Unable to open config directory.")
+
+    def open_memory_browser(self) -> None:
+        if self._memory_dialog and self._memory_dialog.isVisible():
+            self._memory_dialog.raise_()
+            self._memory_dialog.activateWindow()
+            return
+        items = load_mem_items()
+        dialog = MemoryBrowserDialog(items, parent=None)
+        self._memory_dialog = dialog
+        dialog.finished.connect(lambda _: setattr(self, "_memory_dialog", None))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def open_quick_add_task(self) -> None:
+        projects = self.state.projects or []
+        dlg = QuickAddTaskDialog(projects, parent=None)
+        if dlg.exec() == QDialog.Accepted:
+            self.state.tasks = load_tasks()
+            self.rebuild_menu()
+            self._notify("Task added.")
+
+    def open_task_list(self) -> None:
+        if self._task_dialog and self._task_dialog.isVisible():
+            self._task_dialog.raise_()
+            self._task_dialog.activateWindow()
+            return
+        projects = self.state.projects or []
+        dialog = TaskListDialog(self.state.tasks, projects, parent=None)
+        self._task_dialog = dialog
+        dialog.finished.connect(self._on_task_dialog_closed)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_task_dialog_closed(self) -> None:
+        self._task_dialog = None
+        self.state.tasks = load_tasks()
+        self.rebuild_menu()
 
 
 def validate_environment() -> str | None:

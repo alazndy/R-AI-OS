@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::io::{BufRead, BufReader};
+use rusqlite;
 
 // ── Manifest types ────────────────────────────────────────────────────────────
 
@@ -11,6 +12,8 @@ struct ExtensionManifest {
     commands: Vec<ExtCommand>,
     #[serde(default)]
     config_schema: Vec<ConfigField>,
+    #[serde(default)]
+    schedules: Vec<ExtSchedule>,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -57,6 +60,17 @@ struct ConfigField {
     label: String,
     #[serde(rename = "type")]
     field_type: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct ExtSchedule {
+    name: String,
+    /// Standard 5-field cron expression (e.g. "0 2 * * *")
+    cron: String,
+    /// Must match a [[commands]] name in this extension
+    command: String,
     #[serde(default)]
     description: String,
 }
@@ -190,6 +204,12 @@ pub fn cmd_ext_list(dev_ops_path: &Path, json: bool) {
 pub fn cmd_ext(name: &str, ext_args: &[String], dev_ops_path: &Path, json: bool) {
     if name == "list" {
         cmd_ext_list(dev_ops_path, json);
+        return;
+    }
+    if name == "install" {
+        println!("\n  Installing raios extensions...\n");
+        let registered = discover_and_register_extensions(dev_ops_path);
+        println!("\n  {} extension(s) registered.", registered.len());
         return;
     }
 
@@ -507,7 +527,131 @@ pub fn discover_and_register_extensions(dev_ops_path: &Path) -> Vec<(String, Pat
                 println!(" {}", if ok { "done" } else { "failed (check manually)" });
             }
         }
+        // Register schedules into cp_scheduled_jobs
+        if !manifest.schedules.is_empty() {
+            register_extension_schedules(&name, &path, &manifest.schedules);
+        }
+
         registered.push((name, path));
     }
     registered
+}
+
+// ── Schedule registration ─────────────────────────────────────────────────────
+
+/// Converts a 5-field cron string to an approximate repeat interval in seconds.
+/// Only handles the common daily/weekly/hourly patterns used by extensions.
+fn cron_to_interval_secs(cron: &str) -> u64 {
+    let fields: Vec<&str> = cron.split_whitespace().collect();
+    if fields.len() != 5 {
+        return 86400; // fallback: daily
+    }
+    let dow = fields[4]; // day-of-week
+    let hour = fields[1];
+    let minute = fields[0];
+
+    // Weekly: day-of-week is specific (not *)
+    if dow != "*" {
+        return 604800;
+    }
+    // Daily: hour is specific
+    if hour != "*" {
+        return 86400;
+    }
+    // Hourly: minute is specific
+    if minute != "*" {
+        return 3600;
+    }
+    // Every minute (catch-all)
+    60
+}
+
+/// Computes the next UTC run time string from a cron expression.
+/// Approximates by computing "next occurrence of hour:minute today, or tomorrow".
+fn cron_next_run(cron: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let fields: Vec<&str> = cron.split_whitespace().collect();
+    let hour: u64 = fields.get(1).and_then(|s| s.parse().ok()).unwrap_or(2);
+    let minute: u64 = fields.get(0).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Seconds since midnight (UTC)
+    let day_secs = now_secs % 86400;
+    let target_day_secs = hour * 3600 + minute * 60;
+
+    let next_secs = if target_day_secs > day_secs {
+        now_secs - day_secs + target_day_secs
+    } else {
+        now_secs - day_secs + 86400 + target_day_secs
+    };
+
+    // Format as ISO-8601 (rough, without chrono dependency here)
+    let s = next_secs;
+    let days = s / 86400;
+    let rem = s % 86400;
+    let h = rem / 3600;
+    let m = (rem % 3600) / 60;
+    let sec = rem % 60;
+    // Unix epoch was 1970-01-01. We'll just store a readable approx.
+    let _ = (days, h, m, sec); // used below via chrono if available
+
+    // Use chrono for proper formatting (already a dependency in Cargo.toml)
+    chrono_next_run_str(next_secs)
+}
+
+fn chrono_next_run_str(unix_secs: u64) -> String {
+    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(unix_secs as i64, 0)
+        .unwrap_or_else(chrono::Utc::now);
+    dt.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn register_extension_schedules(ext_name: &str, ext_path: &Path, schedules: &[ExtSchedule]) {
+    let db_path = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("raios")
+        .join("workspace.db");
+
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("    Could not open raios DB to register schedules: {}", e);
+            return;
+        }
+    };
+
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    for sched in schedules {
+        let id = format!("ext-{}-{}", ext_name, sched.name);
+        let interval = cron_to_interval_secs(&sched.cron);
+        let next_run = cron_next_run(&sched.cron);
+        // Shell command the daemon will execute
+        let task_desc = format!("raios ext {} {}", ext_name, sched.command);
+        let title = if sched.description.is_empty() {
+            format!("[ext:{}] {}", ext_name, sched.command)
+        } else {
+            sched.description.clone()
+        };
+
+        let result = conn.execute(
+            "INSERT INTO cp_scheduled_jobs
+             (id, title, agent, task_description, interval_secs, status, next_run_at, created_at)
+             VALUES (?1,?2,?3,?4,?5,'active',?6,?7)
+             ON CONFLICT(id) DO UPDATE SET
+               title=excluded.title,
+               task_description=excluded.task_description,
+               interval_secs=excluded.interval_secs,
+               next_run_at=excluded.next_run_at",
+            rusqlite::params![id, title, ext_name, task_desc, interval as i64, next_run, now],
+        );
+        match result {
+            Ok(_) => println!("    ✓ Schedule registered: {} ({}s)", sched.name, interval),
+            Err(e) => eprintln!("    ✗ Failed to register schedule {}: {}", sched.name, e),
+        }
+    }
 }

@@ -63,7 +63,7 @@ pub async fn start_lifecycle_worker(
 
             // Skip manually pinned statuses
             let current = proj.status.as_str();
-            if matches!(current, "production" | "early" | "legacy") {
+            if matches!(current, "production" | "early" | "legacy" | "waiting") {
                 continue;
             }
 
@@ -120,7 +120,7 @@ pub async fn start_lifecycle_worker(
             if let Ok(fresh) = crate::db::load_all_projects(&conn) {
                 s.projects = fresh
                     .into_iter()
-                    .filter(|r| std::path::Path::new(&r.path).exists())
+                    .filter(|r| std::path::Path::new(&r.path).exists() && r.status != "waiting")
                     .map(|r| crate::entities::EntityProject {
                         name: r.name,
                         category: r.category,
