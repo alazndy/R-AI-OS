@@ -1,3 +1,4 @@
+pub mod cmd;
 pub mod cortex;
 pub mod handlers;
 pub mod git;
