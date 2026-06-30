@@ -11,7 +11,7 @@ use ratatui::{
 
 mod steps;
 
-pub(super) const ACCENT: Color = Color::Rgb(30, 140, 255);
+pub(super) const ACCENT: Color = Color::Rgb(0, 180, 255);
 pub(super) const PANEL: Color = Color::Rgb(8, 12, 18);
 pub(super) const DIM_B: Color = Color::Rgb(20, 35, 50);
 

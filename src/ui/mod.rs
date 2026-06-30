@@ -28,13 +28,13 @@ use crate::app::{App, AppState};
 
 // ─── Colour palette ──────────────────────────────────────────────────────────
 
-const GREEN: Color = Color::Rgb(0, 195, 230);   // Cyan-blue (transitional)
-const CYAN: Color = Color::Rgb(30, 140, 255);    // Sky blue (blue)
+const GREEN: Color = Color::Rgb(0, 200, 180);   // Turquoise (turkuaz)
+const CYAN: Color = Color::Rgb(0, 180, 255);    // Cyan (cyan)
 const DIM: Color = Color::Rgb(80, 80, 80);
 const MID: Color = Color::Rgb(170, 170, 170);
-const AMBER: Color = Color::Rgb(255, 100, 20);   // Orange (orange)
-const RED: Color = Color::Rgb(255, 60, 0);       // Vermilion (transitional orange-red)
-const MAGENTA: Color = Color::Rgb(160, 80, 255); // Violet (transitional purple)
+const AMBER: Color = Color::Rgb(255, 100, 20);   // Orange (turuncu)
+const RED: Color = Color::Rgb(255, 60, 0);       // Orange-Red
+const MAGENTA: Color = Color::Rgb(30, 120, 255); // Blue (mavi)
 const PANEL_BG: Color = Color::Rgb(8, 12, 16);
 const HEADER_BG: Color = Color::Rgb(0, 12, 30);
 
