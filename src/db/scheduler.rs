@@ -1,5 +1,21 @@
 use super::*;
 use rusqlite::{params, Connection, OptionalExtension, Result};
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScheduledJob {
+    pub id: String,
+    pub title: String,
+    pub agent: String,
+    pub task_description: String,
+    pub project_id: Option<String>,
+    pub interval_secs: i64,
+    pub status: String,
+    pub last_run_at: Option<String>,
+    pub next_run_at: String,
+    pub created_at: String,
+    pub run_count: i64,
+}
+
 pub fn cp_scheduled_job_create(
     conn: &Connection,
     title: &str,
@@ -149,4 +165,3 @@ pub fn cp_scheduled_job_trigger_now(conn: &Connection, id: &str) -> Result<()> {
     )?;
     Ok(())
 }
-

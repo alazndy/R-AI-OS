@@ -8,7 +8,11 @@ pub mod mem;
 pub mod projects;
 pub mod scheduler;
 pub mod tasks;
-pub mod workflows;
+pub mod wf_file_change;
+pub mod wf_handoff;
+pub mod wf_sessions;
+pub mod wf_swarm;
+pub mod wf_task_graph;
 
 pub use budget::*;
 pub use control_plane::*;
@@ -17,7 +21,11 @@ pub use mem::*;
 pub use projects::*;
 pub use scheduler::*;
 pub use tasks::*;
-pub use workflows::*;
+pub use wf_file_change::*;
+pub use wf_handoff::*;
+pub use wf_sessions::*;
+pub use wf_swarm::*;
+pub use wf_task_graph::*;
 
 #[cfg(test)]
 mod tests;
