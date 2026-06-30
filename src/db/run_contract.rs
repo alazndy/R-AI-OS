@@ -1,4 +1,3 @@
-use super::*;
 use rusqlite::{params, Connection, OptionalExtension, Result};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

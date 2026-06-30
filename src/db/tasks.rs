@@ -1,5 +1,4 @@
-use super::*;
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{params, Connection, Result};
 // ─── Tasks ───────────────────────────────────────────────────────────────────
 
 // ── Legacy tasks table (compat-only; use cp_* for new work) ──────────────────

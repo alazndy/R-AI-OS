@@ -1,4 +1,3 @@
-use super::*;
 pub(super) fn cmd_sessions(agent: Option<&str>, top: usize, json: bool) {
     let conn = match crate::db::open_db() {
         Ok(c) => c,

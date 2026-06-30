@@ -1,5 +1,4 @@
-use super::*;
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{params, Connection, Result};
 // ─── Health cache ─────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]

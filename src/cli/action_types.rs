@@ -1,5 +1,4 @@
 use clap::Subcommand;
-use std::path::PathBuf;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum HubAction {

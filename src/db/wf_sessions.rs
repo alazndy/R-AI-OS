@@ -1,5 +1,5 @@
 use super::*;
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{params, Connection, Result};
 pub fn cp_session_start(
     conn: &Connection,
     agent_identity: &str,

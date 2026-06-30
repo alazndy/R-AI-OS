@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 mod discover;
 mod run;
@@ -15,6 +15,7 @@ struct ExtensionManifest {
     #[serde(default)]
     commands: Vec<ExtCommand>,
     #[serde(default)]
+    #[allow(dead_code)]
     config_schema: Vec<ConfigField>,
     #[serde(default)]
     schedules: Vec<ExtSchedule>,
@@ -62,11 +63,15 @@ enum CommandKind {
 
 #[derive(serde::Deserialize, Debug)]
 struct ConfigField {
+    #[allow(dead_code)]
     key: String,
+    #[allow(dead_code)]
     label: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     field_type: String,
     #[serde(default)]
+    #[allow(dead_code)]
     description: String,
 }
 

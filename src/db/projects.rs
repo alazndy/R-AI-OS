@@ -1,5 +1,4 @@
-use super::*;
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{params, Connection, Result};
 // ─── Project CRUD ─────────────────────────────────────────────────────────────
 
 pub struct DbProject {

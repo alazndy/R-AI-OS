@@ -1,5 +1,5 @@
 use super::*;
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{params, Connection, Result};
 pub fn create_task_graph_node_workflow(
     conn: &Connection,
     graph_id: &str,

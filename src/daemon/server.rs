@@ -1,88 +1,12 @@
 use super::state::DaemonState;
 use crate::config::Config;
-use crate::factory::{Factory, Job};
+use crate::factory::Factory;
 use crate::proxy_store::{CapabilityProxy, CapabilityStore};
 use crate::session::SessionStore;
 use notify::{RecursiveMode, Watcher};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, RwLock};
-
-fn validate_file_change_target(
-    target: &std::path::Path,
-    workspace: &std::path::Path,
-    blocked_paths: &[String],
-) -> Result<std::path::PathBuf, String> {
-    crate::security::sandbox::SandboxGuard::new(workspace.to_path_buf())
-        .with_blocked_paths(blocked_paths.to_vec())
-        .check(target)
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::validate_file_change_target;
-    use tempfile::TempDir;
-
-    #[test]
-    fn validate_file_change_target_allows_workspace_files() {
-        let tmp = TempDir::new().unwrap();
-        let file = tmp.path().join("src/main.rs");
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(&file, "").unwrap();
-
-        let validated = validate_file_change_target(&file, tmp.path(), &[]).unwrap();
-        assert_eq!(validated, file.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn validate_file_change_target_blocks_outside_workspace() {
-        let tmp = TempDir::new().unwrap();
-        let outside_dir = TempDir::new().unwrap();
-        let file = outside_dir.path().join("outside.rs");
-        std::fs::write(&file, "").unwrap();
-
-        let err = validate_file_change_target(&file, tmp.path(), &[]).unwrap_err();
-        assert!(err.contains("outside the allowed workspace"));
-    }
-
-    #[test]
-    fn validate_file_change_target_blocks_explicit_blocked_paths() {
-        let tmp = TempDir::new().unwrap();
-        let blocked_dir = tmp.path().join("secrets");
-        std::fs::create_dir_all(&blocked_dir).unwrap();
-        let file = blocked_dir.join("token.txt");
-        std::fs::write(&file, "").unwrap();
-
-        let err = validate_file_change_target(
-            &file,
-            tmp.path(),
-            &[blocked_dir.to_string_lossy().into_owned()],
-        )
-        .unwrap_err();
-        assert!(err.contains("matches a blocked path"));
-    }
-}
-
-fn policy_blocked_paths() -> Vec<String> {
-    crate::security::PolicyConfig::try_load_default()
-        .map(|p| p.filesystem.blocked_paths)
-        .unwrap_or_default()
-}
-
-fn approval_workflow_ids(
-    approval: &crate::daemon::state::FileChangeApproval,
-) -> Option<crate::control_plane::FileChangeWorkflowIds> {
-    Some(crate::control_plane::FileChangeWorkflowIds {
-        task_id: approval.task_id.clone()?,
-        agent_run_id: approval.agent_run_id.clone()?,
-        artifact_id: approval.artifact_id.clone()?,
-        approval_id: approval.id.clone(), // id IS the canonical approval id
-        project_id: None,
-    })
-}
 
 pub struct Server {
     state: Arc<RwLock<DaemonState>>,
@@ -328,11 +252,11 @@ impl Server {
         }
 
         loop {
-            let (mut socket, addr) = listener.accept().await?;
+            let (socket, addr) = listener.accept().await?;
             println!("Client connected: {}", addr);
 
-            let mut rx = tx.subscribe();
-            let mut telem_rx = telem_tx.subscribe();
+            let rx = tx.subscribe();
+            let telem_rx = telem_tx.subscribe();
             let state_for_client = self.state.clone();
             let proxy_for_client = self.execution_proxy.clone()
                 .with_event_tx(tx.clone());

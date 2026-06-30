@@ -54,7 +54,7 @@ fn chrono_next_run_str(unix_secs: u64) -> String {
 
 pub(super) fn register_extension_schedules(
     ext_name: &str,
-    ext_path: &Path,
+    _ext_path: &Path,
     schedules: &[ExtSchedule],
 ) {
     let db_path = dirs::config_dir()

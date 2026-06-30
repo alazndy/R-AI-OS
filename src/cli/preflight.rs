@@ -214,7 +214,7 @@ fn run_cargo_audit(path: &Path) -> Check {
             let has_vuln = combined.to_lowercase().contains("error")
                 || combined.contains("vulnerability")
                 || !o.status.success();
-            let vuln_count = combined
+            let _vuln_count = combined
                 .lines()
                 .filter(|l| l.contains("Vulnerable crates:") || l.contains("vulnerability"))
                 .count();

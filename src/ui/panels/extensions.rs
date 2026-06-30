@@ -238,7 +238,7 @@ fn render_config_panel(frame: &mut Frame, area: Rect, ext: &ExtensionInfo, app: 
     }
 
     let scroll = if focused && app.ext.cfg_cursor > 4 {
-        ((app.ext.cfg_cursor.saturating_sub(4)) as u16)
+        (app.ext.cfg_cursor.saturating_sub(4)) as u16 
     } else {
         0
     };

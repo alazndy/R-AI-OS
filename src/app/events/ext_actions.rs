@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 
 use crate::app::{
-    state::{BgMsg, ExtCmdInfo, ExtConfigField, ExtFocus, ExtensionInfo, LogEntry},
+    state::{BgMsg, ExtCmdInfo, ExtConfigField, ExtensionInfo},
     App,
 };
 
@@ -100,7 +100,9 @@ fn run_ext_command_bg(
         kind: String,
         #[serde(default)]
         args: Vec<String>,
+        #[allow(dead_code)]
         env_key: Option<String>,
+        #[allow(dead_code)]
         separator: Option<String>,
     }
 

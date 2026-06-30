@@ -1,5 +1,5 @@
 use super::*;
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{params, Connection, Result};
 pub fn project_id_for_file_path(conn: &Connection, path: &str) -> Option<i64> {
     let target = path.replace('\\', "/");
     let projects = load_all_projects(conn).ok()?;

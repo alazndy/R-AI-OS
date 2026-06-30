@@ -1,5 +1,5 @@
 use super::*;
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{params, Connection, Result};
 pub fn create_swarm_workflow(
     conn: &Connection,
     project_path: &str,
