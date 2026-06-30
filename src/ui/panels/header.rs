@@ -49,9 +49,23 @@ pub fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
+    let remote_tag = if app.is_remote {
+        let host = app.remote_host.as_deref().unwrap_or("hub");
+        Span::styled(
+            format!(" ⇄ REMOTE:{} ", host),
+            Style::new()
+                .fg(CYAN)
+                .bg(HEADER_BG)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::raw("")
+    };
+
     let mut header_spans = vec![
         title,
         version_tag,
+        remote_tag,
         Span::raw(" "),
         sync_tag,
         Span::raw(" "),

@@ -32,16 +32,23 @@ impl App {
                 });
             }
             "/discover" => {
-                let projects = crate::entities::discover_entities(&self.config.dev_ops_path);
-                self.projects.list = projects.clone();
-                match crate::entities::save_entities(&self.config.dev_ops_path, projects) {
-                    Ok(_) => {
-                        self.system.sync_status =
-                            Some("Discovery complete: entities.json updated".into())
+                if self.is_remote {
+                    if let Some(ref tx) = self.tx_daemon {
+                        let _ = tx.send("{\"command\":\"GetState\"}".into());
+                        self.system.sync_status = Some("Refreshing remote state...".into());
                     }
-                    Err(e) => self.system.sync_status = Some(format!("Discovery error: {}", e)),
+                } else {
+                    let projects = crate::entities::discover_entities(&self.config.dev_ops_path);
+                    self.projects.list = projects.clone();
+                    match crate::entities::save_entities(&self.config.dev_ops_path, projects) {
+                        Ok(_) => {
+                            self.system.sync_status =
+                                Some("Discovery complete: entities.json updated".into())
+                        }
+                        Err(e) => self.system.sync_status = Some(format!("Discovery error: {}", e)),
+                    }
+                    self.add_activity("System", "Full Dev Ops discovery complete", "Info");
                 }
-                self.add_activity("System", "Full Dev Ops discovery complete", "Info");
             }
             "/q" | "/quit" | "/exit" => self.should_quit = true,
             "/rules" => {
@@ -84,7 +91,16 @@ impl App {
                 self.ui.right_panel_focus = false;
                 if !arg.is_empty() {
                     self.add_activity("User", &format!("Searching for: {}", arg), "Info");
-                    if let Some(ref idx) = self.search.index {
+                    if self.is_remote {
+                        if let Some(ref tx) = self.tx_daemon {
+                            let cmd = format!(
+                                "{{\"command\":\"Search\",\"query\":\"{}\"}}",
+                                arg.replace('"', "\\\"")
+                            );
+                            let _ = tx.send(cmd);
+                            self.search.status = Some(format!("Searching remote hub: {}", arg));
+                        }
+                    } else if let Some(ref idx) = self.search.index {
                         self.search.results = idx.search(arg);
                         self.search.cursor = 0;
                         if !self.search.results.is_empty() {
@@ -207,9 +223,15 @@ impl App {
                 }
             }
             "/health" => {
-                if !self.projects.list.is_empty() {
-                    self.health.is_checking = true;
-                    self.state = AppState::HealthView;
+                self.health.is_checking = true;
+                self.state = AppState::HealthView;
+                if self.is_remote {
+                    if let Some(ref tx) = self.tx_daemon {
+                        let _ = tx.send("{\"command\":\"GetState\"}".into());
+                        let _ = tx.send("{\"command\":\"HealthScan\"}".into());
+                        self.system.sync_status = Some("Scanning remote hub health...".into());
+                    }
+                } else if !self.projects.list.is_empty() {
                     if let Some(ref tx_daemon) = self.tx_daemon {
                         let _ = tx_daemon.send("{\"command\":\"GetState\"}".into());
                     }
@@ -285,6 +307,32 @@ impl App {
                 } else {
                     self.system.sync_status =
                         Some("Open a project detail first to run /heal".into());
+                }
+            }
+            // Remote-only: execute a raios subcommand on the hub server
+            // Usage: /run health myproject | /run search query | /run stats
+            "/run" if self.is_remote && !arg.is_empty() => {
+                if let Some(ref tx) = self.tx_daemon {
+                    let parts: Vec<&str> = arg.splitn(2, ' ').collect();
+                    let subcmd = parts[0];
+                    let subcmd_args: Vec<&str> = parts
+                        .get(1)
+                        .map(|s| s.split_whitespace().collect())
+                        .unwrap_or_default();
+                    let args_json = subcmd_args
+                        .iter()
+                        .map(|a| format!("\"{}\"", a.replace('"', "\\\"")))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let cmd = format!(
+                        "{{\"command\":\"SubmitJob\",\"cmd\":\"raios\",\"args\":[\"{subcmd}\",{args_json}]}}"
+                    );
+                    let _ = tx.send(cmd);
+                    self.system.sync_status =
+                        Some(format!("→ Remote: raios {}", arg));
+                    self.add_activity("Remote", &format!("raios {}", arg), "Info");
+                } else {
+                    self.system.sync_status = Some("Not connected to remote hub".into());
                 }
             }
             _ => {}

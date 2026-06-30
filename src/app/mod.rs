@@ -150,6 +150,10 @@ pub struct App {
     pub rx: Receiver<BgMsg>,
     pub tx_daemon: Option<Sender<String>>,
 
+    // Remote Hub mode
+    pub is_remote: bool,
+    pub remote_host: Option<String>,
+
     pub width: u16,
     pub height: u16,
 
@@ -227,6 +231,8 @@ impl App {
             tx,
             rx,
             tx_daemon,
+            is_remote: false,
+            remote_host: None,
             width: 80,
             height: 24,
             timeline: TimelineState::default(),
@@ -263,7 +269,7 @@ impl App {
                 .ok();
         });
 
-        let tx_daemon = ipc::connect_daemon_addr(tx.clone(), Some(host));
+        let tx_daemon = ipc::connect_daemon_addr(tx.clone(), Some(host.clone()));
 
         Self {
             state: AppState::Booting,
@@ -284,6 +290,8 @@ impl App {
             tx,
             rx,
             tx_daemon,
+            is_remote: true,
+            remote_host: Some(host),
             width: 80,
             height: 24,
             timeline: TimelineState::default(),
