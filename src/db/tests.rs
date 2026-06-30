@@ -5,7 +5,7 @@ use rusqlite::Connection;
 fn in_memory() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-    migrate(&conn).unwrap();
+    migrate_existing(&conn).unwrap();
     conn
 }
 
