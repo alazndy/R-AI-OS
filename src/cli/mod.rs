@@ -96,6 +96,9 @@ pub enum Commands {
         project: Option<String>,
         #[arg(short, long)]
         timeout: Option<u64>,
+        /// Extra flags forwarded verbatim to the agent binary (e.g. --model opus --print "hi")
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        extra: Vec<String>,
     },
     /// Commit dirty projects in bulk (optionally push)
     Commit {
@@ -717,8 +720,9 @@ pub fn run(cli: Cli) {
             agent,
             project,
             timeout,
+            extra,
         } => {
-            if let Err(e) = crate::agent_runner::run_agent(&agent, project, timeout) {
+            if let Err(e) = crate::agent_runner::run_agent(&agent, project, timeout, extra) {
                 eprintln!("Agent Runner Error: {}", e);
                 std::process::exit(1);
             }

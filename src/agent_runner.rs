@@ -15,6 +15,7 @@ pub fn run_agent(
     agent: &str,
     project_dir: Option<String>,
     timeout_secs: Option<u64>,
+    extra_args: Vec<String>,
 ) -> Result<(), String> {
     let shield = AgentShield::init();
     let mut instinct = InstinctEngine::init();
@@ -120,7 +121,12 @@ pub fn run_agent(
         _ => return Err(format!("Unsupported agent: {}", agent)),
     };
 
-    // 5. Inject Instincts & Budget Info
+    // 5. Forward extra args verbatim to the agent binary
+    if !extra_args.is_empty() {
+        cmd.args(&extra_args);
+    }
+
+    // Inject Instincts & Budget Info
     let instinct_prompt = instinct.get_instinct_prompt();
     if !instinct_prompt.is_empty() {
         cmd.env("RAIOS_INSTINCTS", instinct_prompt);
@@ -132,6 +138,13 @@ pub fn run_agent(
     if let Some(block) = &handover_block {
         cmd.env("RAIOS_HANDOVER_CONTEXT", block);
     }
+
+    // Resolve effective project dir: explicit flag > CWD
+    let project_dir = project_dir.or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    });
 
     if let Some(dir) = &project_dir {
         cmd.current_dir(dir);

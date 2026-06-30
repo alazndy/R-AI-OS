@@ -85,7 +85,7 @@ pub(super) fn cmd_task(
     };
 
     println!("Invoking {} with the task...", agent);
-    let _ = crate::agent_runner::run_agent(&agent, project_dir, None);
+    let _ = crate::agent_runner::run_agent(&agent, project_dir, None, vec![]);
 }
 
 pub(super) fn cmd_bootstrap() {
