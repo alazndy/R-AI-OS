@@ -325,6 +325,53 @@ fn dispatch_event(tx: &Sender<BgMsg>, v: &serde_json::Value) {
                 .ok();
             }
         }
+        Some("JobSubmitted") => {
+            let job_id = v["job_id"].as_str().unwrap_or("?");
+            tx.send(BgMsg::NewLog(crate::app::state::LogEntry {
+                timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                sender: "RUN".into(),
+                content: format!("⏳ Job queued [{}]", &job_id[..8.min(job_id.len())]),
+            }))
+            .ok();
+        }
+        Some("JobComplete") => {
+            let result = v["result"].as_str().unwrap_or("").trim().to_string();
+            let job_id = v["job_id"].as_str().unwrap_or("?");
+            // Each output line as a separate log entry for readability
+            let lines: Vec<&str> = result.lines().collect();
+            if lines.is_empty() {
+                tx.send(BgMsg::NewLog(crate::app::state::LogEntry {
+                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                    sender: "RUN".into(),
+                    content: format!("✓ [{}] done (no output)", &job_id[..8.min(job_id.len())]),
+                }))
+                .ok();
+            } else {
+                for line in lines {
+                    tx.send(BgMsg::NewLog(crate::app::state::LogEntry {
+                        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                        sender: "RUN".into(),
+                        content: line.to_string(),
+                    }))
+                    .ok();
+                }
+            }
+            // Also update status bar
+            tx.send(BgMsg::RemoteCommandResult {
+                output: result,
+            })
+            .ok();
+        }
+        Some("JobFailed") => {
+            let error = v["error"].as_str().unwrap_or("unknown error");
+            let job_id = v["job_id"].as_str().unwrap_or("?");
+            tx.send(BgMsg::NewLog(crate::app::state::LogEntry {
+                timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                sender: "RUN".into(),
+                content: format!("✗ [{}] {}", &job_id[..8.min(job_id.len())], error),
+            }))
+            .ok();
+        }
         _ => {}
     }
 }

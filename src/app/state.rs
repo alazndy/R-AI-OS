@@ -117,6 +117,9 @@ pub enum BgMsg {
         ok: bool,
         message: String,
     },
+    RemoteCommandResult {
+        output: String,
+    },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

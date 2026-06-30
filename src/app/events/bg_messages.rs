@@ -476,6 +476,17 @@ impl App {
                 self.health.report = report;
                 self.add_activity("Health", "Health delta received from daemon", "Info");
             }
+            BgMsg::RemoteCommandResult { output } => {
+                // Show first line in status bar, full output is already in Live Logs
+                let preview = output
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("done")
+                    .chars()
+                    .take(80)
+                    .collect::<String>();
+                self.system.sync_status = Some(format!("✓ {}", preview));
+            }
         }
     }
 }

@@ -310,26 +310,16 @@ impl App {
                 }
             }
             // Remote-only: execute a raios subcommand on the hub server
-            // Usage: /run health myproject | /run search query | /run stats
+            // Usage: /run health myproject | /run reflect | /run pre-flight kaira-mix
             "/run" if self.is_remote && !arg.is_empty() => {
                 if let Some(ref tx) = self.tx_daemon {
-                    let parts: Vec<&str> = arg.splitn(2, ' ').collect();
-                    let subcmd = parts[0];
-                    let subcmd_args: Vec<&str> = parts
-                        .get(1)
-                        .map(|s| s.split_whitespace().collect())
-                        .unwrap_or_default();
-                    let args_json = subcmd_args
-                        .iter()
-                        .map(|a| format!("\"{}\"", a.replace('"', "\\\"")))
-                        .collect::<Vec<_>>()
-                        .join(",");
+                    let shell_cmd = format!("raios {}", arg.replace('"', "\\\""));
                     let cmd = format!(
-                        "{{\"command\":\"SubmitJob\",\"cmd\":\"raios\",\"args\":[\"{subcmd}\",{args_json}]}}"
+                        "{{\"command\":\"SubmitJob\",\"shell_cmd\":\"{}\",\"description\":\"raios {}\",\"agent\":\"tui\"}}",
+                        shell_cmd, arg.replace('"', "\\\"")
                     );
                     let _ = tx.send(cmd);
-                    self.system.sync_status =
-                        Some(format!("→ Remote: raios {}", arg));
+                    self.system.sync_status = Some(format!("→ Remote: raios {}", arg));
                     self.add_activity("Remote", &format!("raios {}", arg), "Info");
                 } else {
                     self.system.sync_status = Some("Not connected to remote hub".into());
