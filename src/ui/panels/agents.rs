@@ -99,7 +99,7 @@ pub fn render_agents(frame: &mut Frame, area: Rect, app: &App) {
 
         for s in &app.inventory.skills {
             let color = match s.category {
-                "Global AI" => Color::Cyan,
+                "Global AI" => Color::Rgb(30, 140, 255),
                 "Local" => Color::Yellow,
                 _ => Color::Magenta,
             };

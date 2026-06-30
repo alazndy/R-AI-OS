@@ -25,7 +25,7 @@ pub fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
                         format!("▶ {}{}", item, arrow),
                         Style::new()
                             .fg(GREEN)
-                            .bg(Color::Rgb(0, 30, 15))
+                            .bg(Color::Rgb(0, 20, 45))
                             .add_modifier(Modifier::BOLD),
                     )))
                 }

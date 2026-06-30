@@ -16,7 +16,7 @@ pub fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
     let mut agent_items = Vec::new();
     for (i, agent) in app.system.active_agents.iter().enumerate() {
         let style = if i == app.system.selected_agent_idx {
-            Style::new().bg(Color::Rgb(0, 40, 20)).fg(GREEN).bold()
+            Style::new().bg(Color::Rgb(0, 20, 50)).fg(GREEN).bold()
         } else {
             Style::new().fg(MID)
         };

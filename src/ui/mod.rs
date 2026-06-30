@@ -29,14 +29,14 @@ use crate::app::{App, AppState};
 // ─── Colour palette ──────────────────────────────────────────────────────────
 
 const GREEN: Color = Color::Rgb(0, 255, 136);
-const CYAN: Color = Color::Rgb(0, 220, 220);
+const CYAN: Color = Color::Rgb(30, 140, 255);
 const DIM: Color = Color::Rgb(80, 80, 80);
 const MID: Color = Color::Rgb(170, 170, 170);
-const AMBER: Color = Color::Rgb(255, 170, 0);
+const AMBER: Color = Color::Rgb(255, 100, 20);
 const RED: Color = Color::Rgb(255, 80, 80);
 const MAGENTA: Color = Color::Rgb(255, 100, 255);
 const PANEL_BG: Color = Color::Rgb(8, 12, 16);
-const HEADER_BG: Color = Color::Rgb(0, 20, 12);
+const HEADER_BG: Color = Color::Rgb(0, 12, 30);
 
 // ─── Spinner ─────────────────────────────────────────────────────────────────
 

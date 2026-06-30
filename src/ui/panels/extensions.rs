@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::app::{App, state::{ExtFocus, ExtensionInfo}};
 
-const ACCENT: Color = Color::Cyan;
+const ACCENT: Color = Color::Rgb(30, 140, 255);
 const DIM: Color = Color::DarkGray;
 const GREEN: Color = Color::Green;
 const RED: Color = Color::Red;

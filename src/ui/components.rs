@@ -287,14 +287,14 @@ pub fn render_handover_modal(frame: &mut Frame, app: &App) {
             .title(" ⚠️ Human Approval Required: Bouncing Limit ")
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
-            .border_style(Style::default().fg(Color::Rgb(255, 170, 0))) // AMBER
+            .border_style(Style::default().fg(Color::Rgb(255, 100, 20))) // AMBER
             .style(Style::default().bg(Color::Rgb(8, 12, 16)));
 
         let mut lines = Vec::new();
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             " The agents are bouncing tasks too much.",
-            Style::default().fg(Color::Rgb(255, 170, 0)).bold(),
+            Style::default().fg(Color::Rgb(255, 100, 20)).bold(),
         )]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![

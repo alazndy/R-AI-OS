@@ -24,7 +24,7 @@ pub fn render_sentinel_hub(frame: &mut Frame, area: Rect, app: &App) {
                 SentinelState::Compiling => ("🟡", Color::Rgb(255, 200, 0)),
                 SentinelState::Failed => ("🔴", Color::Rgb(255, 80, 80)),
                 SentinelState::Compiled => ("🟢", Color::Rgb(0, 255, 136)),
-                SentinelState::Verified => ("💠", Color::Rgb(0, 220, 220)),
+                SentinelState::Verified => ("💠", Color::Rgb(30, 140, 255)),
             };
 
             let file_name = std::path::Path::new(&file.path)
@@ -64,7 +64,7 @@ pub fn render_sentinel_hub(frame: &mut Frame, area: Rect, app: &App) {
     let list = List::new(items).block(
         Block::new()
             .title(" SENTINEL HUB ")
-            .title_style(Style::new().fg(Color::Rgb(0, 220, 220)).bold())
+            .title_style(Style::new().fg(Color::Rgb(30, 140, 255)).bold())
             .borders(Borders::NONE),
     );
 
