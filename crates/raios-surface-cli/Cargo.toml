@@ -1,0 +1,39 @@
+[package]
+name = "raios-surface-cli"
+version = "3.2.0"
+edition = "2021"
+
+[dependencies]
+raios-core = { path = "../raios-core" }
+raios-runtime = { path = "../raios-runtime" }
+raios-surface-tui = { path = "../raios-surface-tui" }
+raios-surface-mcp = { path = "../raios-surface-mcp" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+tokio = { version = "1", features = ["full"] }
+crossterm = "0.28"
+ratatui = "0.29"
+dirs = "5"
+rusqlite = { version = "0.31", features = ["bundled"] }
+sha2 = "0.10"
+walkdir = "2"
+notify = "6.1.1"
+uuid = { version = "1.23.1", features = ["v4", "serde"] }
+regex = "1.10"
+notify-rust = "4"
+which = "6"
+
+[[bin]]
+name = "raios"
+path = "src/bin/raios.rs"
+
+[[bin]]
+name = "aiosd"
+path = "src/bin/aiosd.rs"
+
+[dev-dependencies]
+tempfile = "3"

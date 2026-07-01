@@ -2353,24 +2353,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "r-ai-os"
+name = "r-efi"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "r-efi"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "raios-core"
 version = "3.2.0"
 dependencies = [
  "anyhow",
- "axum",
- "base64 0.22.1",
  "chrono",
- "clap",
- "crossterm",
  "dirs 5.0.1",
- "fastembed",
  "fd-lock",
- "hf-hub 0.4.3",
- "instant-distance",
- "notify",
- "notify-rust",
- "ort-sys",
- "ratatui",
  "regex",
  "regex-lite",
  "rusqlite",
@@ -2386,16 +2387,99 @@ dependencies = [
 ]
 
 [[package]]
-name = "r-efi"
-version = "5.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+name = "raios-runtime"
+version = "3.2.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "dirs 5.0.1",
+ "fastembed",
+ "hf-hub 0.4.3",
+ "instant-distance",
+ "notify",
+ "notify-rust",
+ "ort-sys",
+ "raios-core",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml",
+ "uuid",
+ "walkdir",
+ "which",
+]
 
 [[package]]
-name = "r-efi"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+name = "raios-surface-cli"
+version = "3.2.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "crossterm",
+ "dirs 5.0.1",
+ "notify",
+ "notify-rust",
+ "raios-core",
+ "raios-runtime",
+ "raios-surface-mcp",
+ "raios-surface-tui",
+ "ratatui",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml",
+ "uuid",
+ "walkdir",
+ "which",
+]
+
+[[package]]
+name = "raios-surface-mcp"
+version = "3.2.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "raios-core",
+ "raios-runtime",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "raios-surface-tui"
+version = "3.2.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "crossterm",
+ "dirs 5.0.1",
+ "notify",
+ "raios-core",
+ "raios-runtime",
+ "ratatui",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "uuid",
+]
 
 [[package]]
 name = "rand"

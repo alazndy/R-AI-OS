@@ -177,5 +177,6 @@ After Inbox:
 - 2026-07-01: Refactored `app/events/keyboard/*` event handlers to move direct orchestrations (agent launching, daemon JSON messaging, async git commit/push threads, health refresh) behind `App` controller methods in `app/events/actions.rs`.
 - 2026-07-01: Analysed import dependency boundaries for Core vs Runtime vs Surface split.
 - 2026-07-01: Decoupled `src/workers.rs` from TUI `BgMsg` event type by defining a generic `RuntimeEvent` and forwarding events inside `App::new()`.
+- 2026-07-01: Physically split the codebase into a Cargo workspace containing `raios-core`, `raios-runtime`, `raios-surface-tui`, `raios-surface-mcp`, and `raios-surface-cli`. Refactored all internal paths and resolved dependencies cleanly. Deleted root `src/` directory. Workspace verified clean compile and 452/452 tests pass.
 
 

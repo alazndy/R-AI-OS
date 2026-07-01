@@ -1,0 +1,38 @@
+extern crate self as raios_runtime;
+pub mod agent_runner;
+pub mod agent_wrapper;
+pub mod daemon;
+pub mod workers;
+pub mod swarm;
+pub mod cortex;
+pub mod intelligence;
+pub mod search;
+pub mod health;
+pub mod compliance;
+pub mod session;
+pub mod session_memory;
+pub mod session_review;
+pub mod radar;
+pub mod tasks;
+pub mod discovery;
+pub mod git_utils;
+pub mod refactor_scan;
+pub mod new_project;
+pub mod proxy_store;
+pub mod compressor;
+pub mod sentinel;
+pub mod kernel;
+pub mod factory;
+pub mod sync;
+pub mod server;
+pub mod filebrowser;
+pub mod system_scan;
+pub mod cli {
+    pub mod preflight;
+}
+pub use intelligence::edge;
+pub use intelligence::evolution;
+pub use intelligence::instinct;
+pub use intelligence::router;
+pub use search::hybrid as hybrid_search;
+pub use search::indexer;
