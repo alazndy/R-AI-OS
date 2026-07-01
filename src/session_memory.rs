@@ -33,7 +33,7 @@ pub fn find_latest_conversation(
     // filename prefix of the JSONL (e.g. job 9b3cbb27 → 9b3cbb27-<uuid>.jsonl).
     // Prioritize the CCR JSONL over the primary dir — it is the authoritative transcript
     // for the current session and is always more recent than any leftover project JSONL.
-    if let Some(job_dir) = std::env::var("CLAUDE_JOB_DIR").ok() {
+    if let Ok(job_dir) = std::env::var("CLAUDE_JOB_DIR") {
         let job_id = Path::new(&job_dir).file_name()?.to_string_lossy().into_owned();
         let ccr_dir = Path::new(&home).join(".claude/projects/-home-alaz");
         if ccr_dir != claude_dir {
@@ -546,13 +546,15 @@ pub fn auto_sync_agent_memory(
     for item in &items {
         let _ = crate::db::mem_upsert(
             &conn,
-            &project_key,
-            item.item_type,
-            &item.slug,
-            &item.title,
-            &item.description,
-            &item.body,
-            None,
+            crate::db::MemUpsert {
+                project_key: &project_key,
+                item_type: item.item_type,
+                slug: &item.slug,
+                title: &item.title,
+                description: &item.description,
+                body: &item.body,
+                session_id: None,
+            },
         );
     }
 

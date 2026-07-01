@@ -222,7 +222,7 @@ fn run_cargo_audit(path: &Path) -> Check {
                 label: "Dependency audit",
                 pass: !has_vuln,
                 detail: if has_vuln {
-                    format!("cargo audit found issues — run: cargo audit")
+                    "cargo audit found issues — run: cargo audit".to_string()
                 } else {
                     "no known CVEs".into()
                 },

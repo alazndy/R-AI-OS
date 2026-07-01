@@ -22,7 +22,7 @@ pub fn cmd_reflect(dev_ops_path: &Path, json: bool) {
 
     let snapshots: Vec<ProjectSnapshot> = projects
         .iter()
-        .map(|p| snapshot(p))
+        .map(snapshot)
         .collect();
 
     if json {
@@ -99,7 +99,7 @@ fn print_report(snaps: &[ProjectSnapshot]) {
     let dirty_count = snaps.iter().filter(|s| s.dirty_files > 0).count();
     let stale_count = snaps
         .iter()
-        .filter(|s| s.last_commit_days.map_or(false, |d| d > 14))
+        .filter(|s| s.last_commit_days.is_some_and(|d| d > 14))
         .count();
 
     let readme_ok = snaps.iter().filter(|s| s.has_readme).count();
@@ -124,8 +124,8 @@ fn print_report(snaps: &[ProjectSnapshot]) {
                 || !s.has_readme
                 || !s.has_memory
                 || !s.has_sigmap
-                || s.memory_stale_days.map_or(false, |d| d > 7)
-                || s.last_commit_days.map_or(false, |d| d > 14)
+                || s.memory_stale_days.is_some_and(|d| d > 7)
+                || s.last_commit_days.is_some_and(|d| d > 14)
         })
         .collect();
 
@@ -199,7 +199,7 @@ fn print_report(snaps: &[ProjectSnapshot]) {
         println!("── STALE PROJECTS (no commit > 14d) ────────────────────────");
         for s in snaps
             .iter()
-            .filter(|s| s.last_commit_days.map_or(false, |d| d > 14))
+            .filter(|s| s.last_commit_days.is_some_and(|d| d > 14))
         {
             println!(
                 "  ● {:<24} last commit: {}d ago",
@@ -238,12 +238,12 @@ fn calculate_score(snaps: &[ProjectSnapshot]) -> u8 {
     let sigmap_penalty = snaps.iter().filter(|s| !s.has_sigmap).count() as f32 * 1.0;
     let stale_penalty = snaps
         .iter()
-        .filter(|s| s.last_commit_days.map_or(false, |d| d > 14))
+        .filter(|s| s.last_commit_days.is_some_and(|d| d > 14))
         .count() as f32
         * 2.0;
     let mem_stale_penalty = snaps
         .iter()
-        .filter(|s| s.memory_stale_days.map_or(false, |d| d > 7))
+        .filter(|s| s.memory_stale_days.is_some_and(|d| d > 7))
         .count() as f32
         * 1.0;
 
@@ -291,7 +291,7 @@ fn build_recommendations(snaps: &[ProjectSnapshot]) -> Vec<String> {
 
     let stale_mem: Vec<_> = snaps
         .iter()
-        .filter(|s| s.memory_stale_days.map_or(false, |d| d > 7))
+        .filter(|s| s.memory_stale_days.is_some_and(|d| d > 7))
         .map(|s| s.name.as_str())
         .collect();
     if !stale_mem.is_empty() {

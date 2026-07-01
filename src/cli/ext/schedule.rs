@@ -27,7 +27,7 @@ fn cron_next_run(cron: &str) -> String {
 
     let fields: Vec<&str> = cron.split_whitespace().collect();
     let hour: u64 = fields.get(1).and_then(|s| s.parse().ok()).unwrap_or(2);
-    let minute: u64 = fields.get(0).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minute: u64 = fields.first().and_then(|s| s.parse().ok()).unwrap_or(0);
 
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

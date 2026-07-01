@@ -77,8 +77,8 @@ impl Umai {
                 Ok(()) => UmaiDecision::Allow,
                 Err(e) => {
                     let msg = e.to_string();
-                    if msg.starts_with("confirm:") {
-                        UmaiDecision::Confirm(msg[8..].to_string())
+                    if let Some(stripped) = msg.strip_prefix("confirm:") {
+                        UmaiDecision::Confirm(stripped.to_string())
                     } else {
                         UmaiDecision::Deny(msg)
                     }

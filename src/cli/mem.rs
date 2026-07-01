@@ -61,7 +61,15 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
         }
         MemAction::Add { item_type, slug, title, description, body, project } => {
             let key = project_key_for(&project);
-            match crate::db::mem_upsert(&conn, &key, &item_type, &slug, &title, &description, &body, None) {
+            match crate::db::mem_upsert(&conn, crate::db::MemUpsert {
+                project_key: &key,
+                item_type: &item_type,
+                slug: &slug,
+                title: &title,
+                description: &description,
+                body: &body,
+                session_id: None,
+            }) {
                 Ok(()) => {
                     if json {
                         println!("{{\"ok\":true,\"slug\":\"{}\"}}", slug);

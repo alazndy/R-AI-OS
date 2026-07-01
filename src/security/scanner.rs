@@ -43,11 +43,10 @@ fn scan_project_impl(path: &Path, include_dep_audit: bool) -> SecurityReport {
     check_env_in_git(path, &mut issues);
     checks_run += 1;
 
-    if include_dep_audit {
-        if run_semgrep(path, &mut issues) {
+    if include_dep_audit
+        && run_semgrep(path, &mut issues) {
             checks_run += 1;
         }
-    }
 
     let audit_output = if include_dep_audit {
         let out = run_dependency_audit(path, &project_type);

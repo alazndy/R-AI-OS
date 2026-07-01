@@ -15,16 +15,26 @@ pub struct MemItemRow {
     pub session_id: Option<String>,
 }
 
-pub fn mem_upsert(
-    conn: &Connection,
-    project_key: &str,
-    item_type: &str,
-    slug: &str,
-    title: &str,
-    description: &str,
-    body: &str,
-    session_id: Option<&str>,
-) -> Result<()> {
+pub struct MemUpsert<'a> {
+    pub project_key: &'a str,
+    pub item_type: &'a str,
+    pub slug: &'a str,
+    pub title: &'a str,
+    pub description: &'a str,
+    pub body: &'a str,
+    pub session_id: Option<&'a str>,
+}
+
+pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
+    let MemUpsert {
+        project_key,
+        item_type,
+        slug,
+        title,
+        description,
+        body,
+        session_id,
+    } = item;
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now()
         .format("%Y-%m-%d %H:%M:%S")
@@ -93,9 +103,7 @@ pub fn mem_get(conn: &Connection, project_key: &str, slug: &str) -> Result<Optio
             })
         },
     )
-    .optional()
-    .map_err(Into::into)
-}
+    .optional()}
 
 pub fn mem_delete(conn: &Connection, project_key: &str, slug: &str) -> Result<bool> {
     let n = conn.execute(

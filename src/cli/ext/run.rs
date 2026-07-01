@@ -93,7 +93,7 @@ pub(super) fn service_status(ext_path: &Path, manifest: &ExtensionManifest) {
         .or_else(|_| {
             let env_path = ext_path.join(".env");
             read_env_key(&env_path, "OBSIDIAN_VAULT_PATH")
-                .ok_or_else(|| std::env::VarError::NotPresent)
+                .ok_or(std::env::VarError::NotPresent)
         })
         .unwrap_or_default();
 

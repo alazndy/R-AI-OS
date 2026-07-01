@@ -58,11 +58,7 @@ impl App {
         let env_path = ext.path.join(".env");
         match write_env_key(&env_path, &field.key, &new_val) {
             Ok(_) => {
-                field.value = if field.masked && !new_val.is_empty() {
-                    new_val.clone()
-                } else {
-                    new_val.clone()
-                };
+                field.value = new_val.clone();
                 self.ext.status = Some(format!("✓ {} saved", field.label));
             }
             Err(e) => {
