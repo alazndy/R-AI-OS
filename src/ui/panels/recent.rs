@@ -13,12 +13,12 @@ pub fn render_recent(frame: &mut Frame, area: Rect, app: &App) {
         Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
 
     let gradient = [
-        Color::Rgb(255, 90, 0),    // Orange-Red
-        Color::Rgb(255, 145, 0),   // Orange
-        Color::Reset,              // Default (white/black depending on background)
-        Color::Rgb(0, 200, 180),   // Turquoise
-        Color::Rgb(0, 180, 255),   // Cyan
-        Color::Rgb(30, 120, 255),  // Blue
+        AMBER, // Orange
+        AMBER, // Orange
+        AMBER, // Orange
+        CYAN,  // Blue
+        CYAN,  // Blue
+        CYAN,  // Blue
     ];
 
     let banner_lines: Vec<Line> = BANNER
