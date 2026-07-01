@@ -332,6 +332,14 @@ pub enum Commands {
         #[arg(short = 'n', long, default_value = "15")]
         top: usize,
     },
+    /// Show per-agent performance stats: run count, success rate, average
+    /// duration, exit_reason distribution — aggregated from cp_agent_runs.
+    /// Does not report token usage or repetition (not tracked anywhere today).
+    #[command(name = "agent-stats")]
+    AgentStats {
+        /// Agent identity to filter to (e.g. claude_kaira). Omit for all agents.
+        agent: Option<String>,
+    },
     /// Generate a memory.md Change Log entry from the last Claude session transcript
     #[command(name = "memory-gen")]
     MemoryGen {
@@ -348,6 +356,11 @@ pub enum Commands {
     Mem {
         #[command(subcommand)]
         action: MemAction,
+    },
+    /// Manage the MCP/WS tool-call security policy (raios-policy.toml)
+    Policy {
+        #[command(subcommand)]
+        action: PolicyCmd,
     },
     /// Workspace-wide health reflection: dirty projects, stale docs, score
     Reflect,

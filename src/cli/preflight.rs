@@ -1,11 +1,30 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-struct Check {
-    label: &'static str,
-    pass: bool,
-    detail: String,
-    blocking: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreflightMode {
+    CommitGate,
+    AgentRunGate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckKind {
+    GitStaged,
+    GitUnstaged,
+    Readme,
+    Memory,
+    Sigmap,
+    DepAudit,
+    SecretsInDiff,
+    SecurityScan,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Check {
+    pub(crate) label: &'static str,
+    pub(crate) pass: bool,
+    pub(crate) detail: String,
+    pub(crate) blocking: bool,
 }
 
 pub fn cmd_preflight(project: Option<String>, dev_ops_path: &Path) -> bool {
@@ -26,7 +45,7 @@ pub fn cmd_preflight(project: Option<String>, dev_ops_path: &Path) -> bool {
     println!("━━━ PRE-FLIGHT CHECK: {} ━━━━━━━━━━━━━━━━━━━━━━━━━━", project_name);
     println!();
 
-    let checks = run_checks(&target_path);
+    let checks = run_checks(&target_path, PreflightMode::CommitGate);
     let blockers: Vec<_> = checks.iter().filter(|c| !c.pass && c.blocking).collect();
     let warnings: Vec<_> = checks.iter().filter(|c| !c.pass && !c.blocking).collect();
 
@@ -65,17 +84,47 @@ pub fn cmd_preflight(project: Option<String>, dev_ops_path: &Path) -> bool {
     blockers.is_empty()
 }
 
-fn run_checks(path: &Path) -> Vec<Check> {
-    vec![
-        check_git_staged(path),
-        check_git_unstaged(path),
-        check_readme(path),
-        check_memory_md(path),
-        check_sigmap(path),
-        check_dep_audit(path),
-        check_secrets_in_diff(path),
-        check_security_scan(path),
-    ]
+pub(crate) fn run_gate(path: &Path, mode: PreflightMode) -> Vec<Check> {
+    run_checks(path, mode)
+}
+
+fn run_checks(path: &Path, mode: PreflightMode) -> Vec<Check> {
+    enabled_checks_for_mode(mode)
+        .into_iter()
+        .map(|kind| match kind {
+            CheckKind::GitStaged => check_git_staged(path),
+            CheckKind::GitUnstaged => check_git_unstaged(path),
+            CheckKind::Readme => check_readme(path),
+            CheckKind::Memory => check_memory_md(path),
+            CheckKind::Sigmap => check_sigmap(path),
+            CheckKind::DepAudit => check_dep_audit(path),
+            CheckKind::SecretsInDiff => check_secrets_in_diff(path, mode),
+            CheckKind::SecurityScan => check_security_scan(path),
+        })
+        .collect()
+}
+
+fn enabled_checks_for_mode(mode: PreflightMode) -> Vec<CheckKind> {
+    match mode {
+        PreflightMode::CommitGate => vec![
+            CheckKind::GitStaged,
+            CheckKind::GitUnstaged,
+            CheckKind::Readme,
+            CheckKind::Memory,
+            CheckKind::Sigmap,
+            CheckKind::DepAudit,
+            CheckKind::SecretsInDiff,
+            CheckKind::SecurityScan,
+        ],
+        PreflightMode::AgentRunGate => vec![
+            CheckKind::Readme,
+            CheckKind::Memory,
+            CheckKind::Sigmap,
+            CheckKind::DepAudit,
+            CheckKind::SecretsInDiff,
+            CheckKind::SecurityScan,
+        ],
+    }
 }
 
 fn check_git_staged(path: &Path) -> Check {
@@ -271,9 +320,15 @@ fn run_npm_audit(path: &Path) -> Check {
     }
 }
 
-fn check_secrets_in_diff(path: &Path) -> Check {
+fn check_secrets_in_diff(path: &Path, mode: PreflightMode) -> Check {
+    let diff_args: &[&str] = match mode {
+        PreflightMode::CommitGate => &["diff", "--cached"],
+        PreflightMode::AgentRunGate => &["diff", "HEAD"],
+    };
     let out = Command::new("git")
-        .args(["-C", &path.to_string_lossy(), "diff", "--cached"])
+        .arg("-C")
+        .arg(path)
+        .args(diff_args)
         .output();
     let diff = match out {
         Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
@@ -311,6 +366,25 @@ fn check_secrets_in_diff(path: &Path) -> Check {
             detail: format!("possible secret detected: {} — review diff", found.join(", ")),
             blocking: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_run_gate_skips_git_staging_checks() {
+        let checks = enabled_checks_for_mode(PreflightMode::AgentRunGate);
+        assert!(!checks.contains(&CheckKind::GitStaged));
+        assert!(!checks.contains(&CheckKind::GitUnstaged));
+    }
+
+    #[test]
+    fn commit_gate_keeps_git_staging_checks() {
+        let checks = enabled_checks_for_mode(PreflightMode::CommitGate);
+        assert!(checks.contains(&CheckKind::GitStaged));
+        assert!(checks.contains(&CheckKind::GitUnstaged));
     }
 }
 

@@ -8,11 +8,13 @@ use tokio::sync::{broadcast, RwLock};
 
 use crate::daemon::state::DaemonState;
 
+mod a2a;
 mod auth;
 mod plans;
 mod routes;
 mod websocket;
 
+use a2a::{handle_a2a, handle_agent_card};
 use auth::auth_middleware;
 use routes::{
     handle_approve, handle_git_status, handle_health, handle_inbox, handle_plans, handle_projects,
@@ -81,6 +83,8 @@ pub async fn start_http_server(
         .route("/api/git-status", get(handle_git_status))
         .route("/api/swarm", get(handle_swarm))
         .route("/api/stream", get(handle_websocket))
+        .route("/.well-known/agent.json", get(handle_agent_card))
+        .route("/a2a", post(handle_a2a))
         .layer(axum::middleware::from_fn(auth_middleware))
         .with_state(app_state);
 

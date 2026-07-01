@@ -21,20 +21,19 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let Ok(conn) = crate::db::open_db() else {
+    let Ok(data) = crate::app::load_inbox_panel_data() else {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "  Could not open control plane DB.",
+                "  Could not load inbox snapshot.",
                 Style::new().fg(RED),
             )),
             inner,
         );
         return;
     };
-
-    let approvals = crate::db::cp_query_pending_approvals(&conn).unwrap_or_default();
-    let runs = crate::db::cp_query_active_runs(&conn).unwrap_or_default();
-    let blocked = crate::db::cp_query_blocked_tasks(&conn).unwrap_or_default();
+    let approvals = data.approvals;
+    let runs = data.runs;
+    let blocked = data.blocked;
 
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
@@ -50,11 +49,17 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(DIM).italic(),
         )));
     } else {
-        for ap in &approvals {
+        for scored in &approvals {
+            let ap = &scored.approval;
             let (icon, color) = if ap.approval_type == "handover" {
                 ("📨", CYAN)
             } else {
                 ("⏳", AMBER)
+            };
+            let risk_color = match scored.risk_label {
+                "low" => GREEN,
+                "medium" => AMBER,
+                _ => RED,
             };
             lines.push(Line::from(vec![
                 Span::styled(format!("  {} ", icon), Style::new().fg(color)),
@@ -66,10 +71,33 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
                     ap.task_title.clone().unwrap_or_else(|| "(no task)".into()),
                     Style::new().fg(MID),
                 ),
+                Span::styled(
+                    format!(" [{} risk:{}]", scored.risk_label.to_uppercase(), scored.risk_score),
+                    Style::new().fg(risk_color).bold(),
+                ),
             ]));
             lines.push(Line::from(Span::styled(
                 format!("      {}", truncate(&ap.reason, 90)),
                 Style::new().fg(DIM),
+            )));
+            let impact = scored
+                .file_impact
+                .as_ref()
+                .map(|fi| {
+                    format!(
+                        "files={} lines={}",
+                        fi.files_changed.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+                        fi.lines_changed.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+                    )
+                })
+                .unwrap_or_else(|| "no file impact data".into());
+            let history = scored
+                .agent_success_rate
+                .map(|r| format!("agent success rate: {:.0}%", r * 100.0))
+                .unwrap_or_else(|| "no agent history".into());
+            lines.push(Line::from(Span::styled(
+                format!("      {impact}  ·  {history}  ·  suggested: {}", scored.suggested_action),
+                Style::new().fg(DIM).italic(),
             )));
         }
     }

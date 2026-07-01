@@ -1,4 +1,3 @@
-use crate::app::events::helpers::*;
 use crate::app::state::AppState;
 use crate::app::App;
 use crate::filebrowser::FileEntry;
@@ -32,10 +31,7 @@ impl App {
                 self.ui.show_launcher = true;
             }
             KeyCode::Char('g') | KeyCode::Char('G') => {
-                if let Some(ref proj) = self.projects.active.clone() {
-                    let msg = self.run_graphify(&proj.local_path);
-                    self.system.sync_status = Some(msg);
-                }
+                self.run_graphify_on_active();
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 if let Some(ref proj) = self.projects.active.clone() {
@@ -85,84 +81,10 @@ impl App {
     pub(crate) fn handle_git_diff_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                if let Some(pending) = self
-                    .system
-                    .pending_file_changes
-                    .get(self.system.pending_change_cursor)
-                    .cloned()
-                {
-                    if let Some(ref tx) = self.tx_daemon {
-                        let msg = serde_json::json!({
-                            "command": "ApproveFileChange",
-                            "id": pending.id.clone(),
-                            "path": pending.path,
-                            "approved": true
-                        });
-                        let _ = tx.send(msg.to_string());
-                        self.add_activity(
-                            "System",
-                            &format!("File change approved for {}", pending.path),
-                            "Info",
-                        );
-                    }
-                    self.system
-                        .pending_file_changes
-                        .remove(self.system.pending_change_cursor);
-                    if self.system.pending_change_cursor >= self.system.pending_file_changes.len()
-                        && !self.system.pending_file_changes.is_empty()
-                    {
-                        self.system.pending_change_cursor =
-                            self.system.pending_file_changes.len() - 1;
-                    }
-                }
-                if self.system.pending_file_changes.is_empty() {
-                    self.state = AppState::Dashboard;
-                } else {
-                    // Load next diff
-                    let next = &self.system.pending_file_changes[self.system.pending_change_cursor];
-                    self.projects.git_diff_lines =
-                        crate::app::editor::simple_diff(&next.original_content, &next.new_content);
-                }
+                self.handle_file_change_approval(true);
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
-                if let Some(pending) = self
-                    .system
-                    .pending_file_changes
-                    .get(self.system.pending_change_cursor)
-                    .cloned()
-                {
-                    if let Some(ref tx) = self.tx_daemon {
-                        let msg = serde_json::json!({
-                            "command": "ApproveFileChange",
-                            "id": pending.id.clone(),
-                            "path": pending.path,
-                            "approved": false
-                        });
-                        let _ = tx.send(msg.to_string());
-                        self.add_activity(
-                            "System",
-                            &format!("File change rejected for {}", pending.path),
-                            "Warning",
-                        );
-                    }
-                    self.system
-                        .pending_file_changes
-                        .remove(self.system.pending_change_cursor);
-                    if self.system.pending_change_cursor >= self.system.pending_file_changes.len()
-                        && !self.system.pending_file_changes.is_empty()
-                    {
-                        self.system.pending_change_cursor =
-                            self.system.pending_file_changes.len() - 1;
-                    }
-                }
-                if self.system.pending_file_changes.is_empty() {
-                    self.state = AppState::Dashboard;
-                } else {
-                    // Load next diff
-                    let next = &self.system.pending_file_changes[self.system.pending_change_cursor];
-                    self.projects.git_diff_lines =
-                        crate::app::editor::simple_diff(&next.original_content, &next.new_content);
-                }
+                self.handle_file_change_approval(false);
             }
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.state = AppState::Dashboard;
@@ -299,19 +221,12 @@ impl App {
                 }
             }
             KeyCode::Char('C') | KeyCode::Char('O') | KeyCode::Char('A') => {
-                if let Some(proj) = self.get_selected_mempalace_project() {
-                    let agent = match key.code {
-                        KeyCode::Char('C') => "claude",
-                        KeyCode::Char('O') => "opencode",
-                        _ => "antigravity",
-                    };
-                    self.add_activity(
-                        "Agent",
-                        &format!("Launching {} from MemPalace", agent),
-                        "Info",
-                    );
-                    self.system.sync_status = Some(launch_agent(agent, &proj.path));
-                }
+                let agent = match key.code {
+                    KeyCode::Char('C') => "claude",
+                    KeyCode::Char('O') => "opencode",
+                    _ => "antigravity",
+                };
+                self.launch_agent_from_mempalace(agent);
             }
             _ => {}
         }

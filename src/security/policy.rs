@@ -12,6 +12,9 @@ pub struct PolicyConfig {
     pub server: Option<ServerPolicy>,
     pub filesystem: FilesystemPolicy,
     pub tools: ToolsPolicy,
+    /// Optional agent-run preflight gate. Absent means disabled so older
+    /// policy files continue to behave exactly as before.
+    pub preflight: Option<PreflightPolicy>,
     /// Optional egress (network) filtering rules
     pub egress: Option<EgressPolicy>,
     /// Optional rate limiting rules (Phase 13)
@@ -95,9 +98,46 @@ pub struct ToolsPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreflightPolicy {
+    pub enforce_before_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolRule {
     pub name: String,
     pub action: PolicyAction,
+    /// Optional explicit capability declaration for this tool, overriding the
+    /// built-in default from `security::capabilities::default_for`. Absent by
+    /// default so existing `raios-policy.toml` files keep working unchanged.
+    #[serde(default)]
+    pub capabilities: Option<ToolCapabilities>,
+}
+
+/// Declares what a tool is allowed to touch — filesystem paths (as glob
+/// patterns), network domains, and whether it may spawn subprocesses.
+///
+/// This is a *capability* grant, not a rule action: even an `Allow`-ed tool
+/// with no declared capability cannot smuggle in a filesystem or network
+/// access it never asked for ("no ambient authority"). See
+/// `security::capabilities` for enforcement and the built-in default map.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ToolCapabilities {
+    /// Glob patterns for paths this tool may read. `["*"]` means "whatever
+    /// path the tool resolves for itself" (used by portfolio tools that
+    /// operate on a caller-supplied project path rather than a fixed root).
+    #[serde(default)]
+    pub fs_read: Vec<String>,
+    /// Glob patterns for paths this tool may write.
+    #[serde(default)]
+    pub fs_write: Vec<String>,
+    /// Domains this tool may connect to (checked against the egress policy).
+    #[serde(default)]
+    pub network: Vec<String>,
+    /// Whether this tool is expected to spawn subprocesses (cargo, git, …).
+    /// Declarative only today — surfaced via `raios policy caps` for
+    /// visibility, not yet enforced at a process-spawn chokepoint.
+    #[serde(default)]
+    pub exec: bool,
 }
 
 // ─── Load & Query ─────────────────────────────────────────────────────────────
@@ -145,18 +185,31 @@ impl PolicyConfig {
     /// Try to load from default paths; returns `None` if not found (disabled).
     pub fn try_load_default() -> Option<Self> {
         // Try current dir first, then user config dir
-        let candidates = [
-            std::env::current_dir().ok()?.join("raios-policy.toml"),
-            dirs::config_dir()?.join("raios").join("raios-policy.toml"),
-        ];
-        for path in &candidates {
+        for path in Self::candidate_paths()? {
             if path.exists() {
-                if let Ok(config) = Self::load_from_file(path) {
+                if let Ok(config) = Self::load_from_file(&path) {
                     return Some(config);
                 }
             }
         }
         None
+    }
+
+    /// Resolves the same candidate paths as `try_load_default`, but returns
+    /// the first one that *exists and parses successfully* — used by `raios
+    /// policy suggest --apply` to know which file to append accepted
+    /// suggestions to (must match what `try_load_default` would have loaded).
+    pub fn default_path() -> Option<std::path::PathBuf> {
+        Self::candidate_paths()?
+            .into_iter()
+            .find(|path| path.exists() && Self::load_from_file(path).is_ok())
+    }
+
+    fn candidate_paths() -> Option<[std::path::PathBuf; 2]> {
+        Some([
+            std::env::current_dir().ok()?.join("raios-policy.toml"),
+            dirs::config_dir()?.join("raios").join("raios-policy.toml"),
+        ])
     }
 }
 

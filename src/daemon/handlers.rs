@@ -1,9 +1,33 @@
 use super::state::DaemonState;
 use crate::proxy_store::CapabilityProxy;
+use crate::security::{Umai, UmaiDecision};
 use crate::session::SessionStore;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, RwLock};
+
+/// Records one daemon WS command decision into the tamper-evident audit ledger.
+/// Mirrors `McpServer::record_tool_audit` (src/mcp/tools.rs) so both dispatch
+/// paths feed the same `raios policy suggest` learning pipeline.
+fn record_ws_tool_audit(umai: &Umai, cmd_name: &str, raw_payload: Option<&str>, decision: &UmaiDecision) {
+    let Ok(conn) = crate::db::open_db() else { return };
+    let event_type = match decision {
+        UmaiDecision::Allow => "tool_allow",
+        UmaiDecision::Deny(_) => "tool_deny",
+        UmaiDecision::Confirm(_) => "tool_confirm",
+    };
+    let args_hash = format!("{:x}", Sha256::digest(raw_payload.unwrap_or("").as_bytes()));
+    let actor = std::env::var("RAIOS_AGENT_IDENTITY").unwrap_or_else(|_| "claude_kaira".into());
+    let _ = crate::security::record_tool_decision(
+        &conn,
+        cmd_name,
+        &args_hash,
+        umai.rule_source(cmd_name),
+        event_type,
+        &actor,
+    );
+}
 
 /// All context needed to handle one TCP client connection.
 pub struct ClientHandle {
@@ -96,6 +120,7 @@ pub async fn handle_client_connection(h: ClientHandle) {
                         .or_else(|| v.get("shell_cmd"))
                         .and_then(|p| p.as_str());
                     let umai_result = umai.check(cmd_name, raw_payload);
+                    record_ws_tool_audit(&umai, cmd_name, raw_payload, &umai_result);
                     if !umai_result.is_allowed() {
                         let _ = writer
                             .write_all(format!("{}\n", umai_result.into_error_json()).as_bytes())

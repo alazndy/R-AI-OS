@@ -24,6 +24,12 @@ pub struct ExtConfigField {
 }
 
 #[derive(Debug, Clone)]
+pub struct ExtServiceStatus {
+    pub name: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct ExtensionInfo {
     pub name: String,
     pub version: String,
@@ -32,6 +38,7 @@ pub struct ExtensionInfo {
     pub commands: Vec<ExtCmdInfo>,
     pub config_schema: Vec<ExtConfigField>,
     pub services: Vec<String>,
+    pub service_statuses: Vec<ExtServiceStatus>,
 }
 
 #[derive(Debug, Default, PartialEq, Clone)]
@@ -95,10 +102,7 @@ pub enum BgMsg {
     IndexError(String),
     AgentRuleGroups(Vec<AgentRuleGroup>),
     Projects(Vec<crate::entities::EntityProject>),
-    ProjectOpened {
-        memory: Vec<String>,
-        git_log: Vec<String>,
-    },
+    ProjectOpened(crate::app::ProjectDetailData),
     HealthReport(Vec<crate::health::ProjectHealth>),
     BuildTestDepsResult {
         idx: usize,

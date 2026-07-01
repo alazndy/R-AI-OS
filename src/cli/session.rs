@@ -40,6 +40,7 @@ pub(super) fn cmd_sessions(agent: Option<&str>, top: usize, json: bool) {
                     "started_at": r.started_at,
                     "ended_at": r.ended_at,
                     "exit_reason": r.exit_reason,
+                    "summary": r.summary,
                 })
             })
             .collect();
@@ -93,7 +94,9 @@ pub(super) fn cmd_sessions(agent: Option<&str>, top: usize, json: bool) {
             w4 = col_w[4],
             w5 = col_w[5],
         );
+        if let Some(summary) = &r.summary {
+            println!("  \x1b[90m{:>8}  review: {}\x1b[0m", "", summary);
+        }
     }
     println!();
 }
-

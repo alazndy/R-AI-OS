@@ -43,7 +43,7 @@ pub(super) async fn handle_inbox() -> impl IntoResponse {
     match crate::db::open_db() {
         Ok(conn) => {
             let tasks = crate::db::cp_query_active_tasks(&conn).unwrap_or_default();
-            let approvals = crate::db::cp_query_pending_approvals(&conn).unwrap_or_default();
+            let approvals = crate::db::cp_query_pending_approvals_scored(&conn).unwrap_or_default();
             let runs = crate::db::cp_query_active_runs(&conn).unwrap_or_default();
             let blocked = crate::db::cp_query_blocked_tasks(&conn).unwrap_or_default();
             Json(json!({

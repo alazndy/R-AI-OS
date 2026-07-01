@@ -36,36 +36,22 @@ impl App {
     }
 
     pub(crate) fn open_graph_report(&mut self, project_path: &Path) {
-        let report_path = project_path.join("GRAPH_REPORT.md");
-        if report_path.exists() {
-            let content = load_file_content(&report_path);
-            self.projects.graph_report_lines = content.lines().map(str::to_owned).collect();
-            self.projects.graph_report_scroll = 0;
-            self.state = AppState::GraphReport;
-        } else {
-            self.system.sync_status = Some("Graph report not found. Run Graphify first.".into());
+        match crate::app::load_graph_report_lines(project_path) {
+            Ok(lines) => {
+                self.projects.graph_report_lines = lines;
+                self.projects.graph_report_scroll = 0;
+                self.state = AppState::GraphReport;
+            }
+            Err(msg) => {
+                self.system.sync_status = Some(msg);
+            }
         }
     }
 
     pub(crate) fn open_git_diff(&mut self, project_path: &Path) {
-        let output = std::process::Command::new("git")
-            .current_dir(project_path)
-            .args(["diff"])
-            .output();
-
-        if let Ok(out) = output {
-            let diff = String::from_utf8_lossy(&out.stdout).to_string();
-            if diff.trim().is_empty() {
-                self.projects.git_diff_lines = vec!["No unstaged changes.".to_string()];
-            } else {
-                self.projects.git_diff_lines = diff.lines().map(|s| s.to_string()).collect();
-            }
-            self.projects.git_diff_scroll = 0;
-            self.state = AppState::GitDiffView;
-        } else {
-            self.projects.git_diff_lines = vec!["Failed to run git diff.".to_string()];
-            self.state = AppState::GitDiffView;
-        }
+        self.projects.git_diff_lines = crate::app::load_git_diff_lines(project_path);
+        self.projects.git_diff_scroll = 0;
+        self.state = AppState::GitDiffView;
     }
 
     pub(crate) fn save_file(&mut self) {
@@ -95,11 +81,8 @@ impl App {
         let tx = self.tx.clone();
         let proj_path = project.local_path.clone();
         thread::spawn(move || {
-            let memory_path = proj_path.join("memory.md");
-            let content = load_file_content(&memory_path);
-            let memory: Vec<String> = content.lines().map(str::to_owned).collect();
-            let git_log = crate::filebrowser::get_git_log(&proj_path);
-            tx.send(BgMsg::ProjectOpened { memory, git_log }).ok();
+            tx.send(BgMsg::ProjectOpened(crate::app::load_project_detail_data(&proj_path)))
+                .ok();
         });
     }
 
@@ -243,4 +226,189 @@ impl App {
             tx.send(BgMsg::WizardDone).ok();
         });
     }
+
+    pub(crate) fn handle_handover_approval(&mut self, approved: bool) {
+        if let Some(ref tx) = self.tx_daemon {
+            let msg = format!("{{\"command\":\"HumanApproval\",\"approved\":{}}}", approved);
+            let _ = tx.send(msg);
+        }
+        self.system.handover_modal = None;
+    }
+
+    pub(crate) fn launch_agent_for_active(&mut self, agent: &str) {
+        if let Some(ref proj) = self.projects.active.clone() {
+            let msg = crate::app::events::helpers::launch_agent(agent, &proj.local_path);
+            self.system.sync_status = Some(msg);
+        }
+        self.ui.show_launcher = false;
+    }
+
+    pub(crate) fn run_compliance_auto_fix(&mut self) {
+        if let Some(ref report) = self.health.compliance {
+            if !report.violations.is_empty() && !self.health.is_fixing {
+                self.health.is_fixing = true;
+                self.health.fix_status = Some("Claude fixing issues...".into());
+                self.add_activity("Agent", "Initiating Auto-Fix with Claude Code", "Warning");
+                let tx = self.tx.clone();
+                thread::spawn(move || {
+                    thread::sleep(std::time::Duration::from_secs(3));
+                    tx.send(BgMsg::SyncDone(
+                        "Auto-Fix Complete: Issues resolved".into(),
+                    ))
+                    .ok();
+                });
+            }
+        }
+    }
+
+    pub(crate) fn open_current_file_in_editor(&mut self) {
+        let files = self.current_menu_files();
+        if let Some(entry) = files.into_iter().nth(self.ui.right_file_cursor) {
+            let _ = crate::discovery::open_in_editor(&entry.path);
+            if let Some(ref tx) = self.tx_daemon {
+                let line = (self.editor.scroll as u64) + 1;
+                let msg = serde_json::json!({
+                    "event": "OpenFile",
+                    "path": entry.path.to_string_lossy(),
+                    "line": line,
+                    "col": 1
+                });
+                let _ = tx.send(msg.to_string());
+            }
+        }
+    }
+
+    pub(crate) fn launch_agent_for_selected_project(&mut self, agent: &str) {
+        let project_path = match self.ui.menu_cursor {
+            7 => self.project_at_cursor().map(|p| p.local_path.clone()),
+            _ => None,
+        };
+
+        if let Some(path) = project_path {
+            self.add_activity(
+                "Agent",
+                &format!("Launching {} for project", agent),
+                "Info",
+            );
+            self.system.sync_status = Some(crate::app::events::helpers::launch_agent(agent, &path));
+        }
+    }
+
+    pub(crate) fn run_graphify_on_active(&mut self) {
+        if let Some(ref proj) = self.projects.active.clone() {
+            let msg = self.run_graphify(&proj.local_path);
+            self.system.sync_status = Some(msg);
+        }
+    }
+
+    pub(crate) fn handle_file_change_approval(&mut self, approved: bool) {
+        if let Some(pending) = self
+            .system
+            .pending_file_changes
+            .get(self.system.pending_change_cursor)
+            .cloned()
+        {
+            if let Some(ref tx) = self.tx_daemon {
+                let msg = serde_json::json!({
+                    "command": "ApproveFileChange",
+                    "id": pending.id.clone(),
+                    "path": pending.path,
+                    "approved": approved
+                });
+                let _ = tx.send(msg.to_string());
+                if approved {
+                    self.add_activity(
+                        "System",
+                        &format!("File change approved for {}", pending.path),
+                        "Info",
+                    );
+                } else {
+                    self.add_activity(
+                        "System",
+                        &format!("File change rejected for {}", pending.path),
+                        "Warning",
+                    );
+                }
+            }
+            self.system
+                .pending_file_changes
+                .remove(self.system.pending_change_cursor);
+            if self.system.pending_change_cursor >= self.system.pending_file_changes.len()
+                && !self.system.pending_file_changes.is_empty()
+            {
+                self.system.pending_change_cursor =
+                    self.system.pending_file_changes.len() - 1;
+            }
+        }
+        if self.system.pending_file_changes.is_empty() {
+            self.state = AppState::Dashboard;
+        } else {
+            let next = &self.system.pending_file_changes[self.system.pending_change_cursor];
+            self.projects.git_diff_lines =
+                crate::app::editor::simple_diff(&next.original_content, &next.new_content);
+        }
+    }
+
+    pub(crate) fn launch_agent_from_mempalace(&mut self, agent: &str) {
+        if let Some(proj) = self.get_selected_mempalace_project() {
+            self.add_activity(
+                "Agent",
+                &format!("Launching {} from MemPalace", agent),
+                "Info",
+            );
+            self.system.sync_status = Some(crate::app::events::helpers::launch_agent(agent, &proj.path));
+        }
+    }
+
+    pub(crate) fn refresh_health(&mut self) {
+        self.health.is_checking = true;
+        if let Some(ref tx_daemon) = self.tx_daemon {
+            let _ = tx_daemon.send("{\"command\":\"GetState\"}".into());
+            self.add_activity("System", "Manual health refresh requested", "Info");
+        }
+    }
+
+    pub(crate) fn commit_project_at_health_cursor(&mut self) {
+        if let Some(h) = self.health.report.get(self.health.cursor).cloned() {
+            if h.git_dirty == Some(true) {
+                let tx = self.tx.clone();
+                let path = h.path.clone();
+                let name = h.name.clone();
+                self.system.sync_status = Some(format!("Committing {}...", name));
+                thread::spawn(move || {
+                    let r = crate::core::git::commit(&path, "chore: raios update", true);
+                    tx.send(BgMsg::GitActionDone {
+                        project: name,
+                        action: "commit".into(),
+                        ok: r.ok,
+                        message: r.message,
+                    })
+                    .ok();
+                });
+            } else {
+                self.system.sync_status =
+                    Some("Nothing to commit (working tree clean)".into());
+            }
+        }
+    }
+
+    pub(crate) fn push_project_at_health_cursor(&mut self) {
+        if let Some(h) = self.health.report.get(self.health.cursor).cloned() {
+            let tx = self.tx.clone();
+            let path = h.path.clone();
+            let name = h.name.clone();
+            self.system.sync_status = Some(format!("Pushing {}...", name));
+            thread::spawn(move || {
+                let r = crate::core::git::push(&path);
+                tx.send(BgMsg::GitActionDone {
+                    project: name,
+                    action: "push".into(),
+                    ok: r.ok,
+                    message: r.message,
+                })
+                .ok();
+            });
+        }
+    }
 }
+

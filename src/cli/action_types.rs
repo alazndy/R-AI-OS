@@ -40,6 +40,42 @@ pub enum HubApiKeyAction {
 }
 
 #[derive(Subcommand, Debug, Clone)]
+pub enum PolicyCmd {
+    /// Analyze the audit ledger and propose new [[tools.rules]] entries
+    /// (learns from repeated allow/deny/confirm decisions instead of
+    /// requiring every rule to be hand-written)
+    Suggest {
+        /// Minimum number of matching decisions before a rule is suggested
+        #[arg(long, default_value_t = 20)]
+        min_count: usize,
+        /// Write accepted suggestions directly into raios-policy.toml
+        /// (idempotent — existing rules for the same tool are left untouched)
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Show the resolved policy currently in effect (default action + rules)
+    Show,
+    /// Show the resolved capability (fs/network/exec) for one or all tools —
+    /// a TOML override if declared, otherwise the built-in default
+    Caps {
+        /// Tool name (omit to list all known tools)
+        tool: Option<String>,
+    },
+    /// Preview what the policy engine would decide for a tool call — allow,
+    /// confirm, or deny, and why — WITHOUT running the tool or touching the
+    /// audit ledger. Answers "what would happen if I called this?" before it
+    /// actually happens.
+    Simulate {
+        /// Tool name to simulate a call to
+        tool: String,
+        /// Optional JSON arguments, scanned the same way a real call's
+        /// arguments would be (AgentShield pattern check)
+        #[arg(long)]
+        args: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
 pub enum MemAction {
     /// List memory items for a project
     List {

@@ -127,7 +127,7 @@ impl McpServer {
     pub(super) fn tool_get_inbox(&self) -> Result<Value, String> {
         let conn = crate::db::open_db().map_err(|e| e.to_string())?;
         let tasks = crate::db::cp_query_active_tasks(&conn).unwrap_or_default();
-        let approvals = crate::db::cp_query_pending_approvals(&conn).unwrap_or_default();
+        let approvals = crate::db::cp_query_pending_approvals_scored(&conn).unwrap_or_default();
         let runs = crate::db::cp_query_active_runs(&conn).unwrap_or_default();
         let blocked = crate::db::cp_query_blocked_tasks(&conn).unwrap_or_default();
         let summary = format!(
@@ -147,6 +147,21 @@ impl McpServer {
                 "blocked_tasks": blocked,
             })).unwrap_or_default()
         ) }] }))
+    }
+
+    pub(super) fn tool_get_agent_stats(&self, args: &Value) -> Result<Value, String> {
+        let conn = crate::db::open_db().map_err(|e| e.to_string())?;
+        let agent = args["agent"].as_str();
+        let stats = match agent {
+            Some(a) => crate::db::cp_agent_stats_for(&conn, a)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .collect::<Vec<_>>(),
+            None => crate::db::cp_agent_stats(&conn).map_err(|e| e.to_string())?,
+        };
+        Ok(json!({ "content": [{ "type": "text", "text":
+            serde_json::to_string_pretty(&stats).unwrap_or_default()
+        }] }))
     }
 
     pub(super) fn tool_add_task(&self, args: &Value) -> Result<Value, String> {

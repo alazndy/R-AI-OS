@@ -19,9 +19,9 @@ pub fn render_policies(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // ─── Load live policy data ────────────────────────────────────────────────
-    let policy = crate::security::PolicyConfig::try_load_default();
-    let audit_count = load_audit_count();
+    let data = crate::app::load_policies_panel_data();
+    let policy = data.policy;
+    let audit_count = data.audit_count;
 
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
@@ -153,12 +153,4 @@ pub fn render_policies(frame: &mut Frame, area: Rect, app: &App) {
     )));
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-fn load_audit_count() -> Option<i64> {
-    let conn = crate::db::open_db().ok()?;
-    conn.query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))
-        .ok()
 }

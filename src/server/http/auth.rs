@@ -14,7 +14,7 @@ pub(super) async fn auth_middleware(
     next: axum::middleware::Next,
 ) -> Result<Response, StatusCode> {
     let path = req.uri().path();
-    if path == "/health" || path == "/api/health" {
+    if path == "/health" || path == "/api/health" || path == "/.well-known/agent.json" {
         return Ok(next.run(req).await);
     }
 

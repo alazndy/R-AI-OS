@@ -19,12 +19,38 @@ pub fn run_agent(
 ) -> Result<(), String> {
     let shield = AgentShield::init();
     let mut instinct = InstinctEngine::init();
+    let run_started = Instant::now();
+    let session_started_system = SystemTime::now();
+    let review_window_start = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     // 1. Pre-flight Security Check
     if let Some(ref dir) = project_dir {
         let warnings = shield.preflight_check(Path::new(dir));
         for warning in warnings {
             println!("{}", warning);
+        }
+
+        let skip_preflight = std::env::var("RAIOS_SKIP_PREFLIGHT").ok().as_deref() == Some("1");
+        let enforce_before_run = crate::security::PolicyConfig::try_load_default()
+            .and_then(|cfg| cfg.preflight.map(|p| p.enforce_before_run))
+            .unwrap_or(false);
+        if enforce_before_run && !skip_preflight {
+            let checks = crate::cli::preflight::run_gate(
+                Path::new(dir),
+                crate::cli::preflight::PreflightMode::AgentRunGate,
+            );
+            let blockers: Vec<_> = checks.iter().filter(|c| !c.pass && c.blocking).collect();
+            for c in &checks {
+                let icon = if c.pass { "✓" } else if c.blocking { "✗" } else { "⚠" };
+                let detail = if c.detail.is_empty() { String::new() } else { format!("  {}", c.detail) };
+                println!("  {}  {:<28}{}", icon, c.label, detail);
+            }
+            if !blockers.is_empty() {
+                println!("  Preflight enforcement blocked this agent run. See `raios pre-flight` for the full commit gate.");
+                return Err("Preflight blocked agent run; fix the findings above first.".into());
+            }
+        } else if skip_preflight {
+            println!("⚠ Preflight enforcement bypassed via RAIOS_SKIP_PREFLIGHT=1");
         }
     }
 
@@ -267,9 +293,30 @@ pub fn run_agent(
         strip_session_from_claude_md();
     }
     let success = result.is_ok();
+    let review_window_end = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let review = match (session_ids.as_ref(), project_dir.as_deref()) {
+        (Some(_), Some(dir)) => crate::db::open_db().ok().map(|conn| {
+            crate::session_review::build_review(
+                &conn,
+                agent,
+                Path::new(dir),
+                session_started_system,
+                &review_window_start,
+                &review_window_end,
+            )
+        }),
+        _ => None,
+    };
+    let review_summary = review.as_ref().map(|r| r.to_json());
     if let Some((task_id, run_id)) = &session_ids {
         if let Ok(conn) = crate::db::open_db() {
-            let _ = crate::db::cp_session_end(&conn, task_id, run_id, success);
+            let _ = crate::db::cp_session_end_with_summary(
+                &conn,
+                task_id,
+                run_id,
+                success,
+                review_summary.as_deref(),
+            );
         }
     }
     let session_short = session_ids.as_ref()
@@ -278,15 +325,37 @@ pub fn run_agent(
     let identity = canonical_agent_identity(agent).unwrap_or(agent);
     if success {
         println!(
-            "\x1b[32m✓ Session ended\x1b[0m{}\n  \x1b[90mHandoff:\x1b[0m raios handoff --to {}-kaira --status success --msg \"...\"",
-            session_short, agent
+            "\x1b[32m✓ Session ended\x1b[0m{}\n  \x1b[90mDuration:\x1b[0m {}s",
+            session_short,
+            run_started.elapsed().as_secs(),
         );
     } else {
         println!(
-            "\x1b[31m✗ Session ended (non-zero)\x1b[0m{}\n  \x1b[90mHandoff:\x1b[0m raios handoff --to {}-kaira --status failed --msg \"...\"",
-            session_short, identity
+            "\x1b[31m✗ Session ended (non-zero)\x1b[0m{}\n  \x1b[90mDuration:\x1b[0m {}s",
+            session_short,
+            run_started.elapsed().as_secs(),
         );
     }
+    if let Some(review) = &review {
+        if let Some(changed) = &review.changed {
+            println!("  \x1b[90mChanged:\x1b[0m {}", changed.replace('\n', " | "));
+        }
+        println!(
+            "  \x1b[90mTests in session:\x1b[0m {}",
+            if review.tests_run_during_session { "yes" } else { "no" }
+        );
+        if !review.risks.is_empty() {
+            println!("  \x1b[90mRisks:\x1b[0m {}", review.risks.join(" | "));
+        }
+        if !review.learned.is_empty() {
+            println!("  \x1b[90mLearned:\x1b[0m {}", review.learned.join(" | "));
+        }
+    }
+    println!(
+        "  \x1b[90mHandoff:\x1b[0m raios handoff --to {}-kaira --status {} --msg \"...\"",
+        if success { agent } else { identity },
+        if success { "success" } else { "failed" }
+    );
     let _ = identity;
 
     // 7. Post-session Instinct Learning

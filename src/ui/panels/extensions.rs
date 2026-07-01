@@ -109,12 +109,11 @@ fn render_ext_header(frame: &mut Frame, area: Rect, ext: &ExtensionInfo, app: &A
     }
 
     // Service badges
-    for svc in &ext.services {
-        let running = is_service_active(svc);
-        let (badge_color, badge_text) = if running {
-            (GREEN, format!(" {} ● ", svc))
+    for svc in &ext.service_statuses {
+        let (badge_color, badge_text) = if svc.active {
+            (GREEN, format!(" {} ● ", svc.name))
         } else {
-            (RED, format!(" {} ○ ", svc))
+            (RED, format!(" {} ○ ", svc.name))
         };
         spans.push(Span::styled(badge_text, Style::new().fg(badge_color)));
     }
@@ -244,12 +243,4 @@ fn render_config_panel(frame: &mut Frame, area: Rect, ext: &ExtensionInfo, app: 
     };
     let p = Paragraph::new(lines).scroll((scroll, 0));
     frame.render_widget(p, inner);
-}
-
-fn is_service_active(service: &str) -> bool {
-    std::process::Command::new("systemctl")
-        .args(["is-active", "--quiet", service])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }

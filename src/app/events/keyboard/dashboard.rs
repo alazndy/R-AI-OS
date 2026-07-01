@@ -1,4 +1,3 @@
-use crate::app::events::helpers::*;
 use crate::app::state::AppState;
 use crate::app::{filtered_palette, App, MENU_ITEMS};
 use crate::filebrowser::FileEntry;
@@ -346,41 +345,16 @@ impl App {
                 }
             KeyCode::Char('o')
                 if self.ui.right_panel_focus => {
-                    let files = self.current_menu_files();
-                    if let Some(entry) = files.into_iter().nth(self.ui.right_file_cursor) {
-                        let _ = crate::discovery::open_in_editor(&entry.path);
-                        if let Some(ref tx) = self.tx_daemon {
-                            let line = (self.editor.scroll as u64) + 1;
-                            let msg = serde_json::json!({
-                                "event": "OpenFile",
-                                "path": entry.path.to_string_lossy(),
-                                "line": line,
-                                "col": 1
-                            });
-                            let _ = tx.send(msg.to_string());
-                        }
-                    }
+                    self.open_current_file_in_editor();
                 }
             KeyCode::Char('C') | KeyCode::Char('O') | KeyCode::Char('A')
                 if self.ui.right_panel_focus => {
-                    let project_path = match self.ui.menu_cursor {
-                        7 => self.project_at_cursor().map(|p| p.local_path.clone()),
-                        _ => None,
+                    let agent = match key.code {
+                        KeyCode::Char('C') => "claude",
+                        KeyCode::Char('O') => "opencode",
+                        _ => "antigravity",
                     };
-
-                    if let Some(path) = project_path {
-                        let agent = match key.code {
-                            KeyCode::Char('C') => "claude",
-                            KeyCode::Char('O') => "opencode",
-                            _ => "antigravity",
-                        };
-                        self.add_activity(
-                            "Agent",
-                            &format!("Launching {} for project", agent),
-                            "Info",
-                        );
-                        self.system.sync_status = Some(launch_agent(agent, &path));
-                    }
+                    self.launch_agent_for_selected_project(agent);
                 }
             _ => {}
         }

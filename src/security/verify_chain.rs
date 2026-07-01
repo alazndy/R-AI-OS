@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -32,6 +33,32 @@ pub fn record_audit_event(
     )?;
 
     Ok(())
+}
+
+/// Records one tool-call policy decision (allow/deny/confirm) into the audit
+/// ledger with a normalized JSON envelope.
+///
+/// Raw arguments are never persisted — callers pass a pre-computed hash — so
+/// the ledger cannot itself become a secret-leak vector. Shared by the MCP
+/// (`src/mcp/tools.rs`) and daemon WS (`src/daemon/handlers.rs`) dispatch
+/// paths so both feed the same `raios policy suggest` learning pipeline
+/// (Phase 1: reads `event_type`/`data` back out to propose new
+/// `[[tools.rules]]` entries).
+pub fn record_tool_decision(
+    conn: &Connection,
+    tool: &str,
+    args_hash: &str,
+    matched_rule: &str,
+    event_type: &str,
+    actor: &str,
+) -> Result<()> {
+    let data = json!({
+        "tool": tool,
+        "args_hash": args_hash,
+        "matched_rule": matched_rule,
+    })
+    .to_string();
+    record_audit_event(conn, event_type, actor, &data)
 }
 
 /// Verify the integrity of the entire audit_log chain.
@@ -175,6 +202,34 @@ mod tests {
         let result = verify_chain(&conn);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Chain broken"));
+    }
+
+    #[test]
+    fn tool_decision_writes_normalized_envelope_and_chains() {
+        let conn = in_memory_db();
+        record_tool_decision(&conn, "run_build", "deadbeef", "rule", "tool_allow", "claude_kaira")
+            .unwrap();
+        record_tool_decision(&conn, "git_commit", "cafebabe", "default", "tool_confirm", "codex_kaira")
+            .unwrap();
+
+        // Chain integrity holds across mixed record_audit_event / record_tool_decision writers.
+        assert_eq!(verify_chain(&conn).unwrap(), 2);
+
+        let (event_type, actor, data): (String, String, String) = conn
+            .query_row(
+                "SELECT event_type, actor, data FROM audit_log WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(event_type, "tool_allow");
+        assert_eq!(actor, "claude_kaira");
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(parsed["tool"], "run_build");
+        assert_eq!(parsed["args_hash"], "deadbeef");
+        assert_eq!(parsed["matched_rule"], "rule");
+        // Raw arguments must never appear in the ledger — only the hash.
+        assert!(!data.contains("--force"));
     }
 
     #[test]

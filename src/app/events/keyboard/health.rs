@@ -1,7 +1,6 @@
-use crate::app::state::{AppState, BgMsg};
+use crate::app::state::AppState;
 use crate::app::App;
 use crossterm::event::{KeyCode, KeyEvent};
-use std::thread;
 
 impl App {
     pub(crate) fn handle_health_view_key(&mut self, key: KeyEvent) {
@@ -31,52 +30,13 @@ impl App {
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
-                self.health.is_checking = true;
-                if let Some(ref tx_daemon) = self.tx_daemon {
-                    let _ = tx_daemon.send("{\"command\":\"GetState\"}".into());
-                    self.add_activity("System", "Manual health refresh requested", "Info");
-                }
+                self.refresh_health();
             }
             KeyCode::Char('c') => {
-                if let Some(h) = self.health.report.get(self.health.cursor).cloned() {
-                    if h.git_dirty == Some(true) {
-                        let tx = self.tx.clone();
-                        let path = h.path.clone();
-                        let name = h.name.clone();
-                        self.system.sync_status = Some(format!("Committing {}...", name));
-                        thread::spawn(move || {
-                            let r = crate::core::git::commit(&path, "chore: raios update", true);
-                            tx.send(BgMsg::GitActionDone {
-                                project: name,
-                                action: "commit".into(),
-                                ok: r.ok,
-                                message: r.message,
-                            })
-                            .ok();
-                        });
-                    } else {
-                        self.system.sync_status =
-                            Some("Nothing to commit (working tree clean)".into());
-                    }
-                }
+                self.commit_project_at_health_cursor();
             }
             KeyCode::Char('p') => {
-                if let Some(h) = self.health.report.get(self.health.cursor).cloned() {
-                    let tx = self.tx.clone();
-                    let path = h.path.clone();
-                    let name = h.name.clone();
-                    self.system.sync_status = Some(format!("Pushing {}...", name));
-                    thread::spawn(move || {
-                        let r = crate::core::git::push(&path);
-                        tx.send(BgMsg::GitActionDone {
-                            project: name,
-                            action: "push".into(),
-                            ok: r.ok,
-                            message: r.message,
-                        })
-                        .ok();
-                    });
-                }
+                self.push_project_at_health_cursor();
             }
             _ => {}
         }

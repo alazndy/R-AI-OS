@@ -27,18 +27,10 @@ impl App {
         if self.system.handover_modal.is_some() {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    if let Some(ref tx) = self.tx_daemon {
-                        let msg = "{\"command\":\"HumanApproval\",\"approved\":true}".to_string();
-                        let _ = tx.send(msg);
-                    }
-                    self.system.handover_modal = None;
+                    self.handle_handover_approval(true);
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    if let Some(ref tx) = self.tx_daemon {
-                        let msg = "{\"command\":\"HumanApproval\",\"approved\":false}".to_string();
-                        let _ = tx.send(msg);
-                    }
-                    self.system.handover_modal = None;
+                    self.handle_handover_approval(false);
                 }
                 _ => {}
             }
@@ -52,28 +44,13 @@ impl App {
                     self.ui.show_launcher = false;
                 }
                 KeyCode::Char('c') | KeyCode::Char('C') => {
-                    if let Some(ref proj) = self.projects.active.clone() {
-                        let msg =
-                            crate::app::events::helpers::launch_agent("claude", &proj.local_path);
-                        self.system.sync_status = Some(msg);
-                    }
-                    self.ui.show_launcher = false;
+                    self.launch_agent_for_active("claude");
                 }
                 KeyCode::Char('o') | KeyCode::Char('O') => {
-                    if let Some(ref proj) = self.projects.active.clone() {
-                        let msg =
-                            crate::app::events::helpers::launch_agent("opencode", &proj.local_path);
-                        self.system.sync_status = Some(msg);
-                    }
-                    self.ui.show_launcher = false;
+                    self.launch_agent_for_active("opencode");
                 }
                 KeyCode::Char('x') | KeyCode::Char('X') => {
-                    if let Some(ref proj) = self.projects.active.clone() {
-                        let msg =
-                            crate::app::events::helpers::launch_agent("codex", &proj.local_path);
-                        self.system.sync_status = Some(msg);
-                    }
-                    self.ui.show_launcher = false;
+                    self.launch_agent_for_active("codex");
                 }
                 _ => {}
             }
@@ -84,21 +61,7 @@ impl App {
             && self.ui.menu_cursor == 2
             && key.code == KeyCode::Char('f')
         {
-            if let Some(ref report) = self.health.compliance {
-                if !report.violations.is_empty() && !self.health.is_fixing {
-                    self.health.is_fixing = true;
-                    self.health.fix_status = Some("Claude fixing issues...".into());
-                    self.add_activity("Agent", "Initiating Auto-Fix with Claude Code", "Warning");
-                    let tx = self.tx.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_secs(3));
-                        tx.send(crate::app::state::BgMsg::SyncDone(
-                            "Auto-Fix Complete: Issues resolved".into(),
-                        ))
-                        .ok();
-                    });
-                }
-            }
+            self.run_compliance_auto_fix();
         }
 
         match self.state {

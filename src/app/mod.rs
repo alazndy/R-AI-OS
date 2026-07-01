@@ -18,6 +18,12 @@ pub use editor::*;
 pub mod ipc;
 pub use ipc::*;
 
+pub mod ipc_support;
+pub mod ipc_events;
+
+pub mod services;
+pub use services::*;
+
 pub mod events;
 
 // ─── App ──────────────────────────────────────────────────────────────────────
@@ -213,7 +219,28 @@ impl App {
 
         // Spawn embedded workers when aiosd is not available (local only)
         if !config.dev_ops_path.as_os_str().is_empty() {
-            crate::workers::spawn_embedded_workers(tx.clone(), config.dev_ops_path.clone());
+            let (runtime_tx, runtime_rx) = mpsc::channel::<crate::workers::RuntimeEvent>();
+            let tx_forward = tx.clone();
+            thread::spawn(move || {
+                for event in runtime_rx {
+                    let msg = match event {
+                        crate::workers::RuntimeEvent::Projects(p) => BgMsg::Projects(p),
+                        crate::workers::RuntimeEvent::HealthReport(h) => BgMsg::HealthReport(h),
+                        crate::workers::RuntimeEvent::FileChanged(f) => BgMsg::FileChanged(f),
+                        crate::workers::RuntimeEvent::SentinelUpdate {
+                            project,
+                            status,
+                            error_count,
+                        } => BgMsg::SentinelUpdate {
+                            project,
+                            status,
+                            error_count,
+                        },
+                    };
+                    let _ = tx_forward.send(msg);
+                }
+            });
+            crate::workers::spawn_embedded_workers(runtime_tx, config.dev_ops_path.clone());
         }
 
         Self {
@@ -382,48 +409,7 @@ impl App {
     }
 
     pub fn sorted_project_indices(&self) -> Vec<usize> {
-        let mut indices: Vec<usize> = (0..self.projects.list.len()).collect();
-        match self.projects.sort {
-            SortMode::Name => indices.sort_by(|&a, &b| {
-                self.projects.list[a]
-                    .name
-                    .to_lowercase()
-                    .cmp(&self.projects.list[b].name.to_lowercase())
-            }),
-            SortMode::Grade => indices.sort_by(|&a, &b| {
-                let get_grade = |p: &crate::entities::EntityProject| {
-                    self.health
-                        .report
-                        .iter()
-                        .find(|h| h.name == p.name)
-                        .map(|h| h.compliance_grade.as_str())
-                        .unwrap_or("Z")
-                };
-                get_grade(&self.projects.list[a]).cmp(get_grade(&self.projects.list[b]))
-            }),
-            SortMode::GitDirty => indices.sort_by(|&a, &b| {
-                let get_dirty = |p: &crate::entities::EntityProject| {
-                    self.health
-                        .report
-                        .iter()
-                        .find(|h| h.name == p.name)
-                        .and_then(|h| h.git_dirty)
-                        .unwrap_or(false)
-                };
-                get_dirty(&self.projects.list[b]).cmp(&get_dirty(&self.projects.list[a]))
-            }),
-            SortMode::Category => indices.sort_by(|&a, &b| {
-                self.projects.list[a]
-                    .category
-                    .cmp(&self.projects.list[b].category)
-            }),
-            SortMode::Status => indices.sort_by(|&a, &b| {
-                self.projects.list[a]
-                    .status
-                    .cmp(&self.projects.list[b].status)
-            }),
-        }
-        indices
+        crate::app::sort_project_indices(&self.projects.list, &self.health.report, &self.projects.sort)
     }
 
     pub fn project_at_cursor(&self) -> Option<&crate::entities::EntityProject> {

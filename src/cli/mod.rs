@@ -8,7 +8,7 @@ mod health;
 mod hub;
 mod instinct;
 mod new;
-mod preflight;
+pub(crate) mod preflight;
 mod reflect;
 mod refactor;
 mod search;
@@ -16,8 +16,10 @@ mod security;
 mod swarm;
 mod version;
 mod workspace;
+mod agent_stats;
 mod cron;
 mod mem;
+mod policy;
 mod session;
 mod task_update;
 use self::mem::cmd_mem;
@@ -240,10 +242,12 @@ pub fn run(cli: Cli) {
             agent_wrapper::cmd_agent_wrapper(a, cli.json);
         }
         Commands::Sessions { agent, top } => cmd_sessions(agent.as_deref(), top, cli.json),
+        Commands::AgentStats { agent } => agent_stats::cmd_agent_stats(agent, cli.json),
         Commands::MemoryGen { project } => {
             crate::session_memory::cmd_memory_gen(project.as_deref(), cli.json);
         }
         Commands::Mem { action } => cmd_mem(action, cli.json),
+        Commands::Policy { action } => policy::cmd_policy(action, cli.json),
         Commands::Hub { action } => match action {
             HubAction::Start => hub::cmd_start(cli.json),
             HubAction::Stop => hub::cmd_stop(cli.json),

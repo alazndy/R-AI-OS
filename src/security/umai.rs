@@ -1,3 +1,4 @@
+use crate::security::policy::ToolCapabilities;
 use crate::security::PolicyConfig;
 use crate::shield::AgentShield;
 
@@ -55,6 +56,30 @@ impl Umai {
         Self::new(PolicyConfig::try_load_default())
     }
 
+    /// Returns `"rule"` if an explicit `[[tools.rules]]` entry matches `command`,
+    /// or `"default"` if the decision fell through to `tools.default_action`
+    /// (or there is no policy loaded at all). Used to annotate audit log entries
+    /// with which config path produced a given allow/deny/confirm decision.
+    pub fn rule_source(&self, command: &str) -> &'static str {
+        match &self.policy {
+            Some(policy) if policy.tools.rules.iter().any(|r| r.name == command) => "rule",
+            _ => "default",
+        }
+    }
+
+    /// Returns the TOML-declared capability override for `command`, if any.
+    /// `None` means "no explicit override" — callers should fall back to
+    /// `security::capabilities::default_for(command)`.
+    pub fn tool_capabilities(&self, command: &str) -> Option<ToolCapabilities> {
+        self.policy
+            .as_ref()?
+            .tools
+            .rules
+            .iter()
+            .find(|r| r.name == command)
+            .and_then(|r| r.capabilities.clone())
+    }
+
     /// Check a WS command name + optional payload string before dispatch.
     ///
     /// Layer order:
@@ -106,6 +131,7 @@ mod tests {
                 blocked_paths: vec![],
             },
             tools: ToolsPolicy { default_action: default, rules },
+            preflight: None,
             egress: None,
             rate_limits: None,
             quarantine: None,
@@ -122,7 +148,7 @@ mod tests {
     fn denies_blocked_tool() {
         let policy = policy_with_rules(
             PolicyAction::Allow,
-            vec![ToolRule { name: "run_build".into(), action: PolicyAction::Deny }],
+            vec![ToolRule { name: "run_build".into(), action: PolicyAction::Deny, capabilities: None }],
         );
         let umai = Umai::new(Some(policy));
         assert!(matches!(umai.check("run_build", None), UmaiDecision::Deny(_)));
@@ -145,10 +171,27 @@ mod tests {
     }
 
     #[test]
+    fn rule_source_distinguishes_explicit_rule_from_default() {
+        let policy = policy_with_rules(
+            PolicyAction::Confirm,
+            vec![ToolRule { name: "run_build".into(), action: PolicyAction::Allow, capabilities: None }],
+        );
+        let umai = Umai::new(Some(policy));
+        assert_eq!(umai.rule_source("run_build"), "rule");
+        assert_eq!(umai.rule_source("some_unlisted_tool"), "default");
+    }
+
+    #[test]
+    fn rule_source_is_default_when_no_policy_loaded() {
+        let umai = Umai::new(None);
+        assert_eq!(umai.rule_source("anything"), "default");
+    }
+
+    #[test]
     fn allow_passes_both_layers() {
         let policy = policy_with_rules(
             PolicyAction::Allow,
-            vec![ToolRule { name: "list_projects".into(), action: PolicyAction::Allow }],
+            vec![ToolRule { name: "list_projects".into(), action: PolicyAction::Allow, capabilities: None }],
         );
         let umai = Umai::new(Some(policy));
         assert_eq!(umai.check("list_projects", Some("safe payload")), UmaiDecision::Allow);

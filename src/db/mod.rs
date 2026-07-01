@@ -1,9 +1,11 @@
 use rusqlite::{params, Connection, Result};
 use std::path::Path;
 
+pub mod agent_stats;
 pub mod budget_gate;
 pub mod control_plane;
 pub mod health;
+pub mod inbox_risk;
 pub mod mem;
 pub mod projects;
 pub mod provider;
@@ -17,9 +19,11 @@ pub mod wf_swarm;
 pub mod wf_task_graph;
 mod schema;
 
+pub use agent_stats::*;
 pub use budget_gate::*;
 pub use control_plane::*;
 pub use health::*;
+pub use inbox_risk::*;
 pub use mem::*;
 pub use projects::*;
 pub use provider::*;

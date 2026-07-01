@@ -1,8 +1,53 @@
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use super::McpServer;
 
 impl McpServer {
+    /// Records one MCP tool-call decision into the tamper-evident audit ledger.
+    ///
+    /// Raw arguments are never persisted — only a SHA-256 hash — so the ledger
+    /// cannot itself become a secret-leak vector. `rule_source` distinguishes
+    /// an explicit `[[tools.rules]]` match from a fallback to `default_action`,
+    /// which `raios policy suggest` (Phase 1) uses to propose new rules.
+    fn record_tool_audit(&self, name: &str, raw_args: &str, decision: &crate::security::UmaiDecision) {
+        let Ok(conn) = crate::db::open_db() else { return };
+        let event_type = match decision {
+            crate::security::UmaiDecision::Allow => "tool_allow",
+            crate::security::UmaiDecision::Deny(_) => "tool_deny",
+            crate::security::UmaiDecision::Confirm(_) => "tool_confirm",
+        };
+        let args_hash = format!("{:x}", Sha256::digest(raw_args.as_bytes()));
+        let actor = std::env::var("RAIOS_AGENT_IDENTITY").unwrap_or_else(|_| "claude_kaira".into());
+        let _ = crate::security::record_tool_decision(
+            &conn,
+            name,
+            &args_hash,
+            self.umai.rule_source(name),
+            event_type,
+            &actor,
+        );
+    }
+
+    /// Enforces the capability-declaration sandbox ("no ambient authority")
+    /// for one tool call. See `security::capabilities` module docs for the
+    /// exact scope of what is and isn't checked here.
+    fn enforce_capability(&self, name: &str, args: &Value) -> Result<(), String> {
+        let caps = crate::security::capabilities::resolve(name, self.umai.tool_capabilities(name));
+
+        if crate::security::capabilities::PATH_RESOLVING_TOOLS.contains(&name) {
+            // Only enforce once the tool would actually resolve a path — if
+            // resolution itself fails (e.g. missing "project"), let the real
+            // dispatch below surface that error instead of masking it here.
+            if let Ok(resolved) = self.resolve_git_path(args) {
+                crate::security::check_fs_capability(&caps, &resolved, &self.blocked_paths)?;
+            }
+        }
+
+        crate::security::check_network_capability(&caps, &self.egress)?;
+        Ok(())
+    }
+
     pub(super) fn handle_tools_list(&self) -> Result<Value, String> {
         Ok(json!({ "tools": [
             { "name": "update_state",    "description": "Update the shared memory.md with agent progress. Call this after completing any significant action.", "inputSchema": { "type": "object", "properties": { "agent": {"type":"string","description":"Agent name (claude, antigravity)"}, "action": {"type":"string","description":"What was done"}, "summary": {"type":"string","description":"Detailed summary to append to memory"} }, "required": ["agent","action","summary"] } },
@@ -36,7 +81,8 @@ impl McpServer {
             { "name": "get_inbox",                 "description": "Unified operational inbox: all active tasks, pending approvals, and in-progress agent runs sourced from the canonical control plane tables.", "inputSchema": { "type": "object", "properties": {} } },
             { "name": "route_capability",          "description": "Semantically route a natural language query to the best matching raios capability name.", "inputSchema": { "type": "object", "required": ["query"], "properties": { "query": {"type":"string","description":"Natural language description of what you want to do"} } } },
             { "name": "list_evolution_candidates", "description": "List pending instinct candidates learned from agent job outcomes.", "inputSchema": { "type": "object", "properties": { "limit": {"type":"integer","description":"Max results (default: 20)"} } } },
-            { "name": "promote_evolution_candidate","description": "Promote a learned instinct candidate to active memory and the instinct store.", "inputSchema": { "type": "object", "required": ["rule"], "properties": { "rule": {"type":"string","description":"The rule text to promote"} } } }
+            { "name": "promote_evolution_candidate","description": "Promote a learned instinct candidate to active memory and the instinct store.", "inputSchema": { "type": "object", "required": ["rule"], "properties": { "rule": {"type":"string","description":"The rule text to promote"} } } },
+            { "name": "get_agent_stats", "description": "Per-agent performance stats aggregated from cp_agent_runs: run count, success rate, average duration, exit_reason distribution. Does not report token usage or repetition (not tracked).", "inputSchema": { "type": "object", "properties": { "agent": {"type":"string","description":"Agent identity to filter to (e.g. claude_kaira). Omit for all agents."} } } }
         ]}))
     }
 
@@ -51,7 +97,9 @@ impl McpServer {
         let args = &params["arguments"];
 
         let raw_args = serde_json::to_string(args).unwrap_or_default();
-        match self.umai.check(name, Some(&raw_args)) {
+        let decision = self.umai.check(name, Some(&raw_args));
+        self.record_tool_audit(name, &raw_args, &decision);
+        match decision {
             crate::security::UmaiDecision::Allow => {}
             crate::security::UmaiDecision::Deny(reason) => {
                 return Err(format!("umai:{}", reason));
@@ -79,6 +127,10 @@ impl McpServer {
             for (var, val) in crate::security::secret_lease::active_env_for_tool(&conn, name) {
                 std::env::set_var(var, val);
             }
+        }
+
+        if let Err(e) = self.enforce_capability(name, args) {
+            return Err(format!("capability:{}", e));
         }
 
         match name {
@@ -114,6 +166,7 @@ impl McpServer {
             "route_capability" => self.tool_route_capability(args),
             "list_evolution_candidates" => self.tool_list_evolution_candidates(args),
             "promote_evolution_candidate" => self.tool_promote_evolution_candidate(args),
+            "get_agent_stats" => self.tool_get_agent_stats(args),
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }

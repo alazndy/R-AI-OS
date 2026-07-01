@@ -19,18 +19,17 @@ pub fn render_scheduler(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let Ok(conn) = crate::db::open_db() else {
+    let Ok(data) = crate::app::load_scheduler_panel_data() else {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "  Could not open control plane DB.",
+                "  Could not load scheduler snapshot.",
                 Style::new().fg(RED),
             )),
             inner,
         );
         return;
     };
-
-    let jobs = crate::db::cp_scheduled_jobs_list(&conn).unwrap_or_default();
+    let jobs = data.jobs;
 
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(

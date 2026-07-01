@@ -56,14 +56,26 @@ pub fn cp_session_end(
     run_id: &str,
     success: bool,
 ) -> Result<()> {
+    cp_session_end_with_summary(conn, task_id, run_id, success, None)
+}
+
+pub fn cp_session_end_with_summary(
+    conn: &Connection,
+    task_id: &str,
+    run_id: &str,
+    success: bool,
+    summary: Option<&str>,
+) -> Result<()> {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let run_status = if success { "succeeded" } else { "failed" };
     let task_status = if success { "completed" } else { "failed" };
     let exit_reason = if success { "clean_exit" } else { "nonzero_exit" };
 
     conn.execute(
-        "UPDATE cp_agent_runs SET status=?1, ended_at=?2, exit_reason=?3 WHERE id=?4",
-        params![run_status, now, exit_reason, run_id],
+        "UPDATE cp_agent_runs
+         SET status=?1, ended_at=?2, exit_reason=?3, summary=COALESCE(?4, summary)
+         WHERE id=?5",
+        params![run_status, now, exit_reason, summary, run_id],
     )?;
     conn.execute(
         "UPDATE cp_tasks SET status=?1, updated_at=?2 WHERE id=?3",
@@ -80,11 +92,12 @@ pub struct SessionRow {
     pub started_at: String,
     pub ended_at: Option<String>,
     pub exit_reason: Option<String>,
+    pub summary: Option<String>,
 }
 
 pub fn cp_sessions_list(conn: &Connection, limit: usize) -> Result<Vec<SessionRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, agent_name, status, started_at, ended_at, exit_reason
+        "SELECT id, agent_name, status, started_at, ended_at, exit_reason, summary
          FROM cp_agent_runs
          WHERE provider = 'wrapper'
          ORDER BY started_at DESC
@@ -98,8 +111,8 @@ pub fn cp_sessions_list(conn: &Connection, limit: usize) -> Result<Vec<SessionRo
             started_at: r.get(3)?,
             ended_at: r.get(4)?,
             exit_reason: r.get(5)?,
+            summary: r.get(6)?,
         })
     })?;
     rows.collect::<Result<Vec<_>>>()
 }
-

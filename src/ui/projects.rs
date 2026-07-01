@@ -9,17 +9,16 @@ use ratatui::{
 };
 
 pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
-    let indices = app.sorted_project_indices();
-    let total = indices.len();
+    let data = crate::app::build_projects_panel_data(app);
 
     let [title_area, table_area] =
         Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(area);
 
     let title = Line::from(vec![
         Span::styled(" ALL PROJECTS", Style::new().fg(MID).bold()),
-        Span::styled(format!("  ({} total)", total), Style::new().fg(DIM)),
+        Span::styled(format!("  ({} total)", data.total), Style::new().fg(DIM)),
         Span::styled("  sort: ", Style::new().fg(DIM)),
-        Span::styled(app.projects.sort.label(), Style::new().fg(AMBER).bold()),
+        Span::styled(data.sort_label, Style::new().fg(AMBER).bold()),
         Span::styled(
             if app.ui.right_panel_focus {
                 "  [↑↓] navigate  [Enter] open  [s] cycle sort"
@@ -31,7 +30,7 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
     ]);
     frame.render_widget(Paragraph::new(title), title_area);
 
-    if indices.is_empty() {
+    if data.items.is_empty() {
         let msg = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -53,24 +52,19 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
     .style(Style::new().fg(DIM).bold())
     .bottom_margin(1);
 
-    let rows: Vec<Row> = indices
+    let rows: Vec<Row> = data
+        .items
         .iter()
-        .map(|&orig_i| {
-            let proj = &app.projects.list[orig_i];
-            let sc = project_status_color(&proj.status);
-            let cat = proj.category.replace('_', " ");
+        .map(|item| {
+            let sc = project_status_color(&item.status);
 
-            let has_vault = app.system.vault_projects.contains(&proj.name);
-            let vault_tag = if has_vault {
+            let vault_tag = if item.has_vault {
                 Span::styled("V", Style::new().fg(AMBER).bold())
             } else {
                 Span::styled("-", Style::new().fg(DIM))
             };
 
-            // Use cached health report if available
-            let health = app.health.report.iter().find(|h| h.name == proj.name);
-            let grade = health.map(|h| h.compliance_grade.as_str()).unwrap_or("-");
-            let gc = match grade {
+            let gc = match item.compliance_grade.as_str() {
                 "A" => GREEN,
                 "B" => CYAN,
                 "C" => AMBER,
@@ -78,15 +72,13 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
                 _ => DIM,
             };
 
-            let dirty_status = health.and_then(|h| h.git_dirty);
-            let dirty = match dirty_status {
+            let dirty = match item.dirty {
                 Some(true) => Span::styled("DIRTY", Style::new().fg(RED).bold()),
                 Some(false) => Span::styled("clean", Style::new().fg(DIM)),
                 None => Span::styled("?", Style::new().fg(DIM)),
             };
 
-            let ci_status = health.and_then(|h| h.ci_status.as_deref());
-            let ci = match ci_status {
+            let ci = match item.ci_status.as_deref() {
                 Some("success") => Span::styled("✓ pass", Style::new().fg(GREEN)),
                 Some("failure") => Span::styled("✗ fail", Style::new().fg(RED).bold()),
                 Some("in_progress") | Some("queued") => {
@@ -98,11 +90,11 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
             };
 
             Row::new(vec![
-                Text::from(proj.name.clone()),
+                Text::from(item.name.clone()),
                 Text::from(vault_tag),
-                Text::from(Span::styled(proj.status.clone(), Style::new().fg(sc))),
-                Text::from(cat),
-                Text::from(Span::styled(grade, Style::new().fg(gc).bold())),
+                Text::from(Span::styled(item.status.clone(), Style::new().fg(sc))),
+                Text::from(item.category.clone()),
+                Text::from(Span::styled(item.compliance_grade.clone(), Style::new().fg(gc).bold())),
                 Text::from(dirty),
                 Text::from(ci),
             ])

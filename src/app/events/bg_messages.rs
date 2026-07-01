@@ -16,164 +16,9 @@ use crate::filebrowser::load_file_content;
 impl App {
     pub fn handle_bg_msg(&mut self, msg: BgMsg) {
         match msg {
-            BgMsg::BootResult { name, pass, done } => {
-                self.system.boot_results.push((name, pass));
-                if done {
-                    let tx = self.tx.clone();
-                    let has_config = Config::load().is_some();
-                    thread::spawn(move || {
-                        thread::sleep(Duration::from_millis(150));
-                        if has_config {
-                            tx.send(BgMsg::TransitionToDashboard).ok();
-                        } else {
-                            tx.send(BgMsg::TransitionToSetup).ok();
-                        }
-                    });
-                }
-            }
-            BgMsg::TransitionToSetup => {
-                use crate::config::Config as Cfg;
-                let detected = Cfg::auto_detect();
-
-                // Pre-fill wizard fields from auto-detect
-                if let Some(p) = &detected.dev_ops {
-                    self.wizard.dev_ops = p.to_string_lossy().into_owned();
-                }
-                if let Some(p) = &detected.master_md {
-                    self.wizard.master = p.to_string_lossy().into_owned();
-                }
-                if let Some(p) = &detected.vault_projects {
-                    self.wizard.vault = p.to_string_lossy().into_owned();
-                }
-
-                // Keep legacy setup_fields for compatibility
-                self.setup.requirements = check_requirements();
-                self.setup.fields = vec![
-                    SetupField::new("Dev Ops Path", "Root workspace")
-                        .with_detected(detected.dev_ops.clone()),
-                    SetupField::new("MASTER.md Path", "Agent constitution")
-                        .with_detected(detected.master_md.clone()),
-                    SetupField::new("Skills Path", ".agents/skills")
-                        .with_detected(detected.skills.clone()),
-                    SetupField::new("Vault Projects Path", "Obsidian Vault")
-                        .with_detected(detected.vault_projects.clone()),
-                ];
-                self.setup.cursor = 0;
-                self.wizard.step = crate::setup_wizard::WizardStep::Welcome;
-                self.state = AppState::Setup;
-
-                // Detect agents in background
-                let tx = self.tx.clone();
-                thread::spawn(move || {
-                    let status = crate::setup_wizard::detect_agents();
-                    tx.send(BgMsg::AgentStatusReady(status)).ok();
-                });
-            }
-            BgMsg::TransitionToDashboard => {
-                self.state = AppState::Dashboard;
-                // Discover graphify before spawning threads (no borrow conflict here)
-                self.system.graphify_script =
-                    crate::health::find_graphify_script(&self.config.dev_ops_path);
-                let tx = self.tx.clone();
-                let cfg = self.config.clone();
-                thread::spawn(move || {
-                    tx.send(BgMsg::RecentProjects(load_recent_projects(
-                        &cfg.dev_ops_path,
-                    )))
-                    .ok();
-                    tx.send(BgMsg::Agents(crate::discovery::discover_agents()))
-                        .ok();
-                    tx.send(BgMsg::Skills(crate::discovery::discover_skills(
-                        &cfg.skills_path,
-                    )))
-                    .ok();
-                    tx.send(BgMsg::MemPalaceFiles(get_mempalace_files(
-                        &cfg.dev_ops_path,
-                    )))
-                    .ok();
-                    tx.send(BgMsg::MasterFiles(get_master_rule_files(
-                        &cfg.master_md_path,
-                    )))
-                    .ok();
-                    tx.send(BgMsg::AgentFiles(get_agent_config_files())).ok();
-                    tx.send(BgMsg::PolicyFiles(get_policy_files())).ok();
-                    tx.send(BgMsg::AgentRuleGroups(discover_all_agent_rules(
-                        &cfg.dev_ops_path,
-                    )))
-                    .ok();
-                    let discovered = crate::entities::discover_entities(&cfg.dev_ops_path);
-                    let count = discovered.len();
-                    tx.send(BgMsg::Projects(discovered)).ok();
-                    let log = LogEntry {
-                        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                        sender: "System".into(),
-                        content: format!("Discovery: Found {} projects in total", count),
-                    };
-                    tx.send(BgMsg::NewLog(log)).ok();
-                    tx.send(BgMsg::MemPalaceBuilt(crate::mempalace::build(
-                        &cfg.dev_ops_path,
-                    )))
-                    .ok();
-                    if let Ok(tasks) = crate::tasks::load_tasks(&cfg.dev_ops_path) {
-                        tx.send(BgMsg::Tasks(tasks)).ok();
-                    }
-
-                    let vault_path = cfg.vault_projects_path.clone();
-                    if vault_path.exists() {
-                        let mut vault_projs = Vec::new();
-                        if let Ok(entries) = std::fs::read_dir(vault_path) {
-                            for entry in entries.filter_map(|e| e.ok()) {
-                                if let Some(name) = entry.path().file_stem() {
-                                    vault_projs.push(name.to_string_lossy().into_owned());
-                                }
-                            }
-                        }
-                        tx.send(BgMsg::VaultStatus(vault_projs)).ok();
-                    }
-
-                    // Removed Port Monitor from TUI, it runs in aiosd.
-
-                    // Compute portfolio stats in background
-                    let projects = crate::entities::load_entities(&cfg.dev_ops_path);
-                    #[allow(clippy::field_reassign_with_default)]
-                    let mut stats = crate::app::state::PortfolioStats::default();
-                    stats.total = projects.len();
-                    let mut cat_dirty: std::collections::HashMap<String, usize> =
-                        std::collections::HashMap::new();
-                    for p in &projects {
-                        match p.status.as_str() {
-                            "archived" | "legacy" => stats.archived += 1,
-                            _ => stats.active += 1,
-                        }
-                        if p.github.is_none() {
-                            stats.no_github += 1;
-                        }
-                        if !p.local_path.join("memory.md").exists() {
-                            stats.no_memory += 1;
-                        }
-                        if !p.local_path.join("SIGMAP.md").exists() {
-                            stats.no_sigmap += 1;
-                        }
-                        if crate::filebrowser::git_is_dirty(&p.local_path) == Some(true) {
-                            stats.dirty += 1;
-                            *cat_dirty.entry(p.category.clone()).or_insert(0) += 1;
-                        }
-                        let health = crate::health::check_project(p);
-                        match health.compliance_grade.as_str() {
-                            "A" => stats.grade_a += 1,
-                            "B" => stats.grade_b += 1,
-                            "C" => stats.grade_c += 1,
-                            _ => stats.grade_d += 1,
-                        }
-                    }
-                    stats.top_dirty_category = cat_dirty
-                        .into_iter()
-                        .max_by_key(|(_, v)| *v)
-                        .map(|(k, _)| k)
-                        .unwrap_or_default();
-                    tx.send(BgMsg::StatsReady(stats)).ok();
-                });
-            }
+            BgMsg::BootResult { name, pass, done } => self.handle_boot_result(name, pass, done),
+            BgMsg::TransitionToSetup => self.handle_transition_to_setup(),
+            BgMsg::TransitionToDashboard => self.handle_transition_to_dashboard(),
             BgMsg::SearchResults(results) => {
                 self.search.results = results;
                 self.search.cursor = 0;
@@ -188,29 +33,7 @@ impl App {
             BgMsg::AgentFiles(a) => self.inventory.agent_files = a,
             BgMsg::PolicyFiles(p) => self.inventory.policy_files = p,
             BgMsg::MemPalaceFiles(m) => self.inventory.mempalace_files = m,
-            BgMsg::SyncDone(msg) => {
-                self.system.is_syncing = false;
-                self.system.sync_status = Some(msg.clone());
-                self.add_activity("System", &msg, "Info");
-                let tx = self.tx.clone();
-                let cfg = self.config.clone();
-                thread::spawn(move || {
-                    tx.send(BgMsg::RecentProjects(load_recent_projects(
-                        &cfg.dev_ops_path,
-                    )))
-                    .ok();
-                    tx.send(BgMsg::Agents(crate::discovery::discover_agents()))
-                        .ok();
-                    tx.send(BgMsg::MemPalaceFiles(
-                        crate::filebrowser::get_mempalace_files(&cfg.dev_ops_path),
-                    ))
-                    .ok();
-                    tx.send(BgMsg::MemPalaceBuilt(crate::mempalace::build(
-                        &cfg.dev_ops_path,
-                    )))
-                    .ok();
-                });
-            }
+            BgMsg::SyncDone(msg) => self.handle_sync_done(msg),
             BgMsg::SyncError(e) => {
                 self.system.is_syncing = false;
                 self.system.sync_status = Some(format!("Error: {}", e));
@@ -261,21 +84,7 @@ impl App {
                 );
                 self.system.handover_modal = Some((target, instruction));
             }
-            BgMsg::FileChangeRequested { approval } => {
-                self.system.pending_file_changes.push(approval.clone());
-                self.system.pending_change_cursor =
-                    self.system.pending_file_changes.len().saturating_sub(1);
-                self.projects.git_diff_lines = crate::app::editor::simple_diff(
-                    &approval.original_content,
-                    &approval.new_content,
-                );
-                self.state = AppState::GitDiffView;
-                self.add_activity(
-                    "Agent",
-                    &format!("File Change Requested: {}", approval.path),
-                    "Warning",
-                );
-            }
+            BgMsg::FileChangeRequested { approval } => self.handle_file_change_requested(approval),
             BgMsg::HumanApprovalResult { status } => {
                 self.add_activity(
                     "System",
@@ -340,9 +149,9 @@ impl App {
                 self.health.is_checking = false;
                 self.add_activity("System", "Full state synchronized with daemon", "Info");
             }
-            BgMsg::ProjectOpened { memory, git_log } => {
-                self.projects.memory_lines = memory;
-                self.projects.git_log = git_log;
+            BgMsg::ProjectOpened(data) => {
+                self.projects.memory_lines = data.memory_lines;
+                self.projects.git_log = data.git_log;
             }
             BgMsg::IndexReady(idx) => {
                 let doc_count = idx.doc_count;
@@ -360,27 +169,7 @@ impl App {
             BgMsg::NewLog(log) => {
                 self.timeline.logs.push(log);
             }
-            BgMsg::MemPalaceBuilt(rooms) => {
-                let n = rooms.len();
-                // Register all memory.md files for watching
-                for room in &rooms {
-                    for proj in &room.projects {
-                        let mem = proj.path.join("memory.md");
-                        if mem.exists() {
-                            let mtime = std::fs::metadata(&mem)
-                                .ok()
-                                .and_then(|m| m.modified().ok())
-                                .unwrap_or(SystemTime::UNIX_EPOCH);
-                            self.system.memory_watch.insert(mem, mtime);
-                        }
-                    }
-                }
-                self.mempalace.expanded = vec![true; n];
-                self.mempalace.rooms = rooms;
-                self.mempalace.room_cursor = 0;
-                self.mempalace.proj_cursor = None;
-                self.mempalace.is_building = false;
-            }
+            BgMsg::MemPalaceBuilt(rooms) => self.handle_mempalace_built(rooms),
             BgMsg::StatsReady(stats) => {
                 self.system.stats_cache = Some(stats);
                 self.system.is_computing_stats = false;
@@ -401,47 +190,8 @@ impl App {
                 action,
                 ok,
                 message,
-            } => {
-                let status = if ok {
-                    format!("✓ {} {} — {}", action, project, message)
-                } else {
-                    format!("✗ {} {} failed: {}", action, project, message)
-                };
-                self.system.sync_status = Some(status.clone());
-                self.add_activity("Git", &status, if ok { "Info" } else { "Warning" });
-            }
-            BgMsg::FileChanged(path) => {
-                // Bouncing Limit takibi: _session_notes.md değiştiğinde ardışık HANDOVER kontrolü yap
-                if path.file_name().and_then(|n| n.to_str()) == Some("_session_notes.md") {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        let lines: Vec<&str> =
-                            content.lines().filter(|l| !l.trim().is_empty()).collect();
-                        let mut count = 0;
-                        for line in lines.iter().rev() {
-                            if line.contains("HANDOVER →") {
-                                count += 1;
-                            } else if !line.trim().starts_with("Context:") {
-                                break;
-                            }
-                        }
-                        self.system.handover_count = count;
-                        self.system.bouncing_alert = count >= 3;
-                    }
-                }
-
-                // Eğer değişen dosya aktif açık olan dosya ise otomatik reload ve compliance tetikle
-                if let Some(ref active) = self.editor.active_file {
-                    if active.path == path {
-                        let content = load_file_content(&path);
-                        self.health.compliance = Some(compliance::check_file(&path, &content));
-                        self.editor.lines = content.lines().map(str::to_owned).collect();
-                        self.editor.watched_mtime = std::fs::metadata(&path)
-                            .ok()
-                            .and_then(|m| m.modified().ok());
-                        self.editor.changed_externally = false;
-                    }
-                }
-            }
+            } => self.handle_git_action_done(project, action, ok, message),
+            BgMsg::FileChanged(path) => self.handle_file_changed(path),
             BgMsg::AgentStarted { agent_id, name, project_path } => {
                 self.system.active_agents.push(crate::daemon::proxy::AgentProcess {
                     id: uuid::Uuid::parse_str(&agent_id).unwrap_or_default(),
@@ -487,19 +237,269 @@ impl App {
                     .collect::<String>();
                 self.system.sync_status = Some(format!("✓ {}", preview));
             }
-            BgMsg::ExtensionsLoaded(exts) => {
-                self.ext.extensions = exts;
-                self.ext.loaded = true;
-                self.ext.ext_cursor = 0;
+            BgMsg::ExtensionsLoaded(exts) => self.handle_extensions_loaded(exts),
+            BgMsg::ExtCmdOutput { ext, cmd, line } => self.handle_ext_cmd_output(ext, cmd, line),
+        }
+    }
+
+    fn handle_boot_result(&mut self, name: String, pass: bool, done: bool) {
+        self.system.boot_results.push((name, pass));
+        if done {
+            let tx = self.tx.clone();
+            let has_config = Config::load().is_some();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(150));
+                if has_config {
+                    tx.send(BgMsg::TransitionToDashboard).ok();
+                } else {
+                    tx.send(BgMsg::TransitionToSetup).ok();
+                }
+            });
+        }
+    }
+
+    fn handle_transition_to_setup(&mut self) {
+        use crate::config::Config as Cfg;
+        let detected = Cfg::auto_detect();
+
+        if let Some(p) = &detected.dev_ops {
+            self.wizard.dev_ops = p.to_string_lossy().into_owned();
+        }
+        if let Some(p) = &detected.master_md {
+            self.wizard.master = p.to_string_lossy().into_owned();
+        }
+        if let Some(p) = &detected.vault_projects {
+            self.wizard.vault = p.to_string_lossy().into_owned();
+        }
+
+        self.setup.requirements = check_requirements();
+        self.setup.fields = vec![
+            SetupField::new("Dev Ops Path", "Root workspace").with_detected(detected.dev_ops.clone()),
+            SetupField::new("MASTER.md Path", "Agent constitution")
+                .with_detected(detected.master_md.clone()),
+            SetupField::new("Skills Path", ".agents/skills").with_detected(detected.skills.clone()),
+            SetupField::new("Vault Projects Path", "Obsidian Vault")
+                .with_detected(detected.vault_projects.clone()),
+        ];
+        self.setup.cursor = 0;
+        self.wizard.step = crate::setup_wizard::WizardStep::Welcome;
+        self.state = AppState::Setup;
+
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let status = crate::setup_wizard::detect_agents();
+            tx.send(BgMsg::AgentStatusReady(status)).ok();
+        });
+    }
+
+    fn handle_transition_to_dashboard(&mut self) {
+        self.state = AppState::Dashboard;
+        self.system.graphify_script =
+            crate::health::find_graphify_script(&self.config.dev_ops_path);
+        let tx = self.tx.clone();
+        let cfg = self.config.clone();
+        thread::spawn(move || {
+            tx.send(BgMsg::RecentProjects(load_recent_projects(&cfg.dev_ops_path)))
+                .ok();
+            tx.send(BgMsg::Agents(crate::discovery::discover_agents())).ok();
+            tx.send(BgMsg::Skills(crate::discovery::discover_skills(&cfg.skills_path)))
+                .ok();
+            tx.send(BgMsg::MemPalaceFiles(get_mempalace_files(&cfg.dev_ops_path)))
+                .ok();
+            tx.send(BgMsg::MasterFiles(get_master_rule_files(&cfg.master_md_path)))
+                .ok();
+            tx.send(BgMsg::AgentFiles(get_agent_config_files())).ok();
+            tx.send(BgMsg::PolicyFiles(get_policy_files())).ok();
+            tx.send(BgMsg::AgentRuleGroups(discover_all_agent_rules(&cfg.dev_ops_path)))
+                .ok();
+            let discovered = crate::entities::discover_entities(&cfg.dev_ops_path);
+            let count = discovered.len();
+            tx.send(BgMsg::Projects(discovered)).ok();
+            tx.send(BgMsg::NewLog(LogEntry {
+                timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                sender: "System".into(),
+                content: format!("Discovery: Found {} projects in total", count),
+            }))
+            .ok();
+            tx.send(BgMsg::MemPalaceBuilt(crate::mempalace::build(&cfg.dev_ops_path)))
+                .ok();
+            if let Ok(tasks) = crate::tasks::load_tasks(&cfg.dev_ops_path) {
+                tx.send(BgMsg::Tasks(tasks)).ok();
             }
-            BgMsg::ExtCmdOutput { ext, cmd, line } => {
-                self.ext.status = Some(format!("[{}:{}] {}", ext, cmd, &line.chars().take(60).collect::<String>()));
-                self.timeline.logs.push(LogEntry {
-                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                    sender: format!("EXT:{}", ext.to_uppercase()),
-                    content: line,
-                });
+
+            let vault_path = cfg.vault_projects_path.clone();
+            if vault_path.exists() {
+                let mut vault_projs = Vec::new();
+                if let Ok(entries) = std::fs::read_dir(vault_path) {
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        if let Some(name) = entry.path().file_stem() {
+                            vault_projs.push(name.to_string_lossy().into_owned());
+                        }
+                    }
+                }
+                tx.send(BgMsg::VaultStatus(vault_projs)).ok();
+            }
+
+            let projects = crate::entities::load_entities(&cfg.dev_ops_path);
+            #[allow(clippy::field_reassign_with_default)]
+            let mut stats = crate::app::state::PortfolioStats::default();
+            stats.total = projects.len();
+            let mut cat_dirty: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for p in &projects {
+                match p.status.as_str() {
+                    "archived" | "legacy" => stats.archived += 1,
+                    _ => stats.active += 1,
+                }
+                if p.github.is_none() {
+                    stats.no_github += 1;
+                }
+                if !p.local_path.join("memory.md").exists() {
+                    stats.no_memory += 1;
+                }
+                if !p.local_path.join("SIGMAP.md").exists() {
+                    stats.no_sigmap += 1;
+                }
+                if crate::filebrowser::git_is_dirty(&p.local_path) == Some(true) {
+                    stats.dirty += 1;
+                    *cat_dirty.entry(p.category.clone()).or_insert(0) += 1;
+                }
+                let health = crate::health::check_project(p);
+                match health.compliance_grade.as_str() {
+                    "A" => stats.grade_a += 1,
+                    "B" => stats.grade_b += 1,
+                    "C" => stats.grade_c += 1,
+                    _ => stats.grade_d += 1,
+                }
+            }
+            stats.top_dirty_category = cat_dirty
+                .into_iter()
+                .max_by_key(|(_, v)| *v)
+                .map(|(k, _)| k)
+                .unwrap_or_default();
+            tx.send(BgMsg::StatsReady(stats)).ok();
+        });
+    }
+
+    fn handle_sync_done(&mut self, msg: String) {
+        self.system.is_syncing = false;
+        self.system.sync_status = Some(msg.clone());
+        self.add_activity("System", &msg, "Info");
+        let tx = self.tx.clone();
+        let cfg = self.config.clone();
+        thread::spawn(move || {
+            tx.send(BgMsg::RecentProjects(load_recent_projects(&cfg.dev_ops_path)))
+                .ok();
+            tx.send(BgMsg::Agents(crate::discovery::discover_agents())).ok();
+            tx.send(BgMsg::MemPalaceFiles(crate::filebrowser::get_mempalace_files(
+                &cfg.dev_ops_path,
+            )))
+            .ok();
+            tx.send(BgMsg::MemPalaceBuilt(crate::mempalace::build(&cfg.dev_ops_path)))
+                .ok();
+        });
+    }
+
+    fn handle_file_change_requested(
+        &mut self,
+        approval: crate::daemon::state::FileChangeApproval,
+    ) {
+        self.system.pending_file_changes.push(approval.clone());
+        self.system.pending_change_cursor = self.system.pending_file_changes.len().saturating_sub(1);
+        self.projects.git_diff_lines =
+            crate::app::editor::simple_diff(&approval.original_content, &approval.new_content);
+        self.state = AppState::GitDiffView;
+        self.add_activity(
+            "Agent",
+            &format!("File Change Requested: {}", approval.path),
+            "Warning",
+        );
+    }
+
+    fn handle_mempalace_built(&mut self, rooms: Vec<crate::mempalace::MemRoom>) {
+        let n = rooms.len();
+        for room in &rooms {
+            for proj in &room.projects {
+                let mem = proj.path.join("memory.md");
+                if mem.exists() {
+                    let mtime = std::fs::metadata(&mem)
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .unwrap_or(SystemTime::UNIX_EPOCH);
+                    self.system.memory_watch.insert(mem, mtime);
+                }
             }
         }
+        self.mempalace.expanded = vec![true; n];
+        self.mempalace.rooms = rooms;
+        self.mempalace.room_cursor = 0;
+        self.mempalace.proj_cursor = None;
+        self.mempalace.is_building = false;
+    }
+
+    fn handle_git_action_done(
+        &mut self,
+        project: String,
+        action: String,
+        ok: bool,
+        message: String,
+    ) {
+        let status = if ok {
+            format!("✓ {} {} — {}", action, project, message)
+        } else {
+            format!("✗ {} {} failed: {}", action, project, message)
+        };
+        self.system.sync_status = Some(status.clone());
+        self.add_activity("Git", &status, if ok { "Info" } else { "Warning" });
+    }
+
+    fn handle_file_changed(&mut self, path: std::path::PathBuf) {
+        if path.file_name().and_then(|n| n.to_str()) == Some("_session_notes.md") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+                let mut count = 0;
+                for line in lines.iter().rev() {
+                    if line.contains("HANDOVER →") {
+                        count += 1;
+                    } else if !line.trim().starts_with("Context:") {
+                        break;
+                    }
+                }
+                self.system.handover_count = count;
+                self.system.bouncing_alert = count >= 3;
+            }
+        }
+
+        if let Some(ref active) = self.editor.active_file {
+            if active.path == path {
+                let content = load_file_content(&path);
+                self.health.compliance = Some(compliance::check_file(&path, &content));
+                self.editor.lines = content.lines().map(str::to_owned).collect();
+                self.editor.watched_mtime = std::fs::metadata(&path)
+                    .ok()
+                    .and_then(|m| m.modified().ok());
+                self.editor.changed_externally = false;
+            }
+        }
+    }
+
+    fn handle_extensions_loaded(&mut self, exts: Vec<ExtensionInfo>) {
+        self.ext.extensions = exts;
+        self.ext.loaded = true;
+        self.ext.ext_cursor = 0;
+    }
+
+    fn handle_ext_cmd_output(&mut self, ext: String, cmd: String, line: String) {
+        self.ext.status = Some(format!(
+            "[{}:{}] {}",
+            ext,
+            cmd,
+            &line.chars().take(60).collect::<String>()
+        ));
+        self.timeline.logs.push(LogEntry {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            sender: format!("EXT:{}", ext.to_uppercase()),
+            content: line,
+        });
     }
 }

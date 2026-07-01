@@ -200,6 +200,7 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_cp_runs_task ON cp_agent_runs(task_id);
         CREATE INDEX IF NOT EXISTS idx_cp_runs_status ON cp_agent_runs(status);
+        CREATE INDEX IF NOT EXISTS idx_cp_runs_agent ON cp_agent_runs(agent_name);
 
         CREATE TABLE IF NOT EXISTS cp_artifacts (
             id TEXT PRIMARY KEY,

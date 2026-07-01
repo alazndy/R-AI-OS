@@ -1,6 +1,5 @@
 use super::{HandoffStatus, HandoffTarget};
 use std::path::Path;
-use std::process::Command;
 
 pub(super) fn cmd_handoff(
     to: HandoffTarget,
@@ -9,7 +8,7 @@ pub(super) fn cmd_handoff(
     project_path: &Path,
     json: bool,
 ) {
-    if let Some(label) = looks_like_secret(&msg) {
+    if let Some(label) = crate::security::looks_like_secret(&msg) {
         eprintln!(
             "Handoff refused: message looks like it contains a {label}. \
              Remove it and resend — handoffs are stored in plain text (DB + process argv)."
@@ -21,7 +20,7 @@ pub(super) fn cmd_handoff(
     let to_agent = to.as_str();
     let status_str = status.as_str();
     let project_path_str = project_path.to_string_lossy();
-    let diff_stat = git_diff_stat(project_path);
+    let diff_stat = crate::git_utils::diff_stat(project_path);
 
     let conn = match crate::db::open_db() {
         Ok(c) => c,
@@ -88,51 +87,3 @@ pub(super) fn cmd_handoff(
     }
 }
 
-/// Best-effort `git diff --stat HEAD` in the target project — shows the receiving agent
-/// what changed without the sender having to type a file list by hand. `None` on any
-/// failure (not a git repo, no HEAD yet, git not installed): never blocks the handoff.
-fn git_diff_stat(project_path: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(project_path)
-        .args(["diff", "--stat", "HEAD"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stat = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stat.is_empty() {
-        None
-    } else {
-        Some(stat)
-    }
-}
-
-/// Heuristic scan for obvious secrets (API keys, tokens, private keys) in a handoff
-/// message. Not exhaustive — a deterrent against accidental paste, not a DLP system.
-fn looks_like_secret(text: &str) -> Option<&'static str> {
-    let patterns: &[(&str, &str)] = &[
-        (r"AKIA[0-9A-Z]{16}", "AWS access key"),
-        (r"sk-ant-[A-Za-z0-9_-]{20,}", "Anthropic API key"),
-        (r"sk-[A-Za-z0-9]{20,}", "OpenAI-style API key"),
-        (r"gh[pousr]_[A-Za-z0-9]{36,}", "GitHub token"),
-        (r"github_pat_[A-Za-z0-9_]{20,}", "GitHub fine-grained PAT"),
-        (
-            r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----",
-            "private key block",
-        ),
-        (
-            r"(?i)(api[_-]?key|secret|password|token)\s*[=:]\s*['\x22]?[A-Za-z0-9_\-/+]{12,}",
-            "key/secret/password/token assignment",
-        ),
-    ];
-    for (pattern, label) in patterns {
-        if let Ok(re) = regex::Regex::new(pattern) {
-            if re.is_match(text) {
-                return Some(label);
-            }
-        }
-    }
-    None
-}

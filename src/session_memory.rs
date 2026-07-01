@@ -414,6 +414,20 @@ fn heuristic_extract(transcript: &str) -> Vec<HeuristicItem> {
     items
 }
 
+pub fn decision_lines_from_transcript(transcript: &str) -> Vec<String> {
+    heuristic_extract(transcript)
+        .into_iter()
+        .filter(|item| item.item_type == "project")
+        .flat_map(|item| {
+            item.body
+                .lines()
+                .map(|line| line.trim().trim_start_matches("- ").to_string())
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 // ─── Per-agent transcript readers ────────────────────────────────────────────
 
 fn started_secs(t: SystemTime) -> u64 {
@@ -497,7 +511,7 @@ fn read_opencode_transcript(path: &Path, since_secs: u64) -> String {
     parts.join("\n\n")
 }
 
-fn collect_transcript(agent: &str, project_path: &str, session_started: SystemTime) -> String {
+pub fn collect_transcript(agent: &str, project_path: &str, session_started: SystemTime) -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     let since = started_secs(session_started);
     match agent.to_lowercase().as_str() {

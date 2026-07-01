@@ -20,7 +20,7 @@ use crate::config::Config;
 use crate::security::quarantine::{self, QuarantineStore};
 use crate::security::rate_limiter::RateLimiter;
 use crate::security::tool_pin;
-use crate::security::Umai;
+use crate::security::{EgressFilter, Umai};
 
 // ─── JSON-RPC types ───────────────────────────────────────────────────────────
 
@@ -80,6 +80,14 @@ pub(super) struct McpServer {
     quarantine: QuarantineStore,
     pin_broken: bool,
     umai: Umai,
+    /// Domain allowlist/blocklist for outbound network calls made by tools,
+    /// enforced in `handle_tools_call` against each tool's declared network
+    /// capability (see `security::capabilities`).
+    egress: EgressFilter,
+    /// Explicitly blocked filesystem path prefixes (e.g. `~/.ssh`) from
+    /// `[filesystem] blocked_paths`, enforced against every path-resolving
+    /// tool's declared filesystem capability.
+    blocked_paths: Vec<String>,
 }
 
 impl McpServer {
@@ -92,6 +100,14 @@ impl McpServer {
             .as_ref()
             .map(|p| RateLimiter::from_policy(p.rate_limits.clone()))
             .unwrap_or_else(RateLimiter::disabled);
+        let egress = policy
+            .as_ref()
+            .map(EgressFilter::from_policy)
+            .unwrap_or_else(EgressFilter::disabled);
+        let blocked_paths = policy
+            .as_ref()
+            .map(|p| p.filesystem.blocked_paths.clone())
+            .unwrap_or_default();
         let quarantine = QuarantineStore::from_policy(policy.and_then(|p| p.quarantine));
 
         if quarantine.is_enabled() {
@@ -121,6 +137,8 @@ impl McpServer {
             quarantine,
             pin_broken,
             umai,
+            egress,
+            blocked_paths,
         }
     }
 
@@ -133,7 +151,8 @@ impl McpServer {
                 "deps_status","run_build","run_tests","git_status","git_log","git_diff",
                 "git_commit","ask_architect","get_validation_errors","session_note",
                 "create_swarm_task","list_swarm_tasks","approve_swarm_task",
-                "route_capability","list_evolution_candidates","promote_evolution_candidate"
+                "route_capability","list_evolution_candidates","promote_evolution_candidate",
+                "get_agent_stats"
             ]
         })
     }
@@ -158,6 +177,7 @@ impl McpServer {
         }
         Some(match result {
             Ok(v) => RpcResponse::ok(id, v),
+            Err(msg) if msg.starts_with("capability:") => RpcResponse::err(id, -32024, msg),
             Err(msg) if msg.starts_with("umai:") => RpcResponse::err(id, -32026, msg),
             Err(msg) if msg.starts_with("umai_confirm:") => RpcResponse::err(id, -32025, msg),
             Err(msg) if msg.starts_with("rate_limit:") => RpcResponse::err(id, -32029, msg),

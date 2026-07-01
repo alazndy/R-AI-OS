@@ -2,12 +2,22 @@ use notify::{RecursiveMode, Watcher};
 use std::path::PathBuf;
 /// Embedded background workers for standalone raios (no aiosd required).
 /// These activate automatically when aiosd is not reachable on port 42069.
-/// Workers send BgMsg directly via std::sync::mpsc — no TCP, no JSON.
+/// Workers send RuntimeEvent directly via std::sync::mpsc — no TCP, no JSON.
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
-use crate::app::state::BgMsg;
+#[derive(Debug, Clone)]
+pub enum RuntimeEvent {
+    Projects(Vec<crate::entities::EntityProject>),
+    HealthReport(Vec<crate::health::ProjectHealth>),
+    FileChanged(PathBuf),
+    SentinelUpdate {
+        project: String,
+        status: String,
+        error_count: usize,
+    },
+}
 
 const HEALTH_INTERVAL: Duration = Duration::from_secs(120);
 const GIT_INTERVAL: Duration = Duration::from_secs(180);
@@ -16,7 +26,7 @@ const SENTINEL_DEBOUNCE: Duration = Duration::from_millis(600);
 
 // ─── Entry point called from App::new() ──────────────────────────────────────
 
-pub fn spawn_embedded_workers(tx: Sender<BgMsg>, dev_ops: PathBuf) {
+pub fn spawn_embedded_workers(tx: Sender<RuntimeEvent>, dev_ops: PathBuf) {
     // Only spawn if aiosd is NOT already running
     if std::net::TcpStream::connect_timeout(
         &"127.0.0.1:42069".parse().unwrap(),
@@ -36,17 +46,17 @@ pub fn spawn_embedded_workers(tx: Sender<BgMsg>, dev_ops: PathBuf) {
 
 // ─── Discovery ───────────────────────────────────────────────────────────────
 
-fn spawn_discovery_worker(tx: Sender<BgMsg>, dev_ops: PathBuf) {
+fn spawn_discovery_worker(tx: Sender<RuntimeEvent>, dev_ops: PathBuf) {
     thread::spawn(move || loop {
         let projects = crate::entities::discover_entities(&dev_ops);
-        tx.send(BgMsg::Projects(projects)).ok();
+        tx.send(RuntimeEvent::Projects(projects)).ok();
         thread::sleep(DISCOVERY_INTERVAL);
     });
 }
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 
-fn spawn_health_worker(tx: Sender<BgMsg>, dev_ops: PathBuf) {
+fn spawn_health_worker(tx: Sender<RuntimeEvent>, dev_ops: PathBuf) {
     thread::spawn(move || {
         // Initial delay — let discovery run first
         thread::sleep(Duration::from_secs(5));
@@ -54,7 +64,7 @@ fn spawn_health_worker(tx: Sender<BgMsg>, dev_ops: PathBuf) {
             let projects = crate::entities::load_entities(&dev_ops);
             if !projects.is_empty() {
                 let reports: Vec<_> = projects.iter().map(crate::health::check_project).collect();
-                tx.send(BgMsg::HealthReport(reports)).ok();
+                tx.send(RuntimeEvent::HealthReport(reports)).ok();
             }
             thread::sleep(HEALTH_INTERVAL);
         }
@@ -63,18 +73,18 @@ fn spawn_health_worker(tx: Sender<BgMsg>, dev_ops: PathBuf) {
 
 // ─── Git status ──────────────────────────────────────────────────────────────
 
-fn spawn_git_worker(tx: Sender<BgMsg>, dev_ops: PathBuf) {
+fn spawn_git_worker(tx: Sender<RuntimeEvent>, dev_ops: PathBuf) {
     thread::spawn(move || {
         thread::sleep(Duration::from_secs(10));
         loop {
             let mut projects = crate::entities::load_entities(&dev_ops);
             let mut changed = false;
-
+ 
             for proj in &mut projects {
                 if !proj.local_path.join(".git").exists() {
                     continue;
                 }
-
+ 
                 let dirty = crate::filebrowser::git_is_dirty(&proj.local_path);
                 let new_status = match dirty {
                     Some(true) => "dirty".to_string(),
@@ -86,12 +96,12 @@ fn spawn_git_worker(tx: Sender<BgMsg>, dev_ops: PathBuf) {
                     changed = true;
                 }
             }
-
+ 
             if changed {
                 let _ = crate::entities::save_entities(&dev_ops, projects.clone());
-                tx.send(BgMsg::Projects(projects)).ok();
+                tx.send(RuntimeEvent::Projects(projects)).ok();
             }
-
+ 
             thread::sleep(GIT_INTERVAL);
         }
     });
@@ -99,7 +109,7 @@ fn spawn_git_worker(tx: Sender<BgMsg>, dev_ops: PathBuf) {
 
 // ─── File watcher ────────────────────────────────────────────────────────────
 
-fn spawn_file_watcher(tx: Sender<BgMsg>, dev_ops: PathBuf) {
+fn spawn_file_watcher(tx: Sender<RuntimeEvent>, dev_ops: PathBuf) {
     thread::spawn(move || {
         let (notify_tx, notify_rx) = std::sync::mpsc::channel();
 
@@ -122,7 +132,7 @@ fn spawn_file_watcher(tx: Sender<BgMsg>, dev_ops: PathBuf) {
 
         for event in notify_rx {
             for path in event.paths {
-                tx.send(BgMsg::FileChanged(path)).ok();
+                tx.send(RuntimeEvent::FileChanged(path)).ok();
             }
         }
     });
@@ -130,7 +140,7 @@ fn spawn_file_watcher(tx: Sender<BgMsg>, dev_ops: PathBuf) {
 
 // ─── Sentinel (event-driven, Faz 3A) ─────────────────────────────────────────
 
-fn spawn_sentinel_worker(tx: Sender<BgMsg>, dev_ops: PathBuf) {
+fn spawn_sentinel_worker(tx: Sender<RuntimeEvent>, dev_ops: PathBuf) {
     use std::collections::HashMap;
     use std::time::Instant;
 
@@ -213,7 +223,7 @@ fn find_project_root(file_path: &std::path::Path, dev_ops: &std::path::Path) -> 
     }
 }
 
-fn run_sentinel_check(proj_path: &std::path::Path, tx: &Sender<BgMsg>) {
+fn run_sentinel_check(proj_path: &std::path::Path, tx: &Sender<RuntimeEvent>) {
     use crate::daemon::state::SentinelFileStatus;
     use crate::sentinel::SentinelState;
 
@@ -240,7 +250,7 @@ fn run_sentinel_check(proj_path: &std::path::Path, tx: &Sender<BgMsg>) {
                 }
             };
 
-            tx.send(BgMsg::SentinelUpdate {
+            tx.send(RuntimeEvent::SentinelUpdate {
                 project: proj_name,
                 status: format!("{:?}", status.state),
                 error_count: status.errors.len(),

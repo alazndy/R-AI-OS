@@ -1,12 +1,10 @@
 use crate::filebrowser::find_file_by_name;
 use crate::sync::sync_universe;
 use anyhow::Result;
-use chrono::Local;
-use std::io::Write;
-use std::path::Path;
 use std::thread;
 
 use crate::app::{state::*, App};
+use crate::app::events::helpers::append_memo;
 
 impl App {
     pub(crate) fn execute_command(&mut self, raw: &str) -> Result<()> {
@@ -93,10 +91,7 @@ impl App {
                     self.add_activity("User", &format!("Searching for: {}", arg), "Info");
                     if self.is_remote {
                         if let Some(ref tx) = self.tx_daemon {
-                            let cmd = format!(
-                                "{{\"command\":\"Search\",\"query\":\"{}\"}}",
-                                arg.replace('"', "\\\"")
-                            );
+                            let cmd = crate::app::daemon_search_command(arg);
                             let _ = tx.send(cmd);
                             self.search.status = Some(format!("Searching remote hub: {}", arg));
                         }
@@ -152,7 +147,7 @@ impl App {
                 // Request fresh log replay from daemon (restores history after reconnect)
                 if let Some(ref tx) = self.tx_daemon {
                     let limit = if arg.is_empty() { 200 } else { arg.parse::<u64>().unwrap_or(200) };
-                    let _ = tx.send(format!("{{\"command\":\"GetLogs\",\"limit\":{}}}", limit));
+                    let _ = tx.send(crate::app::daemon_get_logs_command(limit));
                 }
             }
             "/help" | "/?" => {
@@ -198,18 +193,8 @@ impl App {
                 } else {
                     let proj = self.projects.list.iter().find(|p| p.name == name).cloned();
                     if let Some(p) = proj {
-                        let vault_file = self
-                            .config
-                            .vault_projects_path
-                            .join(format!("{}.md", p.name));
-                        if vault_file.exists() {
-                            self.system.sync_status = Some("Vault note already exists".into());
-                        } else {
-                            let content = format!(
-                                "---\ncategory: {}\nstatus: {}\ntags: [project, raios]\ncreated: {}\n---\n# {}\n\n## Overview\n{} is a project managed by R-AI-OS.\n\n## Details\n- Path: {}\n",
-                                p.category, p.status, chrono::Local::now().format("%Y-%m-%d"), p.name, p.name, p.local_path.display()
-                            );
-                            if std::fs::write(&vault_file, content).is_ok() {
+                        match crate::app::create_vault_note(&self.config.vault_projects_path, &p) {
+                            Ok(true) => {
                                 self.system.vault_projects.push(p.name.clone());
                                 self.system.sync_status =
                                     Some(format!("Vault note created: {}", p.name));
@@ -218,7 +203,11 @@ impl App {
                                     &format!("Created vault note for {}", p.name),
                                     "Info",
                                 );
-                            } else {
+                            }
+                            Ok(false) => {
+                                self.system.sync_status = Some("Vault note already exists".into());
+                            }
+                            Err(_) => {
                                 self.system.sync_status = Some("Failed to write vault note".into());
                             }
                         }
@@ -325,11 +314,7 @@ impl App {
             // Usage: /run health myproject | /run reflect | /run pre-flight kaira-mix
             "/run" if self.is_remote && !arg.is_empty() => {
                 if let Some(ref tx) = self.tx_daemon {
-                    let shell_cmd = format!("raios {}", arg.replace('"', "\\\""));
-                    let cmd = format!(
-                        "{{\"command\":\"SubmitJob\",\"shell_cmd\":\"{}\",\"description\":\"raios {}\",\"agent\":\"tui\"}}",
-                        shell_cmd, arg.replace('"', "\\\"")
-                    );
+                    let cmd = crate::app::daemon_submit_raios_command(arg);
                     let _ = tx.send(cmd);
                     self.system.sync_status = Some(format!("→ Remote: raios {}", arg));
                     self.add_activity("Remote", &format!("raios {}", arg), "Info");
@@ -340,23 +325,5 @@ impl App {
             _ => {}
         }
         Ok(())
-    }
-}
-
-fn append_memo(text: &str, dev_ops: &Path) -> String {
-    use std::fs::OpenOptions;
-    let ts = Local::now().format("%Y-%m-%d %H:%M").to_string();
-    let entry = format!("- [{}] {}\n", ts, text);
-    let notes_path = dev_ops.join("_session_notes.md");
-    match OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&notes_path)
-    {
-        Ok(mut f) => {
-            let _ = f.write_all(entry.as_bytes());
-            "Memo saved → _session_notes.md".to_string()
-        }
-        Err(e) => format!("Memo error: {}", e),
     }
 }
