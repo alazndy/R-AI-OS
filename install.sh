@@ -11,7 +11,7 @@ echo "[install] building release binaries..."
 cargo build --release
 
 echo "[install] installing raios + aiosd (replacing any existing install)..."
-cargo install --path . --force
+cargo install --path crates/raios-surface-cli --force
 
 BIN_DIR="$(dirname "$(command -v cargo)")"
 echo "[install] checking for stray raios/aiosd binaries outside ${BIN_DIR}..."
