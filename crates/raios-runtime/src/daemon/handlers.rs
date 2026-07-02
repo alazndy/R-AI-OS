@@ -29,6 +29,37 @@ fn record_ws_tool_audit(umai: &Umai, cmd_name: &str, raw_payload: Option<&str>, 
     );
 }
 
+/// Collects every string in an incoming WS command that AgentShield (UMAI
+/// Layer 1, see `security/umai.rs`) needs to regex-scan before dispatch.
+///
+/// Most commands carry their payload in a top-level `input`/`query`/
+/// `shell_cmd` field. `CreateTaskGraph` is the exception: its shell commands
+/// live in a nested `nodes[].shell_cmd` array, one per graph node. Without
+/// pulling those in explicitly, the scan below silently never saw them —
+/// AgentShield's dangerous-pattern check (`rm -rf /`, `curl … | sh`, etc.)
+/// had a blind spot for the exact field that `daemon/cmd/task_graph.rs`
+/// later hands to a shell.
+fn collect_scan_payload(v: &serde_json::Value) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    if let Some(s) = v.get("input").and_then(|p| p.as_str()) {
+        parts.push(s);
+    }
+    if let Some(s) = v.get("query").and_then(|p| p.as_str()) {
+        parts.push(s);
+    }
+    if let Some(s) = v.get("shell_cmd").and_then(|p| p.as_str()) {
+        parts.push(s);
+    }
+    if let Some(nodes) = v.get("nodes").and_then(|n| n.as_array()) {
+        for node in nodes {
+            if let Some(s) = node.get("shell_cmd").and_then(|p| p.as_str()) {
+                parts.push(s);
+            }
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("\n"))
+}
+
 /// All context needed to handle one TCP client connection.
 pub struct ClientHandle {
     pub socket: tokio::net::TcpStream,
@@ -115,10 +146,8 @@ pub async fn handle_client_connection(h: ClientHandle) {
                 if res.unwrap_or(0) == 0 { break; }
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
                     let cmd_name = v["command"].as_str().unwrap_or("");
-                    let raw_payload = v.get("input")
-                        .or_else(|| v.get("query"))
-                        .or_else(|| v.get("shell_cmd"))
-                        .and_then(|p| p.as_str());
+                    let combined_payload = collect_scan_payload(&v);
+                    let raw_payload = combined_payload.as_deref();
                     let umai_result = umai.check(cmd_name, raw_payload);
                     record_ws_tool_audit(&umai, cmd_name, raw_payload, &umai_result);
                     if !umai_result.is_allowed() {
@@ -452,4 +481,62 @@ pub async fn handle_client_connection(h: ClientHandle) {
         }
     }
     println!("[Daemon] Session {} ended for client {}", session_id, addr);
+}
+
+#[cfg(test)]
+mod payload_scan_tests {
+    use super::collect_scan_payload;
+    use serde_json::json;
+
+    #[test]
+    fn collects_top_level_input_field() {
+        let v = json!({ "command": "ExecuteCapability", "input": "danger" });
+        assert_eq!(collect_scan_payload(&v).as_deref(), Some("danger"));
+    }
+
+    #[test]
+    fn collects_nested_node_shell_cmds() {
+        let v = json!({
+            "command": "CreateTaskGraph",
+            "goal": "build",
+            "nodes": [
+                { "id": "a", "description": "d", "shell_cmd": "rm -rf /" },
+                { "id": "b", "description": "d", "shell_cmd": "echo ok" },
+            ]
+        });
+        let payload = collect_scan_payload(&v).unwrap();
+        assert!(payload.contains("rm -rf /"), "payload was: {payload}");
+        assert!(payload.contains("echo ok"), "payload was: {payload}");
+    }
+
+    #[test]
+    fn returns_none_when_nothing_scannable() {
+        let v = json!({ "command": "ListProjects" });
+        assert_eq!(collect_scan_payload(&v), None);
+    }
+
+    /// End-to-end regression test: before this fix, AgentShield's dangerous-
+    /// pattern scan (`raios_core::security::Umai`, Layer 1) never received a
+    /// `CreateTaskGraph` node's `shell_cmd` at all, so a node like
+    /// `{"shell_cmd": "rm -rf /"}` sailed through UMAI untouched (its fate
+    /// then depended entirely on `default_action` in raios-policy.toml).
+    /// With `collect_scan_payload` wired into the dispatch loop, the same
+    /// payload is now denied by Layer 1 before Layer 2 (the policy rule) is
+    /// even consulted.
+    #[test]
+    fn nested_shell_cmd_dangerous_pattern_is_denied_by_umai() {
+        use raios_core::security::Umai;
+
+        let v = json!({
+            "command": "CreateTaskGraph",
+            "goal": "build",
+            "nodes": [
+                { "id": "a", "description": "d", "shell_cmd": "rm -rf /" }
+            ]
+        });
+        let payload = collect_scan_payload(&v);
+        let umai = Umai::new(None);
+        let decision = umai.check("CreateTaskGraph", payload.as_deref());
+        assert!(!decision.is_allowed(), "expected Deny, got {decision:?}");
+    }
 }

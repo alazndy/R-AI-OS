@@ -96,19 +96,23 @@ pub fn resolve(tool: &str, override_caps: Option<ToolCapabilities>) -> ToolCapab
 /// actually resolved to touch. A tool with no declared `fs_read`/`fs_write`
 /// capability is denied outright — it has no ambient authority to touch any
 /// path, regardless of what the caller passed in.
+///
+/// `workspace_root` is the real jail boundary (e.g. `Config::dev_ops_path`)
+/// — every path-resolving tool call must stay inside it. It must be a
+/// distinct, caller-supplied root, not `resolved_target` itself: passing the
+/// target as its own workspace makes the boundary check trivially true for
+/// any path, which previously left the filesystem jail as a no-op for this
+/// call path (only `blocked_paths` was ever actually enforced).
 pub fn check_fs_capability(
     caps: &ToolCapabilities,
+    workspace_root: &std::path::Path,
     resolved_target: &std::path::Path,
     blocked_paths: &[String],
 ) -> Result<(), String> {
     if caps.fs_read.is_empty() && caps.fs_write.is_empty() {
         return Err("tool has no declared filesystem capability".to_string());
     }
-    // The capability model uses "*" (whatever the tool resolves for itself)
-    // rather than a fixed glob, so the boundary check that matters here is
-    // "does this path collide with an explicitly blocked path" — reusing the
-    // same SandboxGuard the daemon file-write path already trusts.
-    SandboxGuard::new(resolved_target.to_path_buf())
+    SandboxGuard::new(workspace_root.to_path_buf())
         .with_blocked_paths(blocked_paths.to_vec())
         .check(resolved_target)
         .map(|_| ())
@@ -186,7 +190,7 @@ mod tests {
     fn fs_capability_denies_tool_with_no_declared_access() {
         let tmp = TempDir::new().unwrap();
         let caps = ToolCapabilities::default();
-        let result = check_fs_capability(&caps, tmp.path(), &[]);
+        let result = check_fs_capability(&caps, tmp.path(), tmp.path(), &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("no declared filesystem capability"));
     }
@@ -195,7 +199,7 @@ mod tests {
     fn fs_capability_allows_declared_tool_outside_blocked_paths() {
         let tmp = TempDir::new().unwrap();
         let caps = ToolCapabilities { fs_read: vec!["*".into()], ..Default::default() };
-        assert!(check_fs_capability(&caps, tmp.path(), &[]).is_ok());
+        assert!(check_fs_capability(&caps, tmp.path(), tmp.path(), &[]).is_ok());
     }
 
     #[test]
@@ -203,7 +207,48 @@ mod tests {
         let caps = ToolCapabilities { fs_write: vec!["*".into()], ..Default::default() };
         let sensitive = std::path::Path::new("/home/user/.ssh");
         let blocked = vec!["/home/user/.ssh".to_string()];
-        let result = check_fs_capability(&caps, sensitive, &blocked);
+        let result = check_fs_capability(&caps, sensitive, sensitive, &blocked);
+        assert!(result.is_err());
+    }
+
+    /// Regression test for the bug where `workspace_root == resolved_target`
+    /// made the jail boundary trivially true for any path. With a real,
+    /// distinct workspace root, a target outside it must be denied.
+    #[test]
+    fn fs_capability_confines_target_to_distinct_workspace_root() {
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let caps = ToolCapabilities { fs_read: vec!["*".into()], ..Default::default() };
+        let result = check_fs_capability(&caps, workspace.path(), outside.path(), &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fs_capability_allows_target_actually_inside_workspace_root() {
+        let workspace = TempDir::new().unwrap();
+        let inside = workspace.path().join("project-a");
+        std::fs::create_dir_all(&inside).unwrap();
+        let caps = ToolCapabilities { fs_read: vec!["*".into()], ..Default::default() };
+        assert!(check_fs_capability(&caps, workspace.path(), &inside, &[]).is_ok());
+    }
+
+    /// Regression test for the blocklist bypass via `..`: the old
+    /// implementation string-matched the blocklist against the raw,
+    /// unresolved target, so a `..` segment that lexically/canonically
+    /// resolves into a blocked directory slipped through.
+    #[test]
+    fn fs_capability_blocklist_not_bypassable_via_dotdot() {
+        let workspace = TempDir::new().unwrap();
+        let sub = workspace.path().join("sub");
+        let secret = workspace.path().join(".secrets");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&secret).unwrap();
+
+        let traversal_target = sub.join("..").join(".secrets").join("key");
+        let blocked = vec![secret.to_string_lossy().to_string()];
+        let caps = ToolCapabilities { fs_read: vec!["*".into()], ..Default::default() };
+
+        let result = check_fs_capability(&caps, workspace.path(), &traversal_target, &blocked);
         assert!(result.is_err());
     }
 

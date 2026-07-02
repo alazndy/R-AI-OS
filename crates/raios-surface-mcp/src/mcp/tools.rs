@@ -40,7 +40,12 @@ impl McpServer {
             // resolution itself fails (e.g. missing "project"), let the real
             // dispatch below surface that error instead of masking it here.
             if let Ok(resolved) = self.resolve_git_path(args) {
-                raios_core::security::check_fs_capability(&caps, &resolved, &self.blocked_paths)?;
+                raios_core::security::check_fs_capability(
+                    &caps,
+                    &self.config.dev_ops_path,
+                    &resolved,
+                    &self.blocked_paths,
+                )?;
             }
         }
 

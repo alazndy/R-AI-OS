@@ -4,9 +4,12 @@
 //! the A2A `message/send` endpoint (`server/http/a2a.rs`) so both delivery
 //! paths for a handoff message get the same protection.
 
-/// Returns a human-readable label for the first secret-like pattern found in
-/// `text`, or `None` if nothing matched.
-pub fn looks_like_secret(text: &str) -> Option<&'static str> {
+use std::sync::LazyLock;
+
+/// Compiled once on first use (not once per `looks_like_secret` call — the
+/// previous implementation re-compiled all 7 patterns on every invocation,
+/// including on the A2A `message/send` hot path).
+static SECRET_PATTERNS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::new(|| {
     let patterns: &[(&str, &str)] = &[
         (r"AKIA[0-9A-Z]{16}", "AWS access key"),
         (r"sk-ant-[A-Za-z0-9_-]{20,}", "Anthropic API key"),
@@ -22,14 +25,24 @@ pub fn looks_like_secret(text: &str) -> Option<&'static str> {
             "key/secret/password/token assignment",
         ),
     ];
-    for (pattern, label) in patterns {
-        if let Ok(re) = regex::Regex::new(pattern) {
-            if re.is_match(text) {
-                return Some(label);
-            }
-        }
-    }
-    None
+    patterns
+        .iter()
+        .map(|(pattern, label)| {
+            (
+                regex::Regex::new(pattern).expect("secret_scan pattern must be valid regex"),
+                *label,
+            )
+        })
+        .collect()
+});
+
+/// Returns a human-readable label for the first secret-like pattern found in
+/// `text`, or `None` if nothing matched.
+pub fn looks_like_secret(text: &str) -> Option<&'static str> {
+    SECRET_PATTERNS
+        .iter()
+        .find(|(re, _)| re.is_match(text))
+        .map(|(_, label)| *label)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
