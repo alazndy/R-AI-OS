@@ -337,6 +337,32 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
 
     conn.execute_batch(
         "
+        CREATE TABLE IF NOT EXISTS tool_traces (
+            id              TEXT PRIMARY KEY,
+            project         TEXT NOT NULL,
+            agent           TEXT NOT NULL,
+            command         TEXT NOT NULL,
+            context         TEXT NOT NULL DEFAULT '',
+            outcome         TEXT NOT NULL DEFAULT '',
+            error_summary   TEXT NOT NULL DEFAULT '',
+            fix_summary     TEXT NOT NULL DEFAULT '',
+            tags_json       TEXT NOT NULL DEFAULT '[]',
+            success         INTEGER NOT NULL DEFAULT 0,
+            confidence      REAL NOT NULL DEFAULT 0.5,
+            related_task_id TEXT,
+            content_hash    TEXT NOT NULL UNIQUE,
+            redacted        INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now','utc'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_tool_traces_project_created_at
+            ON tool_traces(project, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_tool_traces_success ON tool_traces(success);
+        CREATE INDEX IF NOT EXISTS idx_tool_traces_content_hash ON tool_traces(content_hash);
+        ",
+    )?;
+
+    conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS cp_scheduled_jobs (
             id               TEXT PRIMARY KEY,
             title            TEXT NOT NULL,

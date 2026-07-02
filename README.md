@@ -205,6 +205,27 @@ raios handoff --to codex-kaira --status success --msg "skeleton ready, implement
 - Delivery is real, not an unread env var: the next `raios run`/`raios task` for that agent injects the `[HANDOVER CONTEXT]` via the CLI's own prompt flag — `claude --append-system-prompt`, `codex <prompt>`, `opencode --prompt`, `agy --prompt-interactive` — and marks it consumed only once the process actually starts.
 - Visible at the terminal via the **Inbox** TUI panel (pending approvals, active runs, blocked tasks) or programmatically via the `get_inbox` MCP tool.
 
+### 🧠 Trace Memory — Local Fix Recall
+
+R-AI-OS can now store compact tool/session traces locally and recall them before repeating the same failure:
+
+```bash
+raios trace record --project R-AI-OS --command "cargo test -p raios-runtime" \
+  --error "trace recall missed partial phrase" \
+  --fix "fall back to significant query tokens before project fallback" \
+  --tag trace --success
+raios trace search "partial phrase" --project R-AI-OS --success-only
+raios evolve from-traces --project R-AI-OS
+raios trace kg-export "partial phrase" --project R-AI-OS
+```
+
+- Traces are stored in SQLite (`tool_traces`) with exact-content deduplication and confidence metadata.
+- Secret-like inputs are refused before raw trace content is stored; redacted refusal rows keep an audit trail without persisting the secret.
+- Handoffs automatically attach relevant successful trace memory, and `raios run` augments incoming `[HANDOVER CONTEXT]` with prior fixes.
+- Post-run session reviews auto-record trace rows only when there is a failure, risk, or learned decision, avoiding noisy memory pollution.
+- `raios evolve from-traces` converts useful trace fixes into pending instinct candidates; promotion remains a human-controlled step.
+- `raios trace kg-export` emits MemPalace-compatible KG triple JSON for MCP ingestion without silently writing to an external semantic store.
+
 ### ⏳ Lifecycle Worker
 
 Background daemon task (`src/daemon/lifecycle.rs`) that keeps project status honest without manual upkeep. Every `lifecycle_interval_secs`, it checks each tracked project's last commit time and transitions status automatically:
@@ -370,6 +391,9 @@ raios bootstrap
 | `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules) |
 | `raios task "<description>"` | Route task to best agent |
 | `raios handoff --to <agent> --status <SUCCESS\|FAILED\|BLOCKER> --msg "<text>"` | Atomic agent-to-agent handoff via the control plane |
+| `raios trace record/search/forget` | Store, recall, and delete local tool/session trace memory |
+| `raios trace kg-export [query]` | Export trace memory as MemPalace-compatible KG triple JSON |
+| `raios evolve from-traces` | Generate pending instinct candidates from successful trace fixes |
 | `raios bootstrap` | Replicate AI factory on a new machine |
 
 ### Security
@@ -468,6 +492,7 @@ vscode-extension/
 - [x] **Phase 18:** `aiosd` systemd user service auto-start on login — `aiosd.service` enabled via `systemctl --user enable aiosd`, `WantedBy=default.target`
 - [x] **Phase 19:** Cortex Real Embeddings — `default = ["cortex"]`, fastembed all-MiniLM-L6-v2, adaptive CPU throttling in embed_batch
 - [x] **Phase 20:** Autonomous Scheduler — `raios cron add/list/remove/pause/resume/run`, `cp_scheduled_jobs` control-plane table, atomic claim worker, `spawn_agent_detached` helper
+- [x] **Phase 21:** Trace Memory — `raios trace`, handoff/runtime recall, session-review auto trace, trace-to-evolution candidates, and MemPalace KG export
 
 ---
 

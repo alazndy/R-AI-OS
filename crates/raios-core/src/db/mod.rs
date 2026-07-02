@@ -11,13 +11,14 @@ pub mod projects;
 pub mod provider;
 pub mod run_contract;
 pub mod scheduler;
+mod schema;
 pub mod tasks;
+pub mod tool_traces;
 pub mod wf_file_change;
 pub mod wf_handoff;
 pub mod wf_sessions;
 pub mod wf_swarm;
 pub mod wf_task_graph;
-mod schema;
 
 pub use agent_stats::*;
 pub use budget_gate::*;
@@ -30,6 +31,7 @@ pub use provider::*;
 pub use run_contract::*;
 pub use scheduler::*;
 pub use tasks::*;
+pub use tool_traces::*;
 pub use wf_file_change::*;
 pub use wf_handoff::*;
 pub use wf_sessions::*;
@@ -81,9 +83,8 @@ pub fn cp_log_append(conn: &Connection, sender: &str, content: &str) -> Result<(
 
 /// Return the last `limit` log entries in chronological order.
 pub fn cp_logs_replay(conn: &Connection, limit: usize) -> Result<Vec<(String, String, String)>> {
-    let mut stmt = conn.prepare(
-        "SELECT ts, sender, content FROM cp_logs ORDER BY id DESC LIMIT ?1",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT ts, sender, content FROM cp_logs ORDER BY id DESC LIMIT ?1")?;
     let rows = stmt.query_map(params![limit as i64], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -167,4 +168,3 @@ pub fn import_from_json(dev_ops: &Path, conn: &Connection) -> usize {
     }
     imported
 }
-

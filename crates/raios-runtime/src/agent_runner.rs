@@ -87,6 +87,17 @@ pub fn run_agent(
         if let Some(diff_stat) = &ctx.diff_stat {
             block.push_str(&format!("\n\n[Changed files since handoff]\n{diff_stat}"));
         }
+        if let Some(trace_block) = crate::trace_recall::relevant_trace_block(
+            &conn,
+            project_dir.as_deref(),
+            &ctx.context_summary,
+            3,
+        ) {
+            if !block.contains("[Relevant trace memory]") {
+                block.push_str("\n\n");
+                block.push_str(&trace_block);
+            }
+        }
         Some((conn, identity, ctx, block))
     });
     let handover_block = pending_handoff.as_ref().map(|(_, _, _, block)| block.clone());
@@ -317,6 +328,18 @@ pub fn run_agent(
                 success,
                 review_summary.as_deref(),
             );
+            if let (Some(review), Some(dir)) = (review.as_ref(), project_dir.as_deref()) {
+                if let Err(e) = crate::trace_recall::record_post_run_review_trace(
+                    &conn,
+                    agent,
+                    dir,
+                    success,
+                    review,
+                    Some(run_id),
+                ) {
+                    eprintln!("Warning: failed to record trace memory: {e}");
+                }
+            }
         }
     }
     let session_short = session_ids.as_ref()

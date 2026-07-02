@@ -6,6 +6,7 @@ mod handoff;
 mod integration;
 mod schema;
 mod tasks;
+mod tool_traces;
 
 pub fn in_memory() -> Connection {
     let conn = Connection::open_in_memory().unwrap();

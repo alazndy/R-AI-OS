@@ -148,6 +148,44 @@ pub(super) fn cmd_evolve(action: EvolveAction, json: bool) {
                 }
             }
         }
+        EvolveAction::FromTraces { project, limit } => {
+            let conn = match raios_core::db::open_db() {
+                Ok(conn) => conn,
+                Err(e) => {
+                    eprintln!("Failed to open workspace DB: {e}");
+                    std::process::exit(1);
+                }
+            };
+            match raios_runtime::evolution::import_trace_candidates(
+                &conn,
+                &store,
+                project.as_deref(),
+                limit,
+            ) {
+                Ok(inserted) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "status": "ok",
+                                "inserted": inserted,
+                                "project": project,
+                                "limit": limit
+                            })
+                        );
+                    } else {
+                        println!("✓ Generated {inserted} instinct candidate(s) from trace memory.");
+                        if inserted > 0 {
+                            println!("  Review with `raios evolve list`; promote with `raios evolve promote \"...\"`.");
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to import trace candidates: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         EvolveAction::Promote { rule } => {
             store.promote(&rule);
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));

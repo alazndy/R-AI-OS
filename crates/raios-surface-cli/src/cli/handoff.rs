@@ -29,6 +29,19 @@ pub(super) fn cmd_handoff(
             std::process::exit(1);
         }
     };
+    let trace_block =
+        raios_runtime::trace_recall::relevant_trace_block(&conn, Some(&project_path_str), &msg, 3);
+    let handoff_msg = match &trace_block {
+        Some(block) => format!("{msg}\n\n{block}"),
+        None => msg.clone(),
+    };
+    if let Some(label) = raios_core::security::looks_like_secret(&handoff_msg) {
+        eprintln!(
+            "Handoff refused: enriched context looks like it contains a {label}. \
+             Remove it and resend — handoffs are stored in plain text (DB + process argv)."
+        );
+        std::process::exit(1);
+    }
 
     let ids = match raios_core::db::create_handoff_workflow(
         &conn,
@@ -36,7 +49,7 @@ pub(super) fn cmd_handoff(
         &from_agent,
         to_agent,
         status_str,
-        &msg,
+        &handoff_msg,
         diff_stat.as_deref(),
     ) {
         Ok(ids) => ids,
@@ -67,6 +80,7 @@ pub(super) fn cmd_handoff(
             "approval_id": ids.approval_id,
             "project_id": ids.project_id,
             "diff_stat": diff_stat,
+            "trace_memory_attached": trace_block.is_some(),
             "tunnel": "agent_action_required",
             "tunnel_hint": tunnel_hint,
         });
@@ -78,6 +92,9 @@ pub(super) fn cmd_handoff(
         if diff_stat.is_some() {
             println!("  diff stat:   attached (git diff --stat vs HEAD)");
         }
+        if trace_block.is_some() {
+            println!("  trace memory: attached");
+        }
         println!(
             "  Next: {to_agent} will receive this as [HANDOVER CONTEXT] on its next `raios run`/`raios task`."
         );
@@ -86,4 +103,3 @@ pub(super) fn cmd_handoff(
         );
     }
 }
-

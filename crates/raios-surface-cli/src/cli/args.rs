@@ -357,6 +357,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: MemAction,
     },
+    /// Record and search operational command outcomes and fix context
+    Trace {
+        #[command(subcommand)]
+        action: TraceAction,
+    },
     /// Manage the MCP/WS tool-call security policy (raios-policy.toml)
     Policy {
         #[command(subcommand)]
@@ -379,4 +384,3 @@ pub enum Commands {
         args: Vec<String>,
     },
 }
-

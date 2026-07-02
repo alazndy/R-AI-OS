@@ -57,6 +57,18 @@ impl CandidateStore {
 
     pub fn insert(&self, rule: &str, source: &str, confidence: f32) {
         if let Ok(conn) = self.connect() {
+            if !has_rule_schema(&conn) {
+                let _ = conn.execute(
+                    "INSERT INTO instinct_candidates
+                        (project_name, command, outcome, suggestion, status)
+                     SELECT 'global', ?1, ?2, ?3, 'pending'
+                     WHERE NOT EXISTS (
+                        SELECT 1 FROM instinct_candidates WHERE suggestion = ?3
+                     )",
+                    params![source, format!("confidence={confidence:.2}"), rule],
+                );
+                return;
+            }
             let expires = chrono::Local::now()
                 .checked_add_signed(chrono::Duration::days(EXPIRY_DAYS))
                 .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
@@ -73,6 +85,23 @@ impl CandidateStore {
         let Ok(conn) = self.connect() else {
             return vec![];
         };
+        if !has_rule_schema(&conn) {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT suggestion FROM instinct_candidates
+                     WHERE status = 'pending'
+                     ORDER BY created_at DESC LIMIT ?1",
+                )
+                .ok();
+            return match &mut stmt {
+                Some(s) => s
+                    .query_map(params![limit as i64], |row| row.get(0))
+                    .ok()
+                    .map(|r| r.flatten().collect())
+                    .unwrap_or_default(),
+                None => vec![],
+            };
+        }
         let mut stmt = conn
             .prepare(
                 "SELECT rule FROM instinct_candidates
@@ -92,6 +121,13 @@ impl CandidateStore {
 
     pub fn promote(&self, rule: &str) {
         if let Ok(conn) = self.connect() {
+            if !has_rule_schema(&conn) {
+                let _ = conn.execute(
+                    "UPDATE instinct_candidates SET status = 'promoted' WHERE suggestion = ?1",
+                    params![rule],
+                );
+                return;
+            }
             let _ = conn.execute(
                 "UPDATE instinct_candidates SET promoted = 1 WHERE rule = ?1",
                 params![rule],
@@ -103,12 +139,20 @@ impl CandidateStore {
         let Ok(conn) = self.connect() else {
             return 0;
         };
+        if !has_rule_schema(&conn) {
+            return 0;
+        }
         conn.execute(
             "DELETE FROM instinct_candidates WHERE expires_at <= datetime('now')",
             [],
         )
         .unwrap_or(0)
     }
+}
+
+fn has_rule_schema(conn: &Connection) -> bool {
+    conn.prepare("SELECT rule, promoted, expires_at FROM instinct_candidates LIMIT 0")
+        .is_ok()
 }
 
 // ─── Event processing ─────────────────────────────────────────────────────────
@@ -137,6 +181,74 @@ pub fn process_job_event(
         }
         _ => {}
     }
+}
+
+pub fn suggest_from_trace(trace: &raios_core::db::ToolTraceRow) -> Option<String> {
+    if trace.redacted || !trace.success {
+        return None;
+    }
+    let fix = trace.fix_summary.trim();
+    if fix.is_empty() {
+        return None;
+    }
+    let trigger = trace
+        .error_summary
+        .trim()
+        .lines()
+        .next()
+        .filter(|line| !line.is_empty())
+        .unwrap_or_else(|| trace.command.trim());
+    if trigger.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "When `{}` appears in `{}`, try: {}",
+        compact_rule_part(trigger, 96),
+        compact_rule_part(&trace.project, 48),
+        compact_rule_part(fix, 160)
+    ))
+}
+
+pub fn import_trace_candidates(
+    conn: &Connection,
+    store: &CandidateStore,
+    project: Option<&str>,
+    limit: usize,
+) -> rusqlite::Result<usize> {
+    let rows = raios_core::db::tool_trace_search(
+        conn,
+        raios_core::db::ToolTraceQuery {
+            text: "",
+            project,
+            preferred_project: project,
+            success_only: true,
+            tag: None,
+            limit,
+        },
+    )?;
+    let mut inserted = 0usize;
+    for row in rows {
+        let Some(rule) = suggest_from_trace(&row) else {
+            continue;
+        };
+        let before = store.list_pending(usize::MAX).len();
+        store.insert(&rule, &format!("trace:{}", row.id), 0.72);
+        let after = store.list_pending(usize::MAX).len();
+        if after > before {
+            inserted += 1;
+        }
+    }
+    Ok(inserted)
+}
+
+fn compact_rule_part(value: &str, max_chars: usize) -> String {
+    let flat = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max_chars {
+        return flat;
+    }
+    let mut out: String = flat.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 // ─── Background worker ────────────────────────────────────────────────────────
@@ -230,5 +342,56 @@ mod tests {
 
         let candidates = store.list_pending(10);
         assert!(!candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn trace_import_generates_candidate_from_successful_fix() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let store = CandidateStore::new(tmp.path().join("test.db"));
+        let conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        raios_core::db::tool_trace_insert(
+            &conn,
+            raios_core::db::ToolTraceInsert {
+                project: "R-AI-OS",
+                agent: "codex_kaira",
+                command: "cargo test -p raios-runtime trace_recall",
+                context: "runtime trace recall",
+                outcome: "tests passed",
+                error_summary: "trace recall missed partial phrase",
+                fix_summary: "fall back to significant query tokens before project fallback",
+                tags_json: r#"["trace"]"#,
+                success: true,
+                confidence: 0.9,
+                related_task_id: None,
+            },
+        )
+        .unwrap();
+
+        let inserted = import_trace_candidates(&conn, &store, Some("R-AI-OS"), 10).unwrap();
+        let candidates = store.list_pending(10);
+
+        assert_eq!(inserted, 1);
+        assert!(candidates
+            .iter()
+            .any(|rule| rule.contains("significant query tokens")));
+    }
+
+    #[tokio::test]
+    async fn candidate_store_supports_core_schema_candidates_table() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("workspace.db");
+        let conn = Connection::open(&db_path).unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        drop(conn);
+
+        let store = CandidateStore::new(&db_path);
+        store.insert("When trace recall fails, inspect token fallback", "trace:test", 0.7);
+        let candidates = store.list_pending(10);
+
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].contains("token fallback"));
+        store.promote(&candidates[0]);
+        assert!(store.list_pending(10).is_empty());
     }
 }

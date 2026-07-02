@@ -130,6 +130,59 @@ pub enum MemAction {
 }
 
 #[derive(Subcommand, Debug, Clone)]
+pub enum TraceAction {
+    /// Record a command outcome and the fix context that made it useful later
+    Record {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        command: String,
+        #[arg(long, default_value = "")]
+        context: String,
+        #[arg(long, default_value = "")]
+        outcome: String,
+        #[arg(long, default_value = "")]
+        error: String,
+        #[arg(long, default_value = "")]
+        fix: String,
+        #[arg(long)]
+        tag: Vec<String>,
+        #[arg(long)]
+        success: bool,
+        #[arg(long, default_value_t = 0.5)]
+        confidence: f64,
+        #[arg(long)]
+        task_id: Option<String>,
+    },
+    /// Search recorded tool traces for prior fixes
+    Search {
+        query: String,
+        #[arg(short, long)]
+        project: Option<String>,
+        #[arg(long)]
+        success_only: bool,
+        #[arg(long)]
+        tag: Option<String>,
+        #[arg(short = 'n', long, default_value_t = 8)]
+        limit: usize,
+    },
+    /// Export traces as knowledge-graph triples for MemPalace MCP ingestion
+    #[command(name = "kg-export")]
+    KgExport {
+        /// Optional search text; omit to export recent successful traces
+        query: Option<String>,
+        #[arg(short, long)]
+        project: Option<String>,
+        #[arg(long, default_value_t = true)]
+        success_only: bool,
+        #[arg(short = 'n', long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Delete a trace by id
+    Forget { id: String },
+}
+
+#[derive(Subcommand, Debug, Clone)]
 pub enum AgentWrapperCmd {
     /// Install shell functions routing agent commands through raios (all agents by default)
     Install {
@@ -269,6 +322,16 @@ pub enum EvolveAction {
     List {
         #[arg(long, default_value = "20")]
         limit: u64,
+    },
+    /// Generate instinct candidates from successful trace memory rows
+    #[command(name = "from-traces")]
+    FromTraces {
+        /// Filter traces by project name/path fragment
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Maximum number of trace rows to inspect
+        #[arg(short = 'n', long, default_value = "50")]
+        limit: usize,
     },
     /// Promote a candidate rule to active instincts
     Promote { rule: String },

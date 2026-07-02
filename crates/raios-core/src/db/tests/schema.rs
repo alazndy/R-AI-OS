@@ -141,6 +141,15 @@ fn instinct_candidates_table_exists() {
 }
 
 #[test]
+fn tool_traces_table_exists() {
+    let conn = in_memory();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tool_traces", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
 fn task_graph_tables_exist() {
     let conn = in_memory();
     let count_graphs: i64 = conn
@@ -203,8 +212,8 @@ fn file_change_workflow_round_trip_applied() {
     )
     .unwrap();
 
-    let ids = create_file_change_workflow(&conn, "/repo/src/main.rs", "old", "new", "claude")
-        .unwrap();
+    let ids =
+        create_file_change_workflow(&conn, "/repo/src/main.rs", "old", "new", "claude").unwrap();
     mark_file_change_workflow_applied(&conn, &ids, "human").unwrap();
 
     let approval_status: String = conn
@@ -237,8 +246,7 @@ fn file_change_workflow_round_trip_applied() {
 #[test]
 fn file_change_workflow_round_trip_rejected() {
     let conn = in_memory();
-    let ids =
-        create_file_change_workflow(&conn, "/tmp/notes.md", "old", "new", "claude").unwrap();
+    let ids = create_file_change_workflow(&conn, "/tmp/notes.md", "old", "new", "claude").unwrap();
     mark_file_change_workflow_rejected(&conn, &ids, "human", "rejected_by_user").unwrap();
 
     let run_status: String = conn

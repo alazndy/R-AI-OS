@@ -1,5 +1,7 @@
+mod agent_stats;
 mod agent_wrapper;
 mod audit;
+mod cron;
 mod dev;
 mod ext;
 mod git;
@@ -7,25 +9,25 @@ mod handoff;
 mod health;
 mod hub;
 mod instinct;
+mod mem;
 mod new;
+mod policy;
 pub(crate) mod preflight;
-mod reflect;
 mod refactor;
+mod reflect;
 mod search;
 mod security;
+mod session;
 mod swarm;
+mod task_update;
+mod trace;
 mod version;
 mod workspace;
-mod agent_stats;
-mod cron;
-mod mem;
-mod policy;
-mod session;
-mod task_update;
 use self::mem::cmd_mem;
 use self::session::cmd_sessions;
 use self::task_update::cmd_task_update;
 pub use self::task_update::run_refactor_flag;
+use self::trace::cmd_trace;
 
 use raios_core::config::Config;
 use std::path::{Path, PathBuf};
@@ -98,7 +100,8 @@ pub fn run(cli: Cli) {
             timeout,
             extra,
         } => {
-            if let Err(e) = raios_runtime::agent_runner::run_agent(&agent, project, timeout, extra) {
+            if let Err(e) = raios_runtime::agent_runner::run_agent(&agent, project, timeout, extra)
+            {
                 eprintln!("Agent Runner Error: {}", e);
                 std::process::exit(1);
             }
@@ -247,6 +250,7 @@ pub fn run(cli: Cli) {
             raios_runtime::session_memory::cmd_memory_gen(project.as_deref(), cli.json);
         }
         Commands::Mem { action } => cmd_mem(action, cli.json),
+        Commands::Trace { action } => cmd_trace(action, cli.json),
         Commands::Policy { action } => policy::cmd_policy(action, cli.json),
         Commands::Hub { action } => match action {
             HubAction::Start => hub::cmd_start(cli.json),
