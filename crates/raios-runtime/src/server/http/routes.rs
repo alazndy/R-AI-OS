@@ -231,7 +231,12 @@ fn resolve_pending_diff_target(file_path: &Path, allowed_base: &Path) -> Option<
             .map(|parent| parent.join(file_name))
     }?;
 
-    resolved.starts_with(allowed_base).then_some(resolved)
+    // Compare against the canonicalized base too — otherwise this check spuriously
+    // rejects legitimate paths (and could as easily hide a real escape) whenever
+    // `allowed_base` isn't already fully resolved, e.g. macOS's /tmp -> /private/tmp
+    // symlink or Windows's \\?\ canonical prefix.
+    let allowed_base = allowed_base.canonicalize().unwrap_or_else(|_| allowed_base.to_path_buf());
+    resolved.starts_with(&allowed_base).then_some(resolved)
 }
 
 fn decode_base64(s: &str) -> anyhow::Result<Vec<u8>> {

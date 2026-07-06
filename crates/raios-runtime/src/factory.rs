@@ -391,12 +391,17 @@ mod tests {
             }),
         );
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let inbox = factory.list_inbox(10);
-        assert!(inbox.iter().any(|j| j.id == id));
-        let completed = inbox.iter().find(|j| j.id == id).unwrap();
-        assert_eq!(completed.status, JobStatus::Completed);
+        // Poll instead of a single fixed sleep — a flat 100ms was flaky under
+        // slower/loaded CI runners (observed timing out on Windows).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let completed = loop {
+            let inbox = factory.list_inbox(10);
+            if let Some(job) = inbox.iter().find(|j| j.id == id && j.status == JobStatus::Completed) {
+                break job.clone();
+            }
+            assert!(std::time::Instant::now() < deadline, "job {id} did not complete in time");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
         assert_eq!(completed.result.as_deref(), Some("result text"));
     }
 
