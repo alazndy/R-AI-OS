@@ -30,9 +30,19 @@ fn read_pid() -> Option<u32> {
         .and_then(|s| s.trim().parse::<u32>().ok())
 }
 
+#[cfg(unix)]
 fn is_alive(pid: u32) -> bool {
-    // On Linux: sending signal 0 checks if the process exists without killing it
+    // Sending signal 0 checks if the process exists without killing it
     unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_alive(pid: u32) -> bool {
+    Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+        .unwrap_or(false)
 }
 
 fn probe_port(port: u16) -> bool {
@@ -161,17 +171,23 @@ pub fn cmd_stop(json: bool) {
         println!("  Stopping PID {pid}…");
     }
 
-    unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    #[cfg(unix)]
+    {
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
 
-    for _ in 0..50 {
-        std::thread::sleep(Duration::from_millis(100));
-        if !is_alive(pid) {
-            break;
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(100));
+            if !is_alive(pid) {
+                break;
+            }
         }
     }
 
     if is_alive(pid) {
-        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        // Unix: SIGTERM above didn't finish the job — escalate to a hard kill.
+        // Windows: there's no graceful signal to send in the first place, so
+        // this is the only kill attempt.
+        let _ = raios_core::core::process::kill_pid(pid);
     }
 
     let _ = fs::remove_file(pid_path());
@@ -504,13 +520,12 @@ pub fn cmd_api_key_generate(force: bool) {
     }
 }
 
-// ─── libc shim (only needs kill + dup + SIGTERM + SIGKILL) ───────────────────
+// ─── libc shim (only needs kill + SIGTERM; unix-only, see is_alive/cmd_stop) ─
 
+#[cfg(unix)]
 mod libc {
     extern "C" {
         pub fn kill(pid: i32, sig: i32) -> i32;
-        pub fn dup(oldfd: i32) -> i32;
     }
     pub const SIGTERM: i32 = 15;
-    pub const SIGKILL: i32 = 9;
 }
