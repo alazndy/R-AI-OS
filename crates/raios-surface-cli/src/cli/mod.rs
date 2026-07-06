@@ -12,7 +12,6 @@ mod instinct;
 mod mem;
 mod new;
 mod policy;
-pub(crate) mod preflight;
 mod refactor;
 mod reflect;
 mod search;
@@ -265,7 +264,7 @@ pub fn run(cli: Cli) {
         },
         Commands::Reflect => reflect::cmd_reflect(&cfg.dev_ops_path, cli.json),
         Commands::PreFlight { project } => {
-            let ok = preflight::cmd_preflight(project, &cfg.dev_ops_path);
+            let ok = raios_runtime::cli::preflight::cmd_preflight(project, &cfg.dev_ops_path);
             if !ok {
                 std::process::exit(1);
             }

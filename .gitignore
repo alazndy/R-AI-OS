@@ -10,3 +10,6 @@
 /.context/
 /.tmp/
 tools/raios-tray/__pycache__/
+.env
+.env.*
+!.env.example
