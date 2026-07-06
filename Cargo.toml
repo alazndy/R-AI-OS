@@ -9,4 +9,14 @@ members = [
 ]
 
 [patch.crates-io]
-hf-hub = { path = ".tmp/hf-hub-0.3.2" }
+# hf-hub 0.3.2 (pulled in transitively by fastembed 3.x, which pins hf-hub = "0.3")
+# mishandles HTTP redirects whose `Location` header is a relative URL: it passes
+# the raw header value straight to the HTTP client's `.get()`, which requires an
+# absolute URL. This vendored copy resolves relative Location headers against the
+# original request's origin before following the redirect. Confirmed still present
+# upstream as of hf-hub 0.4.3 (crates.io), so this can't yet be dropped by bumping
+# the version. See vendor/hf-hub-0.3.2/PATCH.md for the exact diff.
+# IMPORTANT: must live in a non-gitignored path — a previous copy under `.tmp/`
+# (gitignored) made every fresh checkout fail dependency resolution (CI red on
+# all platforms: "failed to load source for dependency `hf-hub`").
+hf-hub = { path = "vendor/hf-hub-0.3.2" }
