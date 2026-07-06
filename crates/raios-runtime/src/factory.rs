@@ -463,7 +463,8 @@ mod tests {
 
         // Expect JobStarted and JobComplete
         let mut events: Vec<String> = vec![];
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        // 500ms was flaky under loaded/slower CI runners (observed timing out on Windows).
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             tokio::select! {
                 Ok(msg) = rx.recv() => {
