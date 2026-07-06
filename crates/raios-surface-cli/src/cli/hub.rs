@@ -5,8 +5,6 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-#[cfg(unix)]
-use std::os::fd::FromRawFd;
 
 const DAEMON_PORT: u16 = 42069;
 const MCP_PORT: u16 = 42070;
@@ -107,17 +105,8 @@ pub fn cmd_start(json: bool) {
         .append(true)
         .open(log_path());
 
-    let (stdout, stderr) = match log_file {
-        Ok(f) => {
-            use std::os::unix::io::IntoRawFd;
-            let fd = f.into_raw_fd();
-            unsafe {
-                (
-                    Stdio::from_raw_fd(fd),
-                    Stdio::from_raw_fd(libc::dup(fd)),
-                )
-            }
-        }
+    let (stdout, stderr) = match log_file.and_then(|f| f.try_clone().map(|f2| (f, f2))) {
+        Ok((f, f2)) => (Stdio::from(f), Stdio::from(f2)),
         Err(_) => (Stdio::null(), Stdio::null()),
     };
 
