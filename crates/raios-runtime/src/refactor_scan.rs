@@ -253,15 +253,30 @@ fn count_risky_patterns(content: &str, ext: &str) -> usize {
     count
 }
 
+/// Estimates max brace-nesting depth by counting unmatched `{`/`}` per line,
+/// ignoring anything after a `//` line comment. This used to be leading-
+/// whitespace-length / 4, which reports the indentation of whichever line in
+/// the file happens to be most indented — including comment lines, which can
+/// be arbitrarily (even accidentally) indented with no bearing on actual
+/// code structure. Doesn't handle braces inside string literals or block
+/// comments, but that's a rare enough source of noise for a heuristic scan.
 fn estimate_max_nesting(content: &str) -> usize {
-    content
-        .lines()
-        .map(|line| {
-            let leading = line.len().saturating_sub(line.trim_start().len());
-            leading / 4
-        })
-        .max()
-        .unwrap_or(0)
+    let mut depth: i32 = 0;
+    let mut max_depth: i32 = 0;
+    for line in content.lines() {
+        let code = line.find("//").map(|i| &line[..i]).unwrap_or(line);
+        for ch in code.chars() {
+            match ch {
+                '{' => {
+                    depth += 1;
+                    max_depth = max_depth.max(depth);
+                }
+                '}' => depth = (depth - 1).max(0),
+                _ => {}
+            }
+        }
+    }
+    max_depth.max(0) as usize
 }
 
 fn determine_severity(
@@ -417,6 +432,20 @@ mod tests {
     fn nesting_depth_8_triggers_medium() {
         let t = RefactorThresholds::default();
         assert_eq!(determine_severity(0, 0, 8, &t), RefactorSeverity::Medium);
+    }
+
+    #[test]
+    fn nesting_ignores_indentation_of_comment_lines() {
+        // A misaligned trailing comment used to report as depth ~12 under the
+        // old indentation-based heuristic despite there being no real nesting.
+        let content = "fn f() {\n    let x = 1; // note\n                                                  // more\n}\n";
+        assert_eq!(estimate_max_nesting(content), 1);
+    }
+
+    #[test]
+    fn nesting_counts_real_brace_depth() {
+        let content = "fn f() {\n    if a {\n        if b {\n            1\n        }\n    }\n}\n";
+        assert_eq!(estimate_max_nesting(content), 3);
     }
 
     #[test]
