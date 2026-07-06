@@ -9,6 +9,11 @@ pub(super) struct Pattern {
     pub severity: Severity,
     pub pattern: &'static str,
     pub exts: &'static [&'static str],
+    /// Regex engines used here (regex-lite) don't support lookaround, so
+    /// exclusions that would otherwise be a negative lookahead in `pattern`
+    /// are applied here instead: a match is dropped if the matched line also
+    /// contains any of these literal substrings.
+    pub exclude: &'static [&'static str],
 }
 
 pub(super) const PATTERNS: &[Pattern] = &[
@@ -21,6 +26,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         exts: &[
             "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml", "json",
         ],
+        exclude: &[],
     },
     Pattern {
         owasp: "A02",
@@ -28,6 +34,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Critical,
         pattern: r#"(?i)(password|passwd|pwd)\s*[=:]\s*['"][^'"]{4,}['"]"#,
         exts: &["rs", "py", "ts", "js", "go", "yaml", "yml", "toml", "env"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A02",
@@ -35,6 +42,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         pattern: r"(?i)(md5|Md5)\s*::",
         exts: &["rs", "py", "ts", "js", "go"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A02",
@@ -42,21 +50,29 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         pattern: r"(?i)(sha1|Sha1)\s*::",
         exts: &["rs", "py", "ts", "js", "go"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A02",
         title: "HTTP instead of HTTPS in config",
         severity: Severity::Medium,
-        pattern: r#"http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0)"#,
+        // Lookahead isn't supported here, so the localhost/loopback exemption
+        // is applied via `exclude` (see below) instead of inline in the regex.
+        pattern: r"http://",
         exts: &["env", "toml", "yaml", "yml", "json", "ts", "js", "py"],
+        exclude: &["localhost", "127.0.0.1", "0.0.0.0"],
     },
     // A03 — Injection
     Pattern {
         owasp: "A03",
         title: "SQL string interpolation (injection risk)",
         severity: Severity::High,
-        pattern: r#"(?i)(SELECT|INSERT|UPDATE|DELETE|DROP)\s+.*\$\{|format!\s*\(\s*"(?i)(SELECT|INSERT|UPDATE|DELETE)"#,
+        // Requires the keyword's typical companion clause (FROM/INTO/SET/TABLE)
+        // so e.g. a CLI arg literally named "task-update" can't match on the
+        // bare substring "update" the way a keyword-only match would.
+        pattern: r#"(?i)\b(SELECT\b[^;]*\bFROM\b|INSERT\s+INTO\b|UPDATE\b[^;]*\bSET\b|DELETE\s+FROM\b|DROP\s+(TABLE|DATABASE)\b)[^;]*\$\{|format!\s*\(\s*"(?i)\b(SELECT|INSERT|UPDATE|DELETE)\b"#,
         exts: &["rs", "py", "ts", "js", "go"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A03",
@@ -64,6 +80,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         pattern: r"\beval\s*\(",
         exts: &["ts", "js", "jsx", "tsx", "py"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A03",
@@ -71,6 +88,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         pattern: r"\.innerHTML\s*=",
         exts: &["ts", "tsx", "js", "jsx", "html"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A03",
@@ -78,13 +96,24 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         pattern: r"dangerouslySetInnerHTML",
         exts: &["tsx", "jsx", "ts", "js"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A03",
         title: "Command injection via shell",
         severity: Severity::Critical,
-        pattern: r#"(?i)(os\.system|subprocess\.call|popen|exec\s*\(|shell\s*=\s*True)"#,
+        // `popen` used to match bare (case-insensitive), which flagged the
+        // perfectly safe list-form `subprocess.Popen([...])` on every use.
+        // Only os.popen() (string-command, always shell-based) is unsafe by
+        // construction; subprocess.Popen is only unsafe with shell=True,
+        // which the last alternative already covers independently.
+        // `exec\s*\(` alone also matched method calls like `dlg.exec()` (Qt,
+        // unrelated to Python's exec() builtin) — (^|[^.\w]) requires the
+        // preceding character to not be a dot or identifier character, i.e.
+        // not a method call.
+        pattern: r#"(?i)(os\.system\s*\(|os\.popen\s*\(|subprocess\.call\s*\(|(^|[^.\w])exec\s*\(|shell\s*=\s*True)"#,
         exts: &["py"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A03",
@@ -92,6 +121,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         pattern: r"(?i)(exec\s*\(|execSync\s*\(|spawnSync\s*\().*\$\{",
         exts: &["ts", "js"],
+        exclude: &[],
     },
     // A05 — Security Misconfiguration
     Pattern {
@@ -100,6 +130,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         pattern: r"(?i)DEBUG\s*=\s*True",
         exts: &["py", "env", "toml", "yaml", "yml"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A05",
@@ -107,6 +138,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         pattern: r#"(?i)(cors|Access-Control-Allow-Origin).*['"]\*['""]"#,
         exts: &["rs", "ts", "js", "py", "go", "yaml", "yml"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A05",
@@ -114,6 +146,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Critical,
         pattern: r#"(?i)(jwt|token).*['"](secret|changeme|your.?secret|example)['""]"#,
         exts: &["rs", "ts", "js", "py", "go", "env", "yaml", "yml"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A05",
@@ -121,6 +154,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         pattern: r#"(?i)(username|user)\s*[=:]\s*['"]admin['"]"#,
         exts: &["env", "yaml", "yml", "toml", "json"],
+        exclude: &[],
     },
     // A07 — Identification and Authentication Failures
     Pattern {
@@ -129,6 +163,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         pattern: r"(?i)app\.(post|put|delete)\s*\(",
         exts: &["ts", "js"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A07",
@@ -136,6 +171,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Critical,
         pattern: r#"(?i)algorithm.*['""]none['""]\s*"#,
         exts: &["rs", "py", "ts", "js", "go"],
+        exclude: &[],
     },
     // A09 — Security Logging and Monitoring Failures
     Pattern {
@@ -144,6 +180,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         pattern: r"console\.log\s*\(.*(?i)(password|token|secret|key)",
         exts: &["ts", "js", "tsx", "jsx"],
+        exclude: &[],
     },
     Pattern {
         owasp: "A09",
@@ -151,6 +188,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         pattern: r"print\s*\(.*(?i)(password|token|secret|key)",
         exts: &["py"],
+        exclude: &[],
     },
     // A02 — Specific credential formats (high-specificity, low false-positive rate)
     Pattern {
@@ -161,6 +199,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         exts: &[
             "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml", "json", "sh",
         ],
+        exclude: &[],
     },
     Pattern {
         owasp: "A02",
@@ -170,6 +209,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         exts: &[
             "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml", "json", "sh",
         ],
+        exclude: &[],
     },
     Pattern {
         owasp: "A02",
@@ -179,6 +219,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         exts: &[
             "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml", "json",
         ],
+        exclude: &[],
     },
     Pattern {
         owasp: "A02",
@@ -189,16 +230,23 @@ pub(super) const PATTERNS: &[Pattern] = &[
             "rs", "py", "ts", "tsx", "js", "jsx", "go", "env", "toml", "yaml", "yml", "json",
             "html",
         ],
+        exclude: &[],
     },
     // A01 — Broken Access Control
     Pattern {
         owasp: "A01",
         title: "Directory traversal pattern",
         severity: Severity::High,
-        // Match ../ or ..\ only when NOT on an import/require/use/include line,
-        // to avoid flagging module-relative imports as directory traversal.
-        pattern: r"^(?!.*\b(import|require|use|from|include)\b).*(\.\./|\.\.\\)",
+        // Only the Unix-style "../" form — "..\" (Windows) collides constantly
+        // with ordinary source text: an ellipsis followed by any backslash
+        // escape (`"...\n"`, `"...\""`, `"...\x1b"`) reads as two dots + a
+        // backslash and matched every such string literal. "../" doesn't have
+        // that collision. The import/require/use/include exemption (avoiding
+        // false positives on module-relative imports) is applied via `exclude`
+        // since lookahead isn't supported here.
+        pattern: r"\.\./",
         exts: &["rs", "py", "ts", "js", "go"],
+        exclude: &["import", "require", "use", "from", "include"],
     },
     Pattern {
         owasp: "A01",
@@ -206,6 +254,7 @@ pub(super) const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         pattern: r"(?i)(auth|permission|role|access).*\.unwrap\(\)",
         exts: &["rs"],
+        exclude: &[],
     },
 ];
 
@@ -273,7 +322,7 @@ pub fn scan_file(path: &Path) -> Vec<SecurityIssue> {
             None => continue,
         };
         for (line_no, line) in content.lines().enumerate() {
-            if re.is_match(line) {
+            if re.is_match(line) && !pattern.exclude.iter().any(|ex| line.contains(ex)) {
                 let raw = line.trim();
                 let snippet = if raw.chars().count() > 80 {
                     format!("{}…", raw.chars().take(80).collect::<String>())
@@ -301,6 +350,22 @@ pub fn scan_file(path: &Path) -> Vec<SecurityIssue> {
 mod tests_scan_file {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn all_patterns_compile() {
+        let compiled = compiled_pattern_regexes();
+        let broken: Vec<_> = PATTERNS
+            .iter()
+            .zip(compiled.iter())
+            .filter(|(_, re)| re.is_none())
+            .map(|(p, _)| format!("{:?} ({})", p.title, p.pattern))
+            .collect();
+        assert!(
+            broken.is_empty(),
+            "these patterns fail to compile and are silently disabled:\n{}",
+            broken.join("\n")
+        );
+    }
 
     #[test]
     fn watched_exts_contains_expected() {
@@ -386,6 +451,120 @@ mod tests_scan_file {
                 .iter()
                 .any(|i| i.owasp == "A02" && i.title.contains("Google")),
             "Should detect Google API key (AIza prefix)"
+        );
+    }
+
+    #[test]
+    fn list_form_popen_is_not_flagged_as_command_injection() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".py").unwrap();
+        writeln!(f, "subprocess.Popen([binary, *candidate[1:]])").unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().all(|i| !i.title.contains("Command injection")),
+            "list-form subprocess.Popen (no shell=True) should not be flagged: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn os_popen_is_flagged_as_command_injection() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".py").unwrap();
+        writeln!(f, r#"os.popen("rm -rf " + user_input)"#).unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().any(|i| i.title.contains("Command injection")),
+            "os.popen() is always shell-based and should still be flagged"
+        );
+    }
+
+    #[test]
+    fn shell_true_is_still_flagged_regardless_of_function() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".py").unwrap();
+        writeln!(f, "subprocess.Popen(cmd, shell=True)").unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().any(|i| i.title.contains("Command injection")),
+            "shell=True should still be flagged even via Popen"
+        );
+    }
+
+    #[test]
+    fn cli_subcommand_named_update_is_not_flagged_as_sql_injection() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".ts").unwrap();
+        writeln!(
+            f,
+            r#"term.sendText(`raios task-update "${{taskId}}" --status ${{status}} && exit`);"#
+        )
+        .unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().all(|i| !i.title.contains("SQL")),
+            "a CLI subcommand literally named *-update should not match the SQL UPDATE rule: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn real_sql_interpolation_is_still_flagged() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".ts").unwrap();
+        writeln!(f, "db.query(`UPDATE users SET name = ${{name}}`);").unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().any(|i| i.title.contains("SQL")),
+            "real SQL interpolation should still be flagged: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn localhost_http_url_is_not_flagged() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".env").unwrap();
+        writeln!(f, "API_URL=http://localhost:3000").unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().all(|i| !i.title.contains("HTTPS")),
+            "localhost http:// should be exempt: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn non_localhost_http_url_is_flagged() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".env").unwrap();
+        writeln!(f, "API_URL=http://api.example.com").unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().any(|i| i.title.contains("HTTPS")),
+            "non-localhost http:// should be flagged: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn relative_import_is_not_flagged_as_directory_traversal() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".ts").unwrap();
+        writeln!(f, "import {{ helper }} from '../utils/helper';").unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().all(|i| !i.title.contains("traversal")),
+            "module-relative imports should be exempt: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn ellipsis_followed_by_escape_is_not_flagged_as_traversal() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
+        writeln!(f, r#"println!("Installing extensions...\n");"#).unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().all(|i| !i.title.contains("traversal")),
+            "an ellipsis followed by a \\n/\\\" escape must not read as \"..\\\": {issues:?}"
+        );
+    }
+
+    #[test]
+    fn filesystem_traversal_is_flagged() {
+        let mut f = tempfile::NamedTempFile::with_suffix(".py").unwrap();
+        writeln!(f, "open('../../../../etc/passwd')").unwrap();
+        let issues = scan_file(f.path());
+        assert!(
+            issues.iter().any(|i| i.title.contains("traversal")),
+            "actual path traversal should be flagged: {issues:?}"
         );
     }
 }

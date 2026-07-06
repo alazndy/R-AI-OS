@@ -1,24 +1,9 @@
 use super::audit::{parse_audit_issues, run_dependency_audit};
-use super::patterns::{compiled_pattern_regexes, PATTERNS, SKIP_DIRS};
+use super::patterns::{PATTERNS, SKIP_DIRS};
 use super::{ProjectType, SecurityIssue, SecurityReport, Severity};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Strip everything from the first `#[cfg(test)]` marker to end of file.
-/// Test modules in idiomatic Rust live at the bottom, so this eliminates
-/// fixture data from security scans without a full parser.
-fn strip_cfg_test_tail<'a>(content: &'a str, ext: &str) -> &'a str {
-    if ext != "rs" {
-        return content;
-    }
-    match content.find("#[cfg(test)]") {
-        Some(idx) => &content[..idx],
-        None => content,
-    }
-}
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -127,8 +112,6 @@ fn static_scan(root: &Path, issues: &mut Vec<SecurityIssue>, checks_run: &mut us
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file());
 
-    let compiled = compiled_pattern_regexes();
-
     for entry in walker {
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -138,49 +121,22 @@ fn static_scan(root: &Path, issues: &mut Vec<SecurityIssue>, checks_run: &mut us
             continue;
         }
 
-        // Skip the scanner's own pattern definition file to avoid self-matches
-        // on pattern title strings (e.g. title: "JWT secret is 'secret'...").
+        // Skip the scanner's own source files to avoid self-matches on pattern
+        // title/example strings (e.g. this file's own comments quoting them,
+        // or patterns.rs's title: "JWT secret is 'secret'...").
         let path_str = path.to_string_lossy();
-        if path_str.contains("security") && path_str.ends_with("patterns.rs") {
+        if path_str.contains("security")
+            && (path_str.ends_with("patterns.rs") || path_str.ends_with("scanner.rs"))
+        {
             continue;
         }
 
-        let raw = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let content = strip_cfg_test_tail(&raw, ext);
-
         *checks_run += 1;
-
-        for (pattern, re_opt) in PATTERNS.iter().zip(compiled.iter()) {
-            if !pattern.exts.contains(&ext) {
-                continue;
-            }
-            let re = match re_opt {
-                Some(r) => r,
-                None => continue,
-            };
-            for (line_no, line) in content.lines().enumerate() {
-                if re.is_match(line) {
-                    let raw = line.trim();
-                    let snippet = if raw.chars().count() > 80 {
-                        format!("{}…", raw.chars().take(80).collect::<String>())
-                    } else {
-                        raw.to_string()
-                    };
-                    issues.push(SecurityIssue {
-                        owasp: pattern.owasp,
-                        title: pattern.title,
-                        severity: pattern.severity.clone(),
-                        file: Some(path.to_path_buf()),
-                        line: Some(line_no + 1),
-                        snippet: Some(snippet),
-                    });
-                    break;
-                }
-            }
-        }
+        // Delegate to patterns::scan_file so there is exactly one place that
+        // implements match-and-exclude logic (this function used to carry its
+        // own copy, which silently fell out of sync with scan_file's exclude
+        // handling).
+        issues.extend(super::patterns::scan_file(path));
     }
 }
 
