@@ -29,7 +29,7 @@
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
-  <a href="#-vs-code-extension"><img src="https://img.shields.io/badge/VS%20Code-v0.6.0-blueviolet?style=for-the-badge&logo=visualstudiocode" alt="VS Code"></a>
+  <a href="#-vs-code-extension"><img src="https://img.shields.io/badge/VS%20Code-v0.8.0-blueviolet?style=for-the-badge&logo=visualstudiocode" alt="VS Code"></a>
 </p>
 
 <p align="center">
@@ -248,7 +248,7 @@ lifecycle_interval_secs = 3600
 
 ---
 
-## 🖥️ VS Code Extension (v0.6.0)
+## 🖥️ VS Code Extension (v0.8.0)
 
 R-AI-OS ships a native VS Code extension that turns the IDE into a **Hybrid UI** — the control panel for your agent swarm directly in your sidebar.
 
@@ -286,10 +286,10 @@ vscode-extension/
 
 ### Install
 
-The packaged `.vsix` is committed to the repo (`vscode-extension/raios-0.6.0.vsix`) so it can be installed directly without a Node toolchain:
+The packaged `.vsix` is committed to the repo (`vscode-extension/raios-0.8.0.vsix`) so it can be installed directly without a Node toolchain:
 
 ```bash
-code --install-extension vscode-extension/raios-0.6.0.vsix --force
+code --install-extension vscode-extension/raios-0.8.0.vsix --force
 ```
 
 To rebuild from source and reinstall, use the bundled script — it compiles, repackages, **uninstalls any existing `alazndy.raios` install first**, then installs the fresh `.vsix`. This guarantees only one version is ever registered, no matter how many times you re-run it:
