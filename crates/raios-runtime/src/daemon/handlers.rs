@@ -79,6 +79,21 @@ pub struct ClientHandle {
     pub umai: raios_core::security::Umai,
 }
 
+/// Checks a raw first line from a new connection against the expected
+/// `AUTH <token>` challenge, using a constant-time comparison so the
+/// response timing doesn't leak how many leading bytes of the token matched.
+/// Pulled out as a pure function so the auth decision itself — the part a
+/// careless refactor is most likely to quietly break — can be unit tested
+/// without standing up a full ClientHandle (socket, DB-backed stores, etc).
+fn check_auth_line(line: &str, server_token: &str) -> bool {
+    match line.trim().strip_prefix("AUTH ") {
+        Some(provided) => {
+            raios_core::security::constant_time_compare(provided.as_bytes(), server_token.as_bytes())
+        }
+        None => false,
+    }
+}
+
 pub async fn handle_client_connection(h: ClientHandle) {
     let mut socket = h.socket;
     let addr = h.addr;
@@ -103,14 +118,7 @@ pub async fn handle_client_connection(h: ClientHandle) {
 
     // Authentication challenge
     if let Ok(n) = reader.read_line(&mut line).await {
-        let trimmed = line.trim();
-        let authenticated = match trimmed.strip_prefix("AUTH ") {
-            Some(provided) => {
-                raios_core::security::constant_time_compare(provided.as_bytes(), server_token.as_bytes())
-            }
-            None => false,
-        };
-        if n == 0 || !authenticated {
+        if n == 0 || !check_auth_line(&line, &server_token) {
             println!("[Daemon] Auth failed for client {}. Dropping connection.", addr);
             let _ = writer
                 .write_all(b"{\"event\":\"Error\",\"message\":\"Authentication failed\"}\n")
@@ -545,5 +553,111 @@ mod payload_scan_tests {
         let umai = Umai::new(None);
         let decision = umai.check("CreateTaskGraph", payload.as_deref());
         assert!(!decision.is_allowed(), "expected Deny, got {decision:?}");
+    }
+}
+
+#[cfg(test)]
+mod auth_handshake_tests {
+    use super::*;
+    use crate::proxy_store::CapabilityStore;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn correct_token_authenticates() {
+        assert!(check_auth_line("AUTH secret123\n", "secret123"));
+    }
+
+    #[test]
+    fn wrong_token_is_rejected() {
+        assert!(!check_auth_line("AUTH wrong\n", "secret123"));
+    }
+
+    #[test]
+    fn missing_auth_prefix_is_rejected() {
+        assert!(!check_auth_line("secret123\n", "secret123"));
+        assert!(!check_auth_line("{\"command\":\"ListProjects\"}\n", "secret123"));
+    }
+
+    #[test]
+    fn empty_line_is_rejected() {
+        assert!(!check_auth_line("", "secret123"));
+        assert!(!check_auth_line("\n", "secret123"));
+    }
+
+    #[test]
+    fn trailing_whitespace_is_trimmed() {
+        assert!(check_auth_line("AUTH secret123\r\n", "secret123"));
+    }
+
+    /// Builds a real ClientHandle backed by tempdir-local SQLite files —
+    /// never the shared `~/.config/raios/workspace.db` — so this test can't
+    /// leak state into (or get confused by) a developer's real daemon data.
+    fn test_client_handle(
+        socket: TcpStream,
+        addr: std::net::SocketAddr,
+        server_token: String,
+        tmp: &tempfile::TempDir,
+    ) -> ClientHandle {
+        let (tx, rx) = broadcast::channel::<String>(16);
+        let telem_rx = tx.subscribe();
+        let state = DaemonState::new();
+        ClientHandle {
+            socket,
+            addr,
+            rx,
+            telem_rx,
+            tx: tx.clone(),
+            execution_proxy: super::super::proxy::ExecutionProxy::new(state.clone()),
+            state,
+            server_token,
+            sessions: Arc::new(SessionStore::new(tmp.path().join("sessions.db"))),
+            factory: Arc::new(crate::factory::Factory::new(tx)),
+            proxy: Arc::new(CapabilityProxy::new(CapabilityStore::new())),
+            graph_store: Arc::new(raios_core::task_graph::GraphStore::new(
+                tmp.path().join("graph.db"),
+            )),
+            swarm_store: Arc::new(crate::swarm::store::SwarmStore::new(
+                tmp.path().join("swarm.db"),
+            )),
+            evolution_store: Arc::new(crate::evolution::CandidateStore::new(
+                tmp.path().join("evolution.db"),
+            )),
+            umai: Umai::new(None),
+        }
+    }
+
+    /// The one integration-level path that's safe to exercise automatically:
+    /// a rejected AUTH returns before `handle_client_connection` ever calls
+    /// `raios_core::db::open_db()` (the shared, non-injectable global DB), so
+    /// this can run in any environment without touching real daemon state.
+    /// The success path is covered indirectly by `correct_token_authenticates`
+    /// above; a full success-path integration test is deliberately not
+    /// attempted here since it would hit that shared database.
+    #[tokio::test]
+    async fn wrong_token_over_real_socket_is_dropped() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let (socket, peer_addr) = listener.accept().await.unwrap();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let handle = test_client_handle(socket, peer_addr, "correct-token".into(), &tmp);
+        let server_task = tokio::spawn(handle_client_connection(handle));
+
+        client.write_all(b"AUTH definitely-wrong-token\n").await.unwrap();
+
+        let mut buf = [0u8; 512];
+        let n = client.read(&mut buf).await.unwrap();
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        assert!(resp.contains("\"event\":\"Error\""), "response was: {resp}");
+        assert!(resp.contains("Authentication failed"), "response was: {resp}");
+
+        // Server must close right after rejecting — a further read returns 0 (EOF).
+        let n2 = client.read(&mut buf).await.unwrap();
+        assert_eq!(n2, 0, "server should have closed the connection after auth failure");
+
+        server_task.await.unwrap();
     }
 }
