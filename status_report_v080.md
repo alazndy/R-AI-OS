@@ -1,3 +1,12 @@
+> ⚠️ **TARİHSEL BELGE — GÜNCEL DEĞİL.** Bu, v0.8.0 anındaki bir durum
+> anlık görüntüsüdür; proje şu an **v3.2.0**'da. Aşağıdaki "Sıradaki
+> Hedefler"in üçü de (SQLite migration, autonomous cron, graphify)
+> uzun süredir tamamlanmış durumda, ve "IPC Token Auth" bölümündeki
+> `.ipc_token` mekanizması 2026-07-07'de güvenlik açığı bulunup
+> **tamamen kaldırıldı** (bkz. `docs/adversarial-review-2026-07-07.md`
+> ve `CHANGELOG.md`). Güncel durum için `CHANGELOG.md` ve `memory.md`'ye
+> bakın. Bu dosya sadece tarihsel referans için tutuluyor.
+
 # R-AI-OS v0.8.0 Durum Raporu (Aura Hardened Edition) 🦾🛡️
 
 Şu an R-AI-OS, güvenlik ve asenkron iş akışı açısından en stabil ve güvenli versiyonuna ulaştı. Sistemin yeni yetenekleri:
