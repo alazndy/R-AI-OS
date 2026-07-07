@@ -174,7 +174,7 @@ fn verify_windows_only_owner_can_read(path: &std::path::Path) -> Result<()> {
 
     if grantees.is_empty() || !grantees.iter().all(|g| is_owner(g)) {
         return Err(anyhow!(
-            "Insecure permissions on token file: expected only '{username}' to have access, found {grantees:?}"
+            "Insecure permissions on token file: expected only '{username}' to have access, found {grantees:?}\nraw icacls output:\n{stdout}"
         ));
     }
     Ok(())
@@ -248,7 +248,9 @@ mod tests {
         let manager = SessionTokenManager::with_path(tmp.path().join(".session_token"));
         manager.generate_and_save().unwrap();
 
-        assert!(manager.get_valid_token().is_ok());
+        if let Err(e) = manager.get_valid_token() {
+            panic!("expected a freshly hardened file to be accepted, got: {e}");
+        }
     }
 
     #[cfg(windows)]
