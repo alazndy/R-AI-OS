@@ -322,4 +322,44 @@ action = "deny"
         let config = PolicyConfig::load_from_file(&path).unwrap();
         assert!(config.server.unwrap().hub.unwrap().trusted_proxy);
     }
+
+    /// README's "Phase 2 — Policy Manager" example is the first thing a new
+    /// user copies into their own raios-policy.toml. It previously used
+    /// `default = "allow"` (real field: `default_action`) and `tool = "..."`
+    /// with a `path_glob` (real field: `name`; no path_glob rule action
+    /// exists at all) — a config built from that example silently failed to
+    /// parse. This test extracts the actual fenced example from README.md
+    /// and parses it against the real schema, so a future doc/schema drift
+    /// fails CI instead of only being found by a user's broken config.
+    #[test]
+    fn readme_policy_manager_example_matches_current_schema() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            tools: ToolsPolicy,
+        }
+
+        let readme_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md");
+        let content = std::fs::read_to_string(&readme_path)
+            .expect("README.md should exist at repo root");
+
+        let after_marker = content
+            .split("### Phase 2 — Policy Manager")
+            .nth(1)
+            .expect("README structure changed: 'Phase 2 — Policy Manager' heading missing");
+        let toml_snippet = after_marker
+            .split("```toml")
+            .nth(1)
+            .expect("no ```toml fence found after the Phase 2 heading")
+            .split("```")
+            .next()
+            .expect("unterminated toml fence");
+
+        let parsed: Wrapper = toml::from_str(toml_snippet).unwrap_or_else(|e| {
+            panic!(
+                "README's Policy Manager example no longer parses as ToolsPolicy: {e}\n\nsnippet:\n{toml_snippet}"
+            )
+        });
+        assert_eq!(parsed.tools.default_action, PolicyAction::Confirm);
+        assert_eq!(parsed.tools.rules.len(), 2);
+    }
 }

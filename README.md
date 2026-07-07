@@ -95,17 +95,18 @@ Every MCP tool call passes through a policy gate before execution. Rules are def
 
 ```toml
 [tools]
-default = "allow"
+default_action = "confirm"
 
 [[tools.rules]]
-tool = "bash"
-action = "confirm"   # requires human approval
+name = "list_projects"
+action = "allow"
 
 [[tools.rules]]
-tool = "write_file"
-path_glob = "/etc/**"
+name = "run_build"
 action = "deny"
 ```
+
+Matching is by exact tool `name`, not by a path glob — per-path filesystem access is a separate concept (`[tools.rules.capabilities]`, declarative today, see `security::capabilities`), not a rule action.
 
 ### Phase 3 — Audit Chain
 
