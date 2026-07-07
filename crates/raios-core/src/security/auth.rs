@@ -120,7 +120,7 @@ impl SessionTokenManager {
 
 /// Timing-safe comparison of two byte slices.
 /// Evaluates in constant time depending only on length.
-fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
+pub fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

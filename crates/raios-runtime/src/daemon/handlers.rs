@@ -103,7 +103,14 @@ pub async fn handle_client_connection(h: ClientHandle) {
 
     // Authentication challenge
     if let Ok(n) = reader.read_line(&mut line).await {
-        if n == 0 || !line.trim().starts_with("AUTH ") || line.trim()[5..] != server_token {
+        let trimmed = line.trim();
+        let authenticated = match trimmed.strip_prefix("AUTH ") {
+            Some(provided) => {
+                raios_core::security::constant_time_compare(provided.as_bytes(), server_token.as_bytes())
+            }
+            None => false,
+        };
+        if n == 0 || !authenticated {
             println!("[Daemon] Auth failed for client {}. Dropping connection.", addr);
             let _ = writer
                 .write_all(b"{\"event\":\"Error\",\"message\":\"Authentication failed\"}\n")

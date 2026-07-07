@@ -60,8 +60,21 @@ impl Server {
             token_path
         );
 
-        // Also write legacy token for backwards compatibility with any existing tools
-        let _ = std::fs::write(config_dir.join(".ipc_token"), &token);
+        // Also write legacy token for backwards compatibility with any existing tools.
+        // Must match .session_token's owner-only permissions — this file carries the
+        // exact same secret and is still the primary auth source for the MCP server
+        // and TUI, so leaving it world-readable would defeat that hardening entirely.
+        let ipc_token_path = config_dir.join(".ipc_token");
+        let _ = std::fs::write(&ipc_token_path, &token);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&ipc_token_path) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o600);
+                let _ = std::fs::set_permissions(&ipc_token_path, perms);
+            }
+        }
 
         let bind_ip = crate::server::http::resolve_bind_addr(42069).ip();
         let daemon_addr = format!("{bind_ip}:42069");
