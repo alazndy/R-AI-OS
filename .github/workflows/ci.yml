@@ -49,3 +49,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: cargo clippy --lib -- -W clippy::all
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage report
+        run: cargo llvm-cov --lib --workspace --lcov --output-path lcov.info
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
