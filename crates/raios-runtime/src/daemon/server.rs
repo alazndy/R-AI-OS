@@ -60,21 +60,14 @@ impl Server {
             token_path
         );
 
-        // Also write legacy token for backwards compatibility with any existing tools.
-        // Must match .session_token's owner-only permissions — this file carries the
-        // exact same secret and is still the primary auth source for the MCP server
-        // and TUI, so leaving it world-readable would defeat that hardening entirely.
-        let ipc_token_path = config_dir.join(".ipc_token");
-        let _ = std::fs::write(&ipc_token_path, &token);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = std::fs::metadata(&ipc_token_path) {
-                let mut perms = meta.permissions();
-                perms.set_mode(0o600);
-                let _ = std::fs::set_permissions(&ipc_token_path, perms);
-            }
-        }
+        // NOTE: this daemon no longer writes a `.ipc_token` copy. It used to,
+        // for backwards compatibility with older clients, but that copy
+        // carried the exact same secret as .session_token without matching
+        // its owner-only (0600) permissions — defeating the hardening
+        // entirely for any local reader. All in-tree clients (MCP server,
+        // TUI, tray, VS Code extension) now read .session_token, with the
+        // VS Code/tray clients falling back to a pre-existing .ipc_token
+        // file on disk for one release cycle to avoid a hard break.
 
         let bind_ip = crate::server::http::resolve_bind_addr(42069).ip();
         let daemon_addr = format!("{bind_ip}:42069");

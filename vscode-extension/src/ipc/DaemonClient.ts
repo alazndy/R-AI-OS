@@ -99,12 +99,23 @@ export class DaemonClient {
   }
 
   private readToken(): string | null {
-    const tokenPath = path.join(raiosConfigDir(), ".ipc_token");
-    try {
-      return fs.readFileSync(tokenPath, "utf-8").trim();
-    } catch {
-      return null;
+    const configDir = raiosConfigDir();
+    // .ipc_token is a legacy fallback: the daemon no longer writes it
+    // (it duplicated .session_token's secret without matching its
+    // owner-only file permissions), but older on-disk copies may still exist.
+    const tokenPaths = [
+      path.join(configDir, ".session_token"),
+      path.join(configDir, ".ipc_token"),
+    ];
+    for (const tokenPath of tokenPaths) {
+      try {
+        const token = fs.readFileSync(tokenPath, "utf-8").trim();
+        if (token) return token;
+      } catch {
+        // try next candidate
+      }
     }
+    return null;
   }
 
   private scheduleReconnect(): void {

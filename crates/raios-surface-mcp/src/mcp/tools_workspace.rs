@@ -55,7 +55,7 @@ impl McpServer {
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_default()
-            .join(".ipc_token");
+            .join(".session_token");
         if let Ok(token) = std::fs::read_to_string(token_path) {
             let _ = stream.write_all(format!("AUTH {}\n", token.trim()).as_bytes());
         }

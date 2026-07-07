@@ -52,7 +52,7 @@ pub(crate) fn read_auth_token(is_remote: bool) -> Option<String> {
     let filename = if is_remote {
         ".hub_api_key"
     } else {
-        ".ipc_token"
+        ".session_token"
     };
     std::fs::read_to_string(config_dir.join(filename))
         .ok()
