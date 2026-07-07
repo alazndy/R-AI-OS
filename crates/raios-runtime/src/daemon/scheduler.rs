@@ -77,9 +77,19 @@ pub async fn start_scheduler_worker(
                         let _ = tx_clone.send(evt.to_string());
                         println!("[Scheduler] Fired '{}' → {} (pid {pid})", job.title, job.agent);
                     }
-                    _ => {
+                    Ok(Err(e)) => {
                         let _ = raios_core::db::cp_scheduled_job_revert_firing(&conn, &job_id);
-                        eprintln!("[Scheduler] Spawn failed for '{}'", job.title);
+                        eprintln!(
+                            "[Scheduler] Spawn failed for '{}' (agent '{}'): {e}",
+                            job.title, job.agent
+                        );
+                    }
+                    Err(join_err) => {
+                        let _ = raios_core::db::cp_scheduled_job_revert_firing(&conn, &job_id);
+                        eprintln!(
+                            "[Scheduler] Spawn task panicked for '{}' (agent '{}'): {join_err}",
+                            job.title, job.agent
+                        );
                     }
                 }
             });

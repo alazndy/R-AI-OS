@@ -100,11 +100,7 @@ pub fn cmd_cron(action: CronAction, json: bool) {
                         );
                         println!("{}", "─".repeat(99));
                         for job in jobs {
-                            let truncated_title = if job.title.len() > 28 {
-                                format!("{}...", &job.title[..25])
-                            } else {
-                                job.title.clone()
-                            };
+                            let truncated_title = truncate_title(&job.title, 28);
                             let interval_str = format!("{}s", job.interval_secs);
                             println!(
                                 "{:<8} | {:<28} | {:<10} | {:<8} | {:<20} | {:<8} | {:<5}",
@@ -277,5 +273,55 @@ pub fn cmd_cron(action: CronAction, json: bool) {
                 }
             }
         }
+    }
+}
+
+/// Truncates a job title to at most `max_chars` characters for table display,
+/// appending "..." if it was cut. Byte-slicing (`&title[..25]`) panics
+/// whenever the cut point lands inside a multi-byte UTF-8 character — this
+/// happened live with a real cron job titled "...scrape → Gemini...", where
+/// byte offset 25 landed inside the arrow. Counting/collecting by `char`
+/// always lands on a valid boundary regardless of content.
+fn truncate_title(title: &str, max_chars: usize) -> String {
+    if title.chars().count() > max_chars {
+        let short: String = title.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{short}...")
+    } else {
+        title.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn leaves_short_titles_untouched() {
+        assert_eq!(truncate_title("short title", 28), "short title");
+    }
+
+    #[test]
+    fn truncates_long_ascii_titles_with_ellipsis() {
+        let title = "This is a very long cron job title that exceeds the limit";
+        let result = truncate_title(title, 28);
+        assert!(result.ends_with("..."));
+        assert_eq!(result.chars().count(), 28); // 25 chars + "..."
+    }
+
+    /// Regression test for the live crash: byte-slicing `&title[..25]`
+    /// panicked when byte 25 fell inside the multi-byte '→' (U+2192,
+    /// 3 bytes in UTF-8).
+    #[test]
+    fn does_not_panic_on_multi_byte_utf8_at_the_cut_boundary() {
+        let title = "Night pipeline: scrape → Gemini analysis → Obsidian";
+        let result = truncate_title(title, 28);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn handles_titles_entirely_made_of_multi_byte_chars() {
+        let title = "→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→";
+        let result = truncate_title(title, 28);
+        assert!(result.ends_with("..."));
     }
 }
