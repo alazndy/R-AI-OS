@@ -38,3 +38,4 @@ cortex = ["fastembed", "ort-sys", "hf-hub", "raios-core/cortex"]
 
 [dev-dependencies]
 tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

@@ -2415,6 +2415,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "tower",
  "uuid",
  "walkdir",
  "which",

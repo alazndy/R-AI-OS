@@ -105,6 +105,10 @@ impl PolicyAction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsPolicy {
     pub default_action: PolicyAction,
+    /// No rules beyond `default_action` is a completely valid policy — an
+    /// absent list shouldn't force every minimal `[tools]` block to spell
+    /// out `rules = []`.
+    #[serde(default)]
     pub rules: Vec<ToolRule>,
 }
 

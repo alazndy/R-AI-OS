@@ -593,7 +593,8 @@ mod auth_handshake_tests {
     /// Builds a real ClientHandle backed by tempdir-local SQLite files —
     /// never the shared `~/.config/raios/workspace.db` — so this test can't
     /// leak state into (or get confused by) a developer's real daemon data.
-    fn test_client_handle(
+    /// `pub(super)` so the sibling `dispatch_loop_tests` module can reuse it.
+    pub(super) fn test_client_handle(
         socket: TcpStream,
         addr: std::net::SocketAddr,
         server_token: String,
@@ -659,5 +660,107 @@ mod auth_handshake_tests {
         assert_eq!(n2, 0, "server should have closed the connection after auth failure");
 
         server_task.await.unwrap();
+    }
+}
+
+/// Covers the post-auth command dispatch loop — specifically, that a UMAI
+/// deny decision (Layer 1 AgentShield) is actually reflected in what comes
+/// back over the wire, not just in the in-process `Umai::check` return value
+/// already covered by `payload_scan_tests`. The dispatch loop also calls
+/// `raios_core::db::open_db()` (audit ledger write) on every command, which
+/// resolves a fixed `$HOME/.config/raios/workspace.db` with no injection
+/// seam — these tests redirect HOME/XDG_CONFIG_HOME to a tempdir for their
+/// duration, serialized since that's process-global state.
+#[cfg(all(test, unix))]
+mod dispatch_loop_tests {
+    use super::auth_handshake_tests::test_client_handle;
+    use super::*;
+    use std::sync::Mutex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct IsolatedHome {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        original_home: Option<String>,
+        original_xdg_config_home: Option<String>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl IsolatedHome {
+        fn new() -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let tmp = tempfile::TempDir::new().unwrap();
+            let original_home = std::env::var("HOME").ok();
+            let original_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();
+            std::env::set_var("HOME", tmp.path());
+            std::env::remove_var("XDG_CONFIG_HOME");
+            Self {
+                _lock: lock,
+                original_home,
+                original_xdg_config_home,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for IsolatedHome {
+        fn drop(&mut self) {
+            match &self.original_home {
+                Some(h) => std::env::set_var("HOME", h),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.original_xdg_config_home {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dangerous_shell_cmd_in_create_task_graph_is_denied_over_the_wire() {
+        let _home = IsolatedHome::new();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let (socket, peer_addr) = listener.accept().await.unwrap();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let handle = test_client_handle(socket, peer_addr, "test-token".into(), &tmp);
+        let server_task = tokio::spawn(handle_client_connection(handle));
+
+        client.write_all(b"AUTH test-token\n").await.unwrap();
+
+        // Drain the AUTH ack + SessionStarted line before sending a command.
+        let mut buf = [0u8; 4096];
+        let n = client.read(&mut buf).await.unwrap();
+        assert!(
+            String::from_utf8_lossy(&buf[..n]).contains("SessionStarted"),
+            "expected SessionStarted after successful auth"
+        );
+
+        let cmd = serde_json::json!({
+            "command": "CreateTaskGraph",
+            "goal": "test",
+            "nodes": [
+                { "id": "a", "description": "d", "shell_cmd": "rm -rf /" }
+            ]
+        });
+        client
+            .write_all(format!("{cmd}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let n = client.read(&mut buf).await.unwrap();
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            resp.contains("\"event\":\"UmaiBlocked\""),
+            "expected the dangerous shell_cmd to be denied over the wire, got: {resp}"
+        );
+
+        drop(client);
+        let _ = server_task.await;
     }
 }
