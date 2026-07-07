@@ -544,3 +544,115 @@ fn get_dir_size(path: &Path) -> std::io::Result<u64> {
     }
     Ok(total_size)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── canonical_agent_identity ────────────────────────────────────────
+
+    #[test]
+    fn maps_known_agents_to_kaira_identities() {
+        assert_eq!(canonical_agent_identity("claude"), Some("claude_kaira"));
+        assert_eq!(canonical_agent_identity("codex"), Some("codex_kaira"));
+        assert_eq!(canonical_agent_identity("opencode"), Some("opencode_kaira"));
+        assert_eq!(canonical_agent_identity("antigravity"), Some("antigravity_kaira"));
+        assert_eq!(canonical_agent_identity("agy"), Some("antigravity_kaira"));
+    }
+
+    #[test]
+    fn agent_identity_lookup_is_case_insensitive() {
+        assert_eq!(canonical_agent_identity("Claude"), Some("claude_kaira"));
+        assert_eq!(canonical_agent_identity("CODEX"), Some("codex_kaira"));
+        assert_eq!(canonical_agent_identity("AGY"), Some("antigravity_kaira"));
+    }
+
+    #[test]
+    fn unknown_agent_returns_none_without_blocking_spawn() {
+        // Agents outside the 4-agent matrix (e.g. "cursor") still spawn
+        // normally — this must fail open (None), never panic or error.
+        assert_eq!(canonical_agent_identity("cursor"), None);
+        assert_eq!(canonical_agent_identity(""), None);
+        assert_eq!(canonical_agent_identity("gpt-5"), None);
+    }
+
+    // ─── strip_session_block ─────────────────────────────────────────────
+
+    #[test]
+    fn strip_session_block_removes_an_existing_block() {
+        let content = "# My Notes\n\nSome content.\n\n\
+            <!-- raios-session-begin -->\n\
+            # RAIOS WRAPPER SESSION\n- Session ID: `abc12345`\n\
+            <!-- raios-session-end -->\n\n\
+            More content after.\n";
+        let stripped = strip_session_block(content);
+        assert!(!stripped.contains("raios-session-begin"));
+        assert!(!stripped.contains("Session ID"));
+        assert!(stripped.contains("# My Notes"));
+        assert!(stripped.contains("More content after."));
+    }
+
+    #[test]
+    fn strip_session_block_is_a_noop_without_a_block() {
+        let content = "# My Notes\n\nJust some plain content, no session block.\n";
+        assert_eq!(strip_session_block(content), content);
+    }
+
+    #[test]
+    fn strip_session_block_replaces_stale_block_on_reinjection() {
+        // inject_session_to_claude_md always strips first, then appends —
+        // this is what guarantees re-running an agent never accumulates
+        // multiple stacked session blocks in CLAUDE.md.
+        let content = "# Notes\n\n\
+            <!-- raios-session-begin -->\nold session\n<!-- raios-session-end -->\n";
+        let stripped = strip_session_block(content);
+        let reinjected = format!(
+            "{}\n<!-- raios-session-begin -->\nnew session\n<!-- raios-session-end -->\n",
+            stripped.trim_end()
+        );
+        assert_eq!(reinjected.matches("raios-session-begin").count(), 1);
+        assert!(reinjected.contains("new session"));
+        assert!(!reinjected.contains("old session"));
+    }
+
+    #[test]
+    fn strip_session_block_handles_multiple_begin_markers_by_taking_outermost_span() {
+        // find() picks the first BEGIN, rfind() picks the last END — this
+        // documents the actual (not obviously correct) behavior on
+        // malformed/doubled markers rather than leaving it unverified.
+        let content = "pre\n<!-- raios-session-begin -->\nA\n<!-- raios-session-begin -->\nB\n<!-- raios-session-end -->\npost";
+        let stripped = strip_session_block(content);
+        assert_eq!(stripped, "pre\npost");
+    }
+
+    // ─── get_dir_size ─────────────────────────────────────────────────────
+
+    #[test]
+    fn get_dir_size_sums_files_recursively() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"12345").unwrap(); // 5 bytes
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("b.txt"), b"1234567890").unwrap(); // 10 bytes
+
+        let size = get_dir_size(tmp.path()).unwrap();
+        assert_eq!(size, 15);
+    }
+
+    #[test]
+    fn get_dir_size_of_empty_dir_is_zero() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert_eq!(get_dir_size(tmp.path()).unwrap(), 0);
+    }
+
+    #[test]
+    fn get_dir_size_of_a_file_path_is_zero() {
+        // Matches the real call site's behavior: `path.is_dir()` gates the
+        // whole body, so pointing this at a plain file (not a directory)
+        // silently returns 0 rather than that file's own size.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("solo.txt");
+        std::fs::write(&file, b"some bytes").unwrap();
+        assert_eq!(get_dir_size(&file).unwrap(), 0);
+    }
+}
