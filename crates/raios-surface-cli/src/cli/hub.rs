@@ -481,15 +481,13 @@ pub fn cmd_api_key_generate(force: bool) {
     // Generate 32-byte cryptographically strong key from the OS CSPRNG
     let key = raios_core::security::generate_secret_hex();
 
-    // Save key plaintext (chmod 600)
+    // Save key, restricted to owner-only access
     if let Err(e) = fs::write(&path, &key) {
         eprintln!("  Failed to write key: {e}");
         std::process::exit(1);
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    if let Err(e) = raios_core::security::harden_file_perms(&path) {
+        eprintln!("  Warning: could not restrict key file permissions: {e}");
     }
 
     // Compute hash for policy.toml

@@ -2,6 +2,7 @@ pub mod audit;
 pub mod auth;
 pub mod capabilities;
 pub mod egress;
+pub mod file_perms;
 pub mod license;
 pub mod patterns;
 pub mod policy;
@@ -23,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub use egress::EgressFilter;
+pub use file_perms::harden_file_perms;
 pub use license::{scan_licenses, LicenseDep, LicenseReport};
 pub use patterns::{scan_file, WATCHED_EXTS};
 pub use capabilities::{check_fs_capability, check_network_capability, default_for as default_capabilities_for};

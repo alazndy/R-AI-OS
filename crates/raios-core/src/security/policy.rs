@@ -41,6 +41,16 @@ pub struct HubPolicy {
     pub trusted_cidr: String,
     /// SHA-256 hex hash of the remote API key (never store the key in plaintext)
     pub api_key_hash: Option<String>,
+    /// Set to true only when this server sits behind a same-host reverse
+    /// proxy (nginx, Caddy, Cloudflare Tunnel, etc). When true, the HTTP
+    /// auth middleware trusts the leftmost `X-Forwarded-For` address as the
+    /// real client IP instead of the raw TCP peer — otherwise every
+    /// proxied request looks like it came from localhost and silently
+    /// gets checked against the session token instead of the API key.
+    /// Only honored when the direct TCP peer is itself loopback, so a
+    /// remote attacker can't spoof this header to impersonate a proxy.
+    #[serde(default)]
+    pub trusted_proxy: bool,
 }
 
 impl HubPolicy {
@@ -54,6 +64,7 @@ impl Default for HubPolicy {
             bind_mode: Self::default_bind_mode(),
             trusted_cidr: Self::default_trusted_cidr(),
             api_key_hash: None,
+            trusted_proxy: false,
         }
     }
 }
@@ -288,5 +299,27 @@ action = "deny"
             .filesystem
             .blocked_paths
             .contains(&"C:/Users/turha/.ssh".to_string()));
+    }
+
+    #[test]
+    fn hub_trusted_proxy_defaults_to_false_when_absent() {
+        assert!(!HubPolicy::default().trusted_proxy);
+
+        let tmp = TempDir::new().unwrap();
+        let toml = format!("{SAMPLE_TOML}\n[server.hub]\nbind_mode = \"all\"\n");
+        let path = write_policy(&tmp, &toml);
+        let config = PolicyConfig::load_from_file(&path).unwrap();
+        assert!(!config.server.unwrap().hub.unwrap().trusted_proxy);
+    }
+
+    #[test]
+    fn hub_trusted_proxy_can_be_enabled_explicitly() {
+        let tmp = TempDir::new().unwrap();
+        let toml = format!(
+            "{SAMPLE_TOML}\n[server.hub]\nbind_mode = \"all\"\ntrusted_proxy = true\n"
+        );
+        let path = write_policy(&tmp, &toml);
+        let config = PolicyConfig::load_from_file(&path).unwrap();
+        assert!(config.server.unwrap().hub.unwrap().trusted_proxy);
     }
 }

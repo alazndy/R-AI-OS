@@ -56,14 +56,8 @@ impl SessionTokenManager {
         // Write token to file
         fs::write(&self.token_path, &token)?;
 
-        // Set owner-only permissions (chmod 600) on Unix-like systems
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&self.token_path)?.permissions();
-            perms.set_mode(0o600);
-            fs::set_permissions(&self.token_path, perms)?;
-        }
+        // Restrict to owner-only access (chmod 600 on Unix, owner-only DACL on Windows)
+        crate::security::harden_file_perms(&self.token_path)?;
 
         Ok(token)
     }
