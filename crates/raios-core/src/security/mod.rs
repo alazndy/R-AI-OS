@@ -16,7 +16,7 @@ pub mod tool_pin;
 pub mod umai;
 pub mod verify_chain;
 
-pub use auth::{constant_time_compare, SessionTokenManager};
+pub use auth::{constant_time_compare, generate_secret_hex, SessionTokenManager};
 pub use umai::{Umai, UmaiDecision};
 
 use serde::{Deserialize, Serialize};

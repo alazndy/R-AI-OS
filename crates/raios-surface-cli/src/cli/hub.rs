@@ -478,12 +478,8 @@ pub fn cmd_api_key_generate(force: bool) {
 
     let _ = fs::create_dir_all(config_dir());
 
-    // Generate 32-byte cryptographically strong key
-    let mut hasher = Sha256::new();
-    hasher.update(uuid::Uuid::new_v4().as_bytes());
-    hasher.update(format!("{:?}", std::time::SystemTime::now()).as_bytes());
-    hasher.update(format!("{}", std::process::id()).as_bytes());
-    let key = format!("{:x}", hasher.finalize());
+    // Generate 32-byte cryptographically strong key from the OS CSPRNG
+    let key = raios_core::security::generate_secret_hex();
 
     // Save key plaintext (chmod 600)
     if let Err(e) = fs::write(&path, &key) {

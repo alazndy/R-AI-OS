@@ -1,11 +1,22 @@
 use anyhow::{anyhow, Result};
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 /// Maximum age of a token before it expires (8 hours)
 const TOKEN_MAX_AGE: Duration = Duration::from_secs(8 * 60 * 60);
+
+/// Draws 32 bytes directly from the OS CSPRNG and hex-encodes them into a
+/// 256-bit secret. Used for session tokens and API keys — anywhere a bearer
+/// credential needs to be generated. Deliberately does not hash any
+/// additional inputs (pid, timestamps, uuids): the OS RNG is already the
+/// primitive, and mixing in predictable data adds complexity without adding
+/// security.
+pub fn generate_secret_hex() -> String {
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf).expect("OS CSPRNG unavailable");
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
 
 /// Security helper for managing bootstrap session tokens.
 /// The token is stored at `~/.config/raios/.session_token` with owner-only permissions.
@@ -40,13 +51,7 @@ impl SessionTokenManager {
             fs::create_dir_all(parent)?;
         }
 
-        // Generate 32 bytes of secure random hex string using system time, pid, and counter as entropy source,
-        // hashed via SHA-256 for a cryptographically strong 256-bit key.
-        let mut hasher = Sha256::new();
-        hasher.update(uuid::Uuid::new_v4().as_bytes());
-        hasher.update(format!("{}", std::process::id()).as_bytes());
-        hasher.update(format!("{:?}", SystemTime::now()).as_bytes());
-        let token = format!("{:x}", hasher.finalize());
+        let token = generate_secret_hex();
 
         // Write token to file
         fs::write(&self.token_path, &token)?;
@@ -155,6 +160,18 @@ mod tests {
 
         manager.clear().unwrap();
         assert!(!manager.token_path.exists());
+    }
+
+    #[test]
+    fn generate_secret_hex_produces_64_char_hex_string() {
+        let secret = generate_secret_hex();
+        assert_eq!(secret.len(), 64);
+        assert!(secret.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn generate_secret_hex_is_not_deterministic() {
+        assert_ne!(generate_secret_hex(), generate_secret_hex());
     }
 
     #[test]

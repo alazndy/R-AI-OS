@@ -2374,6 +2374,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "fd-lock",
+ "getrandom 0.4.2",
  "regex",
  "regex-lite",
  "rusqlite",
