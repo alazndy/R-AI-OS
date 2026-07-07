@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex};
+use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 // ─── Job types ────────────────────────────────────────────────────────────────
@@ -85,7 +85,6 @@ pub type TaskFn = Pin<Box<dyn Future<Output = Result<String>> + Send + 'static>>
 pub struct Factory {
     db_path: Arc<PathBuf>,
     tx: broadcast::Sender<String>,
-    #[allow(dead_code)]
     write_lock: Arc<Mutex<()>>,
 }
 
@@ -153,7 +152,16 @@ impl Factory {
         id
     }
 
+    /// Every write below takes `write_lock` around the connect+execute pair
+    /// (never across a broadcast send or webhook call). WAL mode lets
+    /// concurrent readers through, but this factory opens a fresh
+    /// short-lived connection per write with no `busy_timeout` set — two
+    /// jobs completing at nearly the same instant from different tasks in
+    /// this same process could otherwise both hit SQLite's writer lock and
+    /// get an immediate `SQLITE_BUSY` that these call sites silently swallow.
+    /// Serializing in-process writers removes that self-contention entirely.
     fn persist(&self, job: &Job) {
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         if let Ok(conn) = self.connect() {
             let _ = conn.execute(
                 "INSERT OR REPLACE INTO factory_jobs
@@ -173,11 +181,14 @@ impl Factory {
     }
 
     fn set_running(&self, id: &Uuid) {
-        if let Ok(conn) = self.connect() {
-            let _ = conn.execute(
-                "UPDATE factory_jobs SET status='running' WHERE id=?1",
-                params![id.to_string()],
-            );
+        {
+            let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
+            if let Ok(conn) = self.connect() {
+                let _ = conn.execute(
+                    "UPDATE factory_jobs SET status='running' WHERE id=?1",
+                    params![id.to_string()],
+                );
+            }
         }
         let msg = serde_json::json!({
             "event": "JobStarted",
@@ -189,11 +200,14 @@ impl Factory {
     fn complete(&self, id: &Uuid, result: &str) {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-        if let Ok(conn) = self.connect() {
-            let _ = conn.execute(
-                "UPDATE factory_jobs SET status='completed', result=?2, completed_at=?3 WHERE id=?1",
-                params![id.to_string(), result, now],
-            );
+        {
+            let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
+            if let Ok(conn) = self.connect() {
+                let _ = conn.execute(
+                    "UPDATE factory_jobs SET status='completed', result=?2, completed_at=?3 WHERE id=?1",
+                    params![id.to_string(), result, now],
+                );
+            }
         }
 
         let msg = serde_json::json!({
@@ -224,11 +238,14 @@ impl Factory {
     fn fail(&self, id: &Uuid, error: &str) {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-        if let Ok(conn) = self.connect() {
-            let _ = conn.execute(
-                "UPDATE factory_jobs SET status='failed', error=?2, completed_at=?3 WHERE id=?1",
-                params![id.to_string(), error, now],
-            );
+        {
+            let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
+            if let Ok(conn) = self.connect() {
+                let _ = conn.execute(
+                    "UPDATE factory_jobs SET status='failed', error=?2, completed_at=?3 WHERE id=?1",
+                    params![id.to_string(), error, now],
+                );
+            }
         }
 
         let msg = serde_json::json!({

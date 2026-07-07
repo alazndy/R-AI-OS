@@ -354,6 +354,10 @@ pub fn run_extension_command_bg(
         interpreter: Option<String>,
         entry: Option<String>,
     }
+    // Mirrors ext/mod.rs's ExtCommand shape so this parses the same
+    // manifest.toml without error — this view only renders name/kind/args,
+    // but env_key/separator must still exist on the struct or manifests
+    // that set them fail to deserialize here.
     #[derive(serde::Deserialize)]
     struct Cmd {
         name: String,

@@ -72,10 +72,15 @@ pub(super) fn scan_opencode_usage() -> UsageSnapshot {
 }
 
 pub(super) fn scan_antigravity_usage() -> UsageSnapshot {
-    let installed = raios_core::core::process::resolve_command_path("antigravity").is_some();
+    let home = dirs::home_dir().unwrap_or_default();
+    let auth_path = home.join(".gemini/antigravity-cli/antigravity-oauth-token");
+    let installed = raios_core::core::process::resolve_command_path("antigravity").is_some()
+        || auth_path.exists();
     let mut usage = UsageSnapshot::new("Antigravity CLI", installed);
 
-    if installed {
+    if let Some(json) = read_json_value(&auth_path) {
+        apply_antigravity_auth_metadata(&mut usage, &json);
+    } else if installed {
         usage.source = UsageSource::Inferred;
         usage.notes.push(
             "Antigravity kurulu görünüyor; local auth metadata bulunamadığı için quota durumu bilinmiyor."
@@ -173,7 +178,6 @@ fn apply_claude_auth_metadata(usage: &mut UsageSnapshot, auth: &Value) {
     );
 }
 
-#[allow(dead_code)]
 fn apply_antigravity_auth_metadata(usage: &mut UsageSnapshot, auth: &Value) {
     usage.authenticated = true;
     usage.source = UsageSource::LocalAuth;

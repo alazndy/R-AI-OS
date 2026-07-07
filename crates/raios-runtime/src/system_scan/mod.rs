@@ -17,6 +17,10 @@ pub enum ToolStatus {
     Running,
     Installed,
     Missing,
+    /// Matched in the TUI (ui/health.rs) but never constructed today — no
+    /// scan path currently distinguishes "detection failed" from "not
+    /// installed". Reserved for when one does, rather than removed and
+    /// re-added later.
     #[allow(dead_code)]
     Error(String),
 }

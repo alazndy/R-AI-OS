@@ -14,6 +14,9 @@ struct ExtensionManifest {
     extension: ExtensionMeta,
     #[serde(default)]
     commands: Vec<ExtCommand>,
+    // Parsed so extension.toml manifests declaring a config_schema validate
+    // correctly, but nothing consumes it yet — there's no settings-prompt
+    // UI that would ask a user for these values.
     #[serde(default)]
     #[allow(dead_code)]
     config_schema: Vec<ConfigField>,

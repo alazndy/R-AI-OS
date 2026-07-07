@@ -26,6 +26,9 @@ use raios_core::security::{EgressFilter, Umai};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RpcRequest {
+    /// Required to exist in the incoming JSON for the shape to match, but
+    /// its value (always "2.0") is never inspected — no protocol version
+    /// negotiation is implemented.
     #[allow(dead_code)]
     jsonrpc: String,
     pub(super) id: Option<Value>,

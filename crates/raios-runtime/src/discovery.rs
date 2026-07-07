@@ -13,6 +13,11 @@ impl AgentInfo {
     }
 }
 
+/// Populated by `discover_skills` but currently only `name`/`category` are
+/// ever displayed (see TUI skills panel). `description` carries a real
+/// (if generic) value; `version`/`is_active` are hardcoded constants at
+/// every call site today, not actually-discovered metadata — kept for a
+/// UI that shows per-skill detail, not yet built.
 #[derive(Debug, Clone)]
 pub struct SkillInfo {
     pub name: String,

@@ -52,6 +52,7 @@ pub(super) async fn handle_agent_card() -> impl IntoResponse {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct A2aRequest {
+    /// Same as mcp::RpcRequest.jsonrpc — must deserialize, value unused.
     #[allow(dead_code)]
     #[serde(default)]
     jsonrpc: String,

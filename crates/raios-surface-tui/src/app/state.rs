@@ -122,9 +122,7 @@ pub enum BgMsg {
         status: String,
         error_count: usize,
     },
-    #[allow(dead_code)]
     ActivityUpdate(Vec<Activity>),
-    #[allow(dead_code)]
     NewLog(LogEntry),
     MemPalaceBuilt(Vec<raios_core::mempalace::MemRoom>),
     Tasks(Vec<raios_runtime::tasks::Task>),
