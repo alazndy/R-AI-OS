@@ -516,6 +516,38 @@ fn strip_session_block(content: &str) -> String {
     }
 }
 
+/// Extension schedules (registered via `raios ext install` — see
+/// `crates/raios-surface-cli/src/cli/ext/schedule.rs`) write a
+/// machine-parseable `task_description` of the form "raios ext <name>
+/// <command>" and set `agent` to the extension's own name (e.g. "atc")
+/// rather than a supported AI-agent CLI. Recognize that shape so callers
+/// can dispatch through the extension runner instead of treating it as an
+/// unrecognized AI agent.
+pub fn ext_command_from_task_description(task_description: &str) -> Option<(&str, &str)> {
+    let rest = task_description.strip_prefix("raios ext ")?;
+    let (ext_name, command) = rest.split_once(' ')?;
+    if ext_name.is_empty() || command.is_empty() {
+        return None;
+    }
+    Some((ext_name, command))
+}
+
+/// Spawn `raios ext <name> <command>` detached. Used by the cron scheduler
+/// for schedules an extension registered for itself (see
+/// `crates/raios-surface-cli/src/cli/ext/schedule.rs`) — these run a
+/// project's own script through the extension runner, not an interactive
+/// AI-agent CLI, so they must bypass the fixed agent whitelist in
+/// `spawn_agent_detached`.
+pub fn spawn_ext_command_detached(ext_name: &str, command: &str) -> Result<u32, String> {
+    let child = Command::new("raios")
+        .arg("ext")
+        .arg(ext_name)
+        .arg(command)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn 'raios ext {ext_name} {command}': {e}"))?;
+    Ok(child.id())
+}
+
 /// Maps a spawnable agent name to its Kaira identity for handoff lookups.
 /// Agents outside the 4-agent matrix (e.g. "cursor") return `None` — they
 /// still spawn normally, just without handoff delivery.
@@ -574,6 +606,37 @@ mod tests {
         assert_eq!(canonical_agent_identity("cursor"), None);
         assert_eq!(canonical_agent_identity(""), None);
         assert_eq!(canonical_agent_identity("gpt-5"), None);
+    }
+
+    // ─── ext_command_from_task_description ──────────────────────────────
+
+    #[test]
+    fn parses_a_well_formed_ext_task_description() {
+        assert_eq!(
+            ext_command_from_task_description("raios ext atc process"),
+            Some(("atc", "process"))
+        );
+    }
+
+    #[test]
+    fn preserves_multi_word_commands_after_the_extension_name() {
+        // splitn(2, ' ') must not truncate a command that itself has spaces.
+        assert_eq!(
+            ext_command_from_task_description("raios ext atc per project"),
+            Some(("atc", "per project"))
+        );
+    }
+
+    #[test]
+    fn plain_ai_agent_task_descriptions_do_not_match() {
+        assert_eq!(ext_command_from_task_description("backup database"), None);
+        assert_eq!(ext_command_from_task_description(""), None);
+    }
+
+    #[test]
+    fn rejects_prefix_without_a_trailing_command() {
+        assert_eq!(ext_command_from_task_description("raios ext atc"), None);
+        assert_eq!(ext_command_from_task_description("raios ext "), None);
     }
 
     // ─── strip_session_block ─────────────────────────────────────────────

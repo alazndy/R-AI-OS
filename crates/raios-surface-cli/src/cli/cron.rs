@@ -255,7 +255,15 @@ pub fn cmd_cron(action: CronAction, json: bool) {
             );
 
             println!("Firing job '{}' ({}) synchronously...", job.title, job.id);
-            match raios_runtime::agent_runner::spawn_agent_detached(&job.agent, &prompt, None) {
+            let spawn_result = match raios_runtime::agent_runner::ext_command_from_task_description(
+                &job.task_description,
+            ) {
+                Some((ext_name, command)) => {
+                    raios_runtime::agent_runner::spawn_ext_command_detached(ext_name, command)
+                }
+                None => raios_runtime::agent_runner::spawn_agent_detached(&job.agent, &prompt, None),
+            };
+            match spawn_result {
                 Ok(pid) => {
                     if json {
                         println!("{}", serde_json::json!({"status": "ok", "pid": pid}));

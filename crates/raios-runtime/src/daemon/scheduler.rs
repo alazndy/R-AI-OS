@@ -3,6 +3,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 use crate::daemon::state::DaemonState;
+use crate::agent_runner::ext_command_from_task_description;
 
 pub async fn start_scheduler_worker(
     _state: Arc<RwLock<DaemonState>>,
@@ -46,6 +47,7 @@ pub async fn start_scheduler_worker(
                 job.title, job.task_description
             );
             let agent = job.agent.clone();
+            let task_description = job.task_description.clone();
             let job_id = job.id.clone();
             let interval = job.interval_secs;
             let tx_clone = tx.clone();
@@ -53,7 +55,12 @@ pub async fn start_scheduler_worker(
             // Spawn task to prevent blocking the scheduler loop
             tokio::spawn(async move {
                 let spawn_result = tokio::task::spawn_blocking(move || {
-                    crate::agent_runner::spawn_agent_detached(&agent, &prompt, None)
+                    match ext_command_from_task_description(&task_description) {
+                        Some((ext_name, command)) => {
+                            crate::agent_runner::spawn_ext_command_detached(ext_name, command)
+                        }
+                        None => crate::agent_runner::spawn_agent_detached(&agent, &prompt, None),
+                    }
                 }).await;
 
                 let conn = match raios_core::db::open_db() {
