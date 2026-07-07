@@ -39,7 +39,11 @@ impl SessionTokenManager {
         Self { token_path }
     }
 
-    #[cfg(test)]
+    /// Constructs a manager pointing at an explicit path instead of the
+    /// default `~/.config/raios/.session_token`. Not test-only: this is how
+    /// downstream crates (e.g. raios-runtime's daemon bootstrap) inject a
+    /// tempdir path in their own tests, since #[cfg(test)] items in this
+    /// crate aren't visible to other crates' test builds.
     pub fn with_path(path: PathBuf) -> Self {
         Self { token_path: path }
     }

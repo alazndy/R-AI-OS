@@ -48,17 +48,13 @@ impl Server {
         self.state.write().await.refresh_pending_from_db();
 
         // 1. Generate and save IPC token for security using SessionTokenManager
-        let token_mgr = raios_core::security::SessionTokenManager::new();
-        let token = token_mgr.generate_and_save()?;
         let config_dir = Config::config_file()
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let token_path = config_dir.join(".session_token");
-        println!(
-            "[Daemon] Security: Secure Session Token generated and saved to {:?}",
-            token_path
-        );
+        let token_mgr =
+            raios_core::security::SessionTokenManager::with_path(config_dir.join(".session_token"));
+        let token = bootstrap_session_token(&token_mgr, &config_dir)?;
 
         // NOTE: this daemon no longer writes a `.ipc_token` copy. It used to,
         // for backwards compatibility with older clients, but that copy
@@ -303,6 +299,68 @@ impl Server {
                 }
             ));
         }
+    }
+}
+
+/// Generates the daemon's session token, saves it (owner-only permissions
+/// via `SessionTokenManager::generate_and_save`), and logs where it landed.
+/// Pulled out of `run_inner` so it's testable without a TcpListener/accept
+/// loop — this is the exact code path the `.ipc_token` permission bug lived
+/// in (see git history), and it had zero test coverage even after the fix.
+fn bootstrap_session_token(
+    token_mgr: &raios_core::security::SessionTokenManager,
+    config_dir: &std::path::Path,
+) -> anyhow::Result<String> {
+    let token = token_mgr.generate_and_save()?;
+    let token_path = config_dir.join(".session_token");
+    println!(
+        "[Daemon] Security: Secure Session Token generated and saved to {:?}",
+        token_path
+    );
+    Ok(token)
+}
+
+#[cfg(test)]
+mod bootstrap_session_token_tests {
+    use super::*;
+
+    #[test]
+    fn generates_and_saves_a_token_with_owner_only_permissions() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let token_path = tmp.path().join(".session_token");
+        let mgr = raios_core::security::SessionTokenManager::with_path(token_path.clone());
+
+        let token = bootstrap_session_token(&mgr, tmp.path()).unwrap();
+
+        assert_eq!(token.len(), 64, "expected a 64-char hex token");
+        let on_disk = std::fs::read_to_string(&token_path).unwrap();
+        assert_eq!(on_disk.trim(), token);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&token_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "session token must be owner-only");
+        }
+    }
+
+    /// Regression guard for the vulnerability fixed this session: a `.ipc_token`
+    /// copy used to be written right after this, carrying the same secret
+    /// without matching permissions. Bootstrapping the token alone must never
+    /// produce that file — if a future edit reintroduces it here, this fails.
+    #[test]
+    fn never_writes_a_legacy_ipc_token_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mgr = raios_core::security::SessionTokenManager::with_path(
+            tmp.path().join(".session_token"),
+        );
+
+        bootstrap_session_token(&mgr, tmp.path()).unwrap();
+
+        assert!(
+            !tmp.path().join(".ipc_token").exists(),
+            "bootstrap_session_token must not write a .ipc_token copy"
+        );
     }
 }
 // ─── END OF server.rs — all client handling is in handlers.rs ─────────────────
