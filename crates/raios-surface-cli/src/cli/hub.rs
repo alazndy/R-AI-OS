@@ -503,7 +503,18 @@ pub fn cmd_api_key_generate(force: bool) {
 
     // Write hash to policy.toml if it exists
     if let Some(pol_path) = policy_path() {
+        // policy_path() checks the global config dir first, then the current
+        // working directory — so running this command from inside *any*
+        // project that happens to have a raios-policy.toml silently rewrites
+        // that project's file instead of the global one. Make the target
+        // explicit so that's never a surprise.
         let content = fs::read_to_string(&pol_path).unwrap_or_default();
+        let overwriting_existing = content.contains("api_key_hash");
+        println!(
+            "  {} raios-policy.toml at {}",
+            if overwriting_existing { "Updating" } else { "Writing" },
+            pol_path.display()
+        );
         let new_line = format!("api_key_hash = \"{key_hash}\"");
 
         let updated = if content.contains("api_key_hash") {
