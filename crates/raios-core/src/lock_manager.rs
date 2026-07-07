@@ -282,8 +282,19 @@ mod tests {
         )
         .await
         .unwrap();
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        assert!(!mgr.is_locked(&key).await);
+
+        // Poll instead of a single fixed sleep: a 1ms TTL plus a short fixed
+        // delay is exactly the kind of margin that's fine locally but flakes
+        // under CI scheduler jitter (the same class of bug already hit twice
+        // in raios-runtime's factory.rs tests this session).
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if !mgr.is_locked(&key).await {
+                break;
+            }
+            assert!(Instant::now() < deadline, "lock never expired within 2s");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     #[tokio::test]
