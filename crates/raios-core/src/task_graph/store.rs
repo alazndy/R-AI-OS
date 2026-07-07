@@ -15,7 +15,11 @@ impl GraphStore {
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         let db_path = db_path.into();
         let store = Self { db_path };
-        store.ensure_tables();
+        // connect() runs raios_core::db::migrate_existing(), which is the
+        // single source of truth for this table's schema (see schema.rs) —
+        // used to duplicate the CREATE TABLE + a bolt-on ALTER TABLE here,
+        // which had drifted out of sync with the central migration.
+        let _ = store.connect();
         store
     }
 
@@ -34,31 +38,6 @@ impl GraphStore {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         raios_core::db::migrate_existing(&conn)?;
         Ok(conn)
-    }
-
-    fn ensure_tables(&self) {
-        if let Ok(conn) = self.connect() {
-            let _ = conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS task_graphs (
-                    id TEXT PRIMARY KEY, goal TEXT NOT NULL, agent TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')), completed_at TEXT
-                );
-                CREATE TABLE IF NOT EXISTS task_graph_nodes (
-                    id TEXT NOT NULL, graph_id TEXT NOT NULL,
-                    description TEXT NOT NULL, shell_cmd TEXT NOT NULL,
-                    deps TEXT NOT NULL DEFAULT '[]',
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    cp_task_id TEXT, cp_agent_run_id TEXT,
-                    factory_job_id TEXT, result TEXT, error TEXT,
-                    PRIMARY KEY (graph_id, id)
-                );",
-            );
-            let _ = conn.execute_batch(
-                "ALTER TABLE task_graph_nodes ADD COLUMN cp_task_id TEXT;
-                 ALTER TABLE task_graph_nodes ADD COLUMN cp_agent_run_id TEXT;",
-            );
-        }
     }
 
     /// Create a new task graph. Returns the graph ID.

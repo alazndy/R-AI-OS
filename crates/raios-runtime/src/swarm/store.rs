@@ -13,7 +13,11 @@ impl SwarmStore {
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         let db_path = db_path.into();
         let s = Self { db_path };
-        s.ensure_table();
+        // connect() runs raios_core::db::migrate_existing(), the single
+        // source of truth for this table's schema (see schema.rs) — used
+        // to duplicate the CREATE TABLE + a bolt-on ALTER TABLE here, which
+        // had drifted out of sync with the central migration.
+        let _ = s.connect();
         s
     }
 
@@ -32,28 +36,6 @@ impl SwarmStore {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         raios_core::db::migrate_existing(&conn)?;
         Ok(conn)
-    }
-
-    fn ensure_table(&self) {
-        if let Ok(conn) = self.connect() {
-            let _ = conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS swarm_tasks (
-                    id TEXT PRIMARY KEY, project_name TEXT NOT NULL,
-                    project_path TEXT NOT NULL, worktree_path TEXT NOT NULL,
-                    branch_name TEXT NOT NULL, description TEXT NOT NULL,
-                    agent TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'initializing',
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')), completed_at TEXT,
-                    cp_task_id TEXT, cp_agent_run_id TEXT, cp_artifact_id TEXT, cp_approval_id TEXT
-                );
-                CREATE INDEX IF NOT EXISTS idx_swarm_status ON swarm_tasks(status);",
-            );
-            let _ = conn.execute_batch(
-                "ALTER TABLE swarm_tasks ADD COLUMN cp_task_id TEXT;
-                 ALTER TABLE swarm_tasks ADD COLUMN cp_agent_run_id TEXT;
-                 ALTER TABLE swarm_tasks ADD COLUMN cp_artifact_id TEXT;
-                 ALTER TABLE swarm_tasks ADD COLUMN cp_approval_id TEXT;",
-            );
-        }
     }
 
     pub fn create(

@@ -13,6 +13,23 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "ALTER TABLE health_cache ADD COLUMN refactor_high INTEGER NOT NULL DEFAULT 0",
     );
+    // task_graph_nodes/swarm_tasks: these columns are already in the
+    // CREATE TABLE below for fresh DBs. This ALTER path exists only for
+    // upgrading pre-existing DBs created before these columns were added
+    // here — GraphStore/SwarmStore used to carry their own duplicate
+    // ALTER TABLE for the same purpose (removed; this is now the one
+    // place that does it, consistent with every other column addition
+    // above).
+    let _ = conn.execute_batch(
+        "ALTER TABLE task_graph_nodes ADD COLUMN cp_task_id TEXT;
+         ALTER TABLE task_graph_nodes ADD COLUMN cp_agent_run_id TEXT;",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE swarm_tasks ADD COLUMN cp_task_id TEXT;
+         ALTER TABLE swarm_tasks ADD COLUMN cp_agent_run_id TEXT;
+         ALTER TABLE swarm_tasks ADD COLUMN cp_artifact_id TEXT;
+         ALTER TABLE swarm_tasks ADD COLUMN cp_approval_id TEXT;",
+    );
 
     conn.execute_batch(
         "
@@ -164,7 +181,11 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             agent         TEXT NOT NULL,
             status        TEXT NOT NULL DEFAULT 'initializing',
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-            completed_at  TEXT
+            completed_at  TEXT,
+            cp_task_id      TEXT,
+            cp_agent_run_id TEXT,
+            cp_artifact_id  TEXT,
+            cp_approval_id  TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_swarm_status ON swarm_tasks(status);
 

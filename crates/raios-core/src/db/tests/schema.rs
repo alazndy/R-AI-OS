@@ -171,6 +171,40 @@ fn swarm_tasks_table_exists() {
     assert_eq!(count, 0);
 }
 
+fn table_columns(conn: &Connection, table: &str) -> Vec<String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(1))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+}
+
+/// GraphStore (raios-core::task_graph::store) and SwarmStore
+/// (raios-runtime::swarm::store) used to each carry their own duplicate
+/// CREATE TABLE + a bolt-on ALTER TABLE for these cp_* columns, which had
+/// drifted out of sync with this central migration (task_graph_nodes was
+/// missing them entirely until this was caught). Both stores now rely
+/// solely on this migration via their connect()'s migrate_existing() call —
+/// this test is what would have caught the original drift.
+#[test]
+fn task_graph_nodes_has_control_plane_link_columns() {
+    let conn = in_memory();
+    let cols = table_columns(&conn, "task_graph_nodes");
+    assert!(cols.contains(&"cp_task_id".to_string()), "columns: {cols:?}");
+    assert!(cols.contains(&"cp_agent_run_id".to_string()), "columns: {cols:?}");
+}
+
+#[test]
+fn swarm_tasks_has_control_plane_link_columns() {
+    let conn = in_memory();
+    let cols = table_columns(&conn, "swarm_tasks");
+    for expected in ["cp_task_id", "cp_agent_run_id", "cp_artifact_id", "cp_approval_id"] {
+        assert!(cols.contains(&expected.to_string()), "columns: {cols:?}");
+    }
+}
+
 #[test]
 fn control_plane_tables_exist() {
     let conn = in_memory();
