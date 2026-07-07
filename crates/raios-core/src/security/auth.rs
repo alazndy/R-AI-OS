@@ -86,6 +86,10 @@ impl SessionTokenManager {
                 ));
             }
         }
+        #[cfg(windows)]
+        {
+            verify_windows_only_owner_can_read(&self.token_path)?;
+        }
 
         // Verify token file is not older than 8 hours
         let modified = metadata.modified()?;
@@ -119,6 +123,61 @@ impl SessionTokenManager {
         }
         Ok(())
     }
+}
+
+/// Verifies that only the current user has any access granted on `path`,
+/// by parsing `icacls` output. This is the read-side counterpart to
+/// `harden_file_perms`'s write-side `icacls /inheritance:r /grant:r` — that
+/// call strips inherited ACEs and grants only the owner, so a healthy file
+/// should list exactly one grantee (the current user) and nothing else
+/// (no Administrators, SYSTEM, Users, Everyone, ...).
+#[cfg(windows)]
+fn verify_windows_only_owner_can_read(path: &std::path::Path) -> Result<()> {
+    let username = std::env::var("USERNAME")
+        .map_err(|_| anyhow!("USERNAME env var not set; cannot verify token file permissions"))?;
+
+    let output = std::process::Command::new("icacls")
+        .arg(path)
+        .output()
+        .map_err(|e| anyhow!("failed to run icacls: {e}"))?;
+    if !output.status.success() {
+        return Err(anyhow!("icacls failed to inspect token file permissions"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let path_str = path.display().to_string();
+    let mut grantees = Vec::new();
+
+    for (i, raw_line) in stdout.lines().enumerate() {
+        // icacls prints "<path> ACCOUNT:(perms)" on the first line, then
+        // "                     ACCOUNT:(perms)" (indented, no path) for
+        // each further grantee, until a blank line ends the ACE list.
+        let line = if i == 0 {
+            raw_line.strip_prefix(&path_str).unwrap_or(raw_line).trim()
+        } else {
+            raw_line.trim()
+        };
+        if line.is_empty() || line.starts_with("Successfully processed") {
+            break;
+        }
+        if let Some(colon_idx) = line.find(":(") {
+            grantees.push(line[..colon_idx].trim().to_string());
+        }
+    }
+
+    let is_owner = |g: &str| {
+        g.eq_ignore_ascii_case(&username)
+            || g.rsplit('\\')
+                .next()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&username))
+    };
+
+    if grantees.is_empty() || !grantees.iter().all(|g| is_owner(g)) {
+        return Err(anyhow!(
+            "Insecure permissions on token file: expected only '{username}' to have access, found {grantees:?}"
+        ));
+    }
+    Ok(())
 }
 
 /// Timing-safe comparison of two byte slices.
@@ -177,5 +236,31 @@ mod tests {
         assert!(constant_time_compare(b"hello", b"hello"));
         assert!(!constant_time_compare(b"hello", b"world"));
         assert!(!constant_time_compare(b"hello", b"hell"));
+    }
+
+    // generate_and_save() already calls harden_file_perms(), so on Windows
+    // test_token_lifecycle above exercises verify_windows_only_owner_can_read
+    // via validate_token(). These two make the read-side check explicit.
+    #[cfg(windows)]
+    #[test]
+    fn get_valid_token_accepts_a_hardened_file() {
+        let tmp = TempDir::new().unwrap();
+        let manager = SessionTokenManager::with_path(tmp.path().join(".session_token"));
+        manager.generate_and_save().unwrap();
+
+        assert!(manager.get_valid_token().is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn get_valid_token_rejects_a_file_with_default_inherited_permissions() {
+        let tmp = TempDir::new().unwrap();
+        let token_path = tmp.path().join(".session_token");
+        // Written without harden_file_perms — keeps whatever ACL the temp
+        // directory inherits (never just the current user alone).
+        std::fs::write(&token_path, "not-hardened").unwrap();
+        let manager = SessionTokenManager::with_path(token_path);
+
+        assert!(manager.get_valid_token().is_err());
     }
 }
