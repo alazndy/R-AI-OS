@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.2.0 — 2026-07-07
+### Changed
+- **Workspace split**: monolithic library physically split into a Cargo workspace of 5 crates (`raios-core`, `raios-runtime`, `raios-surface-cli`, `raios-surface-mcp`, `raios-surface-tui`) — the actual reason for the version jump from v3.0.0; no v3.1.0 was ever tagged.
+- **Schema consolidation**: `task_graph_nodes`/`swarm_tasks` control-plane link columns moved into the single central migration (`db/schema.rs`); both stores previously carried their own duplicate `CREATE TABLE`/`ALTER TABLE` that had silently drifted out of sync.
+### Fixed — security hardening pass (2026-07-07 session)
+- `.ipc_token` (legacy daemon auth file) removed entirely — it duplicated `.session_token`'s secret without matching its owner-only (0600) permissions, defeating that hardening for any local reader. All clients now read `.session_token` only.
+- Daemon AUTH handshake now uses a constant-time comparison (was a plain `!=`).
+- Session tokens and the hub API key now come from a direct OS CSPRNG draw instead of a hand-rolled `SHA256(uuid‖pid‖time)` construction.
+- `[server.hub] trusted_proxy` config added — a same-host reverse proxy no longer silently downgrades remote requests onto the localhost auth path.
+- Windows: token files now get an owner-only ACL on write (`icacls`) **and** are verified on read, not just written — previously Windows had no permission enforcement at all.
+- `raios hub api-key show` masks the key by default now (`--reveal` for the full value) instead of always printing it in full.
+### Note
+This entry summarizes the ~90 commits between v3.0.0 and this tag rather than itemizing each — see git log for full detail. Full findings/fix trail for the security pass: `docs/adversarial-review-2026-07-07.md`.
+
 ## v3.0.0 — 2026-06-25
 ### Added
 - **4-agent identity matrix**: Claude Kaira, Codex Kaira, OpenCode Kaira, Antigravity Kaira — Gemini CLI fully retired (Google shut it down).

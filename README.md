@@ -15,7 +15,7 @@
     ║║   ▀█▄  ───│   · │ · │───  ▄█▀            ║║
     ║║      ▀█▄  └─────────┘  ▄█▀               ║║
   ╔═╝║         ▀█████████████▀                  ║╚═╗
-  ║ ╔╝   · · ·   R - A I - O S   KERNEL  v3.0   ╚╗ ║
+  ║ ╔╝   · · ·   R - A I - O S   KERNEL  v3.2   ╚╗ ║
   ╚═╝ ══════════════════════════════════════════ ╚═╝
 </pre>
 </p>
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.0.0-blue?style=for-the-badge" alt="Version"></a>
+  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.2.0-blue?style=for-the-badge" alt="Version"></a>
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
