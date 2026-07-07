@@ -495,3 +495,202 @@ pub(super) fn parse_semver_triplet(s: &str) -> Option<(u64, u64, u64)> {
 pub(super) fn looks_like_semver(s: &str) -> bool {
     parse_semver_triplet(s).is_some()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── parse_semver_triplet ───────────────────────────────────────────────
+
+    #[test]
+    fn parses_plain_triplet() {
+        assert_eq!(parse_semver_triplet("1.2.3"), Some((1, 2, 3)));
+    }
+
+    #[test]
+    fn parses_leading_v_prefix() {
+        assert_eq!(parse_semver_triplet("v1.2.3"), Some((1, 2, 3)));
+    }
+
+    #[test]
+    fn strips_prerelease_suffix() {
+        assert_eq!(parse_semver_triplet("1.2.3-beta.1"), Some((1, 2, 3)));
+    }
+
+    #[test]
+    fn strips_build_metadata_suffix() {
+        assert_eq!(parse_semver_triplet("1.2.3+build.42"), Some((1, 2, 3)));
+    }
+
+    #[test]
+    fn strips_prerelease_before_build_metadata() {
+        assert_eq!(parse_semver_triplet("1.2.3-rc.1+build.9"), Some((1, 2, 3)));
+    }
+
+    #[test]
+    fn rejects_too_few_segments() {
+        assert_eq!(parse_semver_triplet("1.2"), None);
+        assert_eq!(parse_semver_triplet("1"), None);
+        assert_eq!(parse_semver_triplet(""), None);
+    }
+
+    #[test]
+    fn rejects_too_many_segments() {
+        assert_eq!(parse_semver_triplet("1.2.3.4"), None);
+    }
+
+    #[test]
+    fn rejects_non_numeric_segments() {
+        assert_eq!(parse_semver_triplet("a.b.c"), None);
+        assert_eq!(parse_semver_triplet("1.2.x"), None);
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace() {
+        assert_eq!(parse_semver_triplet("  1.2.3  "), Some((1, 2, 3)));
+    }
+
+    // ─── looks_like_semver ──────────────────────────────────────────────────
+
+    #[test]
+    fn looks_like_semver_accepts_valid_versions() {
+        assert!(looks_like_semver("1.2.3"));
+        assert!(looks_like_semver("v1.2.3"));
+        assert!(looks_like_semver("1.2.3-alpha"));
+    }
+
+    #[test]
+    fn looks_like_semver_rejects_invalid_versions() {
+        assert!(!looks_like_semver("not-a-version"));
+        assert!(!looks_like_semver("1.2"));
+        assert!(!looks_like_semver(""));
+    }
+
+    // ─── bump_semver ────────────────────────────────────────────────────────
+
+    #[test]
+    fn bump_major_resets_minor_and_patch() {
+        assert_eq!(
+            bump_semver("1.2.3", &BumpType::Major),
+            Some("2.0.0".to_string())
+        );
+    }
+
+    #[test]
+    fn bump_minor_resets_patch_only() {
+        assert_eq!(
+            bump_semver("1.2.3", &BumpType::Minor),
+            Some("1.3.0".to_string())
+        );
+    }
+
+    #[test]
+    fn bump_patch_leaves_major_minor_untouched() {
+        assert_eq!(
+            bump_semver("1.2.3", &BumpType::Patch),
+            Some("1.2.4".to_string())
+        );
+    }
+
+    #[test]
+    fn bump_semver_returns_none_for_unparseable_input() {
+        assert_eq!(bump_semver("not-a-version", &BumpType::Patch), None);
+    }
+
+    #[test]
+    fn bump_semver_ignores_prerelease_tag_on_input() {
+        // Bumping a pre-release version drops the pre-release tag, same as
+        // bumping any other triplet — there's no "keep the -beta" concept here.
+        assert_eq!(
+            bump_semver("1.2.3-beta.1", &BumpType::Patch),
+            Some("1.2.4".to_string())
+        );
+    }
+
+    // ─── parse_pubspec_version (Flutter) ────────────────────────────────────
+
+    #[test]
+    fn parses_pubspec_version_with_build_number() {
+        let content = "name: myapp\nversion: 1.2.3+45\nenvironment:\n";
+        assert_eq!(
+            parse_pubspec_version(content),
+            Some(("1.2.3".to_string(), 45))
+        );
+    }
+
+    #[test]
+    fn parses_pubspec_version_without_build_number() {
+        let content = "name: myapp\nversion: 1.2.3\n";
+        assert_eq!(
+            parse_pubspec_version(content),
+            Some(("1.2.3".to_string(), 0))
+        );
+    }
+
+    #[test]
+    fn parses_pubspec_version_with_quotes() {
+        let content = "version: '1.2.3+45'\n";
+        assert_eq!(
+            parse_pubspec_version(content),
+            Some(("1.2.3".to_string(), 45))
+        );
+    }
+
+    #[test]
+    fn pubspec_version_missing_returns_none() {
+        assert_eq!(parse_pubspec_version("name: myapp\n"), None);
+    }
+
+    #[test]
+    fn pubspec_version_malformed_build_number_defaults_to_zero() {
+        let content = "version: 1.2.3+not-a-number\n";
+        assert_eq!(
+            parse_pubspec_version(content),
+            Some(("1.2.3".to_string(), 0))
+        );
+    }
+
+    // ─── Android build.gradle parsing ───────────────────────────────────────
+
+    #[test]
+    fn parses_android_version_name_and_code() {
+        let content = "android {\n    versionName '1.2.3'\n    versionCode 45\n}\n";
+        assert_eq!(parse_version_name(content), Some("1.2.3".to_string()));
+        assert_eq!(parse_version_code(content), Some(45));
+    }
+
+    #[test]
+    fn android_version_name_rejects_non_semver_value() {
+        let content = "versionName 'not-a-version'\n";
+        assert_eq!(parse_version_name(content), None);
+    }
+
+    #[test]
+    fn android_version_code_rejects_non_numeric_value() {
+        let content = "versionCode not-a-number\n";
+        assert_eq!(parse_version_code(content), None);
+    }
+
+    // ─── iOS Info.plist parsing ──────────────────────────────────────────────
+
+    #[test]
+    fn extracts_plist_string_value() {
+        let content = "<key>CFBundleShortVersionString</key>\n<string>1.2.3</string>\n";
+        assert_eq!(
+            extract_plist_key(content, "CFBundleShortVersionString"),
+            Some("1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn plist_key_not_present_returns_none() {
+        let content = "<key>SomeOtherKey</key>\n<string>1.2.3</string>\n";
+        assert_eq!(extract_plist_key(content, "CFBundleShortVersionString"), None);
+    }
+
+    #[test]
+    fn plist_key_present_but_value_not_a_string_tag_returns_none() {
+        let content = "<key>CFBundleShortVersionString</key>\n<integer>3</integer>\n";
+        assert_eq!(extract_plist_key(content, "CFBundleShortVersionString"), None);
+    }
+}

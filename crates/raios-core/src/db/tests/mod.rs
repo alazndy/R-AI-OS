@@ -2,6 +2,7 @@ pub use super::*;
 pub use rusqlite::{params, Connection};
 
 mod agent_stats;
+mod control_plane;
 mod handoff;
 mod integration;
 mod schema;

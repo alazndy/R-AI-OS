@@ -145,6 +145,8 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             shell_cmd   TEXT NOT NULL,
             deps        TEXT NOT NULL DEFAULT '[]',
             status      TEXT NOT NULL DEFAULT 'pending',
+            cp_task_id  TEXT,
+            cp_agent_run_id TEXT,
             factory_job_id TEXT,
             result      TEXT,
             error       TEXT,
