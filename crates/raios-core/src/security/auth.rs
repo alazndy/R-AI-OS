@@ -125,12 +125,24 @@ impl SessionTokenManager {
     }
 }
 
-/// Verifies that only the current user has any access granted on `path`,
-/// by parsing `icacls` output. This is the read-side counterpart to
-/// `harden_file_perms`'s write-side `icacls /inheritance:r /grant:r` — that
-/// call strips inherited ACEs and grants only the owner, so a healthy file
-/// should list exactly one grantee (the current user) and nothing else
-/// (no Administrators, SYSTEM, Users, Everyone, ...).
+/// Verifies that only the current user (plus SYSTEM/Administrators, which
+/// are effectively root-equivalent on Windows and can already bypass any
+/// ACL) has access granted on `path`, by parsing `icacls` output.
+///
+/// This is the read-side counterpart to `harden_file_perms`'s write-side
+/// `icacls /inheritance:r /grant:r`. Confirmed against real output on
+/// GitHub's Windows runner: even after that call, `NT AUTHORITY\SYSTEM` and
+/// `BUILTIN\Administrators` remain listed — `/inheritance:r` only strips
+/// *inherited* ACEs, and these two get re-added as part of the volume's
+/// default security descriptor for newly created objects, not via
+/// inheritance. Unlike a regular user account, though, their presence isn't
+/// a real access-control weakening: both already have unconditional access
+/// to any file regardless of what its ACL says, the same way root on Unix
+/// isn't blocked by chmod 600. The actual protection this check provides is
+/// against *other standard user accounts* (a second local user, a
+/// compromised low-privilege process, Users/Everyone/Authenticated Users
+/// groups) — exactly the Unix chmod 600 threat model's closest Windows
+/// analogue.
 #[cfg(windows)]
 fn verify_windows_only_owner_can_read(path: &std::path::Path) -> Result<()> {
     let username = std::env::var("USERNAME")
@@ -165,16 +177,19 @@ fn verify_windows_only_owner_can_read(path: &std::path::Path) -> Result<()> {
         }
     }
 
-    let is_owner = |g: &str| {
-        g.eq_ignore_ascii_case(&username)
-            || g.rsplit('\\')
-                .next()
-                .is_some_and(|n| n.eq_ignore_ascii_case(&username))
+    const TRUSTED_SYSTEM_ACCOUNTS: [&str; 2] = ["SYSTEM", "Administrators"];
+
+    let is_trusted = |g: &str| {
+        let short_name = g.rsplit('\\').next().unwrap_or(g);
+        short_name.eq_ignore_ascii_case(&username)
+            || TRUSTED_SYSTEM_ACCOUNTS
+                .iter()
+                .any(|acct| short_name.eq_ignore_ascii_case(acct))
     };
 
-    if grantees.is_empty() || !grantees.iter().all(|g| is_owner(g)) {
+    if grantees.is_empty() || !grantees.iter().all(|g| is_trusted(g)) {
         return Err(anyhow!(
-            "Insecure permissions on token file: expected only '{username}' to have access, found {grantees:?}\nraw icacls output:\n{stdout}"
+            "Insecure permissions on token file: expected only '{username}' (or SYSTEM/Administrators) to have access, found {grantees:?}\nraw icacls output:\n{stdout}"
         ));
     }
     Ok(())
@@ -253,16 +268,28 @@ mod tests {
         }
     }
 
+    /// Deliberately grants a normal, non-privileged account access, rather
+    /// than relying on whatever a fresh temp file's default ACL happens to
+    /// be — that default already includes SYSTEM/Administrators (confirmed
+    /// on GitHub's Windows runner), which are meant to pass, so a test
+    /// relying on ambient defaults could pass for the wrong reason or start
+    /// failing if the runner's default ACL ever changes.
     #[cfg(windows)]
     #[test]
-    fn get_valid_token_rejects_a_file_with_default_inherited_permissions() {
+    fn get_valid_token_rejects_a_file_with_an_extra_grantee() {
         let tmp = TempDir::new().unwrap();
         let token_path = tmp.path().join(".session_token");
-        // Written without harden_file_perms — keeps whatever ACL the temp
-        // directory inherits (never just the current user alone).
         std::fs::write(&token_path, "not-hardened").unwrap();
-        let manager = SessionTokenManager::with_path(token_path);
 
+        let status = std::process::Command::new("icacls")
+            .arg(&token_path)
+            .arg("/grant")
+            .arg("Everyone:R")
+            .status()
+            .unwrap();
+        assert!(status.success(), "test setup: failed to grant Everyone:R");
+
+        let manager = SessionTokenManager::with_path(token_path);
         assert!(manager.get_valid_token().is_err());
     }
 }
