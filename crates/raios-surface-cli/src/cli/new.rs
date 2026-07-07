@@ -145,7 +145,7 @@ pub(super) fn cmd_bootstrap() {
         let _ = std::process::Command::new("claude").args(&args).status();
     }
 
-    println!("--- [4/5] Syncing ECC Skills & Rules (182 Skills) ---");
+    println!("--- [4/5] Syncing ECC Skills & Rules ---");
     let ecc_temp_path = temp_dir.join("ecc-master");
     if !ecc_temp_path.exists() {
         let _ = std::process::Command::new("git")
@@ -171,8 +171,9 @@ pub(super) fn cmd_bootstrap() {
         let _ = std::fs::create_dir_all(d);
     }
 
-    copy_dir_recursive(&ecc_temp_path.join("rules"), &claude_rules);
+    let copied = copy_dir_recursive(&ecc_temp_path.join("rules"), &claude_rules);
     copy_dir_recursive(&ecc_temp_path.join("rules"), &antigravity_rules);
+    println!("    Synced {copied} rule file(s) from everything-claude-code.");
 
     println!("--- [5/5] Final Touches & Activations ---");
     let master_path = home_dir
@@ -200,20 +201,24 @@ pub(super) fn cmd_bootstrap() {
     }
 
     println!("\nBOOTSTRAP COMPLETE: Your AI OS Factory is fully operational!");
-    println!("Total Agents: 90+  |  Total Skills: 182");
+    println!("Synced {copied} skill/rule file(s). Run `raios agents` to see registered agent configs.");
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) {
+/// Returns the number of files actually copied, so callers can report a
+/// real count instead of a guessed or hardcoded one.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> usize {
     use walkdir::WalkDir;
+    let mut copied = 0;
     for entry in WalkDir::new(src).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         let destination = dst.join(path.strip_prefix(src).expect("Path stripping failed"));
         if path.is_dir() {
             let _ = std::fs::create_dir_all(&destination);
-        } else {
-            let _ = std::fs::copy(path, &destination);
+        } else if std::fs::copy(path, &destination).is_ok() {
+            copied += 1;
         }
     }
+    copied
 }
 
 const DEFAULT_MASTER_MD: &str = r#"# MASTER — Goktug

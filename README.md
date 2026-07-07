@@ -47,7 +47,7 @@
 
 ## 🔭 The Vision
 
-R-AI-OS is not a CLI tool — it is a **Kernel**. While traditional operating systems manage hardware, R-AI-OS manages the **AI layer**: a decentralized swarm of 90+ autonomous specialists running across Claude Code, Codex CLI, OpenCode, Antigravity (`agy`), and any MCP-compatible agent.
+R-AI-OS is not a CLI tool — it is a **Kernel**. While traditional operating systems manage hardware, R-AI-OS manages the **AI layer**: a decentralized swarm of autonomous specialists running across Claude Code, Codex CLI, OpenCode, Antigravity (`agy`), and any MCP-compatible agent, drawing on external agent/skill ecosystems (Maestro, everything-claude-code) that `raios new`/`raios bootstrap` can pull in — see [CLI Reference](#-cli-reference) for what's actually installed on your machine.
 
 It solves the fundamental problem of **unsupervised agent execution**: agents that run unchecked can leak secrets, corrupt files, and make unauthorized network calls. R-AI-OS sits between the human and the swarm as a hardened control plane — enforcing policies, auditing every action, and managing context economics.
 
@@ -174,7 +174,7 @@ All three protocols share one event bus and one security kernel:
 
 ### 🎯 Unified Agent Router
 
-Maps natural-language task descriptions to the right specialist using local BM25 + vector hybrid indexing. Bridges Maestro (39 agents) and ECC (48 agents) ecosystems natively.
+Maps natural-language task descriptions to the right specialist using local BM25 + vector hybrid indexing. Bridges the Maestro and ECC (everything-claude-code) agent ecosystems natively — exact agent counts depend on those upstream projects' current state, not something R-AI-OS pins or guarantees.
 
 ### 🔄 Agent Swarm Mesh
 
@@ -371,7 +371,7 @@ Launch the TUI:
 raios
 ```
 
-Bootstrap your AI factory (replicates 90+ agents and 180+ skills):
+Bootstrap your AI factory (syncs the Maestro/ECC agent and skill ecosystems, exact counts printed at the end of the run):
 
 ```bash
 raios bootstrap
