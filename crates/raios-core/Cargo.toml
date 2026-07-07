@@ -22,5 +22,13 @@ walkdir = "2"
 url = "2"
 getrandom = "0.4"
 
+[features]
+# Marker feature, no deps of its own here — mirrors raios-runtime's real
+# "cortex" feature (which gates fastembed/ort-sys/hf-hub) so config code in
+# this crate can tell whether the workspace was built with real embeddings.
+# Must be forwarded explicitly by any crate that enables raios-runtime's
+# cortex feature (see raios-runtime and raios-surface-cli Cargo.toml).
+cortex = []
+
 [dev-dependencies]
 tempfile = "3"

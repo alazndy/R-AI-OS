@@ -30,6 +30,14 @@ impl Default for DaemonConfig {
         let windows = cfg!(target_os = "windows");
         Self {
             startup_bm25_indexing: false,
+            // True only if this crate was built with its own "cortex" feature.
+            // raios-core has no direct dependency on the real embedding libs —
+            // this flag exists so callers know whether real embeddings are
+            // available. It must be forwarded explicitly from raios-runtime's
+            // and raios-surface-cli's own "cortex" features (see their
+            // Cargo.toml): cfg checks don't cross crate boundaries on their
+            // own, so without that forwarding this silently stays false
+            // even when the real embedding model is compiled in elsewhere.
             startup_cortex_indexing: cfg!(feature = "cortex"),
             enable_health_worker: true,
             health_interval_secs: if windows { 900 } else { 300 },

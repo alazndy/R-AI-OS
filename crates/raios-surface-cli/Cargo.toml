@@ -27,6 +27,13 @@ regex = "1.10"
 notify-rust = "4"
 which = "6"
 
+[features]
+default = ["cortex"]
+# This crate's own embedding_mode() (cli/search.rs) checks cfg!(feature =
+# "cortex") directly, so it needs its own declaration forwarding to both
+# raios-core and raios-runtime's real cortex feature.
+cortex = ["raios-core/cortex", "raios-runtime/cortex"]
+
 [[bin]]
 name = "raios"
 path = "src/bin/raios.rs"

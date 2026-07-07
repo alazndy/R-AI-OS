@@ -30,7 +30,11 @@ shlex = "1"
 
 [features]
 default = ["cortex"]
-cortex = ["fastembed", "ort-sys", "hf-hub"]
+# Forwards to raios-core/cortex so DaemonConfig::startup_cortex_indexing
+# (computed in raios-core via cfg!(feature = "cortex")) actually reflects
+# whether real embeddings are compiled in here — cfg checks don't cross
+# crate boundaries on their own, so this has to be explicit.
+cortex = ["fastembed", "ort-sys", "hf-hub", "raios-core/cortex"]
 
 [dev-dependencies]
 tempfile = "3"
