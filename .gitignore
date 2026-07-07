@@ -13,3 +13,5 @@ tools/raios-tray/__pycache__/
 .env
 .env.*
 !.env.example
+/wiki_temp
+/graphify-out
