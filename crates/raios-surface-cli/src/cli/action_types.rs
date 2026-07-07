@@ -35,8 +35,12 @@ pub enum HubApiKeyAction {
         #[arg(long)]
         force: bool,
     },
-    /// Print the current API key
-    Show,
+    /// Print the current API key (masked by default)
+    Show {
+        /// Print the full key instead of a masked preview
+        #[arg(long)]
+        reveal: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]

@@ -436,12 +436,28 @@ fn policy_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
-pub fn cmd_api_key_show() {
+/// Masks a secret for display: first/last 4 chars visible, middle collapsed.
+/// Short secrets (<=8 chars) are fully redacted to avoid leaking most of the value.
+fn mask_secret(secret: &str) -> String {
+    let len = secret.len();
+    if len <= 8 {
+        return "*".repeat(len);
+    }
+    format!("{}…{}", &secret[..4], &secret[len - 4..])
+}
+
+pub fn cmd_api_key_show(reveal: bool) {
     let path = api_key_file();
     match fs::read_to_string(&path) {
         Ok(key) => {
+            let key = key.trim();
             println!("\n  Hub API Key (remote bearer token):\n");
-            println!("  {}\n", key.trim());
+            if reveal {
+                println!("  {}\n", key);
+            } else {
+                println!("  {}", mask_secret(key));
+                println!("  (pass --reveal to print the full key; avoid recorded/logged terminals)\n");
+            }
             println!("  Usage:  Authorization: Bearer <key>");
             println!("  Stored: {}\n", path.display());
         }
@@ -487,6 +503,8 @@ pub fn cmd_api_key_generate(force: bool) {
 
     println!("\n  New API key generated.\n");
     println!("  Key:  {key}");
+    println!("  ⚠ This is the only time the full key is printed. It is saved to {}", path.display());
+    println!("    Retrieve it later (masked) with: raios hub api-key show");
     println!("  Hash: {key_hash}\n");
 
     // Write hash to policy.toml if it exists
@@ -528,4 +546,24 @@ mod libc {
         pub fn kill(pid: i32, sig: i32) -> i32;
     }
     pub const SIGTERM: i32 = 15;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_secret;
+
+    #[test]
+    fn masks_long_secret_keeping_first_and_last_four() {
+        let key = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+        let masked = mask_secret(key);
+        assert!(masked.starts_with("a1b2"));
+        assert!(masked.ends_with("a1b2"));
+        assert!(!masked.contains(&key[10..20]), "middle of secret must not leak");
+    }
+
+    #[test]
+    fn fully_redacts_short_secrets() {
+        assert_eq!(mask_secret("short"), "*****");
+        assert_eq!(mask_secret(""), "");
+    }
 }

@@ -259,7 +259,7 @@ pub fn run(cli: Cli) {
             HubAction::Logs { lines } => hub::cmd_logs(lines),
             HubAction::ApiKey { action } => match action {
                 HubApiKeyAction::Generate { force } => hub::cmd_api_key_generate(force),
-                HubApiKeyAction::Show => hub::cmd_api_key_show(),
+                HubApiKeyAction::Show { reveal } => hub::cmd_api_key_show(reveal),
             },
         },
         Commands::Reflect => reflect::cmd_reflect(&cfg.dev_ops_path, cli.json),
