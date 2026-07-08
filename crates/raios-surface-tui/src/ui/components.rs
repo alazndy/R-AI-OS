@@ -136,7 +136,7 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
             ""
         };
         Line::from(Span::styled(
-            format!(" [↑↓] menu  [/] or [Tab] command{}", hint),
+            format!(" [↑↓] menu  [/] or [Tab] command  [?] help{}", hint),
             Style::new().fg(DIM),
         ))
     };
@@ -176,9 +176,18 @@ pub fn render_command_palette(frame: &mut Frame, app: &App) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
+    // Window the list around the cursor so long palettes stay navigable
+    let visible_rows = inner.height as usize;
+    let start = app
+        .ui
+        .palette_cursor
+        .saturating_sub(visible_rows.saturating_sub(1));
+
     let items: Vec<Line> = filtered
         .iter()
         .enumerate()
+        .skip(start)
+        .take(visible_rows)
         .map(|(i, item)| {
             if i == app.ui.palette_cursor {
                 Line::from(vec![
@@ -219,7 +228,7 @@ pub fn render_file_changed_badge(frame: &mut Frame, _app: &App) {
 
 pub fn render_launcher_modal(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    let popup = center_rect(36, 11, area);
+    let popup = center_rect(36, 12, area);
 
     frame.render_widget(
         Block::new().style(Style::new().bg(Color::Rgb(12, 18, 24))),
@@ -259,6 +268,10 @@ pub fn render_launcher_modal(frame: &mut Frame, app: &App) {
         Line::from(vec![
             Span::styled("  [O] ", Style::new().fg(CYAN).bold()),
             Span::styled("OpenCode", Style::new().fg(MID)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [A] ", Style::new().fg(AMBER).bold()),
+            Span::styled("Antigravity (agy)", Style::new().fg(MID)),
         ]),
         Line::from(""),
         Line::from(Span::styled("  [Esc] Cancel", Style::new().fg(DIM))),

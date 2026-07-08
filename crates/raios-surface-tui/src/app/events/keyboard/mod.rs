@@ -52,6 +52,9 @@ impl App {
                 KeyCode::Char('x') | KeyCode::Char('X') => {
                     self.launch_agent_for_active("codex");
                 }
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    self.launch_agent_for_active("antigravity");
+                }
                 _ => {}
             }
             return Ok(());

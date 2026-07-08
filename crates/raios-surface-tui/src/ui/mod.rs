@@ -71,13 +71,13 @@ pub fn render(frame: &mut Frame, app: &App) {
         AppState::MemPalaceView => render_mempalace_view(frame, app),
         AppState::GraphReport => render_graph_report(frame, app),
         AppState::GitDiffView => render_git_diff_view(frame, app),
-        AppState::HelpView => render_dashboard(frame, app), // Just use dashboard for now as it's a menu item
+        AppState::HelpView => render_help_view(frame, app),
     }
     // Overlays rendered after everything else
     if app.ui.show_launcher {
         render_launcher_modal(frame, app);
     }
-    if app.ui.command_mode && !app.ui.command_buf.is_empty() {
+    if app.ui.command_mode {
         render_command_palette(frame, app);
     }
     if app.editor.changed_externally {

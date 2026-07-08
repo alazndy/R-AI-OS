@@ -235,7 +235,8 @@ pub fn dispatch_to_agent(
     let agent_cmd = match agent {
         "codex" => "codex",
         "opencode" => "opencode",
-        "antigravity" => "antigravity",
+        // identity name → installed CLI binary
+        "antigravity" | "agy" => "agy",
         _ => "claude",
     };
 

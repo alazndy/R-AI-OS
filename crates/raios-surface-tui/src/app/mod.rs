@@ -89,6 +89,34 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         desc: "Rebuild Neural Search index",
     },
     PaletteItem {
+        cmd: "/task",
+        desc: "Tasks: /task add <text> | /task send <agent>",
+    },
+    PaletteItem {
+        cmd: "/timeline",
+        desc: "Go to activity Timeline",
+    },
+    PaletteItem {
+        cmd: "/logs",
+        desc: "Go to Live Logs (daemon replay)",
+    },
+    PaletteItem {
+        cmd: "/audit",
+        desc: "Run AI System Audit scan",
+    },
+    PaletteItem {
+        cmd: "/mempalace",
+        desc: "Open MemPalace full-screen view",
+    },
+    PaletteItem {
+        cmd: "/ext",
+        desc: "Go to Extensions panel",
+    },
+    PaletteItem {
+        cmd: "/help",
+        desc: "Show keys & commands reference",
+    },
+    PaletteItem {
         cmd: "/quit",
         desc: "Exit R-AI-OS",
     },

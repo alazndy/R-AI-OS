@@ -3,7 +3,12 @@ use std::io::Write;
 use std::path::Path;
 
 pub fn launch_agent(agent: &str, project_path: &Path) -> String {
-    if raios_core::core::process::launch_in_terminal(agent, project_path) {
+    // "antigravity" is the identity name; the installed CLI binary is `agy`
+    let cmd = match agent {
+        "antigravity" => "agy",
+        other => other,
+    };
+    if raios_core::core::process::launch_in_terminal(cmd, project_path) {
         format!("{} launched", agent)
     } else {
         format!(
