@@ -104,7 +104,10 @@ impl App {
                     self.projects.cursor = 0;
                 }
             // ── Extensions panel keyboard (menu_cursor == 15) ────────────────
-            KeyCode::Tab if self.ui.menu_cursor == 15 => {
+            // All Extensions-specific keys require right_panel_focus, same as every
+            // other panel — otherwise Up/Down/Tab/etc. hijack the menu-navigation
+            // keys and the user gets stuck unable to move off the panel.
+            KeyCode::Tab if self.ui.menu_cursor == 15 && self.ui.right_panel_focus => {
                 self.ext.focus = if self.ext.focus == raios_surface_tui::app::state::ExtFocus::Commands {
                     raios_surface_tui::app::state::ExtFocus::Config
                 } else {
@@ -113,6 +116,7 @@ impl App {
             }
             KeyCode::Enter
                 if self.ui.menu_cursor == 15
+                    && self.ui.right_panel_focus
                     && self.ext.focus == raios_surface_tui::app::state::ExtFocus::Commands
                     && !self.ext.extensions.is_empty() =>
             {
@@ -120,6 +124,7 @@ impl App {
             }
             KeyCode::Char('e')
                 if self.ui.menu_cursor == 15
+                    && self.ui.right_panel_focus
                     && self.ext.focus == raios_surface_tui::app::state::ExtFocus::Config
                     && !self.ext.editing =>
             {
@@ -132,6 +137,7 @@ impl App {
             }
             KeyCode::Enter
                 if self.ui.menu_cursor == 15
+                    && self.ui.right_panel_focus
                     && self.ext.focus == raios_surface_tui::app::state::ExtFocus::Config
                     && self.ext.editing =>
             {
@@ -149,6 +155,7 @@ impl App {
             }
             KeyCode::Left
                 if self.ui.menu_cursor == 15
+                    && self.ui.right_panel_focus
                     && !self.ext.editing
                     && self.ext.ext_cursor > 0 =>
             {
@@ -158,12 +165,18 @@ impl App {
             }
             KeyCode::Right
                 if self.ui.menu_cursor == 15
+                    && self.ui.right_panel_focus
                     && !self.ext.editing
                     && self.ext.ext_cursor + 1 < self.ext.extensions.len() =>
             {
                 self.ext.ext_cursor += 1;
                 self.ext.cmd_cursor = 0;
                 self.ext.cfg_cursor = 0;
+            }
+            // Esc always backs out of a focused right panel to the menu — universal
+            // "go back" regardless of which panel (Extensions, Tasks, files, ...).
+            KeyCode::Esc if self.ui.right_panel_focus => {
+                self.ui.right_panel_focus = false;
             }
             // ── End Extensions ───────────────────────────────────────────────
             KeyCode::Char('/') | KeyCode::Tab => {
@@ -177,7 +190,7 @@ impl App {
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.ui.menu_cursor == 15 && !self.ext.editing {
+                if self.ui.menu_cursor == 15 && self.ui.right_panel_focus && !self.ext.editing {
                     if self.ext.focus == raios_surface_tui::app::state::ExtFocus::Commands {
                         if self.ext.cmd_cursor > 0 { self.ext.cmd_cursor -= 1; }
                     } else if self.ext.cfg_cursor > 0 {
@@ -216,7 +229,7 @@ impl App {
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.ui.menu_cursor == 15 && !self.ext.editing {
+                if self.ui.menu_cursor == 15 && self.ui.right_panel_focus && !self.ext.editing {
                     if self.ext.focus == raios_surface_tui::app::state::ExtFocus::Commands {
                         let max = self.ext.extensions.get(self.ext.ext_cursor)
                             .map(|e| e.commands.len().saturating_sub(1))
@@ -272,7 +285,8 @@ impl App {
                 let can_focus = !self.current_menu_files().is_empty()
                     || (self.ui.menu_cursor == 0 && !self.tasks.list.is_empty())
                     || (self.ui.menu_cursor == 6 && !self.search.results.is_empty())
-                    || (self.ui.menu_cursor == 7 && !self.projects.list.is_empty());
+                    || (self.ui.menu_cursor == 7 && !self.projects.list.is_empty())
+                    || (self.ui.menu_cursor == 15 && !self.ext.extensions.is_empty());
                 if can_focus {
                     self.ui.right_panel_focus = true;
                     self.ui.right_file_cursor = 0;

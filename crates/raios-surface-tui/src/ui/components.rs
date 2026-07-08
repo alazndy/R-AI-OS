@@ -120,10 +120,14 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled("█", Style::new().fg(GREEN)),
         ])
     } else if app.ui.right_panel_focus {
-        Line::from(Span::styled(
-            " [↑↓] navigate  [Enter] view  [e] edit  [o] VS Code  [←] menu  [/] command",
-            Style::new().fg(DIM),
-        ))
+        let hint = match app.ui.menu_cursor {
+            0 => " [↑↓] select  [Space] toggle done  [c/x/o/a] send→agent  [←/Esc] menu",
+            6 => " [↑↓] select  [Enter] open result  [←/Esc] menu",
+            7 => " [↑↓] select  [Enter] open  [L] launch agent  [s] sort  [←/Esc] menu",
+            15 => " [Tab] commands/config  [↑↓] select  [Enter] run  [e] edit  [←→] switch ext  [Esc] menu",
+            _ => " [↑↓] navigate  [Enter] view  [e] edit  [o] VS Code  [←/Esc] menu  [/] command",
+        };
+        Line::from(Span::styled(hint, Style::new().fg(DIM)))
     } else if let Some(act) = app.timeline.activities.last() {
         Line::from(vec![
             Span::styled(format!(" [LOG] {} » ", act.timestamp), Style::new().fg(DIM)),
@@ -132,6 +136,14 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         let hint = if !app.current_menu_files().is_empty() {
             "  [→] files"
+        } else if app.ui.menu_cursor == 0 && !app.tasks.list.is_empty() {
+            "  [→] tasks"
+        } else if app.ui.menu_cursor == 6 && !app.search.results.is_empty() {
+            "  [→] results"
+        } else if app.ui.menu_cursor == 7 && !app.projects.list.is_empty() {
+            "  [→] projects"
+        } else if app.ui.menu_cursor == 15 && !app.ext.extensions.is_empty() {
+            "  [→] extensions"
         } else {
             ""
         };
