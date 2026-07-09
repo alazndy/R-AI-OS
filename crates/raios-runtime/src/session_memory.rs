@@ -3,14 +3,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
-struct HeuristicItem {
-    item_type: &'static str,
-    slug: String,
-    title: String,
-    description: String,
-    body: String,
-}
-
 /// Convert an absolute project path to Claude's directory naming convention.
 /// `/home/alaz/dev/core/R-AI-OS` → `-home-alaz-dev-core-R-AI-OS`
 fn claude_project_dir_name(project_path: &str) -> String {
@@ -309,34 +301,45 @@ pub fn cmd_memory_gen(project: Option<&str>, json: bool) {
 
 // ─── Auto-sync: raios-native heuristic memory extraction ─────────────────────
 
-fn to_slug(text: &str, max_words: usize) -> String {
-    text.split_whitespace()
-        .take(max_words)
-        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase())
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
 fn first_n_words(text: &str, n: usize) -> String {
     text.split_whitespace().take(n).collect::<Vec<_>>().join(" ")
 }
 
-fn heuristic_extract(transcript: &str) -> Vec<HeuristicItem> {
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let date_compact = date.replace('-', "");
+pub(crate) struct AtomicFact {
+    pub item_type: &'static str,
+    pub text: String,
+    pub raw_line: String,
+}
 
-    let mut feedback_lines: Vec<String> = Vec::new();
-    let mut decision_lines: Vec<String> = Vec::new();
-    let mut user_lines: Vec<String> = Vec::new();
+fn fnv1a64(s: &str) -> u64 {
+    let mut h: u64 = 14_695_981_039_346_656_037;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(1_099_511_628_211);
+    }
+    h
+}
+
+fn normalize_fact(text: &str) -> String {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn fact_slug(item_type: &str, text: &str) -> String {
+    let h = fnv1a64(&normalize_fact(text)) & 0xFFFF_FFFF_FFFF; // 48 bits is plenty
+    format!("{}-{:012x}", item_type, h)
+}
+
+fn heuristic_extract_facts(transcript: &str) -> Vec<AtomicFact> {
+    let mut facts: Vec<AtomicFact> = Vec::new();
 
     for line in transcript.lines() {
-        let (role, text) = if let Some(t) = line.strip_prefix("User: ") {
-            ("user", t)
-        } else {
+        let Some(text) = line.strip_prefix("User: ") else {
             continue;
         };
-        let _ = role;
         let lower = text.to_lowercase();
 
         // Feedback — user corrects or confirms a non-obvious approach (EN + TR)
@@ -346,7 +349,11 @@ fn heuristic_extract(transcript: &str) -> Vec<HeuristicItem> {
             .iter()
             .any(|p| lower.contains(p))
         {
-            feedback_lines.push(format!("- {}", first_n_words(text, 30)));
+            facts.push(AtomicFact {
+                item_type: "feedback",
+                text: first_n_words(text, 30),
+                raw_line: line.to_string(),
+            });
         }
 
         // Project decisions / architecture choices (EN + TR)
@@ -356,7 +363,11 @@ fn heuristic_extract(transcript: &str) -> Vec<HeuristicItem> {
             .iter()
             .any(|p| lower.contains(p))
         {
-            decision_lines.push(format!("- {}", first_n_words(text, 30)));
+            facts.push(AtomicFact {
+                item_type: "project",
+                text: first_n_words(text, 30),
+                raw_line: line.to_string(),
+            });
         }
 
         // User background (EN + TR)
@@ -365,66 +376,22 @@ fn heuristic_extract(transcript: &str) -> Vec<HeuristicItem> {
             .iter()
             .any(|p| lower.contains(p))
         {
-            user_lines.push(first_n_words(text, 40));
+            facts.push(AtomicFact {
+                item_type: "user",
+                text: first_n_words(text, 40),
+                raw_line: line.to_string(),
+            });
         }
     }
 
-    let mut items: Vec<HeuristicItem> = Vec::new();
-
-    if !feedback_lines.is_empty() {
-        let body = feedback_lines.join("\n");
-        let title = format!("Session feedback ({})", date);
-        let slug = format!("feedback-{}", date_compact);
-        items.push(HeuristicItem {
-            item_type: "feedback",
-            description: format!("{} correction/confirmation(s) detected", feedback_lines.len()),
-            slug,
-            title,
-            body,
-        });
-    }
-
-    if !decision_lines.is_empty() {
-        let body = decision_lines.join("\n");
-        let slug = format!("decision-{}", date_compact);
-        let title = format!("Decisions ({})", date);
-        items.push(HeuristicItem {
-            item_type: "project",
-            description: format!("{} decision(s) detected", decision_lines.len()),
-            slug,
-            title,
-            body,
-        });
-    }
-
-    if !user_lines.is_empty() {
-        let body = user_lines.join("\n");
-        let slug = to_slug(&user_lines[0], 4);
-        let slug = if slug.is_empty() { "user-background".to_string() } else { format!("user-{}", slug) };
-        let title = format!("User background ({})", date);
-        items.push(HeuristicItem {
-            item_type: "user",
-            description: "User background/role information".to_string(),
-            slug,
-            title,
-            body,
-        });
-    }
-
-    items
+    facts
 }
 
 pub fn decision_lines_from_transcript(transcript: &str) -> Vec<String> {
-    heuristic_extract(transcript)
+    heuristic_extract_facts(transcript)
         .into_iter()
-        .filter(|item| item.item_type == "project")
-        .flat_map(|item| {
-            item.body
-                .lines()
-                .map(|line| line.trim().trim_start_matches("- ").to_string())
-                .filter(|line| !line.is_empty())
-                .collect::<Vec<_>>()
-        })
+        .filter(|f| f.item_type == "project")
+        .map(|f| format!("- {}", f.text))
         .collect()
 }
 
@@ -549,29 +516,52 @@ pub fn auto_sync_agent_memory(
         return;
     }
 
-    let items = heuristic_extract(&transcript);
-    if items.is_empty() {
+    let facts = heuristic_extract_facts(&transcript);
+    if facts.is_empty() {
         return;
     }
 
     let project_key = claude_project_dir_name(project_path);
     let Ok(conn) = raios_core::db::open_db() else { return };
 
-    for item in &items {
-        let _ = raios_core::db::mem_upsert(
+    let mut written = 0usize;
+    for fact in &facts {
+        // L0: immutable raw evidence
+        let Ok(node_id) = raios_core::db::mem_node_add(
+            &conn, &project_key, "l0_raw", agent, &fact.raw_line, None,
+        ) else {
+            continue;
+        };
+
+        // L1: atomic fact — hash slug makes re-detection idempotent
+        let slug = fact_slug(fact.item_type, &fact.text);
+        let title = first_n_words(&fact.text, 8);
+        let ok = raios_core::db::mem_upsert(
             &conn,
             raios_core::db::MemUpsert {
                 project_key: &project_key,
-                item_type: item.item_type,
-                slug: &item.slug,
-                title: &item.title,
-                description: &item.description,
-                body: &item.body,
+                item_type: fact.item_type,
+                slug: &slug,
+                title: &title,
+                description: &fact.text,
+                body: &fact.text,
                 session_id: None,
-                layer: 2,
+                layer: 1,
             },
-        );
+        )
+        .is_ok();
+
+        // Lineage: fact derived_from raw line
+        if ok {
+            if let Ok(Some(item)) = raios_core::db::mem_get(&conn, &project_key, &slug) {
+                let _ = raios_core::db::mem_lineage_add(
+                    &conn, "item", &item.id, "node", &node_id, "derived_from",
+                );
+                written += 1;
+            }
+        }
     }
+    let _ = written; // used by Task 6/7 additions
 
     let home = std::env::var("HOME").unwrap_or_default();
     let memory_dir = PathBuf::from(&home)
@@ -592,4 +582,40 @@ pub fn auto_sync_agent_memory(
 /// Backward-compat shim used by memory-gen flow.
 pub fn auto_sync_claude_memory(project_path: &str, session_started: SystemTime) {
     auto_sync_agent_memory("claude", project_path, session_started, true);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TRANSCRIPT: &str = "User: don't use npm here, use pnpm\n\nAssistant: Anlaşıldı.\n\nUser: we decided to use SQLite for everything\n\nUser: ben gömülü sistem geliştiriciyim";
+
+    #[test]
+    fn extract_facts_one_per_matched_line() {
+        let facts = heuristic_extract_facts(TRANSCRIPT);
+        let types: Vec<&str> = facts.iter().map(|f| f.item_type).collect();
+        assert!(types.contains(&"feedback"));
+        assert!(types.contains(&"project"));
+        assert!(types.contains(&"user"));
+        // raw_line preserves the untruncated source line
+        assert!(facts.iter().any(|f| f.raw_line.contains("don't use npm")));
+    }
+
+    #[test]
+    fn fact_slug_is_deterministic_and_normalized() {
+        let a = fact_slug("feedback", "Don't use NPM here!");
+        let b = fact_slug("feedback", "don't use npm  here");
+        assert_eq!(a, b);
+        assert!(a.starts_with("feedback-"));
+        let c = fact_slug("feedback", "something else entirely");
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn decision_lines_still_work() {
+        let lines = decision_lines_from_transcript(TRANSCRIPT);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].starts_with("- "));
+        assert!(lines[0].contains("SQLite"));
+    }
 }
