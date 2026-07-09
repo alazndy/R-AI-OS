@@ -5,6 +5,7 @@ mod agent_stats;
 mod control_plane;
 mod handoff;
 mod integration;
+mod mem;
 mod schema;
 mod tasks;
 mod tool_traces;

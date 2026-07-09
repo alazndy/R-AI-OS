@@ -30,6 +30,9 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
          ALTER TABLE swarm_tasks ADD COLUMN cp_artifact_id TEXT;
          ALTER TABLE swarm_tasks ADD COLUMN cp_approval_id TEXT;",
     );
+    let _ = conn.execute_batch(
+        "ALTER TABLE mem_items ADD COLUMN layer INTEGER NOT NULL DEFAULT 2",
+    );
 
     conn.execute_batch(
         "
@@ -429,10 +432,39 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             created_at  TEXT NOT NULL DEFAULT (datetime('now','utc')),
             updated_at  TEXT NOT NULL DEFAULT (datetime('now','utc')),
             session_id  TEXT,
+            layer       INTEGER NOT NULL DEFAULT 2,
             UNIQUE(project_key, slug)
         );
         CREATE INDEX IF NOT EXISTS idx_mem_items_project ON mem_items(project_key);
         CREATE INDEX IF NOT EXISTS idx_mem_items_type    ON mem_items(project_key, item_type);
+        ",
+    )?;
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS mem_nodes (
+            id          TEXT PRIMARY KEY,
+            project_key TEXT NOT NULL,
+            kind        TEXT NOT NULL CHECK(kind IN ('l0_raw','revision')),
+            source      TEXT NOT NULL DEFAULT '',
+            content     TEXT NOT NULL,
+            session_id  TEXT,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now','utc'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_mem_nodes_project ON mem_nodes(project_key, kind);
+
+        CREATE TABLE IF NOT EXISTS mem_lineage (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            child_kind  TEXT NOT NULL CHECK(child_kind IN ('item','node')),
+            child_id    TEXT NOT NULL,
+            parent_kind TEXT NOT NULL CHECK(parent_kind IN ('item','node')),
+            parent_id   TEXT NOT NULL,
+            relation    TEXT NOT NULL DEFAULT 'derived_from',
+            created_at  TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            UNIQUE(child_kind, child_id, parent_kind, parent_id, relation)
+        );
+        CREATE INDEX IF NOT EXISTS idx_mem_lineage_child  ON mem_lineage(child_kind, child_id);
+        CREATE INDEX IF NOT EXISTS idx_mem_lineage_parent ON mem_lineage(parent_kind, parent_id);
         ",
     )?;
 
