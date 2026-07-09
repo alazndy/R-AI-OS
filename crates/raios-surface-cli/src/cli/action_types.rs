@@ -89,9 +89,18 @@ pub enum MemAction {
         /// Filter by type: user|feedback|project|reference
         #[arg(short = 't', long)]
         item_type: Option<String>,
+        /// Filter by layer: 1=fact, 2=scene, 3=persona
+        #[arg(short = 'l', long)]
+        layer: Option<i64>,
     },
     /// Show a single memory item by slug
     Get {
+        slug: String,
+        #[arg(short, long)]
+        project: Option<String>,
+    },
+    /// Show archived body revisions of a memory item (newest first)
+    History {
         slug: String,
         #[arg(short, long)]
         project: Option<String>,

@@ -21,11 +21,16 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
     };
 
     match action {
-        MemAction::List { project, item_type } => {
+        MemAction::List { project, item_type, layer } => {
             let key = project_key_for(&project);
             let items = raios_core::db::mem_list(&conn, &key).unwrap_or_default();
             let items: Vec<_> = if let Some(t) = &item_type {
                 items.into_iter().filter(|i| &i.item_type == t).collect()
+            } else {
+                items
+            };
+            let items: Vec<_> = if let Some(l) = layer {
+                items.into_iter().filter(|i| i.layer == l).collect()
             } else {
                 items
             };
@@ -39,7 +44,7 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
             }
             println!("\n  MEMORY ITEMS  {}\n", key);
             for i in &items {
-                println!("  [{:<10}] {}  \x1b[90m{}\x1b[0m", i.item_type, i.slug, i.description);
+                println!("  [L{}][{:<10}] {}  \x1b[90m{}\x1b[0m", i.layer, i.item_type, i.slug, i.description);
             }
             println!();
         }
@@ -56,6 +61,23 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
                     }
                 }
                 Ok(None) => eprintln!("  Not found: {}", slug),
+                Err(e) => eprintln!("  Error: {e}"),
+            }
+        }
+        MemAction::History { slug, project } => {
+            let key = project_key_for(&project);
+            match raios_core::db::mem_history(&conn, &key, &slug) {
+                Ok(revs) if revs.is_empty() => println!("  No revisions for {}", slug),
+                Ok(revs) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&revs).unwrap_or_default());
+                        return;
+                    }
+                    println!("\n  REVISIONS  {}/{}  ({})\n", key, slug, revs.len());
+                    for r in &revs {
+                        println!("  \x1b[90m{}\x1b[0m  node:{}\n{}\n", r.created_at, &r.id[..8], r.content);
+                    }
+                }
                 Err(e) => eprintln!("  Error: {e}"),
             }
         }
