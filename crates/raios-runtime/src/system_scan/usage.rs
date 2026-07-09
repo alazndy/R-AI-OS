@@ -6,6 +6,8 @@ use std::path::Path;
 
 use super::{UsageConfidence, UsageSnapshot, UsageSource};
 
+const USAGE_CACHE_STALENESS_HOURS: i64 = 24;
+
 pub(super) fn scan_codex_usage() -> UsageSnapshot {
     let home = dirs::home_dir().unwrap_or_default();
     let auth_path = home.join(".codex/auth.json");
@@ -53,6 +55,9 @@ pub(super) fn scan_claude_usage() -> UsageSnapshot {
     if let Some(json) = read_json_value(&creds_path) {
         apply_claude_auth_metadata(&mut usage, &json);
     }
+
+    let cache_path = home.join(".claude/raios-usage-cache.json");
+    apply_usage_cache(&mut usage, &cache_path);
 
     usage
 }
@@ -178,6 +183,82 @@ fn apply_claude_auth_metadata(usage: &mut UsageSnapshot, auth: &Value) {
     );
 }
 
+fn apply_usage_cache(usage: &mut UsageSnapshot, cache_path: &Path) {
+    let Ok(content) = fs::read_to_string(cache_path) else {
+        usage.notes.push(
+            "Kalan kullanım cache dosyası bulunamadı — no active/recent session to source from."
+                .into(),
+        );
+        return;
+    };
+    let Ok(cache) = serde_json::from_str::<Value>(&content) else {
+        usage.notes.push(
+            "Kalan kullanım cache dosyası okunamadı (bozuk JSON) — no active/recent session to source from."
+                .into(),
+        );
+        return;
+    };
+
+    let updated_at = cache.get("updated_at").and_then(Value::as_str);
+    let is_fresh = updated_at
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| {
+            let age = chrono::Utc::now().signed_duration_since(dt.with_timezone(&chrono::Utc));
+            age.num_hours() < USAGE_CACHE_STALENESS_HOURS
+        })
+        .unwrap_or(false);
+
+    if !is_fresh {
+        usage.notes.push(
+            "Kalan kullanım cache'i eski (>24 saat) — no active/recent session to source from."
+                .into(),
+        );
+        return;
+    }
+
+    let five = cache.get("five_hour_used_pct").and_then(Value::as_f64);
+    let week = cache.get("seven_day_used_pct").and_then(Value::as_f64);
+
+    if five.is_none() && week.is_none() {
+        usage.notes.push(
+            "Kalan kullanım cache'inde veri yok — no active/recent session to source from.".into(),
+        );
+        return;
+    }
+
+    let mut parts = Vec::new();
+    if let Some(v) = five {
+        parts.push(format!("5h:{:.0}%", 100.0 - v));
+    }
+    if let Some(v) = week {
+        parts.push(format!("7d:{:.0}%", 100.0 - v));
+    }
+    usage.remaining = Some(format!("{} remaining", parts.join(" ")));
+
+    let five_reset = cache.get("five_hour_resets_at").and_then(value_to_i64);
+    let week_reset = cache.get("seven_day_resets_at").and_then(value_to_i64);
+    let mut reset_parts = Vec::new();
+    if let Some(reset) = five_reset.and_then(format_epoch_secs) {
+        reset_parts.push(format!("5h:{reset}"));
+    }
+    if let Some(reset) = week_reset.and_then(format_epoch_secs) {
+        reset_parts.push(format!("7d:{reset}"));
+    }
+    if !reset_parts.is_empty() {
+        usage.reset_at = Some(reset_parts.join(" "));
+    }
+
+    usage.source = UsageSource::LocalLog;
+    usage.confidence = UsageConfidence::Estimated;
+    usage
+        .notes
+        .retain(|n| !n.contains("kalan kullanım yerelden okunmuyor"));
+    usage.notes.push(format!(
+        "cached from statusLine as of {}, not live-polled — only reflects the last active Claude Code session tick.",
+        updated_at.unwrap_or("unknown time")
+    ));
+}
+
 fn apply_antigravity_auth_metadata(usage: &mut UsageSnapshot, auth: &Value) {
     usage.authenticated = true;
     usage.source = UsageSource::LocalAuth;
@@ -237,6 +318,14 @@ fn format_epoch_millis(epoch_millis: i64) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::Write;
+
+    fn write_temp_cache(dir: &std::path::Path, content: &str) -> std::path::PathBuf {
+        let path = dir.join("raios-usage-cache.json");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        path
+    }
 
     fn fake_jwt(payload: Value) -> String {
         format!(
@@ -328,5 +417,76 @@ mod tests {
             usage.auth_expires_at.as_deref(),
             Some("2026-06-09T18:34:34.833463712+03:00")
         );
+    }
+
+    #[test]
+    fn apply_usage_cache_populates_remaining_from_fresh_cache() {
+        let dir = std::env::temp_dir().join(format!("raios-usage-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let cache_path = write_temp_cache(
+            &dir,
+            &format!(
+                r#"{{"five_hour_used_pct":18.4,"seven_day_used_pct":39.0,"five_hour_resets_at":1999999999,"seven_day_resets_at":2000500000,"updated_at":"{}"}}"#,
+                now
+            ),
+        );
+
+        let mut usage = UsageSnapshot::new("Claude Code", true);
+        usage.source = UsageSource::LocalAuth;
+        usage.plan = Some("pro".into());
+
+        apply_usage_cache(&mut usage, &cache_path);
+
+        assert_eq!(usage.remaining.as_deref(), Some("5h:82% 7d:61% remaining"));
+        assert_eq!(usage.source, UsageSource::LocalLog);
+        assert_eq!(usage.confidence, UsageConfidence::Estimated);
+        assert_eq!(usage.plan.as_deref(), Some("pro"));
+        assert!(usage.notes.iter().any(|n| n.contains("cached from statusLine")));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn apply_usage_cache_ignores_stale_cache() {
+        let dir = std::env::temp_dir().join(format!(
+            "raios-usage-test-stale-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = (chrono::Utc::now() - chrono::Duration::hours(30)).to_rfc3339();
+        let cache_path = write_temp_cache(
+            &dir,
+            &format!(
+                r#"{{"five_hour_used_pct":18.4,"seven_day_used_pct":39.0,"five_hour_resets_at":null,"seven_day_resets_at":null,"updated_at":"{}"}}"#,
+                old
+            ),
+        );
+
+        let mut usage = UsageSnapshot::new("Claude Code", true);
+        apply_usage_cache(&mut usage, &cache_path);
+
+        assert_eq!(usage.remaining, None);
+        assert!(usage
+            .notes
+            .iter()
+            .any(|n| n.contains("no active/recent session")));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn apply_usage_cache_missing_file_is_a_noop_note() {
+        let mut usage = UsageSnapshot::new("Claude Code", true);
+        apply_usage_cache(
+            &mut usage,
+            std::path::Path::new("/tmp/does-not-exist-raios-usage-cache.json"),
+        );
+
+        assert_eq!(usage.remaining, None);
+        assert!(usage
+            .notes
+            .iter()
+            .any(|n| n.contains("no active/recent session")));
     }
 }

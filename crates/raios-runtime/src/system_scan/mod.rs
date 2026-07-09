@@ -25,7 +25,7 @@ pub enum ToolStatus {
     Error(String),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageConfidence {
     Exact,
@@ -33,7 +33,7 @@ pub enum UsageConfidence {
     Unavailable,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageSource {
     LocalAuth,
