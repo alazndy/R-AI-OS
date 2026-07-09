@@ -205,7 +205,20 @@ pub struct MemNodeRow {
 }
 
 /// Insert an immutable evidence node (L0 raw excerpt or archived revision).
-/// Returns the generated node id.
+///
+/// `l0_raw` nodes are content-addressed within a project: re-adding the same
+/// `(project_key, content)` returns the existing node's id instead of minting
+/// a duplicate row. This matters because periodic background sync re-scans
+/// the whole session transcript on every tick (see `auto_sync_agent_memory`),
+/// so the same evidence line is offered repeatedly — without dedup here, L0
+/// evidence (and its lineage edges) would grow unboundedly across a session
+/// even though the L1 facts derived from it are already deduped via slug.
+///
+/// `revision` nodes are NOT deduped: each one is a genuinely distinct
+/// historical snapshot of a mem_item's body and must always be inserted
+/// fresh, even if its content happens to match an earlier revision's.
+///
+/// Returns the generated (or, for a deduped l0_raw hit, the existing) node id.
 pub fn mem_node_add(
     conn: &Connection,
     project_key: &str,
@@ -214,6 +227,19 @@ pub fn mem_node_add(
     content: &str,
     session_id: Option<&str>,
 ) -> Result<String> {
+    if kind == "l0_raw" {
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT id FROM mem_nodes WHERE project_key = ?1 AND kind = 'l0_raw' AND content = ?2",
+                params![project_key, content],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute(

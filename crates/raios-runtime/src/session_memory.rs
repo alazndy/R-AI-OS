@@ -866,4 +866,109 @@ mod tests {
         let parents = raios_core::db::mem_lineage_parents(&conn, "item", &p.id).unwrap();
         assert_eq!(parents.len(), 2);
     }
+
+    /// Regression test for the periodic-resync bloat bug: `auto_sync_agent_memory`
+    /// runs on a background timer with a FIXED `session_start_time`, so
+    /// `collect_transcript` re-reads the whole transcript since session start on
+    /// every tick — meaning the same matched lines are offered to the fact loop
+    /// over and over across a long session. The L1 fact itself is deduped via its
+    /// deterministic `fact_slug` → `mem_upsert` on the same slug, but the L0
+    /// evidence node (`mem_node_add(.., "l0_raw", ..)`) and its `derived_from`
+    /// lineage edge were NOT deduped before the fix in `mem_node_add`, so
+    /// `mem_nodes`/`mem_lineage` grew without bound even though the facts they
+    /// backed did not change.
+    ///
+    /// `auto_sync_agent_memory` itself isn't directly testable here (it reads the
+    /// transcript from disk and opens the real production DB via `open_db()`), so
+    /// this test replicates its per-fact write sequence — the exact same three
+    /// calls in the exact same order as the loop body in `auto_sync_agent_memory`
+    /// (mem_node_add for L0 evidence, mem_upsert for the L1 fact, mem_lineage_add
+    /// to link fact → evidence) — against the same in-memory DB, run twice over
+    /// the identical transcript, simulating two consecutive 90-second sync ticks
+    /// with no new conversation content in between.
+    #[test]
+    fn periodic_resync_does_not_grow_mem_nodes_for_unchanged_transcript() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let key = "-home-alaz-p";
+
+        // Mirrors the fact loop body inside `auto_sync_agent_memory` exactly.
+        let run_sync_tick = |conn: &rusqlite::Connection| {
+            let facts = heuristic_extract_facts(TRANSCRIPT);
+            assert!(!facts.is_empty(), "fixture transcript must yield at least one fact");
+
+            let mut written: Vec<(String, &'static str, String)> = Vec::new();
+            for fact in &facts {
+                let node_id = raios_core::db::mem_node_add(
+                    conn, key, "l0_raw", "claude", &fact.raw_line, None,
+                )
+                .unwrap();
+
+                let slug = fact_slug(fact.item_type, &fact.text);
+                let title = first_n_words(&fact.text, 8);
+                raios_core::db::mem_upsert(
+                    conn,
+                    raios_core::db::MemUpsert {
+                        project_key: key,
+                        item_type: fact.item_type,
+                        slug: &slug,
+                        title: &title,
+                        description: &fact.text,
+                        body: &fact.text,
+                        session_id: None,
+                        layer: 1,
+                    },
+                )
+                .unwrap();
+
+                let item = raios_core::db::mem_get(conn, key, &slug).unwrap().unwrap();
+                raios_core::db::mem_lineage_add(
+                    conn, "item", &item.id, "node", &node_id, "derived_from",
+                )
+                .unwrap();
+                written.push((slug, fact.item_type, fact.text.clone()));
+            }
+            written
+        };
+
+        // Tick 1: session just started, first sync of the (only) transcript so far.
+        run_sync_tick(&conn);
+        let l0_count_after_first: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM mem_nodes WHERE kind = 'l0_raw'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(l0_count_after_first > 0);
+
+        // Tick 2: 90 seconds later, `session_start_time` is unchanged so
+        // `collect_transcript` re-reads the SAME transcript from the start again —
+        // no new conversation content.
+        run_sync_tick(&conn);
+        let l0_count_after_second: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM mem_nodes WHERE kind = 'l0_raw'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(
+            l0_count_after_first, l0_count_after_second,
+            "re-syncing the identical transcript must not grow mem_nodes l0_raw rows"
+        );
+
+        // Lineage must also stay flat: same fact, same evidence node id both times,
+        // so mem_lineage's UNIQUE(child_kind, child_id, parent_kind, parent_id, relation)
+        // catches the repeat and INSERT OR IGNORE is a no-op on tick 2.
+        let lineage_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM mem_lineage", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            lineage_count, l0_count_after_first,
+            "lineage edges must not duplicate across resync ticks either"
+        );
+    }
 }

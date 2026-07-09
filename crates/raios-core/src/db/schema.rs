@@ -452,6 +452,7 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             created_at  TEXT NOT NULL DEFAULT (datetime('now','utc'))
         );
         CREATE INDEX IF NOT EXISTS idx_mem_nodes_project ON mem_nodes(project_key, kind);
+        CREATE INDEX IF NOT EXISTS idx_mem_nodes_dedup ON mem_nodes(project_key, kind, content);
 
         CREATE TABLE IF NOT EXISTS mem_lineage (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,

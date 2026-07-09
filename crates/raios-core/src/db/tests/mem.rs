@@ -123,6 +123,36 @@ fn mem_upsert_identical_or_empty_body_creates_no_revision() {
 }
 
 #[test]
+fn mem_node_add_dedupes_l0_raw_content_within_project() {
+    let conn = in_memory();
+    let key = "-home-alaz-p";
+    let id1 = mem_node_add(&conn, key, "l0_raw", "claude", "User: don't use npm here", None).unwrap();
+    let id2 = mem_node_add(&conn, key, "l0_raw", "claude", "User: don't use npm here", None).unwrap();
+
+    assert_eq!(id1, id2, "repeated l0_raw content must return the SAME node id, not a new one");
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM mem_nodes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "repeated l0_raw content must not insert a duplicate row");
+}
+
+#[test]
+fn mem_node_add_still_inserts_fresh_revision_nodes_each_time() {
+    let conn = in_memory();
+    let key = "-home-alaz-p";
+    let id1 = mem_node_add(&conn, key, "revision", "2026-07-08", "same old body", None).unwrap();
+    let id2 = mem_node_add(&conn, key, "revision", "2026-07-08", "same old body", None).unwrap();
+
+    assert_ne!(id1, id2, "revision nodes must always be inserted fresh, even with identical content");
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM mem_nodes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 2, "two distinct revision snapshots must both be present");
+}
+
+#[test]
 fn mem_export_groups_by_layer_persona_first() {
     let conn = in_memory();
     let key = "-home-alaz-p";
