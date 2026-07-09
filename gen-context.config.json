@@ -1,3 +1,4 @@
 {
-  "customOutput": "SIGNATURES.md"
+  "output": "SIGMAP.md",
+  "modelContextLimit": 200000
 }
