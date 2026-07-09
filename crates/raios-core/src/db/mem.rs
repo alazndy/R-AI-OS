@@ -152,3 +152,121 @@ pub fn mem_export(conn: &Connection, project_key: &str, memory_dir: &std::path::
 
     Ok(items.len())
 }
+
+// ─── Memory Nodes (mem_nodes) & Lineage (mem_lineage) ────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MemNodeRow {
+    pub id: String,
+    pub project_key: String,
+    pub kind: String,
+    pub source: String,
+    pub content: String,
+    pub session_id: Option<String>,
+    pub created_at: String,
+}
+
+/// Insert an immutable evidence node (L0 raw excerpt or archived revision).
+/// Returns the generated node id.
+pub fn mem_node_add(
+    conn: &Connection,
+    project_key: &str,
+    kind: &str,
+    source: &str,
+    content: &str,
+    session_id: Option<&str>,
+) -> Result<String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    conn.execute(
+        "INSERT INTO mem_nodes (id, project_key, kind, source, content, session_id, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![id, project_key, kind, source, content, session_id, now],
+    )?;
+    Ok(id)
+}
+
+pub fn mem_node_get(conn: &Connection, id: &str) -> Result<Option<MemNodeRow>> {
+    conn.query_row(
+        "SELECT id, project_key, kind, source, content, session_id, created_at
+         FROM mem_nodes WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(MemNodeRow {
+                id: row.get(0)?,
+                project_key: row.get(1)?,
+                kind: row.get(2)?,
+                source: row.get(3)?,
+                content: row.get(4)?,
+                session_id: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/// Record a derived-from / revision edge. Idempotent.
+pub fn mem_lineage_add(
+    conn: &Connection,
+    child_kind: &str,
+    child_id: &str,
+    parent_kind: &str,
+    parent_id: &str,
+    relation: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO mem_lineage (child_kind, child_id, parent_kind, parent_id, relation)
+         VALUES (?1,?2,?3,?4,?5)",
+        params![child_kind, child_id, parent_kind, parent_id, relation],
+    )?;
+    Ok(())
+}
+
+/// All parents of a child: (parent_kind, parent_id, relation), oldest first.
+pub fn mem_lineage_parents(
+    conn: &Connection,
+    child_kind: &str,
+    child_id: &str,
+) -> Result<Vec<(String, String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT parent_kind, parent_id, relation FROM mem_lineage
+         WHERE child_kind = ?1 AND child_id = ?2 ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map(params![child_kind, child_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .flatten()
+        .collect();
+    Ok(rows)
+}
+
+/// Archived body revisions of a mem_item, newest first. Empty vec for unknown slug.
+pub fn mem_history(conn: &Connection, project_key: &str, slug: &str) -> Result<Vec<MemNodeRow>> {
+    let Some(item) = mem_get(conn, project_key, slug)? else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn.prepare(
+        "SELECT n.id, n.project_key, n.kind, n.source, n.content, n.session_id, n.created_at
+         FROM mem_nodes n
+         JOIN mem_lineage l ON l.parent_kind = 'node' AND l.parent_id = n.id
+         WHERE l.child_kind = 'item' AND l.child_id = ?1 AND l.relation = 'revision'
+         ORDER BY n.created_at DESC, n.id DESC",
+    )?;
+    let rows = stmt
+        .query_map(params![item.id], |row| {
+            Ok(MemNodeRow {
+                id: row.get(0)?,
+                project_key: row.get(1)?,
+                kind: row.get(2)?,
+                source: row.get(3)?,
+                content: row.get(4)?,
+                session_id: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?
+        .flatten()
+        .collect();
+    Ok(rows)
+}

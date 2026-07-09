@@ -23,3 +23,49 @@ fn mem_schema_has_layer_nodes_lineage() {
         .unwrap();
     assert_eq!(l, 0);
 }
+
+#[test]
+fn mem_node_add_and_lineage_round_trip() {
+    let conn = in_memory();
+    let node_id =
+        mem_node_add(&conn, "-home-alaz-p", "l0_raw", "claude", "User: raw line", None).unwrap();
+    assert!(!node_id.is_empty());
+
+    mem_lineage_add(&conn, "item", "item-1", "node", &node_id, "derived_from").unwrap();
+    // idempotent: second insert must not error
+    mem_lineage_add(&conn, "item", "item-1", "node", &node_id, "derived_from").unwrap();
+
+    let parents = mem_lineage_parents(&conn, "item", "item-1").unwrap();
+    assert_eq!(parents.len(), 1);
+    assert_eq!(parents[0], ("node".to_string(), node_id, "derived_from".to_string()));
+}
+
+#[test]
+fn mem_history_returns_revision_nodes_newest_first() {
+    let conn = in_memory();
+    let key = "-home-alaz-p";
+    mem_upsert(
+        &conn,
+        MemUpsert {
+            project_key: key,
+            item_type: "project",
+            slug: "arch",
+            title: "Arch",
+            description: "d",
+            body: "v1",
+            session_id: None,
+        },
+    )
+    .unwrap();
+    let item = mem_get(&conn, key, "arch").unwrap().unwrap();
+    let n1 = mem_node_add(&conn, key, "revision", "2026-07-08", "old body v0", None).unwrap();
+    mem_lineage_add(&conn, "item", &item.id, "node", &n1, "revision").unwrap();
+
+    let hist = mem_history(&conn, key, "arch").unwrap();
+    assert_eq!(hist.len(), 1);
+    assert_eq!(hist[0].content, "old body v0");
+    assert_eq!(hist[0].kind, "revision");
+
+    // unknown slug → empty, no error
+    assert!(mem_history(&conn, key, "nope").unwrap().is_empty());
+}
