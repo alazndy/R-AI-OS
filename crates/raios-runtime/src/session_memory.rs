@@ -387,6 +387,61 @@ fn heuristic_extract_facts(transcript: &str) -> Vec<AtomicFact> {
     facts
 }
 
+/// L2: upsert the per-day scene block digest for today and link it to its facts.
+/// Returns the scene slug, or None if fact_slugs is empty or DB writes failed.
+fn upsert_scene_block(
+    conn: &rusqlite::Connection,
+    project_key: &str,
+    fact_slugs: &[(String, &'static str, String)],
+) -> Option<String> {
+    if fact_slugs.is_empty() {
+        return None;
+    }
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let scene_slug = format!("scene-{}", date.replace('-', ""));
+
+    // Cumulative merge: multiple syncs on the same day must accumulate facts into the
+    // scene, not overwrite it — mem_upsert REPLACES the body on conflict, so we need to
+    // read the existing body first and only append genuinely new lines.
+    let mut lines: Vec<String> = raios_core::db::mem_get(conn, project_key, &scene_slug)
+        .ok()
+        .flatten()
+        .map(|s| s.body.lines().map(String::from).collect())
+        .unwrap_or_default();
+    for (slug, t, text) in fact_slugs {
+        let line = format!("- [{t}] {text} ([[{slug}]])");
+        if !lines.contains(&line) {
+            lines.push(line);
+        }
+    }
+    let body = lines.join("\n");
+
+    raios_core::db::mem_upsert(
+        conn,
+        raios_core::db::MemUpsert {
+            project_key,
+            item_type: "project",
+            slug: &scene_slug,
+            title: &format!("Scene ({})", date),
+            description: &format!("{} fact(s) distilled", fact_slugs.len()),
+            body: &body,
+            session_id: None,
+            layer: 2,
+        },
+    )
+    .ok()?;
+
+    let scene = raios_core::db::mem_get(conn, project_key, &scene_slug).ok()??;
+    for (slug, _, _) in fact_slugs {
+        if let Ok(Some(fact)) = raios_core::db::mem_get(conn, project_key, slug) {
+            let _ = raios_core::db::mem_lineage_add(
+                conn, "item", &scene.id, "item", &fact.id, "derived_from",
+            );
+        }
+    }
+    Some(scene_slug)
+}
+
 pub fn decision_lines_from_transcript(transcript: &str) -> Vec<String> {
     heuristic_extract_facts(transcript)
         .into_iter()
@@ -524,7 +579,7 @@ pub fn auto_sync_agent_memory(
     let project_key = claude_project_dir_name(project_path);
     let Ok(conn) = raios_core::db::open_db() else { return };
 
-    let mut written = 0usize;
+    let mut written: Vec<(String, &'static str, String)> = Vec::new();
     for fact in &facts {
         // L0: immutable raw evidence
         let Ok(node_id) = raios_core::db::mem_node_add(
@@ -557,11 +612,11 @@ pub fn auto_sync_agent_memory(
                 let _ = raios_core::db::mem_lineage_add(
                     &conn, "item", &item.id, "node", &node_id, "derived_from",
                 );
-                written += 1;
+                written.push((slug.clone(), fact.item_type, fact.text.clone()));
             }
         }
     }
-    let _ = written; // used by Task 6/7 additions
+    let _ = upsert_scene_block(&conn, &project_key, &written);
 
     let home = std::env::var("HOME").unwrap_or_default();
     let memory_dir = PathBuf::from(&home)
@@ -617,5 +672,37 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert!(lines[0].starts_with("- "));
         assert!(lines[0].contains("SQLite"));
+    }
+
+    #[test]
+    fn scene_block_upsert_links_facts() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let key = "-home-alaz-p";
+
+        // seed two L1 facts
+        for (t, txt) in [("feedback", "don't use npm"), ("project", "we decided sqlite")] {
+            let slug = fact_slug(t, txt);
+            raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
+                project_key: key, item_type: t, slug: &slug, title: txt,
+                description: txt, body: txt, session_id: None, layer: 1,
+            }).unwrap();
+        }
+        let slugs: Vec<(String, &'static str, String)> = vec![
+            (fact_slug("feedback", "don't use npm"), "feedback", "don't use npm".into()),
+            (fact_slug("project", "we decided sqlite"), "project", "we decided sqlite".into()),
+        ];
+
+        let scene_slug = upsert_scene_block(&conn, key, &slugs).unwrap();
+        let scene = raios_core::db::mem_get(&conn, key, &scene_slug).unwrap().unwrap();
+        assert_eq!(scene.layer, 2);
+        assert!(scene.body.contains("don't use npm"));
+        assert!(scene.body.contains(&fact_slug("project", "we decided sqlite")));
+
+        // lineage: scene → 2 fact parents
+        let parents = raios_core::db::mem_lineage_parents(&conn, "item", &scene.id).unwrap();
+        assert_eq!(parents.len(), 2);
+        assert!(parents.iter().all(|(k, _, r)| k == "item" && r == "derived_from"));
     }
 }
