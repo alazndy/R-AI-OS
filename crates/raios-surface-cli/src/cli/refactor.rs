@@ -77,6 +77,7 @@ pub(super) fn cmd_refactor(
                 "No refactor issues found. Grade: {} ({}/100)",
                 report.grade, report.score
             );
+            println!("⚠ Pattern-based scan (line-count/nesting/unwrap heuristics) — a clean result is not proof of absence.");
             return;
         }
         println!(
@@ -96,5 +97,6 @@ pub(super) fn cmd_refactor(
                 issue.reasons.join("; ")
             );
         }
+        println!("\n⚠ Pattern-based scan (line-count/nesting/unwrap heuristics) — findings need human judgment, not all flagged files are actually problems.");
     }
 }
