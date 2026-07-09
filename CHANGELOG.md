@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.3.0 — 2026-07-09
+### Added
+- **Layered memory (L0→L3), ported from TencentDB-Agent-Memory's semantic pyramid**: `mem_nodes` (immutable evidence: raw transcript lines, archived body revisions) + `mem_lineage` (derived-from/revision edges) give `mem_items` real traceability for the first time. `mem_items.layer` discriminates L1 atomic facts (deterministic hash-slugged, deduped), L2 daily scene digests (cumulative same-day merge with `[[slug]]` backlinks), and L3 a rolling persona (background + working rules, rebuilt from the newest L1 facts). All distillation is local/deterministic — no LLM calls.
+- **`raios mem history <slug>`** and **`raios mem list --layer <n>`** — inspect a memory item's revision chain and filter by pyramid layer.
+- **`raios sessions --canvas <session_id>`** — folds a session's `session_events` stream into a compact Mermaid flowchart; consecutive same-type events collapse into one node with a `se:<id>` back-reference to the full, untruncated payload — compression is never irreversible.
+- **`raios usage` now reports live Claude Pro/Max quota remaining.** The statusLine script caches `rate_limits.five_hour`/`seven_day` usage percentages (from Claude Code's own stdin JSON) to `~/.claude/raios-usage-cache.json`; `raios usage` reads that cache (with a 24h staleness cutoff) and shows `5h:XX% 7d:YY% remaining` plus formatted reset times instead of a hardcoded "unknown".
+### Fixed
+- **`mem_items.body` unbounded growth**: `mem_upsert` previously concatenated every write onto the same row forever. It now replaces the body and archives the previous version as an immutable `mem_nodes` revision — the full history is still recoverable via `raios mem history`, but the live row stays bounded.
+- **A second instance of the same bug, caught only by a whole-branch review**: the 90-second periodic memory-sync thread re-scans the entire session transcript on every tick (fixed start timestamp), and was inserting a fresh, undeduplicated `mem_nodes`/`mem_lineage` row per matched fact on every pass — silently recreating unbounded growth one layer down. Fixed with content-addressed dedup on `(project_key, kind, content)` for `l0_raw` nodes (revision nodes are correctly exempt — each is a genuinely distinct snapshot).
+- `mem_upsert`'s archive-then-replace sequence (revision node + lineage edge + item update) now runs inside a single SQLite transaction instead of three unguarded autocommit statements.
+- `raios security` / `raios refactor` output now discloses its own limitation inline ("pattern-based scan — a clean result is not proof of absence") instead of only in internal docs — both are regex/heuristic scanners, not semantic analysis.
+- `gen-context.config.json` used an unrecognized `customOutput` key that `sigmap` silently ignored, so it never wrote `SIGMAP.md` (it was defaulting to `.github/copilot-instructions.md` instead). Corrected to the real `output` key.
+### Changed
+- `session_memory.rs` (974 lines after the memory-layering work) split into a `session_memory/` directory module — `transcript_io.rs`, `heuristics.rs`, `distillation.rs`, plus a thin `mod.rs` orchestrator. Pure move, no behavior change; full external call surface (`auto_sync_agent_memory`, `collect_transcript`, `decision_lines_from_transcript`, etc.) preserved.
+
 ## v3.2.0 — 2026-07-07
 ### Changed
 - **Workspace split**: monolithic library physically split into a Cargo workspace of 5 crates (`raios-core`, `raios-runtime`, `raios-surface-cli`, `raios-surface-mcp`, `raios-surface-tui`) — the actual reason for the version jump from v3.0.0; no v3.1.0 was ever tagged.
