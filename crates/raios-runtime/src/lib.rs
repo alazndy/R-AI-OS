@@ -10,6 +10,7 @@ pub mod search;
 pub mod health;
 pub mod compliance;
 pub mod session;
+pub mod session_canvas;
 pub mod session_memory;
 pub mod session_review;
 pub mod radar;

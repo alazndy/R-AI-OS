@@ -243,7 +243,9 @@ pub fn run(cli: Cli) {
             };
             agent_wrapper::cmd_agent_wrapper(a, cli.json);
         }
-        Commands::Sessions { agent, top } => cmd_sessions(agent.as_deref(), top, cli.json),
+        Commands::Sessions { agent, top, canvas } => {
+            cmd_sessions(agent.as_deref(), top, canvas.as_deref(), cli.json)
+        }
         Commands::AgentStats { agent } => agent_stats::cmd_agent_stats(agent, cli.json),
         Commands::MemoryGen { project } => {
             raios_runtime::session_memory::cmd_memory_gen(project.as_deref(), cli.json);

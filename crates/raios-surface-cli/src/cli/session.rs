@@ -1,4 +1,20 @@
-pub(super) fn cmd_sessions(agent: Option<&str>, top: usize, json: bool) {
+pub(super) fn cmd_sessions(agent: Option<&str>, top: usize, canvas: Option<&str>, json: bool) {
+    if let Some(session_id) = canvas {
+        let store = raios_runtime::session::SessionStore::new(
+            raios_runtime::session::SessionStore::default_path(),
+        );
+        let events = store.events(session_id);
+        if events.is_empty() {
+            eprintln!("  No events for session {}", session_id);
+            return;
+        }
+        let nodes = raios_runtime::session_canvas::fold_events(&events);
+        println!(
+            "{}",
+            raios_runtime::session_canvas::to_mermaid(session_id, &nodes)
+        );
+        return;
+    }
     let conn = match raios_core::db::open_db() {
         Ok(c) => c,
         Err(e) => {

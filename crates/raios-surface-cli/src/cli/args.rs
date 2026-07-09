@@ -331,6 +331,9 @@ pub enum Commands {
         /// Number of sessions to show (default: 15)
         #[arg(short = 'n', long, default_value = "15")]
         top: usize,
+        /// Render one session's event stream as a Mermaid canvas
+        #[arg(long)]
+        canvas: Option<String>,
     },
     /// Show per-agent performance stats: run count, success rate, average
     /// duration, exit_reason distribution — aggregated from cp_agent_runs.
