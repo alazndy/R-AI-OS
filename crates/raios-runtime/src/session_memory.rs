@@ -442,6 +442,68 @@ fn upsert_scene_block(
     Some(scene_slug)
 }
 
+/// L3: rebuild the project persona from L1 user/feedback facts. Deterministic, no LLM.
+pub fn rebuild_persona(conn: &rusqlite::Connection, project_key: &str) -> Option<()> {
+    let items = raios_core::db::mem_list(conn, project_key).ok()?;
+    let mut user: Vec<&raios_core::db::MemItemRow> = items
+        .iter()
+        .filter(|i| i.layer == 1 && i.item_type == "user" && i.slug != "persona")
+        .collect();
+    let mut feedback: Vec<&raios_core::db::MemItemRow> = items
+        .iter()
+        .filter(|i| i.layer == 1 && i.item_type == "feedback")
+        .collect();
+    if user.is_empty() && feedback.is_empty() {
+        return None;
+    }
+    // newest first, capped
+    user.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    feedback.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    user.truncate(10);
+    feedback.truncate(20);
+
+    let mut body = String::new();
+    if !user.is_empty() {
+        body.push_str("## Background\n");
+        for i in &user {
+            body.push_str(&format!("- {} ([[{}]])\n", i.body, i.slug));
+        }
+    }
+    if !feedback.is_empty() {
+        body.push_str("\n## Working Rules\n");
+        for i in &feedback {
+            body.push_str(&format!("- {} ([[{}]])\n", i.body, i.slug));
+        }
+    }
+
+    raios_core::db::mem_upsert(
+        conn,
+        raios_core::db::MemUpsert {
+            project_key,
+            item_type: "user",
+            slug: "persona",
+            title: "Persona",
+            description: &format!(
+                "{} background + {} rule fact(s)",
+                user.len(),
+                feedback.len()
+            ),
+            body: body.trim_end(),
+            session_id: None,
+            layer: 3,
+        },
+    )
+    .ok()?;
+
+    let persona = raios_core::db::mem_get(conn, project_key, "persona").ok()??;
+    for i in user.iter().chain(feedback.iter()) {
+        let _ = raios_core::db::mem_lineage_add(
+            conn, "item", &persona.id, "item", &i.id, "derived_from",
+        );
+    }
+    Some(())
+}
+
 pub fn decision_lines_from_transcript(transcript: &str) -> Vec<String> {
     heuristic_extract_facts(transcript)
         .into_iter()
@@ -618,6 +680,10 @@ pub fn auto_sync_agent_memory(
     }
     let _ = upsert_scene_block(&conn, &project_key, &written);
 
+    if written.iter().any(|(_, t, _)| *t == "user" || *t == "feedback") {
+        let _ = rebuild_persona(&conn, &project_key);
+    }
+
     let home = std::env::var("HOME").unwrap_or_default();
     let memory_dir = PathBuf::from(&home)
         .join(".claude/projects")
@@ -767,5 +833,37 @@ mod tests {
             "expected exactly 2 derived_from fact parents, got: {:?}",
             parents
         );
+    }
+
+    #[test]
+    fn persona_assembles_from_user_and_feedback_facts() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let key = "-home-alaz-p";
+
+        for (t, txt) in [
+            ("user", "ben gömülü sistem geliştiriciyim"),
+            ("feedback", "don't use npm, use pnpm"),
+            ("project", "we decided sqlite"), // must NOT appear in persona
+        ] {
+            let slug = fact_slug(t, txt);
+            raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
+                project_key: key, item_type: t, slug: &slug, title: txt,
+                description: txt, body: txt, session_id: None, layer: 1,
+            }).unwrap();
+        }
+
+        rebuild_persona(&conn, key).unwrap();
+        let p = raios_core::db::mem_get(&conn, key, "persona").unwrap().unwrap();
+        assert_eq!(p.layer, 3);
+        assert!(p.body.contains("## Background"));
+        assert!(p.body.contains("gömülü sistem"));
+        assert!(p.body.contains("## Working Rules"));
+        assert!(p.body.contains("use pnpm"));
+        assert!(!p.body.contains("sqlite"));
+
+        let parents = raios_core::db::mem_lineage_parents(&conn, "item", &p.id).unwrap();
+        assert_eq!(parents.len(), 2);
     }
 }
