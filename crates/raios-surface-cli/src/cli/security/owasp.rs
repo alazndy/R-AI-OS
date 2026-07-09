@@ -180,6 +180,9 @@ pub fn cmd_security(
     if !full && all_reports.iter().any(|(_, _, r)| !r.issues.is_empty()) {
         println!("\nUse --full to see individual issues.");
     }
+    println!(
+        "\n⚠ Pattern-based scan — findings need human review; a clean result is not proof of absence."
+    );
 }
 
 pub fn cmd_security_watch(path: &Path, json: bool) -> anyhow::Result<()> {
