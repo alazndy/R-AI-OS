@@ -13,6 +13,7 @@ pub struct MemItemRow {
     pub created_at: String,
     pub updated_at: String,
     pub session_id: Option<String>,
+    pub layer: i64,
 }
 
 pub struct MemUpsert<'a> {
@@ -23,6 +24,7 @@ pub struct MemUpsert<'a> {
     pub description: &'a str,
     pub body: &'a str,
     pub session_id: Option<&'a str>,
+    pub layer: i64,
 }
 
 pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
@@ -34,33 +36,53 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
         description,
         body,
         session_id,
+        layer,
     } = item;
+
+    // Archive the previous body as an immutable revision node before replacing.
+    if !body.is_empty() {
+        if let Some(prev) = mem_get(conn, project_key, slug)? {
+            if !prev.body.is_empty() && prev.body != body {
+                let node_id = mem_node_add(
+                    conn,
+                    project_key,
+                    "revision",
+                    &prev.updated_at,
+                    &prev.body,
+                    prev.session_id.as_deref(),
+                )?;
+                mem_lineage_add(conn, "item", &prev.id, "node", &node_id, "revision")?;
+            }
+        }
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now()
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();
     conn.execute(
         "INSERT INTO mem_items
-             (id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?9)
+             (id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?9,?10)
          ON CONFLICT(project_key, slug) DO UPDATE SET
              item_type   = excluded.item_type,
              title       = excluded.title,
              description = excluded.description,
              body        = CASE
-                             WHEN excluded.body != '' THEN mem_items.body || char(10) || '<!-- ' || ?8 || ' -->' || char(10) || excluded.body
+                             WHEN excluded.body != '' THEN excluded.body
                              ELSE mem_items.body
                            END,
              updated_at  = excluded.updated_at,
-             session_id  = excluded.session_id",
-        params![id, project_key, item_type, slug, title, description, body, now, session_id],
+             session_id  = excluded.session_id,
+             layer       = excluded.layer",
+        params![id, project_key, item_type, slug, title, description, body, now, session_id, layer],
     )?;
     Ok(())
 }
 
 pub fn mem_list(conn: &Connection, project_key: &str) -> Result<Vec<MemItemRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id
+        "SELECT id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer
          FROM mem_items WHERE project_key = ?1 ORDER BY item_type, slug",
     )?;
     let rows = stmt
@@ -76,6 +98,7 @@ pub fn mem_list(conn: &Connection, project_key: &str) -> Result<Vec<MemItemRow>>
                 created_at: row.get(7)?,
                 updated_at: row.get(8)?,
                 session_id: row.get(9)?,
+                layer: row.get(10)?,
             })
         })?
         .flatten()
@@ -85,7 +108,7 @@ pub fn mem_list(conn: &Connection, project_key: &str) -> Result<Vec<MemItemRow>>
 
 pub fn mem_get(conn: &Connection, project_key: &str, slug: &str) -> Result<Option<MemItemRow>> {
     conn.query_row(
-        "SELECT id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id
+        "SELECT id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer
          FROM mem_items WHERE project_key = ?1 AND slug = ?2",
         params![project_key, slug],
         |row| {
@@ -100,6 +123,7 @@ pub fn mem_get(conn: &Connection, project_key: &str, slug: &str) -> Result<Optio
                 created_at: row.get(7)?,
                 updated_at: row.get(8)?,
                 session_id: row.get(9)?,
+                layer: row.get(10)?,
             })
         },
     )

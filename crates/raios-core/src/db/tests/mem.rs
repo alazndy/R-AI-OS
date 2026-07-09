@@ -54,6 +54,7 @@ fn mem_history_returns_revision_nodes_newest_first() {
             description: "d",
             body: "v1",
             session_id: None,
+            layer: 1,
         },
     )
     .unwrap();
@@ -68,4 +69,55 @@ fn mem_history_returns_revision_nodes_newest_first() {
 
     // unknown slug → empty, no error
     assert!(mem_history(&conn, key, "nope").unwrap().is_empty());
+}
+
+#[test]
+fn mem_upsert_replaces_body_and_archives_revision() {
+    let conn = in_memory();
+    let key = "-home-alaz-p";
+    let up = |body: &'static str| MemUpsert {
+        project_key: key,
+        item_type: "feedback",
+        slug: "rule-x",
+        title: "Rule X",
+        description: "d",
+        body,
+        session_id: None,
+        layer: 1,
+    };
+    mem_upsert(&conn, up("first version")).unwrap();
+    mem_upsert(&conn, up("second version")).unwrap();
+
+    let item = mem_get(&conn, key, "rule-x").unwrap().unwrap();
+    // body is REPLACED, never concatenated
+    assert_eq!(item.body, "second version");
+    assert_eq!(item.layer, 1);
+
+    // old body archived as revision node
+    let hist = mem_history(&conn, key, "rule-x").unwrap();
+    assert_eq!(hist.len(), 1);
+    assert_eq!(hist[0].content, "first version");
+}
+
+#[test]
+fn mem_upsert_identical_or_empty_body_creates_no_revision() {
+    let conn = in_memory();
+    let key = "-home-alaz-p";
+    let up = |body: &'static str| MemUpsert {
+        project_key: key,
+        item_type: "project",
+        slug: "s",
+        title: "T",
+        description: "",
+        body,
+        session_id: None,
+        layer: 1,
+    };
+    mem_upsert(&conn, up("same")).unwrap();
+    mem_upsert(&conn, up("same")).unwrap(); // identical → no revision
+    mem_upsert(&conn, up("")).unwrap();     // empty → keep body, no revision
+
+    let item = mem_get(&conn, key, "s").unwrap().unwrap();
+    assert_eq!(item.body, "same");
+    assert!(mem_history(&conn, key, "s").unwrap().is_empty());
 }

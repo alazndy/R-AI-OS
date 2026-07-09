@@ -69,6 +69,7 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
                 description: &description,
                 body: &body,
                 session_id: None,
+                layer: 1,
             }) {
                 Ok(()) => {
                     if json {

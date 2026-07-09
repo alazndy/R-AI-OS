@@ -568,6 +568,7 @@ pub fn auto_sync_agent_memory(
                 description: &item.description,
                 body: &item.body,
                 session_id: None,
+                layer: 2,
             },
         );
     }
