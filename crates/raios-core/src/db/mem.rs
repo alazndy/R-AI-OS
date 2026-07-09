@@ -27,6 +27,17 @@ pub struct MemUpsert<'a> {
     pub layer: i64,
 }
 
+/// Archive-then-replace a mem_item's body. Runs the revision-archiving check
+/// (`mem_node_add` for the "revision" node + `mem_lineage_add`) and the final
+/// `INSERT ... ON CONFLICT` as a single atomic transaction: a crash or error
+/// partway through (e.g. a constraint violation on the final insert) rolls
+/// back the whole sequence rather than leaving an orphaned revision node or a
+/// body that wasn't actually archived. `mem_upsert` takes `&Connection`
+/// (shared, not `&mut`) to match every existing call site in this codebase,
+/// so this uses `Connection::unchecked_transaction()` rather than
+/// `Connection::transaction()` (which requires `&mut Connection`) — safe here
+/// because a single `Connection` is never used to run two transactions
+/// concurrently within this codebase's call patterns.
 pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
     let MemUpsert {
         project_key,
@@ -39,19 +50,21 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
         layer,
     } = item;
 
+    let tx = conn.unchecked_transaction()?;
+
     // Archive the previous body as an immutable revision node before replacing.
     if !body.is_empty() {
-        if let Some(prev) = mem_get(conn, project_key, slug)? {
+        if let Some(prev) = mem_get(&tx, project_key, slug)? {
             if !prev.body.is_empty() && prev.body != body {
                 let node_id = mem_node_add(
-                    conn,
+                    &tx,
                     project_key,
                     "revision",
                     &prev.updated_at,
                     &prev.body,
                     prev.session_id.as_deref(),
                 )?;
-                mem_lineage_add(conn, "item", &prev.id, "node", &node_id, "revision")?;
+                mem_lineage_add(&tx, "item", &prev.id, "node", &node_id, "revision")?;
             }
         }
     }
@@ -60,7 +73,7 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
     let now = chrono::Local::now()
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();
-    conn.execute(
+    tx.execute(
         "INSERT INTO mem_items
              (id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?9,?10)
@@ -77,6 +90,8 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
              layer       = excluded.layer",
         params![id, project_key, item_type, slug, title, description, body, now, session_id, layer],
     )?;
+
+    tx.commit()?;
     Ok(())
 }
 

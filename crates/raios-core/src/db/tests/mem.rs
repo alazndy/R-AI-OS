@@ -153,6 +153,64 @@ fn mem_node_add_still_inserts_fresh_revision_nodes_each_time() {
 }
 
 #[test]
+fn mem_upsert_rolls_back_revision_archiving_when_final_insert_fails() {
+    let conn = in_memory();
+    let key = "-home-alaz-p";
+    mem_upsert(
+        &conn,
+        MemUpsert {
+            project_key: key,
+            item_type: "feedback",
+            slug: "rule-y",
+            title: "Rule Y",
+            description: "d",
+            body: "first version",
+            session_id: None,
+            layer: 1,
+        },
+    )
+    .unwrap();
+
+    // Second call changes the body (which would trigger revision archiving:
+    // mem_node_add("revision", ...) + mem_lineage_add) but uses an item_type
+    // that violates mem_items' CHECK(item_type IN (...)) constraint, so the
+    // final INSERT ... ON CONFLICT UPDATE fails. Without a transaction wrapping
+    // the whole sequence, the revision node + lineage edge from the earlier,
+    // separately-committed statements would be left behind as orphans even
+    // though the item's body was never actually replaced.
+    let result = mem_upsert(
+        &conn,
+        MemUpsert {
+            project_key: key,
+            item_type: "not-a-real-type",
+            slug: "rule-y",
+            title: "Rule Y",
+            description: "d",
+            body: "second version",
+            session_id: None,
+            layer: 1,
+        },
+    );
+    assert!(result.is_err(), "invalid item_type must fail the final insert/update");
+
+    // Body must be untouched.
+    let item = mem_get(&conn, key, "rule-y").unwrap().unwrap();
+    assert_eq!(item.body, "first version");
+
+    // No orphaned revision node or lineage edge from the failed attempt.
+    let hist = mem_history(&conn, key, "rule-y").unwrap();
+    assert!(
+        hist.is_empty(),
+        "revision archiving must roll back atomically with the failed insert, got: {:?}",
+        hist
+    );
+    let node_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM mem_nodes WHERE kind = 'revision'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(node_count, 0, "orphaned revision node must not survive a rolled-back mem_upsert");
+}
+
+#[test]
 fn mem_export_groups_by_layer_persona_first() {
     let conn = in_memory();
     let key = "-home-alaz-p";
