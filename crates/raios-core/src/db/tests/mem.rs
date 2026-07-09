@@ -121,3 +121,28 @@ fn mem_upsert_identical_or_empty_body_creates_no_revision() {
     assert_eq!(item.body, "same");
     assert!(mem_history(&conn, key, "s").unwrap().is_empty());
 }
+
+#[test]
+fn mem_export_groups_by_layer_persona_first() {
+    let conn = in_memory();
+    let key = "-home-alaz-p";
+    for (slug, layer, t) in [("persona", 3, "user"), ("scene-20260709", 2, "project"), ("feedback-abc", 1, "feedback")] {
+        mem_upsert(&conn, MemUpsert {
+            project_key: key, item_type: t, slug, title: slug,
+            description: "d", body: "b", session_id: None, layer,
+        }).unwrap();
+    }
+    let dir = std::env::temp_dir().join(format!("raios-mem-test-{}", std::process::id()));
+    let n = mem_export(&conn, key, &dir).unwrap();
+    assert_eq!(n, 3);
+
+    let persona_md = std::fs::read_to_string(dir.join("persona.md")).unwrap();
+    assert!(persona_md.contains("  layer: 3"));
+
+    let index = std::fs::read_to_string(dir.join("MEMORY.md")).unwrap();
+    let p3 = index.find("## Persona (L3)").unwrap();
+    let p2 = index.find("## Scenes (L2)").unwrap();
+    let p1 = index.find("## Facts (L1)").unwrap();
+    assert!(p3 < p2 && p2 < p1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

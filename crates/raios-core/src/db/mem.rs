@@ -83,7 +83,7 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
 pub fn mem_list(conn: &Connection, project_key: &str) -> Result<Vec<MemItemRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer
-         FROM mem_items WHERE project_key = ?1 ORDER BY item_type, slug",
+         FROM mem_items WHERE project_key = ?1 ORDER BY layer DESC, item_type, slug",
     )?;
     let rows = stmt
         .query_map(params![project_key], |row| {
@@ -150,8 +150,8 @@ pub fn mem_export(conn: &Connection, project_key: &str, memory_dir: &std::path::
     for item in &items {
         let file_path = memory_dir.join(format!("{}.md", item.slug));
         let content = format!(
-            "---\nname: {}\ndescription: {}\nmetadata:\n  type: {}\n---\n\n{}\n",
-            item.slug, item.description, item.item_type, item.body
+            "---\nname: {}\ndescription: {}\nmetadata:\n  type: {}\n  layer: {}\n---\n\n{}\n",
+            item.slug, item.description, item.item_type, item.layer, item.body
         );
         let _ = std::fs::write(&file_path, content);
     }
@@ -167,11 +167,25 @@ pub fn mem_export(conn: &Connection, project_key: &str, memory_dir: &std::path::
             project_key.trim_start_matches('-').replace('-', " ")
         )
     };
-    let entries: Vec<String> = items
-        .iter()
-        .map(|i| format!("- [{}]({}.md) — {}", i.title, i.slug, i.description))
-        .collect();
-    let content = format!("{}\n\n{}\n", header, entries.join("\n"));
+    let section = |layer: i64, heading: &str| -> String {
+        let lines: Vec<String> = items
+            .iter()
+            .filter(|i| i.layer == layer)
+            .map(|i| format!("- [{}]({}.md) — {}", i.title, i.slug, i.description))
+            .collect();
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("\n## {}\n{}\n", heading, lines.join("\n"))
+        }
+    };
+    let content = format!(
+        "{}\n{}{}{}",
+        header,
+        section(3, "Persona (L3)"),
+        section(2, "Scenes (L2)"),
+        section(1, "Facts (L1)"),
+    );
     let _ = std::fs::write(&index_path, content);
 
     Ok(items.len())
