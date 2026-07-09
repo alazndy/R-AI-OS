@@ -74,4 +74,23 @@ The Instinct Engine doesn't just store rules; it actively suggests them:
 
 ---
 
+## 5. Layered Distillation (L0→L3)
+
+Inspired by TencentDB-Agent-Memory's semantic pyramid, `mem_items` now carries a `layer`:
+
+| Layer | What | Where |
+|---|---|---|
+| L0 | Raw transcript lines (immutable evidence) | `mem_nodes` (`kind='l0_raw'`) |
+| L1 | Atomic facts, deterministic hash slugs | `mem_items` (`layer=1`) |
+| L2 | Daily scene blocks referencing facts | `mem_items` (`layer=2`, `scene-YYYYMMDD`) |
+| L3 | Rolling persona (background + working rules) | `mem_items` (`layer=3`, slug `persona`) |
+
+Every abstraction links down via `mem_lineage` (`derived_from` / `revision` edges) — no
+compression step is irreversible. `mem_upsert` replaces bodies and archives the previous
+version as a `revision` node; `raios mem history <slug>` walks the chain. Session event
+streams compress into Mermaid canvases (`raios sessions --canvas <id>`) with `se:<id>`
+back-refs to full payloads.
+
+---
+
 *R-AI-OS: Neural-backed, context-optimized, and instinct-driven development.*
