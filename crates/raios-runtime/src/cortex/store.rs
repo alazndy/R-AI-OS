@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
-fn default_db_path() -> PathBuf {
+pub fn default_db_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("raios")
