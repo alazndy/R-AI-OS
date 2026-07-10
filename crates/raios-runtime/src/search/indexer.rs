@@ -161,7 +161,7 @@ impl ProjectIndex {
         results
     }
 
-    pub fn load_or_build(root: &Path, db_path: &Path) -> Result<Self> {
+    pub fn load_or_build(root: &Path, db_path: &Path, force: bool) -> Result<Self> {
         let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let conn = open_bm25_db(db_path)?;
         let fs = fs_mtimes(&root);
@@ -179,13 +179,15 @@ impl ProjectIndex {
         let mut stale_ids: Vec<i64> = Vec::new();
         let mut warm_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        for (path, (file_id, cached_mtime, _)) in &cached {
-            match fs.get(path.as_str()) {
-                Some(&fs_mtime) if fs_mtime == *cached_mtime => {
-                    warm_paths.insert(path.clone());
-                }
-                _ => {
-                    stale_ids.push(*file_id);
+        if !force {
+            for (path, (file_id, cached_mtime, _)) in &cached {
+                match fs.get(path.as_str()) {
+                    Some(&fs_mtime) if fs_mtime == *cached_mtime => {
+                        warm_paths.insert(path.clone());
+                    }
+                    _ => {
+                        stale_ids.push(*file_id);
+                    }
                 }
             }
         }
@@ -377,7 +379,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = make_workspace(&tmp);
         let db = tmp.path().join("test.db");
-        let idx = ProjectIndex::load_or_build(&ws, &db).unwrap();
+        let idx = ProjectIndex::load_or_build(&ws, &db, false).unwrap();
         assert!(idx.doc_count >= 2);
         let results = idx.search("println");
         assert!(!results.is_empty());
@@ -388,9 +390,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = make_workspace(&tmp);
         let db = tmp.path().join("test.db");
-        let idx1 = ProjectIndex::load_or_build(&ws, &db).unwrap();
+        let idx1 = ProjectIndex::load_or_build(&ws, &db, false).unwrap();
         let count1 = idx1.doc_count;
-        let idx2 = ProjectIndex::load_or_build(&ws, &db).unwrap();
+        let idx2 = ProjectIndex::load_or_build(&ws, &db, false).unwrap();
         assert_eq!(idx2.doc_count, count1);
     }
 
@@ -399,10 +401,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = make_workspace(&tmp);
         let db = tmp.path().join("test.db");
-        ProjectIndex::load_or_build(&ws, &db).unwrap();
+        ProjectIndex::load_or_build(&ws, &db, false).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(100));
         fs::write(ws.join("main.rs"), "fn main() { eprintln!(\"changed\"); }").unwrap();
-        let idx2 = ProjectIndex::load_or_build(&ws, &db).unwrap();
+        let idx2 = ProjectIndex::load_or_build(&ws, &db, false).unwrap();
         let results = idx2.search("changed");
         assert!(!results.is_empty());
     }
@@ -420,11 +422,11 @@ mod tests {
         fs::create_dir_all(&ws_b).unwrap();
         fs::write(ws_b.join("main.rs"), "fn main() { println!(\"from b\"); }").unwrap();
 
-        let idx_a1 = ProjectIndex::load_or_build(&ws_a, &db).unwrap();
+        let idx_a1 = ProjectIndex::load_or_build(&ws_a, &db, false).unwrap();
         assert_eq!(idx_a1.doc_count, 1);
 
         // Indexing B must not evict A's cached rows.
-        ProjectIndex::load_or_build(&ws_b, &db).unwrap();
+        ProjectIndex::load_or_build(&ws_b, &db, false).unwrap();
 
         let conn = Connection::open(&db).unwrap();
         let a_path = ws_a.join("main.rs").canonicalize().unwrap();
@@ -438,7 +440,7 @@ mod tests {
         assert_eq!(count, 1, "project A's cached row must survive indexing project B");
 
         // Re-loading A must warm-reuse the surviving cache, not rebuild from scratch.
-        let idx_a2 = ProjectIndex::load_or_build(&ws_a, &db).unwrap();
+        let idx_a2 = ProjectIndex::load_or_build(&ws_a, &db, false).unwrap();
         assert_eq!(idx_a2.doc_count, idx_a1.doc_count);
         let results = idx_a2.search("println");
         assert!(!results.is_empty());
@@ -457,8 +459,8 @@ mod tests {
         fs::create_dir_all(&ws_fork).unwrap();
         fs::write(ws_fork.join("main.rs"), "fn main() { println!(\"fork\"); }").unwrap();
 
-        ProjectIndex::load_or_build(&ws, &db).unwrap();
-        ProjectIndex::load_or_build(&ws_fork, &db).unwrap();
+        ProjectIndex::load_or_build(&ws, &db, false).unwrap();
+        ProjectIndex::load_or_build(&ws_fork, &db, false).unwrap();
 
         let conn = Connection::open(&db).unwrap();
         let core_path = ws.join("main.rs").canonicalize().unwrap();
@@ -484,12 +486,31 @@ mod tests {
         fs::write(&ws.join("a.rs"), "alpha bravo").unwrap();
         fs::write(&ws.join("b.rs"), "charlie delta echo").unwrap();
 
-        ProjectIndex::load_or_build(&ws, &db).unwrap();
+        ProjectIndex::load_or_build(&ws, &db, false).unwrap();
 
         let conn = Connection::open(&db).unwrap();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM bm25_postings", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 5, "posting count must equal exact per-file token occurrences, no duplication or loss");
+    }
+
+    #[test]
+    fn force_rebuild_replaces_rather_than_duplicates() {
+        let tmp = TempDir::new().unwrap();
+        let ws = make_workspace(&tmp);
+        let db = tmp.path().join("test.db");
+
+        ProjectIndex::load_or_build(&ws, &db, true).unwrap();
+        let idx2 = ProjectIndex::load_or_build(&ws, &db, true).unwrap();
+
+        let conn = Connection::open(&db).unwrap();
+        let file_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM bm25_files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(file_count, 2, "REPLACE semantics must not duplicate rows across repeated force rebuilds");
+
+        let results = idx2.search("println");
+        assert!(!results.is_empty());
     }
 }
