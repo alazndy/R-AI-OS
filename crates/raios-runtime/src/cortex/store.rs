@@ -42,7 +42,7 @@ pub struct ChunkMeta {
     pub text: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VectorResult {
     pub path: String,
     pub start_line: usize,

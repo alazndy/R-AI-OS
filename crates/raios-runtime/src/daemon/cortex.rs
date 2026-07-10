@@ -57,3 +57,14 @@ fn is_indexable(path: &str) -> bool {
         || p.ends_with(".json")
         || p.ends_with(".toml")
 }
+
+#[cfg(test)]
+mod thread_probe {
+    #[test]
+    fn cortex_constructible_inside_a_thread() {
+        let h = std::thread::spawn(|| {
+            let _ = crate::cortex::Cortex::init().map(|c| c.chunk_count());
+        });
+        h.join().unwrap();
+    }
+}
