@@ -93,13 +93,16 @@ pub enum Commands {
     },
     /// Show workspace portfolio statistics
     Stats,
-    /// Search across the entire Dev Ops workspace (Semantic + BM25)
+    /// Search the current project (Semantic + BM25). Pass --dir to scan a different directory fully.
     Search {
         query: String,
         #[arg(short, long, default_value = "8")]
         top_k: usize,
         #[arg(long)]
         reindex: bool,
+        /// Directory to scan (defaults to the current working directory)
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
     },
     /// Scan dependency licenses for copyleft (GPL/AGPL/LGPL) and unknown licenses
     License {

@@ -210,6 +210,32 @@ impl Cortex {
         Ok(self.engine.query(&emb, top_k))
     }
 
+    /// Semantic search filtered to paths under `scope_dir`. The HNSW index is
+    /// workspace-wide and shared across every project ever indexed, so a plain
+    /// `search()` call can return hits from unrelated projects — this over-fetches
+    /// (top_k * 10) then keeps only component-aware path matches under `scope_dir`
+    /// (never a naive string prefix — "R-AI-OS" must not match "R-AI-OS-fork").
+    pub fn search_scoped(
+        &self,
+        query: &str,
+        top_k: usize,
+        scope_dir: &Path,
+    ) -> Result<Vec<VectorResult>> {
+        let emb = self.embedder.embed_one(query)?;
+        let candidates = self.engine.query(&emb, top_k.saturating_mul(10));
+        let mut filtered: Vec<VectorResult> = candidates
+            .into_iter()
+            .filter(|r| Path::new(&r.path).starts_with(scope_dir))
+            .collect();
+        filtered.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        filtered.truncate(top_k);
+        Ok(filtered)
+    }
+
     /// Index only memory/agents/master/CLAUDE files across the workspace.
     /// Called automatically when the cortex store is empty and --query is used.
     pub fn index_memory_files(&mut self, root: &Path) -> Result<usize> {
@@ -343,6 +369,45 @@ mod tests {
     fn filter_returns_empty_when_no_match() {
         let results = vec![make_result("/proj/main.rs", 0.9)];
         let filtered = filter_by_patterns(results, &["memory.md"]);
+        assert!(filtered.is_empty());
+    }
+
+    fn filter_by_scope(results: Vec<VectorResult>, scope: &std::path::Path) -> Vec<VectorResult> {
+        let mut filtered: Vec<VectorResult> = results
+            .into_iter()
+            .filter(|r| std::path::Path::new(&r.path).starts_with(scope))
+            .collect();
+        filtered.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        filtered
+    }
+
+    #[test]
+    fn scoped_filter_excludes_paths_outside_the_given_directory() {
+        let results = vec![
+            make_result("/home/alaz/dev/core/R-AI-OS/src/main.rs", 0.9),
+            make_result("/home/alaz/dev/audio/Akort/types.ts", 0.95),
+            make_result("/home/alaz/dev/core/R-AI-OS/README.md", 0.7),
+        ];
+        // No trailing slash — exactly how a real caller (cwd from std::env::current_dir()) would pass it.
+        let filtered = filter_by_scope(results, std::path::Path::new("/home/alaz/dev/core/R-AI-OS"));
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered
+            .iter()
+            .all(|r| std::path::Path::new(&r.path).starts_with("/home/alaz/dev/core/R-AI-OS")));
+        // higher-scored out-of-scope result must not leak in even though it outranked in-scope hits
+        assert!(!filtered.iter().any(|r| r.path.contains("Akort")));
+    }
+
+    #[test]
+    fn scoped_filter_does_not_match_sibling_dirs_with_a_shared_prefix() {
+        // "/home/alaz/dev/core/R-AI-OS-caution-area-fixes" must NOT match scope
+        // "/home/alaz/dev/core/R-AI-OS" — this is exactly why Path::starts_with
+        // (component-aware) is used instead of str::starts_with (naive prefix).
+        let results = vec![make_result(
+            "/home/alaz/dev/core/R-AI-OS-caution-area-fixes/foo.rs",
+            0.9,
+        )];
+        let filtered = filter_by_scope(results, std::path::Path::new("/home/alaz/dev/core/R-AI-OS"));
         assert!(filtered.is_empty());
     }
 }

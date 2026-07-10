@@ -1,6 +1,6 @@
 use std::path::Path;
 
-pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, dev_ops: &Path, json: bool) {
+pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, scope: &Path, json: bool) {
     let mut cortex = match raios_runtime::cortex::Cortex::init() {
         Ok(c) => c,
         Err(e) => {
@@ -13,12 +13,12 @@ pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, dev_ops: &Pat
     if needs_index {
         if !json {
             if reindex {
-                println!("Cortex: Re-indexing workspace (forced)...");
+                println!("Cortex: Re-indexing {} (forced)...", scope.display());
             } else {
-                println!("Cortex: First run — building index...");
+                println!("Cortex: First run — indexing {}...", scope.display());
             }
         }
-        let indexed = cortex.index_workspace(dev_ops).unwrap_or(0);
+        let indexed = cortex.index_project(scope).unwrap_or(0);
         if !json {
             println!("Indexed {} chunks. Searching...\n", indexed);
         }
@@ -29,8 +29,8 @@ pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, dev_ops: &Pat
         );
     }
 
-    let vector_hits = cortex.search(query, top_k).unwrap_or_default();
-    let bm25_hits = match raios_runtime::indexer::ProjectIndex::build(dev_ops) {
+    let vector_hits = cortex.search_scoped(query, top_k, scope).unwrap_or_default();
+    let bm25_hits = match raios_runtime::indexer::ProjectIndex::build(scope) {
         Ok(idx) => idx.search(query),
         Err(e) => {
             eprintln!("Index build failed: {e}");

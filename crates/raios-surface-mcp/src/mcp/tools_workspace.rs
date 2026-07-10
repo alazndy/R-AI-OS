@@ -254,17 +254,40 @@ impl McpServer {
         )
     }
 
+    /// Resolve the `path` arg to a search scope: an explicit project name/absolute
+    /// path if given, otherwise the current working directory (the project the
+    /// MCP server itself was launched from).
+    fn resolve_search_scope(&self, args: &Value) -> Result<std::path::PathBuf, String> {
+        let Some(project) = args["path"].as_str() else {
+            return std::env::current_dir().map_err(|e| e.to_string());
+        };
+        let direct = std::path::Path::new(project);
+        if direct.exists() {
+            return Ok(direct.to_path_buf());
+        }
+        if let Ok(conn) = raios_core::db::open_db() {
+            if let Ok(projects) = raios_core::db::load_all_projects(&conn) {
+                if let Some(found) = projects
+                    .iter()
+                    .find(|p| p.name.to_lowercase().contains(&project.to_lowercase()))
+                {
+                    return Ok(std::path::PathBuf::from(&found.path));
+                }
+            }
+        }
+        Err(format!("Project not found: {}", project))
+    }
+
     pub(super) fn tool_semantic_search(&self, args: &Value) -> Result<Value, String> {
         let query = args["query"].as_str().ok_or("missing query")?;
         let top_k = args["top_k"].as_u64().unwrap_or(8).min(20) as usize;
+        let scope = self.resolve_search_scope(args)?;
         let mut cortex = raios_runtime::cortex::Cortex::init().map_err(|e| e.to_string())?;
-        let _ = cortex
-            .index_workspace(&self.config.dev_ops_path)
-            .unwrap_or(0);
+        let _ = cortex.index_project(&scope).unwrap_or(0);
         let vector_hits = cortex
-            .search(query, top_k)
+            .search_scoped(query, top_k, &scope)
             .map_err(|e| format!("Search failed: {e}"))?;
-        let bm25_hits = raios_runtime::search::indexer::ProjectIndex::build(&self.config.dev_ops_path)
+        let bm25_hits = raios_runtime::search::indexer::ProjectIndex::build(&scope)
             .map_err(|e| format!("BM25 index build failed: {e}"))?
             .search(query);
         let fused = raios_runtime::search::hybrid::fuse(bm25_hits, vector_hits, top_k);
