@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.4.0 — 2026-07-10
+### Added
+- **`raios grep <pattern>` — trigram-indexed exact/regex search** (`[--dir <path>] [-i] [--reindex]`). Every file's content is indexed as lowercased 3-character windows in the shared `workspace.db`; queries extract the literal substrings a pattern requires, intersect candidate files in SQL, then regex-verify only those candidates. Exhaustive within scope (grep semantics, not top-k), **measured at 0.015s warm** on this repo, with proven set-identical output to `grep -rn` over the same scope. Patterns yielding no usable ≥3-char literal (alternations, short wildcards) fall back to a full scoped scan — always correct, just slower. New MCP tool **`grep_search`** exposes the same engine to agents (200-match response cap).
+- **Resident Cortex in `aiosd` — semantic search is now sub-second.** A dedicated worker thread owns ONE long-lived Cortex (embedding model + HNSW), serving requests over an mpsc/oneshot channel with lazy dirty-flag rebuilds (file-change events mark dirty; the next search rebuilds once). `raios search` transparently delegates its vector half to the daemon (300ms connect timeout, `AUTH` handshake) and **silently falls back to the full in-process path when the daemon is unreachable** — measured: ~1.0s daemon-warm vs ~4-6s fallback, identical results. New daemon command `CortexReindex`; `VectorSearch` responses gain an additive `vector_hits` field (existing `results` shape untouched for TUI compatibility).
+### Fixed
+- Daemon's `VectorSearch` handler previously ran `Cortex::init()` — full model load + HNSW rebuild — **on every single request**; the file-watcher worker did the same per changed file, and its incremental `index_file` writes never triggered an HNSW rebuild at all (silently useless indexing). All three replaced by the resident-worker design above.
+### Notes
+- Built as two parallel agent worktrees (Codex: trigram; Antigravity: daemon residency) with an explicitly partitioned file surface; merged sequentially with a rebase. Combined suite: **634 tests, 0 failures** (619 → +10 trigram, +5 daemon).
+
 ## v3.3.0 — 2026-07-09
 ### Added
 - **Layered memory (L0→L3), ported from TencentDB-Agent-Memory's semantic pyramid**: `mem_nodes` (immutable evidence: raw transcript lines, archived body revisions) + `mem_lineage` (derived-from/revision edges) give `mem_items` real traceability for the first time. `mem_items.layer` discriminates L1 atomic facts (deterministic hash-slugged, deduped), L2 daily scene digests (cumulative same-day merge with `[[slug]]` backlinks), and L3 a rolling persona (background + working rules, rebuilt from the newest L1 facts). All distillation is local/deterministic — no LLM calls.
