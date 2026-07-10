@@ -75,27 +75,30 @@ impl ProjectIndex {
         Ok(idx)
     }
 
-    fn index_file(&mut self, path: PathBuf, content: &str) {
+    fn index_file(&mut self, path: PathBuf, content: &str) -> Vec<(String, usize, String)> {
         let file_id = self.files.len();
         self.files.push(path);
         self.doc_count += 1;
 
         let mut total_tokens = 0usize;
+        let mut new_postings: Vec<(String, usize, String)> = Vec::new();
 
         for (line_no, line) in content.lines().enumerate() {
             let tokens = tokenize(line);
             total_tokens += tokens.len();
             let snippet: String = line.trim().chars().take(100).collect();
             for token in tokens {
-                self.inverted.entry(token).or_default().push((
+                self.inverted.entry(token.clone()).or_default().push((
                     file_id,
                     line_no + 1,
                     snippet.clone(),
                 ));
+                new_postings.push((token, line_no + 1, snippet.clone()));
             }
         }
 
         self.doc_lengths.push(total_tokens.max(1));
+        new_postings
     }
 
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
