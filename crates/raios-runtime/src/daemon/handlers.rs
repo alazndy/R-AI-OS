@@ -211,15 +211,36 @@ pub async fn handle_client_connection(h: ClientHandle) {
                         "VectorSearch" => {
                             if let Some(query) = v["query"].as_str() {
                                 let top_k = v["top_k"].as_u64().unwrap_or(10) as usize;
-                                let vector_hits = match crate::cortex::Cortex::init() {
-                                    Ok(cortex) => cortex.search(query, top_k).unwrap_or_default(),
-                                    Err(_) => vec![],
+                                let scope = v["scope"].as_str().map(std::path::PathBuf::from);
+                                let vector_hits = {
+                                    let tx_opt = { state_for_client.read().await.cortex_tx.clone() };
+                                    match tx_opt {
+                                        Some(tx) => {
+                                            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                                            let sent = tx.send(crate::daemon::cortex::CortexRequest::Search {
+                                                query: query.to_string(),
+                                                top_k,
+                                                scope,
+                                                reply: reply_tx,
+                                            }).await.is_ok();
+                                            if sent {
+                                                tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx)
+                                                    .await
+                                                    .ok()
+                                                    .and_then(|r| r.ok())
+                                                    .unwrap_or_default()
+                                            } else {
+                                                vec![]
+                                            }
+                                        }
+                                        None => vec![],
+                                    }
                                 };
                                 let bm25_hits = {
                                     let s = state_for_client.read().await;
                                     if let Some(ref idx) = s.index { idx.search(query) } else { vec![] }
                                 };
-                                let fused = crate::hybrid_search::fuse(bm25_hits, vector_hits, top_k);
+                                let fused = crate::hybrid_search::fuse(bm25_hits, vector_hits.clone(), top_k);
                                 let results: Vec<serde_json::Value> = fused.iter().map(|r| {
                                     serde_json::json!({
                                         "path": r.path.to_string_lossy(),
@@ -231,8 +252,41 @@ pub async fn handle_client_connection(h: ClientHandle) {
                                     })
                                 }).collect();
                                 let response = format!(
-                                    "{{\"event\":\"VectorResults\",\"results\":{}}}\n",
-                                    serde_json::to_string(&results).unwrap()
+                                    "{{\"event\":\"VectorResults\",\"results\":{},\"vector_hits\":{}}}\n",
+                                    serde_json::to_string(&results).unwrap(),
+                                    serde_json::to_string(&vector_hits).unwrap()
+                                );
+                                let _ = writer.write_all(response.as_bytes()).await;
+                            }
+                        }
+                        "CortexReindex" => {
+                            if let Some(scope_str) = v["scope"].as_str() {
+                                let scope = std::path::PathBuf::from(scope_str);
+                                let indexed = {
+                                    let tx_opt = { state_for_client.read().await.cortex_tx.clone() };
+                                    match tx_opt {
+                                        Some(tx) => {
+                                            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                                            let sent = tx.send(crate::daemon::cortex::CortexRequest::Reindex {
+                                                scope,
+                                                reply: reply_tx,
+                                            }).await.is_ok();
+                                            if sent {
+                                                tokio::time::timeout(std::time::Duration::from_secs(60), reply_rx)
+                                                    .await
+                                                    .ok()
+                                                    .and_then(|r| r.ok())
+                                                    .unwrap_or(0)
+                                            } else {
+                                                0
+                                            }
+                                        }
+                                        None => 0,
+                                    }
+                                };
+                                let response = format!(
+                                    "{{\"event\":\"CortexReindexed\",\"indexed\":{}}}\n",
+                                    indexed
                                 );
                                 let _ = writer.write_all(response.as_bytes()).await;
                             }
@@ -758,6 +812,59 @@ mod dispatch_loop_tests {
         assert!(
             resp.contains("\"event\":\"UmaiBlocked\""),
             "expected the dangerous shell_cmd to be denied over the wire, got: {resp}"
+        );
+
+        drop(client);
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn vector_search_with_no_cortex_tx_returns_empty_results() {
+        let _home = IsolatedHome::new();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let (socket, peer_addr) = listener.accept().await.unwrap();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut handle = test_client_handle(socket, peer_addr, "test-token".into(), &tmp);
+        {
+            let mut s = handle.state.write().await;
+            s.cortex_tx = None;
+        }
+
+        let server_task = tokio::spawn(handle_client_connection(handle));
+
+        client.write_all(b"AUTH test-token\n").await.unwrap();
+
+        // Drain the AUTH ack
+        let mut buf = [0u8; 4096];
+        let n = client.read(&mut buf).await.unwrap();
+        assert!(
+            String::from_utf8_lossy(&buf[..n]).contains("SessionStarted"),
+            "expected SessionStarted after successful auth"
+        );
+
+        let cmd = serde_json::json!({
+            "command": "VectorSearch",
+            "query": "hello",
+            "top_k": 5
+        });
+        client
+            .write_all(format!("{cmd}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let n = client.read(&mut buf).await.unwrap();
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            resp.contains("\"event\":\"VectorResults\""),
+            "expected VectorResults event, got: {resp}"
+        );
+        assert!(
+            resp.contains("\"results\":[]"),
+            "expected results to be empty when no worker is active, got: {resp}"
         );
 
         drop(client);
