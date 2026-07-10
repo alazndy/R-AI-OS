@@ -1,35 +1,61 @@
 use std::path::Path;
 
 pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, scope: &Path, json: bool) {
-    let mut cortex = match raios_runtime::cortex::Cortex::init() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Cortex init failed: {e:?}");
-            return;
-        }
-    };
-    let needs_index = reindex || cortex.chunk_count() == 0;
+    let mut vector_hits = None;
 
-    if needs_index {
-        if !json {
-            if reindex {
-                println!("Cortex: Re-indexing {} (forced)...", scope.display());
-            } else {
-                println!("Cortex: First run — indexing {}...", scope.display());
+    if reindex {
+        if let Some(indexed) = daemon_cortex_reindex(scope) {
+            if !json {
+                println!("Cortex: Re-indexed {} via daemon ({} chunks).", scope.display(), indexed);
             }
+            vector_hits = daemon_vector_search(query, top_k, scope);
         }
-        let indexed = cortex.index_project(scope).unwrap_or(0);
-        if !json {
-            println!("Indexed {} chunks. Searching...\n", indexed);
-        }
-    } else if !json {
-        println!(
-            "Cortex: {} chunks loaded from cache. Searching...\n",
-            cortex.chunk_count()
-        );
+    } else {
+        vector_hits = daemon_vector_search(query, top_k, scope);
     }
 
-    let vector_hits = cortex.search_scoped(query, top_k, scope).unwrap_or_default();
+    let vector_hits = match vector_hits {
+        Some(hits) => {
+            if !json {
+                println!("Cortex: Query served by resident daemon.");
+            }
+            hits
+        }
+        None => {
+            if !json {
+                println!("Cortex: Daemon unreachable. Falling back to local in-process search...");
+            }
+            let mut cortex = match raios_runtime::cortex::Cortex::init() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Cortex init failed: {e:?}");
+                    return;
+                }
+            };
+            let needs_index = reindex || cortex.chunk_count() == 0;
+
+            if needs_index {
+                if !json {
+                    if reindex {
+                        println!("Cortex: Re-indexing {} (forced)...", scope.display());
+                    } else {
+                        println!("Cortex: First run — indexing {}...", scope.display());
+                    }
+                }
+                let indexed = cortex.index_project(scope).unwrap_or(0);
+                if !json {
+                    println!("Indexed {} chunks. Searching...\n", indexed);
+                }
+            } else if !json {
+                println!(
+                    "Cortex: {} chunks loaded from cache. Searching...\n",
+                    cortex.chunk_count()
+                );
+            }
+
+            cortex.search_scoped(query, top_k, scope).unwrap_or_default()
+        }
+    };
     let bm25_hits = match raios_runtime::indexer::ProjectIndex::load_or_build(
         scope,
         &raios_runtime::cortex::store::default_db_path(),
@@ -159,5 +185,84 @@ fn embedding_mode() -> &'static str {
     #[cfg(not(feature = "cortex"))]
     {
         "fallback"
+    }
+}
+
+fn daemon_vector_search(query: &str, top_k: usize, scope: &Path)
+    -> Option<Vec<raios_runtime::cortex::store::VectorResult>> {
+    daemon_vector_search_opt(query, top_k, scope, None)
+}
+
+fn daemon_vector_search_opt(query: &str, top_k: usize, scope: &Path, port: Option<u16>)
+    -> Option<Vec<raios_runtime::cortex::store::VectorResult>> {
+    use std::io::{BufRead, BufReader, Write};
+    let port = port.unwrap_or(42069);
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
+    let stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).ok()?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(15))).ok()?;
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(2))).ok()?;
+    let mut writer = stream.try_clone().ok()?;
+    let token_path = raios_core::config::Config::config_file()
+        .parent().map(|p| p.to_path_buf()).unwrap_or_default().join(".session_token");
+    let token = std::fs::read_to_string(token_path).ok()?;
+    writer.write_all(format!("AUTH {}\n", token.trim()).as_bytes()).ok()?;
+    let req = serde_json::json!({
+        "command": "VectorSearch", "query": query, "top_k": top_k,
+        "scope": scope.to_string_lossy(),
+    });
+    writer.write_all(format!("{req}\n").as_bytes()).ok()?;
+    let reader = BufReader::new(stream);
+    for line in reader.lines() {
+        let line = line.ok()?;
+        let v: serde_json::Value = serde_json::from_str(&line).ok()?;
+        if v["event"] == "VectorResults" {
+            return serde_json::from_value(v["vector_hits"].clone()).ok();
+        }
+    }
+    None
+}
+
+fn daemon_cortex_reindex(scope: &Path) -> Option<usize> {
+    daemon_cortex_reindex_opt(scope, None)
+}
+
+fn daemon_cortex_reindex_opt(scope: &Path, port: Option<u16>) -> Option<usize> {
+    use std::io::{BufRead, BufReader, Write};
+    let port = port.unwrap_or(42069);
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
+    let stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).ok()?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(65))).ok()?;
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(2))).ok()?;
+    let mut writer = stream.try_clone().ok()?;
+    let token_path = raios_core::config::Config::config_file()
+        .parent().map(|p| p.to_path_buf()).unwrap_or_default().join(".session_token");
+    let token = std::fs::read_to_string(token_path).ok()?;
+    writer.write_all(format!("AUTH {}\n", token.trim()).as_bytes()).ok()?;
+    let req = serde_json::json!({
+        "command": "CortexReindex",
+        "scope": scope.to_string_lossy(),
+    });
+    writer.write_all(format!("{req}\n").as_bytes()).ok()?;
+    let reader = BufReader::new(stream);
+    for line in reader.lines() {
+        let line = line.ok()?;
+        let v: serde_json::Value = serde_json::from_str(&line).ok()?;
+        if v["event"] == "CortexReindexed" {
+            return v["indexed"].as_u64().map(|n| n as usize);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daemon_vector_search_returns_none_when_unreachable() {
+        let start = std::time::Instant::now();
+        let hits = daemon_vector_search_opt("test", 5, Path::new("."), Some(1));
+        assert!(hits.is_none());
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
     }
 }
