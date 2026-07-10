@@ -26,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
                 .join("raios")
                 .join("workspace.db");
 
-            if let Ok(idx) = ProjectIndex::load_or_build(&config.dev_ops_path, &bm25_db) {
+            if let Ok(idx) = ProjectIndex::load_or_build(&config.dev_ops_path, &bm25_db, false) {
                 let mut s = state_for_index.write().await;
                 s.index = Some(idx);
                 s.projects = projects;

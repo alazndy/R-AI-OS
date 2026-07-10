@@ -30,7 +30,11 @@ pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, scope: &Path,
     }
 
     let vector_hits = cortex.search_scoped(query, top_k, scope).unwrap_or_default();
-    let bm25_hits = match raios_runtime::indexer::ProjectIndex::build(scope) {
+    let bm25_hits = match raios_runtime::indexer::ProjectIndex::load_or_build(
+        scope,
+        &raios_runtime::cortex::store::default_db_path(),
+        reindex,
+    ) {
         Ok(idx) => idx.search(query),
         Err(e) => {
             eprintln!("Index build failed: {e}");
