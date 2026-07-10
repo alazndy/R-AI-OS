@@ -63,6 +63,8 @@ pub struct DaemonState {
     pub latest_errors: Vec<ValidationError>,
     pub sentinel_files: Vec<SentinelFileStatus>,
     pub pending_diffs: VecDeque<PendingDiff>,
+    #[serde(skip)]
+    pub cortex_tx: Option<tokio::sync::mpsc::Sender<super::cortex::CortexRequest>>,
 }
 
 impl DaemonState {

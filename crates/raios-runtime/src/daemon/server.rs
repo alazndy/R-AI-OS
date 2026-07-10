@@ -130,12 +130,29 @@ impl Server {
             super::git::start_git_worker(git_state, git_tx, git_interval).await;
         });
 
-        let cortex_tx_rx = tx.subscribe();
-        let cortex_state = self.state.clone();
         let eager_cortex_indexing = daemon_cfg.startup_cortex_indexing;
+        let cortex_tx = super::cortex::spawn_cortex_worker(eager_cortex_indexing);
+        {
+            let mut s = self.state.write().await;
+            s.cortex_tx = Some(cortex_tx.clone());
+        }
+
+        let mut cortex_tx_rx = tx.subscribe();
+        let cortex_tx_for_watcher = cortex_tx.clone();
         tokio::spawn(async move {
-            super::cortex::start_cortex_worker(cortex_state, eager_cortex_indexing, cortex_tx_rx)
-                .await;
+            while let Ok(msg) = cortex_tx_rx.recv().await {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg) {
+                    if v["event"] == "FileChanged" {
+                        if let Some(path) = v["path"].as_str() {
+                            if super::cortex::is_indexable(path) {
+                                let _ = cortex_tx_for_watcher.send(super::cortex::CortexRequest::IndexFile {
+                                    path: std::path::PathBuf::from(path),
+                                }).await;
+                            }
+                        }
+                    }
+                }
+            }
         });
 
         let validation_tx_rx = tx.subscribe();
