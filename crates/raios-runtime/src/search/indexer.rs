@@ -159,9 +159,11 @@ impl ProjectIndex {
     }
 
     pub fn load_or_build(root: &Path, db_path: &Path) -> Result<Self> {
+        let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let conn = open_bm25_db(db_path)?;
-        let fs = fs_mtimes(root);
-        let cached = load_cached_bm25_files(&conn);
+        let fs = fs_mtimes(&root);
+        let mut cached = load_cached_bm25_files(&conn);
+        cached.retain(|path, _| Path::new(path).starts_with(&root));
 
         let mut idx = Self {
             files: Vec::new(),
@@ -403,5 +405,73 @@ mod tests {
         let idx2 = ProjectIndex::load_or_build(&ws, &db).unwrap();
         let results = idx2.search("changed");
         assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn scope_isolation_survives_a_different_project_being_indexed() {
+        let tmp = TempDir::new().unwrap();
+        let db = tmp.path().join("test.db");
+
+        let ws_a = tmp.path().join("a");
+        fs::create_dir_all(&ws_a).unwrap();
+        fs::write(ws_a.join("main.rs"), "fn main() { println!(\"from a\"); }").unwrap();
+
+        let ws_b = tmp.path().join("b");
+        fs::create_dir_all(&ws_b).unwrap();
+        fs::write(ws_b.join("main.rs"), "fn main() { println!(\"from b\"); }").unwrap();
+
+        let idx_a1 = ProjectIndex::load_or_build(&ws_a, &db).unwrap();
+        assert_eq!(idx_a1.doc_count, 1);
+
+        // Indexing B must not evict A's cached rows.
+        ProjectIndex::load_or_build(&ws_b, &db).unwrap();
+
+        let conn = Connection::open(&db).unwrap();
+        let a_path = ws_a.join("main.rs").canonicalize().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bm25_files WHERE path = ?1",
+                params![a_path.to_string_lossy().to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "project A's cached row must survive indexing project B");
+
+        // Re-loading A must warm-reuse the surviving cache, not rebuild from scratch.
+        let idx_a2 = ProjectIndex::load_or_build(&ws_a, &db).unwrap();
+        assert_eq!(idx_a2.doc_count, idx_a1.doc_count);
+        let results = idx_a2.search("println");
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn scope_filter_does_not_match_sibling_dir_with_shared_prefix() {
+        let tmp = TempDir::new().unwrap();
+        let db = tmp.path().join("test.db");
+
+        let ws = tmp.path().join("R-AI-OS");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(ws.join("main.rs"), "fn main() { println!(\"core\"); }").unwrap();
+
+        let ws_fork = tmp.path().join("R-AI-OS-fork");
+        fs::create_dir_all(&ws_fork).unwrap();
+        fs::write(ws_fork.join("main.rs"), "fn main() { println!(\"fork\"); }").unwrap();
+
+        ProjectIndex::load_or_build(&ws, &db).unwrap();
+        ProjectIndex::load_or_build(&ws_fork, &db).unwrap();
+
+        let conn = Connection::open(&db).unwrap();
+        let core_path = ws.join("main.rs").canonicalize().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bm25_files WHERE path = ?1",
+                params![core_path.to_string_lossy().to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "R-AI-OS's cached row must survive indexing the sibling R-AI-OS-fork directory"
+        );
     }
 }
