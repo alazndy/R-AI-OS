@@ -190,8 +190,9 @@ impl ProjectIndex {
             }
         }
 
+        let tx = conn.unchecked_transaction()?;
         for id in &stale_ids {
-            let _ = conn.execute("DELETE FROM bm25_files WHERE id = ?1", params![id]);
+            let _ = tx.execute("DELETE FROM bm25_files WHERE id = ?1", params![id]);
         }
 
         let mut id_to_slot: HashMap<i64, usize> = HashMap::new();
@@ -236,27 +237,23 @@ impl ProjectIndex {
             }
             let path = PathBuf::from(path_str);
             if let Ok(content) = std::fs::read_to_string(&path) {
-                let slot = idx.files.len();
-                idx.index_file(path.clone(), &content);
-                let doc_len = idx.doc_lengths.get(slot).copied().unwrap_or(1);
+                let postings = idx.index_file(path.clone(), &content);
+                let doc_len = idx.doc_lengths.last().copied().unwrap_or(1);
 
-                let _ = conn.execute(
+                let _ = tx.execute(
                     "INSERT OR REPLACE INTO bm25_files (path, mtime_secs, doc_length) VALUES (?1,?2,?3)",
                     params![path_str, fs_mtime as i64, doc_len as i64],
                 );
-                let file_id = conn.last_insert_rowid();
-                for (token, postings) in &idx.inverted {
-                    for &(posting_slot, line_no, ref snippet) in postings {
-                        if posting_slot == slot {
-                            let _ = conn.execute(
-                                "INSERT INTO bm25_postings (token, file_id, line_no, snippet) VALUES (?1,?2,?3,?4)",
-                                params![token, file_id, line_no as i64, snippet],
-                            );
-                        }
-                    }
+                let file_id = tx.last_insert_rowid();
+                for (token, line_no, snippet) in &postings {
+                    let _ = tx.execute(
+                        "INSERT INTO bm25_postings (token, file_id, line_no, snippet) VALUES (?1,?2,?3,?4)",
+                        params![token, file_id, *line_no as i64, snippet],
+                    );
                 }
             }
         }
+        tx.commit()?;
 
         Ok(idx)
     }
@@ -476,5 +473,23 @@ mod tests {
             count, 1,
             "R-AI-OS's cached row must survive indexing the sibling R-AI-OS-fork directory"
         );
+    }
+
+    #[test]
+    fn cold_build_writes_exactly_the_right_number_of_postings() {
+        let tmp = TempDir::new().unwrap();
+        let db = tmp.path().join("test.db");
+        let ws = tmp.path().join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(&ws.join("a.rs"), "alpha bravo").unwrap();
+        fs::write(&ws.join("b.rs"), "charlie delta echo").unwrap();
+
+        ProjectIndex::load_or_build(&ws, &db).unwrap();
+
+        let conn = Connection::open(&db).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM bm25_postings", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 5, "posting count must equal exact per-file token occurrences, no duplication or loss");
     }
 }
