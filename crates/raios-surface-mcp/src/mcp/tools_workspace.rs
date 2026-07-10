@@ -287,9 +287,13 @@ impl McpServer {
         let vector_hits = cortex
             .search_scoped(query, top_k, &scope)
             .map_err(|e| format!("Search failed: {e}"))?;
-        let bm25_hits = raios_runtime::search::indexer::ProjectIndex::build(&scope)
-            .map_err(|e| format!("BM25 index build failed: {e}"))?
-            .search(query);
+        let bm25_hits = raios_runtime::search::indexer::ProjectIndex::load_or_build(
+            &scope,
+            &raios_runtime::cortex::store::default_db_path(),
+            false,
+        )
+        .map_err(|e| format!("BM25 index build failed: {e}"))?
+        .search(query);
         let fused = raios_runtime::search::hybrid::fuse(bm25_hits, vector_hits, top_k);
         let results: Vec<Value> = fused.iter().map(|r| json!({ "path": r.path.to_string_lossy(), "project": r.project, "snippet": r.snippet, "line": r.start_line, "rrf_score": format!("{:.4}", r.rrf_score), "source": r.source.label() })).collect();
         let summary = format!(
