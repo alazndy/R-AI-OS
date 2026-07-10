@@ -169,6 +169,7 @@ All three protocols share one event bus and one security kernel:
 
 - **Sigmap:** Up to 97% token reduction via high-density signature mapping (`SIGMAP.md`)
 - **BM25 persistence:** Index survives restarts via mtime-based invalidation
+- **Trigram grep:** Exact/regex search via shared SQLite trigram postings, with regex verification and full-scan fallback for ambiguous patterns
 - **Vector store:** Binary SQLite BLOBs — transaction-safe, no JSON drift
 - **Session memory:** Per-agent `memory.md` auto-append
 
@@ -389,6 +390,7 @@ raios bootstrap
 | `raios health <project>` | Single-project health scan |
 | `raios usage` | Show local usage/quota signals across AI tools |
 | `raios search "<query>"` | Semantic search across portfolio |
+| `raios grep "<pattern>" [--dir <path>] [-i] [--reindex]` | Exhaustive exact/regex search over the trigram index |
 | `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules) |
 | `raios task "<description>"` | Route task to best agent |
 | `raios handoff --to <agent> --status <SUCCESS\|FAILED\|BLOCKER> --msg "<text>"` | Atomic agent-to-agent handoff via the control plane |

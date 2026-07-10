@@ -104,6 +104,17 @@ pub enum Commands {
         #[arg(long)]
         dir: Option<std::path::PathBuf>,
     },
+    /// Exact/regex search over the trigram index (grep-fast, exhaustive within scope)
+    Grep {
+        pattern: String,
+        /// Directory to scan (defaults to the current working directory)
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+        #[arg(short = 'i', long)]
+        ignore_case: bool,
+        #[arg(long)]
+        reindex: bool,
+    },
     /// Scan dependency licenses for copyleft (GPL/AGPL/LGPL) and unknown licenses
     License {
         /// Project name or path (omit for current directory)

@@ -1,5 +1,6 @@
 pub mod hybrid;
 pub mod indexer;
+pub mod trigram;
 
 // Re-export top-level so existing `crate::hybrid_search::*` and
 // `crate::indexer::*` paths keep working via lib.rs aliases.

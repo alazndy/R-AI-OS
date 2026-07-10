@@ -308,6 +308,54 @@ impl McpServer {
         )
     }
 
+    pub(super) fn tool_grep_search(&self, args: &Value) -> Result<Value, String> {
+        let pattern = args["pattern"].as_str().ok_or("missing pattern")?;
+        let scope = self.resolve_search_scope(args)?;
+        let case_insensitive = args["case_insensitive"].as_bool().unwrap_or(false);
+        let matches = raios_runtime::search::trigram::grep(
+            &scope,
+            &raios_runtime::cortex::store::default_db_path(),
+            pattern,
+            case_insensitive,
+            false,
+        )
+        .map_err(|e| format!("Grep failed: {e}"))?;
+        let total = matches.len();
+        let truncated = total > 200;
+        let results: Vec<Value> = matches
+            .iter()
+            .take(200)
+            .map(|m| {
+                json!({
+                    "path": m.path.to_string_lossy(),
+                    "line": m.line_no,
+                    "text": m.line,
+                })
+            })
+            .collect();
+        let summary = format!(
+            "Grep search for '{}' -> {} match(es){}",
+            pattern,
+            total,
+            if truncated {
+                " (showing first 200)"
+            } else {
+                ""
+            }
+        );
+        let body = json!({
+            "matches": results,
+            "total": total,
+            "truncated": truncated,
+        });
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": format!("{}\n\n{}", summary, serde_json::to_string_pretty(&body).unwrap_or_default())
+            }]
+        }))
+    }
+
     pub(super) fn tool_project_info(&self, args: &Value) -> Result<Value, String> {
         let path = self.resolve_git_path(args)?;
         let git = raios_core::core::git::status(&path);

@@ -5,6 +5,7 @@ mod cron;
 mod dev;
 mod ext;
 mod git;
+mod grep;
 mod handoff;
 mod health;
 mod hub;
@@ -122,6 +123,17 @@ pub fn run(cli: Cli) {
                 std::env::current_dir().unwrap_or_else(|_| cfg.dev_ops_path.clone())
             });
             search::cmd_search(&query, top_k, reindex, &scope, cli.json)
+        }
+        Commands::Grep {
+            pattern,
+            dir,
+            ignore_case,
+            reindex,
+        } => {
+            let scope = dir.unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| cfg.dev_ops_path.clone())
+            });
+            grep::cmd_grep(&pattern, &scope, ignore_case, reindex, cli.json)
         }
         Commands::License { project } => {
             security::cmd_license(project, &cfg.dev_ops_path, cli.json)

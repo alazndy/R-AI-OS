@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const INDEXED_EXTS: &[&str] = &[
+pub(crate) const INDEXED_EXTS: &[&str] = &[
     "md", "rs", "ts", "tsx", "js", "jsx", "py", "toml", "json", "yaml", "yml",
 ];
 
-const SKIP_DIRS: &[&str] = &[
+pub(crate) const SKIP_DIRS: &[&str] = &[
     "node_modules",
     "target",
     ".git",
@@ -309,7 +309,7 @@ fn open_bm25_db(db_path: &Path) -> anyhow::Result<Connection> {
     Ok(conn)
 }
 
-fn fs_mtimes(root: &Path) -> HashMap<String, u64> {
+pub(crate) fn fs_mtimes(root: &Path) -> HashMap<String, u64> {
     let mut map = HashMap::new();
     let walker = WalkDir::new(root)
         .max_depth(6)
