@@ -4,8 +4,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// Single source of truth for which file extensions raios's search engines
+/// (BM25, trigram, and Cortex — see `cortex::INDEXED_EXTS` re-export) index.
+/// Extended 2026-07-10 after discovering raios grep/search were blind to an
+/// entire Android/Kotlin project (GT-Launcher): only doc/config-adjacent
+/// languages were covered, no mainstream compiled/mobile languages at all.
 pub(crate) const INDEXED_EXTS: &[&str] = &[
     "md", "rs", "ts", "tsx", "js", "jsx", "py", "toml", "json", "yaml", "yml",
+    "go", "kt", "kts", "java", "swift", "c", "cc", "cpp", "h", "hpp", "cs",
+    "rb", "php", "sh", "sql",
 ];
 
 pub(crate) const SKIP_DIRS: &[&str] = &[
@@ -52,7 +59,7 @@ impl ProjectIndex {
         };
 
         let walker = WalkDir::new(root)
-            .max_depth(6)
+            .max_depth(12) // Android/Java-style package trees (com/lcars/launcher/...) need real depth
             .into_iter()
             .filter_entry(|e| {
                 let n = e.file_name().to_string_lossy();
@@ -312,7 +319,7 @@ fn open_bm25_db(db_path: &Path) -> anyhow::Result<Connection> {
 pub(crate) fn fs_mtimes(root: &Path) -> HashMap<String, u64> {
     let mut map = HashMap::new();
     let walker = WalkDir::new(root)
-        .max_depth(6)
+        .max_depth(12) // Android/Java-style package trees (com/lcars/launcher/...) need real depth
         .into_iter()
         .filter_entry(|e| !SKIP_DIRS.contains(&e.file_name().to_string_lossy().as_ref()))
         .filter_map(|e| e.ok())

@@ -26,9 +26,10 @@ use chunker::chunk_file;
 use embedder::Embedder;
 use store::{ChunkMeta, VectorEngine, VectorResult};
 
-const INDEXED_EXTS: &[&str] = &[
-    "md", "rs", "ts", "tsx", "js", "jsx", "py", "toml", "json", "yaml", "yml", "go",
-];
+// Single source of truth lives in search::indexer — see that constant's doc
+// comment for why. Re-exported here so this module's existing `INDEXED_EXTS`
+// call sites don't need touching.
+use crate::search::indexer::INDEXED_EXTS;
 
 /// File name patterns used for memory-targeted indexing and search.
 /// Exact filename match (case-sensitive). Used by `index_memory_files` and `search_with_filter`.
@@ -91,7 +92,7 @@ impl Cortex {
             }
 
             let walker = WalkDir::new(&proj.local_path)
-                .max_depth(6) // deep enough for a single project
+                .max_depth(12) // Android/Java-style package trees (com/lcars/launcher/...) need real depth
                 .follow_links(false)
                 .into_iter()
                 .filter_entry(|e| {
@@ -126,13 +127,13 @@ impl Cortex {
         Ok(indexed)
     }
 
-    /// Index a single project directory with deeper depth (max 6).
+    /// Index a single project directory with deeper depth (max 12).
     /// Use this when the user has selected a specific project in the TUI.
     pub fn index_project(&mut self, project_path: &Path) -> Result<usize> {
         let mut indexed = 0usize;
 
         let walker = WalkDir::new(project_path)
-            .max_depth(6)
+            .max_depth(12) // Android/Java-style package trees (com/lcars/launcher/...) need real depth
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
@@ -242,7 +243,7 @@ impl Cortex {
         let mut indexed = 0usize;
 
         let walker = WalkDir::new(root)
-            .max_depth(8)
+            .max_depth(12)
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
