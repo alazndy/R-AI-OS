@@ -12,7 +12,7 @@ use walkdir::WalkDir;
 pub(crate) const INDEXED_EXTS: &[&str] = &[
     "md", "rs", "ts", "tsx", "js", "jsx", "py", "toml", "json", "yaml", "yml",
     "go", "kt", "kts", "java", "swift", "c", "cc", "cpp", "h", "hpp", "cs",
-    "rb", "php", "sh", "sql",
+    "rb", "php", "sh", "sql", "dart",
 ];
 
 /// Single source of truth for which directories raios's search engines never
@@ -40,6 +40,7 @@ pub(crate) const SKIP_DIRS: &[&str] = &[
     "coverage",
     ".svelte-kit",
     "out",
+    ".fastembed_cache",
 ];
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

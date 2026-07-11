@@ -43,6 +43,14 @@ action = "allow"
 name = "version_info"
 action = "allow"
 
+[[tools.rules]]
+name = "grep_search"
+action = "allow"
+
+[[tools.rules]]
+name = "semantic_search"
+action = "allow"
+
 # Deny or restrict high-risk tools
 [[tools.rules]]
 name = "run_build"
@@ -198,6 +206,8 @@ allowed_domains = [
     "registry.npmjs.org",
     "doc.rust-lang.org",
     ".googleapis.com",
+    "127.0.0.1",
+    "localhost",
 ]
 
 # Explicitly block known exfiltration / C2 vectors
