@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.5.0 — 2026-07-11
+### Changed
+- **`raios grep` renamed to `raios locate`** (MCP `grep_search` → `locate_search`), including the core engine (`trigram::grep` → `trigram::locate`, `GrepMatch` → `LocateMatch`) — the command name no longer collides with "grep" as a concept.
+### Fixed
+- **MCP `semantic_search` now delegates to the resident Cortex daemon**, same as the CLI's `raios search` since v3.4.0. It previously paid a full in-process `Cortex::init()` + `index_project()` + HNSW rebuild on *every single call* — measured >60s per call, never completing within a 60s timeout. Now: ~1s warm, ~30-60s one-time cost only on the first call after an `aiosd` restart.
+- **Duplicate search results from stale git worktrees.** `SKIP_DIRS` never listed `worktrees`, so any repo carrying a Claude Code isolated-worktree checkout under `.claude/worktrees/<id>/` reported every match twice (once from the real source, once from the stale copy) — confirmed on GT-Launcher (56MB stale checkout).
+- **`tool_pin` (MCP tool-manifest tamper detection) was blocking all `tools/call` requests** after `grep_search`/`semantic_search` were added to the tool list without re-pinning. Verified the drift was legitimate (this repo's own commits), re-pinned.
+### Added
+- **Dart/Flutter support**: `dart` added to `INDEXED_EXTS`, verified on two real Flutter projects (NEXUS, esp32flutter) with exact-parity results via both CLI and MCP.
+- `.fastembed_cache/` added to `SKIP_DIRS` (was being walked as source content).
+- `raios-policy.toml` explicitly allow-lists `locate_search`/`semantic_search` and loopback (`127.0.0.1`/`localhost`) domains — the latter needed for the resident-daemon TCP client introduced in v3.4.0, consistent with this codebase's existing SSRF-hardening design (loopback was already deliberately excluded from the metadata-IP blocklist for this exact reason, see 2026-07-02 in memory.md).
+### Notes
+- Verified end-to-end by two agents independently: Antigravity Kaira implemented and live-tested the Dart support + MCP tool_pin fix; Claude Kaira independently re-verified that work (diff content, test counts) before merging, then found and fixed the `semantic_search` daemon-delegation gap and the worktrees duplicate-match bug through its own live dogfooding — both previously undocumented. Combined suite: **635 tests, 0 failures**.
+
 ## v3.4.0 — 2026-07-10
 ### Added
 - **`raios grep <pattern>` — trigram-indexed exact/regex search** (`[--dir <path>] [-i] [--reindex]`). Every file's content is indexed as lowercased 3-character windows in the shared `workspace.db`; queries extract the literal substrings a pattern requires, intersect candidate files in SQL, then regex-verify only those candidates. Exhaustive within scope (grep semantics, not top-k), **measured at 0.015s warm** on this repo, with proven set-identical output to `grep -rn` over the same scope. Patterns yielding no usable ≥3-char literal (alternations, short wildcards) fall back to a full scoped scan — always correct, just slower. New MCP tool **`grep_search`** exposes the same engine to agents (200-match response cap).

@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.4.0-blue?style=for-the-badge" alt="Version"></a>
+  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.5.0-blue?style=for-the-badge" alt="Version"></a>
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
@@ -500,6 +500,7 @@ vscode-extension/
 - [x] **Phase 23:** Operational Hardening — pattern-scan self-disclosure in `raios security`/`raios refactor`; `sigmap` config drift fix; `session_memory.rs` split into a focused module; `raios usage` reads live Claude Pro/Max quota via a statusLine cache bridge
 - [x] **Phase 24:** Trigram Locate (renamed 2026-07-11 from `raios grep`) — `raios locate` + MCP `locate_search`: trigram-indexed, exhaustive exact/regex search at 0.015s warm with proven `grep -rn` parity; conservative literal extraction with full-scan fallback
 - [x] **Phase 25:** Resident Cortex — long-lived model+HNSW worker inside `aiosd` (mpsc/oneshot, lazy dirty rebuilds); `raios search` delegates via TCP with silent in-process fallback — semantic search ~1.0s warm (was ~4-6s)
+- [x] **Phase 26:** MCP Parity + Dart/Flutter — MCP `semantic_search` now delegates to the resident Cortex daemon too (was >60s in-process per call, now ~1s warm); Dart/Flutter ecosystem support; stale-worktree duplicate-match fix; `tool_pin` re-verified and re-pinned
 
 ---
 
