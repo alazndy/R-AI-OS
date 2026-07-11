@@ -26,10 +26,10 @@ use chunker::chunk_file;
 use embedder::Embedder;
 use store::{ChunkMeta, VectorEngine, VectorResult};
 
-// Single source of truth lives in search::indexer — see that constant's doc
-// comment for why. Re-exported here so this module's existing `INDEXED_EXTS`
-// call sites don't need touching.
-use crate::search::indexer::INDEXED_EXTS;
+// Single source of truth lives in search::indexer — see those constants' doc
+// comments for why. Re-exported here so this module's existing `INDEXED_EXTS`/
+// `SKIP_DIRS` call sites don't need touching.
+use crate::search::indexer::{INDEXED_EXTS, SKIP_DIRS};
 
 /// File name patterns used for memory-targeted indexing and search.
 /// Exact filename match (case-sensitive). Used by `index_memory_files` and `search_with_filter`.
@@ -38,27 +38,6 @@ pub const MEMORY_PATTERNS: &[&str] = &["memory.md", "AGENTS.md", "MASTER.md", "C
 /// Hard cap: never index more than this many files in one call.
 /// Prevents runaway indexing on giant workspaces.
 const MAX_FILES_PER_INDEX: usize = 5_000;
-
-const SKIP_DIRS: &[&str] = &[
-    "node_modules",
-    ".pnpm",
-    "target",
-    ".git",
-    "dist",
-    "build",
-    ".next",
-    ".nuxt",
-    "__pycache__",
-    ".turbo",
-    ".cache",
-    ".venv",
-    "venv",
-    "vendor",
-    ".yarn",
-    "coverage",
-    ".svelte-kit",
-    "out",
-];
 
 // ─── Public Cortex struct ─────────────────────────────────────────────────────
 

@@ -15,15 +15,31 @@ pub(crate) const INDEXED_EXTS: &[&str] = &[
     "rb", "php", "sh", "sql",
 ];
 
+/// Single source of truth for which directories raios's search engines never
+/// descend into (see `cortex::SKIP_DIRS` re-export). Extended 2026-07-10 after
+/// discovering a real 5.7GB Python `venv/` directory (ultimatevocalremovergui)
+/// was being walked to death — this list previously lacked `.venv`/`venv` and
+/// several other dependency/build directories that cortex/mod.rs's own
+/// (separately maintained, already more complete) copy already had.
 pub(crate) const SKIP_DIRS: &[&str] = &[
     "node_modules",
+    ".pnpm",
     "target",
     ".git",
     "dist",
     "build",
     ".next",
+    ".nuxt",
     "__pycache__",
     ".turbo",
+    ".cache",
+    ".venv",
+    "venv",
+    "vendor",
+    ".yarn",
+    "coverage",
+    ".svelte-kit",
+    "out",
 ];
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
