@@ -53,7 +53,8 @@
 
 ## Current Focus
 - Health worker RAM resolved (5.8GB → 1.1GB peak). Project in hardening/expansion mode.
-- Next candidates: VS Code extension package bump, tray macOS/Windows validasyonu.
+- v3.5.0 tagged 2026-07-11 (locate rename, MCP semantic_search daemon delegation, Dart support, worktrees dedup). Not yet pushed/GitHub-released — pending explicit go-ahead.
+- Next candidates: VS Code extension package bump, tray macOS/Windows validasyonu, v4 direction (open brainstorm as of 2026-07-11).
 
 ## Change Log & Agent Trail
 - 2026-06-03 [Antigravity Kaira]: Hash-Chained Audit Ledger, Redaction Engine, Sentry SDK integration — v2.0.0-alpha foundation
