@@ -390,7 +390,7 @@ raios bootstrap
 | `raios health <project>` | Single-project health scan |
 | `raios usage` | Show local usage/quota signals across AI tools |
 | `raios search "<query>"` | Semantic search across portfolio |
-| `raios grep "<pattern>" [--dir <path>] [-i] [--reindex]` | Exhaustive exact/regex search over the trigram index |
+| `raios locate "<pattern>" [--dir <path>] [-i] [--reindex]` | Exhaustive exact/regex search over the trigram index (grep-equivalent) |
 | `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules) |
 | `raios task "<description>"` | Route task to best agent |
 | `raios handoff --to <agent> --status <SUCCESS\|FAILED\|BLOCKER> --msg "<text>"` | Atomic agent-to-agent handoff via the control plane |
@@ -498,7 +498,7 @@ vscode-extension/
 - [x] **Phase 21:** Trace Memory — `raios trace`, handoff/runtime recall, session-review auto trace, trace-to-evolution candidates, and MemPalace KG export
 - [x] **Phase 22:** Layered Memory & Lineage (L0→L3) — `mem_nodes`/`mem_lineage` give `mem_items` real traceability; replace-and-archive `mem_upsert` (fixes unbounded body growth); deterministic L1 atomic facts, L2 daily scenes, L3 persona; `raios mem history`/`--layer`; Mermaid `raios sessions --canvas`
 - [x] **Phase 23:** Operational Hardening — pattern-scan self-disclosure in `raios security`/`raios refactor`; `sigmap` config drift fix; `session_memory.rs` split into a focused module; `raios usage` reads live Claude Pro/Max quota via a statusLine cache bridge
-- [x] **Phase 24:** Trigram Grep — `raios grep` + MCP `grep_search`: trigram-indexed, exhaustive exact/regex search at 0.015s warm with proven `grep -rn` parity; conservative literal extraction with full-scan fallback
+- [x] **Phase 24:** Trigram Locate (renamed 2026-07-11 from `raios grep`) — `raios locate` + MCP `locate_search`: trigram-indexed, exhaustive exact/regex search at 0.015s warm with proven `grep -rn` parity; conservative literal extraction with full-scan fallback
 - [x] **Phase 25:** Resident Cortex — long-lived model+HNSW worker inside `aiosd` (mpsc/oneshot, lazy dirty rebuilds); `raios search` delegates via TCP with silent in-process fallback — semantic search ~1.0s warm (was ~4-6s)
 
 ---

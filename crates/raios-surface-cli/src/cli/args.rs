@@ -104,8 +104,8 @@ pub enum Commands {
         #[arg(long)]
         dir: Option<std::path::PathBuf>,
     },
-    /// Exact/regex search over the trigram index (grep-fast, exhaustive within scope)
-    Grep {
+    /// Exact/regex search over the trigram index (grep-equivalent, exhaustive within scope)
+    Locate {
         pattern: String,
         /// Directory to scan (defaults to the current working directory)
         #[arg(long)]

@@ -41,6 +41,12 @@ pub(crate) const SKIP_DIRS: &[&str] = &[
     ".svelte-kit",
     "out",
     ".fastembed_cache",
+    // Ephemeral git-worktree checkouts (Claude Code's isolated-worktree
+    // feature lands these at <repo>/.claude/worktrees/<id>/, a full
+    // duplicate checkout). Found 2026-07-11: raios locate returned every
+    // match twice on GT-Launcher — once from the real source, once from a
+    // stale 56MB worktree copy — because "worktrees" wasn't skipped.
+    "worktrees",
 ];
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

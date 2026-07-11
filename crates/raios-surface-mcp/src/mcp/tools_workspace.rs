@@ -374,18 +374,18 @@ impl McpServer {
         )
     }
 
-    pub(super) fn tool_grep_search(&self, args: &Value) -> Result<Value, String> {
+    pub(super) fn tool_locate_search(&self, args: &Value) -> Result<Value, String> {
         let pattern = args["pattern"].as_str().ok_or("missing pattern")?;
         let scope = self.resolve_search_scope(args)?;
         let case_insensitive = args["case_insensitive"].as_bool().unwrap_or(false);
-        let matches = raios_runtime::search::trigram::grep(
+        let matches = raios_runtime::search::trigram::locate(
             &scope,
             &raios_runtime::cortex::store::default_db_path(),
             pattern,
             case_insensitive,
             false,
         )
-        .map_err(|e| format!("Grep failed: {e}"))?;
+        .map_err(|e| format!("Locate failed: {e}"))?;
         let total = matches.len();
         let truncated = total > 200;
         let results: Vec<Value> = matches
@@ -400,7 +400,7 @@ impl McpServer {
             })
             .collect();
         let summary = format!(
-            "Grep search for '{}' -> {} match(es){}",
+            "Locate search for '{}' -> {} match(es){}",
             pattern,
             total,
             if truncated {

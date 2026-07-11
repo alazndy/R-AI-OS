@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::search::indexer::fs_mtimes;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GrepMatch {
+pub struct LocateMatch {
     pub path: PathBuf,
     pub line_no: usize,
     pub line: String,
@@ -139,13 +139,13 @@ pub(crate) fn ensure_index(root: &Path, db_path: &Path, force: bool) -> Result<P
     Ok(root)
 }
 
-pub fn grep(
+pub fn locate(
     root: &Path,
     db_path: &Path,
     pattern: &str,
     case_insensitive: bool,
     force: bool,
-) -> Result<Vec<GrepMatch>> {
+) -> Result<Vec<LocateMatch>> {
     let root = ensure_index(root, db_path, force)?;
     let re = RegexBuilder::new(pattern)
         .case_insensitive(case_insensitive)
@@ -174,7 +174,7 @@ pub fn grep(
         };
         for (i, line) in content.lines().enumerate() {
             if re.is_match(line) {
-                out.push(GrepMatch {
+                out.push(LocateMatch {
                     path: path.clone(),
                     line_no: i + 1,
                     line: line.to_string(),
@@ -452,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn grep_end_to_end() {
+    fn locate_end_to_end() {
         let tmp = TempDir::new().unwrap();
         let ws = tmp.path().join("ws");
         let db = tmp.path().join("test.db");
@@ -466,26 +466,26 @@ mod tests {
         );
         write_file(&ws.join("c.rs"), "let error = true;\nlet timeout = true;\n");
 
-        let literal = grep(&ws, &db, "getUserById", false, false).unwrap();
+        let literal = locate(&ws, &db, "getUserById", false, false).unwrap();
         assert_eq!(literal.len(), 2);
         assert_eq!(
             literal.iter().map(|m| m.line_no).collect::<Vec<_>>(),
             vec![1, 2]
         );
 
-        let regex = grep(&ws, &db, "fn get.*Id", false, false).unwrap();
+        let regex = locate(&ws, &db, "fn get.*Id", false, false).unwrap();
         assert_eq!(regex.len(), 3);
 
-        let case_sensitive = grep(&ws, &db, "getuserbyid", false, false).unwrap();
+        let case_sensitive = locate(&ws, &db, "getuserbyid", false, false).unwrap();
         assert!(case_sensitive.is_empty());
-        let case_insensitive = grep(&ws, &db, "getuserbyid", true, false).unwrap();
+        let case_insensitive = locate(&ws, &db, "getuserbyid", true, false).unwrap();
         assert_eq!(case_insensitive.len(), 3);
 
-        let fallback = grep(&ws, &db, "a.c", false, false).unwrap();
+        let fallback = locate(&ws, &db, "a.c", false, false).unwrap();
         assert_eq!(fallback.len(), 1);
         assert!(fallback[0].line.contains("abc"));
 
-        let same_line = grep(&ws, &db, "error.*timeout", false, false).unwrap();
+        let same_line = locate(&ws, &db, "error.*timeout", false, false).unwrap();
         assert_eq!(same_line.len(), 1);
         assert_eq!(same_line[0].path, ws.join("a.rs").canonicalize().unwrap());
 
@@ -495,12 +495,12 @@ mod tests {
     }
 
     #[test]
-    fn grep_rejects_invalid_regex() {
+    fn locate_rejects_invalid_regex() {
         let tmp = TempDir::new().unwrap();
         let ws = make_workspace(&tmp);
         let db = tmp.path().join("test.db");
 
-        let err = grep(&ws, &db, "(", false, false).unwrap_err();
+        let err = locate(&ws, &db, "(", false, false).unwrap_err();
         assert!(err.to_string().contains("invalid pattern"));
     }
 
