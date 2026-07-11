@@ -27,6 +27,60 @@ fn extract_validation_errors_from_state_sync(
     Ok(errors)
 }
 
+/// Tries the resident Cortex daemon first (mirrors raios-surface-cli's
+/// `daemon_vector_search_opt` — see cli/search.rs); returns None on any
+/// failure so callers fall back to the in-process path.
+fn daemon_vector_search(
+    query: &str,
+    top_k: usize,
+    scope: &std::path::Path,
+) -> Option<Vec<raios_runtime::cortex::store::VectorResult>> {
+    daemon_vector_search_opt(query, top_k, scope, None)
+}
+
+fn daemon_vector_search_opt(
+    query: &str,
+    top_k: usize,
+    scope: &std::path::Path,
+    port: Option<u16>,
+) -> Option<Vec<raios_runtime::cortex::store::VectorResult>> {
+    use std::io::{BufRead, BufReader, Write};
+    let port = port.unwrap_or(42069);
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
+    let stream =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).ok()?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+        .ok()?;
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_secs(2)))
+        .ok()?;
+    let mut writer = stream.try_clone().ok()?;
+    let token_path = raios_core::config::Config::config_file()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default()
+        .join(".session_token");
+    let token = std::fs::read_to_string(token_path).ok()?;
+    writer
+        .write_all(format!("AUTH {}\n", token.trim()).as_bytes())
+        .ok()?;
+    let req = serde_json::json!({
+        "command": "VectorSearch", "query": query, "top_k": top_k,
+        "scope": scope.to_string_lossy(),
+    });
+    writer.write_all(format!("{req}\n").as_bytes()).ok()?;
+    let reader = BufReader::new(stream);
+    for line in reader.lines() {
+        let line = line.ok()?;
+        let v: Value = serde_json::from_str(&line).ok()?;
+        if v["event"] == "VectorResults" {
+            return serde_json::from_value(v["vector_hits"].clone()).ok();
+        }
+    }
+    None
+}
+
 impl McpServer {
     pub(super) fn tool_ask_architect(&self, args: &Value) -> Result<Value, String> {
         let question = args["question"].as_str().ok_or("missing question")?;
@@ -282,11 +336,24 @@ impl McpServer {
         let query = args["query"].as_str().ok_or("missing query")?;
         let top_k = args["top_k"].as_u64().unwrap_or(8).min(20) as usize;
         let scope = self.resolve_search_scope(args)?;
-        let mut cortex = raios_runtime::cortex::Cortex::init().map_err(|e| e.to_string())?;
-        let _ = cortex.index_project(&scope).unwrap_or(0);
-        let vector_hits = cortex
-            .search_scoped(query, top_k, &scope)
-            .map_err(|e| format!("Search failed: {e}"))?;
+
+        let (vector_hits, index_note) = match daemon_vector_search(query, top_k, &scope) {
+            Some(hits) => (hits, "resident daemon".to_string()),
+            None => {
+                let mut cortex = raios_runtime::cortex::Cortex::init().map_err(|e| e.to_string())?;
+                let _ = cortex.index_project(&scope).unwrap_or(0);
+                let hits = cortex
+                    .search_scoped(query, top_k, &scope)
+                    .map_err(|e| format!("Search failed: {e}"))?;
+                let note = format!(
+                    "in-process, {} chunks, {} files",
+                    cortex.chunk_count(),
+                    cortex.file_count()
+                );
+                (hits, note)
+            }
+        };
+
         let bm25_hits = raios_runtime::search::indexer::ProjectIndex::load_or_build(
             &scope,
             &raios_runtime::cortex::store::default_db_path(),
@@ -297,11 +364,10 @@ impl McpServer {
         let fused = raios_runtime::search::hybrid::fuse(bm25_hits, vector_hits, top_k);
         let results: Vec<Value> = fused.iter().map(|r| json!({ "path": r.path.to_string_lossy(), "project": r.project, "snippet": r.snippet, "line": r.start_line, "rrf_score": format!("{:.4}", r.rrf_score), "source": r.source.label() })).collect();
         let summary = format!(
-            "Semantic search for '{}' -> {} result(s) (index: {} chunks, {} files)",
+            "Semantic search for '{}' -> {} result(s) (vector index: {})",
             query,
             results.len(),
-            cortex.chunk_count(),
-            cortex.file_count()
+            index_note
         );
         Ok(
             json!({ "content": [{ "type": "text", "text": format!("{}\n\n{}", summary, serde_json::to_string_pretty(&results).unwrap_or_default()) }] }),
@@ -480,8 +546,16 @@ impl McpServer {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_validation_errors_from_state_sync;
+    use super::{daemon_vector_search_opt, extract_validation_errors_from_state_sync};
     use serde_json::json;
+
+    #[test]
+    fn daemon_vector_search_returns_none_when_unreachable() {
+        let start = std::time::Instant::now();
+        let hits = daemon_vector_search_opt("test", 5, std::path::Path::new("."), Some(1));
+        assert!(hits.is_none());
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    }
 
     #[test]
     fn extract_validation_errors_requires_latest_errors_field() {
