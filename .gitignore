@@ -16,3 +16,4 @@ tools/raios-tray/__pycache__/
 /wiki_temp
 /graphify-out
 .fastembed_cache/
+.raios_tool_pin
