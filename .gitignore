@@ -17,3 +17,6 @@ tools/raios-tray/__pycache__/
 /graphify-out
 .fastembed_cache/
 .raios_tool_pin
+
+# Superpowers subagent-driven-development scratch ledger
+.superpowers/
