@@ -89,6 +89,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.system.handover_modal.is_some() {
         render_handover_modal(frame, app);
     }
+    if app.constitution.pending_save.is_some() {
+        render_constitution_save_modal(frame, app);
+    }
 }
 
 // ─── Boot screen ─────────────────────────────────────────────────────────────

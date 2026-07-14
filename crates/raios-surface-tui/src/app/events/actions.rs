@@ -35,6 +35,35 @@ impl App {
         self.state = AppState::FileEdit;
     }
 
+    pub(crate) fn is_constitution_path(&self, path: &Path) -> bool {
+        self.constitution.tabs.iter().any(|t| t.path() == path)
+    }
+
+    pub(crate) fn jump_to_constitution_raw_edit(&mut self) {
+        let Some(target) = self.constitution.tabs.get(self.constitution.active_tab).cloned() else { return };
+        let line = self.outline_cursor_line();
+        let entry = FileEntry::new(target.label(), target.path().to_path_buf());
+        self.open_file_edit(entry);
+        if let Some(l) = line {
+            self.editor.editor.cursor_row = l.min(self.editor.editor.lines.len().saturating_sub(1));
+            self.editor.editor.cursor_col = 0;
+        }
+    }
+
+    fn outline_cursor_line(&self) -> Option<usize> {
+        use raios_surface_tui::app::state::OutlineRow;
+        let row = self.constitution.rows.get(self.constitution.outline_cursor)?;
+        let sections = &self.constitution.sections;
+        Some(match *row {
+            OutlineRow::Section { idx } => sections[idx].line_start,
+            OutlineRow::Child { idx, child_idx } => sections[idx].children[child_idx].line_start,
+            OutlineRow::Item { idx, child_idx, .. } => match child_idx {
+                Some(c) => sections[idx].children[c].line_start,
+                None => sections[idx].line_start,
+            },
+        })
+    }
+
     pub(crate) fn open_graph_report(&mut self, project_path: &Path) {
         match raios_surface_tui::app::load_graph_report_lines(project_path) {
             Ok(lines) => {
@@ -57,6 +86,10 @@ impl App {
     pub(crate) fn save_file(&mut self) {
         if let Some(ref file) = self.editor.active_file.clone() {
             let content = self.editor.editor.content();
+            if self.is_constitution_path(&file.path) {
+                self.request_constitution_save(file.path.clone(), content);
+                return;
+            }
             match save_file_content(&file.path, &content) {
                 Ok(()) => {
                     self.editor.lines = content.lines().map(str::to_owned).collect();
@@ -68,6 +101,40 @@ impl App {
                 }
             }
         }
+    }
+
+    pub(crate) fn request_constitution_save(&mut self, path: PathBuf, new_content: String) {
+        let old_content = load_file_content(&path);
+        let diff_lines = raios_surface_tui::app::editor::simple_diff(&old_content, &new_content);
+        let added = diff_lines.iter().filter(|l| l.starts_with('+')).count();
+        let removed = diff_lines.iter().filter(|l| l.starts_with('-')).count();
+        self.constitution.pending_save = Some(raios_surface_tui::app::state::PendingConstitutionSave {
+            path,
+            new_content,
+            diff_lines,
+            added,
+            removed,
+        });
+    }
+
+    pub(crate) fn confirm_constitution_save(&mut self) {
+        if let Some(pending) = self.constitution.pending_save.take() {
+            match raios_runtime::filebrowser::save_constitution_file(&pending.path, &pending.new_content) {
+                Ok(()) => {
+                    self.editor.save_msg = Some("Saved!".into());
+                    self.state = AppState::FileView;
+                    let idx = self.constitution.active_tab;
+                    self.load_constitution_tab(idx);
+                }
+                Err(e) => {
+                    self.editor.save_msg = Some(format!("Error: {}", e));
+                }
+            }
+        }
+    }
+
+    pub(crate) fn cancel_constitution_save(&mut self) {
+        self.constitution.pending_save = None;
     }
 
     pub(crate) fn open_project_detail(&mut self, project: raios_core::entities::EntityProject) {

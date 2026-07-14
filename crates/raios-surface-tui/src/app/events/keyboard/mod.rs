@@ -37,6 +37,16 @@ impl App {
             return Ok(());
         }
 
+        // Constitution save-confirmation modal takes priority over all other input
+        if self.constitution.pending_save.is_some() {
+            match key.code {
+                KeyCode::Enter => self.confirm_constitution_save(),
+                KeyCode::Esc => self.cancel_constitution_save(),
+                _ => {}
+            }
+            return Ok(());
+        }
+
         // Launcher overlay takes priority over all other input
         if self.ui.show_launcher {
             match key.code {

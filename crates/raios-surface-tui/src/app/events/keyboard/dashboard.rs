@@ -212,6 +212,15 @@ impl App {
                     self.constitution.outline_cursor += 1;
                 }
             }
+            KeyCode::Char('r') | KeyCode::Enter
+                if self.ui.menu_cursor == 1
+                    && self.ui.right_panel_focus
+                    && !self.constitution.item_editing
+                    && !self.constitution.creator.active
+                    && !self.constitution.sections.is_empty() =>
+            {
+                self.jump_to_constitution_raw_edit();
+            }
             // ── End Constitution ──────────────────────────────────────────────
             KeyCode::Char('/') | KeyCode::Tab => {
                 self.ui.command_mode = true;

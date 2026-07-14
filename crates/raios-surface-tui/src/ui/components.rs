@@ -382,3 +382,50 @@ pub fn render_handover_modal(frame: &mut Frame, app: &App) {
         frame.render_widget(p, area);
     }
 }
+
+pub fn render_constitution_save_modal(frame: &mut Frame, app: &App) {
+    if let Some(ref pending) = app.constitution.pending_save {
+        let area = center_rect(70, 60, frame.area());
+        frame.render_widget(Clear, area);
+
+        let block = Block::default()
+            .title(" Save Constitution File? ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double)
+            .border_style(Style::default().fg(AMBER))
+            .style(Style::default().bg(Color::Rgb(8, 12, 16)));
+
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                format!(
+                    " {} lines added, {} lines removed — {}",
+                    pending.added,
+                    pending.removed,
+                    pending.path.display()
+                ),
+                Style::default().fg(AMBER).bold(),
+            )]),
+            Line::from(""),
+        ];
+        for diff_line in pending.diff_lines.iter().take(20) {
+            let color = if diff_line.starts_with('+') {
+                GREEN
+            } else if diff_line.starts_with('-') {
+                RED
+            } else {
+                DIM
+            };
+            lines.push(Line::from(Span::styled(diff_line.clone(), Style::default().fg(color))));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " [Enter] Save (backs up previous version)   [Esc] Cancel",
+            Style::default().fg(MID),
+        )));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
+}
