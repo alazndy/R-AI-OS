@@ -62,7 +62,7 @@ pub fn render_content_body(frame: &mut Frame, area: Rect, app: &App) {
 
     match app.ui.menu_cursor {
         0 => render_recent(frame, inner, app),
-        1 => render_rules(frame, inner, app),
+        1 => render_constitution(frame, inner, app),
         2 => render_diagnostics(frame, inner, app),
         3 => render_agents(frame, inner, app),
         4 => render_policies(frame, inner, app),

@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod constitution;
 pub mod content;
 pub mod dashboard_main;
 pub mod extensions;
@@ -10,13 +11,13 @@ pub mod logs;
 pub mod menu;
 pub mod policies;
 pub mod recent;
-pub mod rules;
 pub mod stats;
 pub mod tasks;
 pub mod scheduler;
 pub mod timeline;
 
 pub use agents::*;
+pub use constitution::*;
 pub use content::*;
 pub use dashboard_main::*;
 pub use extensions::*;
@@ -28,7 +29,6 @@ pub use logs::*;
 pub use menu::*;
 pub use policies::*;
 pub use recent::*;
-pub use rules::*;
 pub use scheduler::*;
 pub use stats::*;
 pub use tasks::*;

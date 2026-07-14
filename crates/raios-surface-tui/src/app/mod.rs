@@ -427,12 +427,35 @@ impl App {
 
     pub fn current_menu_files(&self) -> Vec<FileEntry> {
         match self.ui.menu_cursor {
-            1 => self.inventory.master_files.clone(),
+            1 => vec![],
             3 => self.inventory.agent_files.clone(),
             4 => self.inventory.policy_files.clone(),
             5 => self.inventory.mempalace_files.clone(),
             _ => vec![],
         }
+    }
+
+    pub fn refresh_constitution_tabs(&mut self) {
+        let mut tabs = vec![raios_surface_tui::app::state::ConstitutionTarget::Global {
+            path: self.config.master_md_path.clone(),
+        }];
+        if let Some(ref proj) = self.projects.active {
+            for (kind, path) in raios_runtime::constitution::discover_project_constitution_files(&proj.local_path) {
+                tabs.push(raios_surface_tui::app::state::ConstitutionTarget::ProjectFile { path, kind });
+            }
+        }
+        self.constitution.tabs = tabs;
+        self.constitution.active_tab = 0;
+        self.load_constitution_tab(0);
+    }
+
+    pub fn load_constitution_tab(&mut self, idx: usize) {
+        let Some(target) = self.constitution.tabs.get(idx) else { return };
+        let content = raios_runtime::filebrowser::load_file_content(target.path());
+        self.constitution.sections = raios_runtime::constitution::parse_sections(&content);
+        self.constitution.rows = raios_surface_tui::app::state::flatten_sections(&self.constitution.sections);
+        self.constitution.outline_cursor = 0;
+        self.constitution.active_tab = idx;
     }
 
     pub fn sorted_project_indices(&self) -> Vec<usize> {

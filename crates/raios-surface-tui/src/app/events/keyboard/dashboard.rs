@@ -226,6 +226,9 @@ impl App {
                     self.search.cursor = 0;
                     self.ui.right_panel_scroll = 0;
                     self.ui.right_panel_focus = false;
+                    if self.ui.menu_cursor == 1 && self.constitution.tabs.is_empty() {
+                        self.refresh_constitution_tabs();
+                    }
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -278,6 +281,9 @@ impl App {
                     // Lazy-load extensions when navigating to the Extensions panel
                     if self.ui.menu_cursor == 15 && !self.ext.loaded {
                         self.load_extensions();
+                    }
+                    if self.ui.menu_cursor == 1 && self.constitution.tabs.is_empty() {
+                        self.refresh_constitution_tabs();
                     }
                 }
             }

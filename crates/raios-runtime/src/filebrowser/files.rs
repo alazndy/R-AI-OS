@@ -109,7 +109,7 @@ pub fn discover_memory_files(base: &Path, limit: usize) -> Vec<FileEntry> {
         .collect()
 }
 
-pub fn load_file_content(path: &PathBuf) -> String {
+pub fn load_file_content(path: &Path) -> String {
     fs::read_to_string(path)
         .unwrap_or_else(|e| format!("# Error\n\nCould not read:\n  {}\n\n{}", path.display(), e))
 }
