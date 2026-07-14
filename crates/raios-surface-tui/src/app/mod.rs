@@ -208,6 +208,9 @@ pub struct App {
 
     // Setup Wizard
     pub wizard: WizardState,
+
+    // Constitution Editor
+    pub constitution: ConstitutionState,
 }
 
 impl Default for App {
@@ -280,10 +283,7 @@ impl App {
             search: SearchState::default(),
             system: SystemState::default(),
             ui: UIState::default(),
-            inventory: InventoryState {
-                system_rules: raios_surface_tui::app::state::system_rules(),
-                ..Default::default()
-            },
+            inventory: InventoryState::default(),
             editor: EditorState::default(),
             health: HealthState::default(),
             projects: ProjectState::default(),
@@ -300,6 +300,7 @@ impl App {
             ext: ExtState::default(),
             _watcher: None,
             wizard: WizardState::default(),
+            constitution: ConstitutionState::default(),
         }
     }
 
@@ -340,10 +341,7 @@ impl App {
             search: SearchState::default(),
             system: SystemState::default(),
             ui: UIState::default(),
-            inventory: InventoryState {
-                system_rules: raios_surface_tui::app::state::system_rules(),
-                ..Default::default()
-            },
+            inventory: InventoryState::default(),
             editor: EditorState::default(),
             health: HealthState::default(),
             projects: ProjectState::default(),
@@ -360,6 +358,7 @@ impl App {
             ext: ExtState::default(),
             _watcher: None,
             wizard: WizardState::default(),
+            constitution: ConstitutionState::default(),
         }
     }
 

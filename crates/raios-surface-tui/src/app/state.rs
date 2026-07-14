@@ -277,12 +277,108 @@ pub struct PortfolioStats {
     pub top_dirty_category: String,
 }
 
-// ─── Rule categories (hardcoded constitution) ────────────────────────────────
+// ─── Constitution State ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstitutionTarget {
+    Global { path: PathBuf },
+    ProjectFile {
+        path: PathBuf,
+        kind: raios_runtime::constitution::ProjectFileKind,
+    },
+}
+
+impl ConstitutionTarget {
+    pub fn path(&self) -> &std::path::Path {
+        match self {
+            ConstitutionTarget::Global { path } => path,
+            ConstitutionTarget::ProjectFile { path, .. } => path,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            ConstitutionTarget::Global { .. } => "Global Constitution".to_string(),
+            ConstitutionTarget::ProjectFile { kind, .. } => kind.filename().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutlineRow {
+    Section { idx: usize },
+    Child { idx: usize, child_idx: usize },
+    Item {
+        idx: usize,
+        child_idx: Option<usize>,
+        item_idx: usize,
+    },
+}
+
+pub fn flatten_sections(
+    sections: &[raios_runtime::constitution::ConstitutionSection],
+) -> Vec<OutlineRow> {
+    let mut rows = Vec::new();
+    for (idx, sec) in sections.iter().enumerate() {
+        rows.push(OutlineRow::Section { idx });
+        for item_idx in 0..sec.items.len() {
+            rows.push(OutlineRow::Item { idx, child_idx: None, item_idx });
+        }
+        for (child_idx, child) in sec.children.iter().enumerate() {
+            rows.push(OutlineRow::Child { idx, child_idx });
+            for item_idx in 0..child.items.len() {
+                rows.push(OutlineRow::Item {
+                    idx,
+                    child_idx: Some(child_idx),
+                    item_idx,
+                });
+            }
+        }
+    }
+    rows
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreatorStep {
+    ChooseTarget,
+    Notes,
+    Preview,
+}
+
+impl Default for CreatorStep {
+    fn default() -> Self {
+        CreatorStep::ChooseTarget
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct CreatorState {
+    pub active: bool,
+    pub target_is_global: bool,
+    pub step: CreatorStep,
+    pub notes_input: String,
+}
 
 #[derive(Debug, Clone)]
-pub struct RuleCategory {
-    pub title: &'static str,
-    pub rules: Vec<&'static str>,
+pub struct PendingConstitutionSave {
+    pub path: PathBuf,
+    pub new_content: String,
+    pub diff_lines: Vec<String>,
+    pub added: usize,
+    pub removed: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct ConstitutionState {
+    pub tabs: Vec<ConstitutionTarget>,
+    pub active_tab: usize,
+    pub sections: Vec<raios_runtime::constitution::ConstitutionSection>,
+    pub rows: Vec<OutlineRow>,
+    pub outline_cursor: usize,
+    pub item_editing: bool,
+    pub item_input: String,
+    pub pending_save: Option<PendingConstitutionSave>,
+    pub creator: CreatorState,
 }
 
 // ─── Search State ────────────────────────────────────────────────────────────
@@ -390,7 +486,6 @@ pub struct SetupState {
 
 #[derive(Debug, Default)]
 pub struct InventoryState {
-    pub system_rules: Vec<RuleCategory>,
     pub agents: Vec<AgentInfo>,
     pub skills: Vec<SkillInfo>,
     pub master_files: Vec<FileEntry>,
@@ -450,41 +545,4 @@ pub struct EditorState {
     pub save_msg: Option<String>,
     pub watched_mtime: Option<std::time::SystemTime>,
     pub changed_externally: bool,
-}
-
-pub fn system_rules() -> Vec<RuleCategory> {
-    vec![
-        RuleCategory {
-            title: "Core Principles",
-            rules: vec![
-                "İş arkadaşı tavrı, net ve direkt iletişim",
-                "Kod: İngilizce, İletişim: Türkçe",
-                "Güvenlik ve performans odaklı pair-programming",
-            ],
-        },
-        RuleCategory {
-            title: "Coding Standards",
-            rules: vec![
-                "pnpm > npm/yarn. Python: uv/pip",
-                "Önce amaç ve skeleton, sonra component-by-component",
-                "Fonksiyonel yazım, hata yönetimi zorunlu",
-            ],
-        },
-        RuleCategory {
-            title: "Mandatory Skills",
-            rules: vec![
-                "prompt-master: Her prompt öncesi zorunlu",
-                "graphify: Codebase girişi ve analizde zorunlu",
-                "verify-ai-os: Session başı ve tutarsızlıkta zorunlu",
-            ],
-        },
-        RuleCategory {
-            title: "Security",
-            rules: vec![
-                "API key asla client-side'da olmaz",
-                "RLS (Row Level Security) day 0'dan zorunlu",
-                "Secrets Manager kullanımı (Production)",
-            ],
-        },
-    ]
 }
