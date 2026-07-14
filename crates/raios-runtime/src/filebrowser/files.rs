@@ -152,16 +152,16 @@ pub fn find_file_by_name(query: &str, master_md: &Path) -> Option<FileEntry> {
 /// edit to the single file every agent reads is always recoverable.
 pub fn save_constitution_file(path: &Path, new_content: &str) -> std::io::Result<()> {
     if path.exists() {
-        let existing = fs::read_to_string(path).unwrap_or_default();
+        let existing = fs::read_to_string(path)?;
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_millis();
         let backup_path = PathBuf::from(format!("{}.bak.{}", path.display(), ts));
         fs::write(&backup_path, existing)?;
         prune_old_backups(path)?;
     }
-    fs::write(path, new_content)
+    save_file_content(path, new_content)
 }
 
 fn prune_old_backups(path: &Path) -> std::io::Result<()> {
@@ -173,12 +173,12 @@ fn prune_old_backups(path: &Path) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let prefix = format!("{}.bak.", file_name);
 
-    let mut backups: Vec<(u64, PathBuf)> = fs::read_dir(dir)?
+    let mut backups: Vec<(u128, PathBuf)> = fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let ts_str = name.strip_prefix(&prefix)?;
-            let ts: u64 = ts_str.parse().ok()?;
+            let ts: u128 = ts_str.parse().ok()?;
             Some((ts, e.path()))
         })
         .collect();
