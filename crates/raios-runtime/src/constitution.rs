@@ -18,7 +18,7 @@ pub fn parse_sections(content: &str) -> Vec<ConstitutionSection> {
         if let Some(title) = lines[i].strip_prefix("## ") {
             let start = i;
             i += 1;
-            let (items, children, end) = parse_body(&lines, &mut i, start);
+            let (items, children, end) = parse_body(&lines, &mut i, start, false);
             sections.push(ConstitutionSection {
                 level: 1,
                 title: title.trim().to_string(),
@@ -37,10 +37,18 @@ pub fn parse_sections(content: &str) -> Vec<ConstitutionSection> {
 /// Consumes lines starting at `*i` until the next `## ` header (exclusive), collecting
 /// plain body lines as `items` and `### ` headers as `children`. Returns the last
 /// non-empty line index consumed (falls back to `fallback_line` if nothing was consumed).
+///
+/// `stop_at_child_header` controls whether a `### ` header also terminates this call: the
+/// top-level call from `parse_sections` passes `false` so it keeps consuming sibling `### `
+/// headers as children of the enclosing `## ` section, while the recursive call made when a
+/// `### ` header is hit passes `true` so it stops as soon as it sees the *next* `### ` (or
+/// `## `) header, handing control back to the outer loop so that next sibling gets its own
+/// entry instead of being swallowed into the previous child's body.
 fn parse_body(
     lines: &[&str],
     i: &mut usize,
     fallback_line: usize,
+    stop_at_child_header: bool,
 ) -> (Vec<String>, Vec<ConstitutionSection>, usize) {
     let mut items = Vec::new();
     let mut children = Vec::new();
@@ -50,10 +58,13 @@ fn parse_body(
         if line.starts_with("## ") {
             break;
         }
+        if stop_at_child_header && line.starts_with("### ") {
+            break;
+        }
         if let Some(title) = line.strip_prefix("### ") {
             let start = *i;
             *i += 1;
-            let (child_items, _grandchildren, end) = parse_body(lines, i, start);
+            let (child_items, _grandchildren, end) = parse_body(lines, i, start, true);
             children.push(ConstitutionSection {
                 level: 2,
                 title: title.trim().to_string(),
@@ -172,6 +183,48 @@ Turkish in chat.\n";
             ]
         );
         assert_eq!(sections[1].title, "5. Communication");
+    }
+
+    #[test]
+    fn parses_multiple_sibling_subsections_without_swallowing_them() {
+        let content = "\
+## 4. Engineering Standards\n\
+### Skeleton-First Architecture (Mandatory)\n\
+* No Blind Coding rule\n\
+\n\
+### AgentShield: Absolute OWASP Rules\n\
+1. Broken Access Control\n\
+2. Cryptographic Failures\n\
+\n\
+### Anti-Laziness\n\
+* Never write lazy shortcuts\n\
+\n\
+## 5. Communication\n\
+Turkish in chat.\n";
+        let sections = parse_sections(content);
+        assert_eq!(sections.len(), 2);
+
+        let engineering = &sections[0];
+        assert_eq!(engineering.title, "4. Engineering Standards");
+        assert!(engineering.items.is_empty());
+        assert_eq!(engineering.children.len(), 3);
+
+        assert_eq!(engineering.children[0].title, "Skeleton-First Architecture (Mandatory)");
+        assert_eq!(engineering.children[0].items, vec!["No Blind Coding rule"]);
+
+        assert_eq!(engineering.children[1].title, "AgentShield: Absolute OWASP Rules");
+        assert_eq!(
+            engineering.children[1].items,
+            vec!["Broken Access Control", "Cryptographic Failures"]
+        );
+
+        assert_eq!(engineering.children[2].title, "Anti-Laziness");
+        assert_eq!(engineering.children[2].items, vec!["Never write lazy shortcuts"]);
+
+        let communication = &sections[1];
+        assert_eq!(communication.title, "5. Communication");
+        assert!(communication.children.is_empty());
+        assert_eq!(communication.items, vec!["Turkish in chat."]);
     }
 
     #[test]
