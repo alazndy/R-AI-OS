@@ -122,6 +122,7 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
     } else if app.ui.right_panel_focus {
         let hint = match app.ui.menu_cursor {
             0 => " [↑↓] select  [Space] toggle done  [c/x/o/a] send→agent  [←/Esc] menu",
+            1 => " [1-9] tab  [↑↓] navigate  [Enter/r] raw edit  [i] edit item  [n] new item  [d] delete  [c] creator  [←/Esc] menu",
             6 => " [↑↓] select  [Enter] open result  [←/Esc] menu",
             7 => " [↑↓] select  [Enter] open  [L] launch agent  [s] sort  [←/Esc] menu",
             15 => " [Tab] commands/config  [↑↓] select  [Enter] run  [e] edit  [←→] switch ext  [Esc] menu",
@@ -138,6 +139,8 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
             "  [→] files"
         } else if app.ui.menu_cursor == 0 && !app.tasks.list.is_empty() {
             "  [→] tasks"
+        } else if app.ui.menu_cursor == 1 && !app.constitution.tabs.is_empty() {
+            "  [→] outline"
         } else if app.ui.menu_cursor == 6 && !app.search.results.is_empty() {
             "  [→] results"
         } else if app.ui.menu_cursor == 7 && !app.projects.list.is_empty() {

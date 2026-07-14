@@ -179,6 +179,40 @@ impl App {
                 self.ui.right_panel_focus = false;
             }
             // ── End Extensions ───────────────────────────────────────────────
+            // ── Constitution panel keyboard (menu_cursor == 1) ───────────────
+            KeyCode::Char(n @ '1'..='9')
+                if self.ui.menu_cursor == 1
+                    && self.ui.right_panel_focus
+                    && !self.constitution.item_editing
+                    && !self.constitution.creator.active =>
+            {
+                let idx = (n as usize) - ('1' as usize);
+                if idx < self.constitution.tabs.len() {
+                    self.load_constitution_tab(idx);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k')
+                if self.ui.menu_cursor == 1
+                    && self.ui.right_panel_focus
+                    && !self.constitution.item_editing
+                    && !self.constitution.creator.active =>
+            {
+                if self.constitution.outline_cursor > 0 {
+                    self.constitution.outline_cursor -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j')
+                if self.ui.menu_cursor == 1
+                    && self.ui.right_panel_focus
+                    && !self.constitution.item_editing
+                    && !self.constitution.creator.active =>
+            {
+                let max = self.constitution.rows.len().saturating_sub(1);
+                if self.constitution.outline_cursor < max {
+                    self.constitution.outline_cursor += 1;
+                }
+            }
+            // ── End Constitution ──────────────────────────────────────────────
             KeyCode::Char('/') | KeyCode::Tab => {
                 self.ui.command_mode = true;
                 self.ui.palette_cursor = 0;
@@ -290,6 +324,7 @@ impl App {
             KeyCode::Right | KeyCode::Char('l') => {
                 let can_focus = !self.current_menu_files().is_empty()
                     || (self.ui.menu_cursor == 0 && !self.tasks.list.is_empty())
+                    || (self.ui.menu_cursor == 1 && !self.constitution.tabs.is_empty())
                     || (self.ui.menu_cursor == 6 && !self.search.results.is_empty())
                     || (self.ui.menu_cursor == 7 && !self.projects.list.is_empty())
                     || (self.ui.menu_cursor == 15 && !self.ext.extensions.is_empty());
