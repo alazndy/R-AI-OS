@@ -20,3 +20,4 @@ tools/raios-tray/__pycache__/
 
 # Superpowers subagent-driven-development scratch ledger
 .superpowers/
+.claude/worktrees/
