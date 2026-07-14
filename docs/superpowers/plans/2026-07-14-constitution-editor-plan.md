@@ -873,7 +873,7 @@ Expected: clean compile, 0 errors. Fix any remaining reference to the deleted `s
 
 - [ ] **Step 7: Manual verification**
 
-Run: `cargo run -p raios-surface-tui --bin raios-tui 2>&1 | head -5` is not interactive-friendly for automated checking — instead confirm via `cargo build -p raios-surface-tui` succeeding, then launch the real binary manually in a `screen`/`tmux` session, navigate to the "System Rules" menu item (now Constitution), and confirm it shows a tab bar plus either an outline or the include-only notice instead of the old static Turkish text. Record what you observe.
+The TUI binary is `raios` (package `raios-surface-cli`, `src/bin/raios.rs` — running it with no subcommand launches the TUI). This is not automatable non-interactively — confirm via `cargo build -p raios-surface-cli` succeeding, then launch the real binary manually in a `screen`/`tmux` session (`cargo run -p raios-surface-cli --bin raios`), navigate to the "System Rules" menu item (now Constitution), and confirm it shows a tab bar plus either an outline or the include-only notice instead of the old static Turkish text. Record what you observe.
 
 - [ ] **Step 8: Commit**
 
