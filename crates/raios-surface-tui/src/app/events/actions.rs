@@ -137,6 +137,140 @@ impl App {
         self.constitution.pending_save = None;
     }
 
+    pub(crate) fn begin_item_edit(&mut self) {
+        use raios_surface_tui::app::state::OutlineRow;
+        let Some(&row) = self.constitution.rows.get(self.constitution.outline_cursor) else { return };
+        if let OutlineRow::Item { idx, child_idx, item_idx } = row {
+            let current = match child_idx {
+                Some(c) => self.constitution.sections[idx].children[c].items[item_idx].clone(),
+                None => self.constitution.sections[idx].items[item_idx].clone(),
+            };
+            self.constitution.item_input = current;
+            self.constitution.item_editing = true;
+        }
+    }
+
+    pub(crate) fn begin_item_insert(&mut self) {
+        self.constitution.item_input = String::new();
+        self.constitution.item_editing = true;
+    }
+
+    pub(crate) fn commit_item_edit(&mut self) {
+        use raios_surface_tui::app::state::OutlineRow;
+        let Some(target) = self.constitution.tabs.get(self.constitution.active_tab).cloned() else {
+            self.constitution.item_editing = false;
+            return;
+        };
+        let row = self.constitution.rows.get(self.constitution.outline_cursor).copied();
+        let content = load_file_content(target.path());
+        let new_text = self.constitution.item_input.clone();
+        self.constitution.item_editing = false;
+
+        let new_content = match row {
+            // Cursor is on an existing item row: replace *that item's own* source line.
+            // `outline_cursor_line()` can't be reused here — it intentionally returns the
+            // enclosing section/child *header's* line for Item rows (correct for Task 6's
+            // raw-edit-jump, since `ConstitutionSection` never tracks per-item line numbers).
+            // Blindly reusing it here would overwrite the section/child heading instead of
+            // the item text, so the item's real line is resolved by walking the raw content
+            // with the same body-parsing rules `constitution::parse_body` uses.
+            Some(OutlineRow::Item { idx, child_idx, item_idx }) => {
+                let Some(line) = self.resolve_item_source_line(&content, idx, child_idx, item_idx) else {
+                    return;
+                };
+                let mut lines: Vec<String> = content.lines().map(str::to_owned).collect();
+                if line < lines.len() {
+                    // The outline always shows/edits marker-stripped text (see
+                    // `begin_item_edit`, which pulls from `ConstitutionSection::items` —
+                    // already stripped of its `- `/`* `/`N. ` prefix by the parser), so the
+                    // original line's marker must be reattached here or every edited item
+                    // would silently lose its list formatting on save.
+                    let prefix = list_marker_prefix(&lines[line]).to_string();
+                    lines[line] = format!("{prefix}{new_text}");
+                } else {
+                    lines.push(new_text);
+                }
+                lines.join("\n") + "\n"
+            }
+            // Cursor is on a section/child header row (via `n`): insert a brand-new line
+            // directly under the header rather than overwriting the header itself.
+            Some(OutlineRow::Section { .. }) | Some(OutlineRow::Child { .. }) => {
+                let Some(header_line) = self.outline_cursor_line() else { return };
+                let mut lines: Vec<String> = content.lines().map(str::to_owned).collect();
+                let insert_at = (header_line + 1).min(lines.len());
+                lines.insert(insert_at, new_text);
+                lines.join("\n") + "\n"
+            }
+            None => return,
+        };
+        self.request_constitution_save(target.path().to_path_buf(), new_content);
+    }
+
+    pub(crate) fn delete_item_at_cursor(&mut self) {
+        use raios_surface_tui::app::state::OutlineRow;
+        let Some(&row) = self.constitution.rows.get(self.constitution.outline_cursor) else { return };
+        let OutlineRow::Item { idx, child_idx, item_idx } = row else { return };
+        let Some(target) = self.constitution.tabs.get(self.constitution.active_tab).cloned() else { return };
+        let content = load_file_content(target.path());
+        let Some(line) = self.resolve_item_source_line(&content, idx, child_idx, item_idx) else { return };
+        let mut lines: Vec<String> = content.lines().map(str::to_owned).collect();
+        if line < lines.len() {
+            lines.remove(line);
+        }
+        let new_content = lines.join("\n") + "\n";
+        self.request_constitution_save(target.path().to_path_buf(), new_content);
+    }
+
+    /// Resolves the absolute source-file line of an `OutlineRow::Item`'s own text.
+    /// `ConstitutionSection` (raios_runtime::constitution) only stores `line_start` for
+    /// section/child *headers* — it never tracks a per-item line number — so this walks the
+    /// raw file content starting right after the relevant header, mirroring
+    /// `constitution::parse_body`'s exact rules (a top-level section's items skip over any
+    /// `### ` child blocks entirely; a child's items stop at the next `### `/`## ` header)
+    /// so the `item_idx`-th line found here lines up with the same item the outline shows.
+    fn resolve_item_source_line(
+        &self,
+        content: &str,
+        idx: usize,
+        child_idx: Option<usize>,
+        item_idx: usize,
+    ) -> Option<usize> {
+        let sections = &self.constitution.sections;
+        let (header_line, skip_child_blocks) = match child_idx {
+            Some(c) => (sections[idx].children[c].line_start, false),
+            None => (sections[idx].line_start, true),
+        };
+        let lines: Vec<&str> = content.lines().collect();
+        let mut i = header_line + 1;
+        let mut count = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            if line.starts_with("## ") {
+                break;
+            }
+            if skip_child_blocks && line.starts_with("### ") {
+                // Skip this child header's entire body — it doesn't belong to the parent
+                // section's own `items` list (mirrors parse_body's recursive child call).
+                i += 1;
+                while i < lines.len() && !lines[i].starts_with("### ") && !lines[i].starts_with("## ") {
+                    i += 1;
+                }
+                continue;
+            }
+            if !skip_child_blocks && line.starts_with("### ") {
+                break;
+            }
+            if !line.trim().is_empty() {
+                if count == item_idx {
+                    return Some(i);
+                }
+                count += 1;
+            }
+            i += 1;
+        }
+        None
+    }
+
     pub(crate) fn open_project_detail(&mut self, project: raios_core::entities::EntityProject) {
         self.projects.memory_scroll = 0;
         self.projects.panel_focus = false;
@@ -477,5 +611,24 @@ impl App {
             });
         }
     }
+}
+
+/// Returns the leading list-marker slice of `line` (`"- "`, `"* "`, or a numbered `"N. "`,
+/// including any leading indentation), or `""` if the line has no marker. Mirrors
+/// `raios_runtime::constitution::strip_list_marker`'s own recognition rules (that function
+/// isn't `pub`, so its logic is duplicated here) so a replaced item line can keep its
+/// original bullet style instead of silently losing it.
+fn list_marker_prefix(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    let indent_len = line.len() - trimmed.len();
+    if trimmed.starts_with("* ") || trimmed.starts_with("- ") {
+        return &line[..indent_len + 2];
+    }
+    if let Some(dot) = trimmed.find(". ") {
+        if !trimmed[..dot].is_empty() && trimmed[..dot].chars().all(|c| c.is_ascii_digit()) {
+            return &line[..indent_len + dot + 2];
+        }
+    }
+    ""
 }
 

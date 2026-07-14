@@ -173,6 +173,13 @@ impl App {
                 self.ext.cmd_cursor = 0;
                 self.ext.cfg_cursor = 0;
             }
+            // Constitution item-editing Esc cancels the inline edit/insert first —
+            // must precede the generic "back out of panel" Esc arm below, same
+            // precedence pattern as the Extensions ext.editing Esc arm above.
+            KeyCode::Esc if self.ui.menu_cursor == 1 && self.constitution.item_editing => {
+                self.constitution.item_editing = false;
+                self.constitution.item_input.clear();
+            }
             // Esc always backs out of a focused right panel to the menu — universal
             // "go back" regardless of which panel (Extensions, Tasks, files, ...).
             KeyCode::Esc if self.ui.right_panel_focus => {
@@ -220,6 +227,39 @@ impl App {
                     && !self.constitution.sections.is_empty() =>
             {
                 self.jump_to_constitution_raw_edit();
+            }
+            KeyCode::Char('i')
+                if self.ui.menu_cursor == 1
+                    && self.ui.right_panel_focus
+                    && !self.constitution.item_editing
+                    && !self.constitution.creator.active =>
+            {
+                self.begin_item_edit();
+            }
+            KeyCode::Char('n')
+                if self.ui.menu_cursor == 1
+                    && self.ui.right_panel_focus
+                    && !self.constitution.item_editing
+                    && !self.constitution.creator.active =>
+            {
+                self.begin_item_insert();
+            }
+            KeyCode::Char('d')
+                if self.ui.menu_cursor == 1
+                    && self.ui.right_panel_focus
+                    && !self.constitution.item_editing
+                    && !self.constitution.creator.active =>
+            {
+                self.delete_item_at_cursor();
+            }
+            KeyCode::Enter if self.ui.menu_cursor == 1 && self.constitution.item_editing => {
+                self.commit_item_edit();
+            }
+            KeyCode::Char(c) if self.ui.menu_cursor == 1 && self.constitution.item_editing => {
+                self.constitution.item_input.push(c);
+            }
+            KeyCode::Backspace if self.ui.menu_cursor == 1 && self.constitution.item_editing => {
+                self.constitution.item_input.pop();
             }
             // ── End Constitution ──────────────────────────────────────────────
             KeyCode::Char('/') | KeyCode::Tab => {
