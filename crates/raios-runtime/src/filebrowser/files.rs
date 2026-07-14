@@ -145,3 +145,114 @@ pub fn find_file_by_name(query: &str, master_md: &Path) -> Option<FileEntry> {
     }
     None
 }
+
+/// Writes `new_content` to `path`, first backing up any existing content to
+/// `<path>.bak.<unix_timestamp>` and pruning backups beyond the 5 most recent.
+/// Used exclusively for constitution files (global + per-project) so a bad
+/// edit to the single file every agent reads is always recoverable.
+pub fn save_constitution_file(path: &Path, new_content: &str) -> std::io::Result<()> {
+    if path.exists() {
+        let existing = fs::read_to_string(path).unwrap_or_default();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let backup_path = PathBuf::from(format!("{}.bak.{}", path.display(), ts));
+        fs::write(&backup_path, existing)?;
+        prune_old_backups(path)?;
+    }
+    fs::write(path, new_content)
+}
+
+fn prune_old_backups(path: &Path) -> std::io::Result<()> {
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let prefix = format!("{}.bak.", file_name);
+
+    let mut backups: Vec<(u64, PathBuf)> = fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let ts_str = name.strip_prefix(&prefix)?;
+            let ts: u64 = ts_str.parse().ok()?;
+            Some((ts, e.path()))
+        })
+        .collect();
+
+    backups.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
+    for (_, old_path) in backups.into_iter().skip(5) {
+        let _ = fs::remove_file(old_path);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod constitution_save_tests {
+    use super::*;
+
+    fn temp_file(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "raios-save-test-{}-{}",
+            std::process::id(),
+            name
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("CONSTITUTION.md")
+    }
+
+    #[test]
+    fn first_save_with_no_prior_file_creates_no_backup() {
+        let path = temp_file("first");
+        save_constitution_file(&path, "## 1. Hello\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "## 1. Hello\n");
+        let dir = path.parent().unwrap();
+        let backups: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".bak."))
+            .collect();
+        assert!(backups.is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn second_save_backs_up_the_previous_content() {
+        let path = temp_file("second");
+        save_constitution_file(&path, "version one\n").unwrap();
+        save_constitution_file(&path, "version two\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "version two\n");
+
+        let dir = path.parent().unwrap();
+        let backups: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".bak."))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        let backup_content = std::fs::read_to_string(backups[0].path()).unwrap();
+        assert_eq!(backup_content, "version one\n");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn keeps_only_five_most_recent_backups() {
+        let path = temp_file("prune");
+        for i in 0..7 {
+            save_constitution_file(&path, &format!("version {}\n", i)).unwrap();
+            // Force distinct backup timestamps even on fast filesystems/CI.
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+        }
+        let dir = path.parent().unwrap();
+        let backups: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".bak."))
+            .collect();
+        assert_eq!(backups.len(), 5, "expected exactly 5 backups, found {}", backups.len());
+        std::fs::remove_dir_all(dir).ok();
+    }
+}

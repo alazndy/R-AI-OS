@@ -5,7 +5,8 @@ mod git;
 pub use agents::{discover_all_agent_rules, AgentRuleGroup};
 pub use files::{
     discover_memory_files, find_file_by_name, get_agent_config_files, get_master_rule_files,
-    get_mempalace_files, get_policy_files, load_file_content, save_file_content,
+    get_mempalace_files, get_policy_files, load_file_content, save_constitution_file,
+    save_file_content,
 };
 pub use git::{
     get_git_log, git_commit, git_get_remote_url, git_is_dirty, git_push, load_recent_projects,
