@@ -27,6 +27,7 @@ pub mod factory;
 pub mod sync;
 pub mod server;
 pub mod filebrowser;
+pub mod constitution;
 pub mod system_scan;
 pub mod trace_recall;
 pub mod cli {
