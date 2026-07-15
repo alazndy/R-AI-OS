@@ -36,7 +36,19 @@ impl App {
     }
 
     pub(crate) fn is_constitution_path(&self, path: &Path) -> bool {
-        self.constitution.tabs.iter().any(|t| t.path() == path)
+        // Checked against stable predicates (the configured global path, plus the
+        // well-known per-project filenames) rather than `self.constitution.tabs` —
+        // that list is only populated lazily on first visit to the Constitution
+        // menu item, so a constitution file opened before then (e.g. via the
+        // command palette) would otherwise silently bypass the backup+diff-confirm
+        // save path.
+        if path == self.config.master_md_path {
+            return true;
+        }
+        matches!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("CLAUDE.md") | Some("AGENTS.md") | Some("GEMINI.md")
+        )
     }
 
     pub(crate) fn jump_to_constitution_raw_edit(&mut self) {
@@ -157,8 +169,16 @@ impl App {
     pub(crate) fn creator_confirm_save(&mut self) {
         let creator = self.constitution.creator.clone();
         if creator.target_is_global {
-            let notes = format!("## Project-Specific Rules\n{}\n", creator.notes_input);
-            self.request_constitution_save(self.config.master_md_path.clone(), notes);
+            // Append-only: the global constitution is the single file every agent
+            // reads, so the creator must never replace its existing content —
+            // only add a new section to the end of what's already there.
+            let existing = load_file_content(&self.config.master_md_path);
+            let appended = format!(
+                "{}\n\n## Project-Specific Rules\n{}\n",
+                existing.trim_end(),
+                creator.notes_input
+            );
+            self.request_constitution_save(self.config.master_md_path.clone(), appended);
         } else if let Some(ref proj) = self.projects.active.clone() {
             let path = proj.local_path.join("CLAUDE.md");
             let content = format!(

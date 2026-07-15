@@ -314,7 +314,30 @@ impl App {
                     && self.constitution.creator.step
                         == raios_surface_tui::app::state::CreatorStep::Preview =>
             {
+                // Global writes get an extra explicit y/N gate below — the design's
+                // "single file every agent reads" deserves more than a plain Enter.
+                if self.constitution.creator.target_is_global {
+                    self.constitution.creator.step =
+                        raios_surface_tui::app::state::CreatorStep::ConfirmGlobal;
+                } else {
+                    self.creator_confirm_save();
+                }
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y')
+                if self.ui.menu_cursor == 1
+                    && self.constitution.creator.active
+                    && self.constitution.creator.step
+                        == raios_surface_tui::app::state::CreatorStep::ConfirmGlobal =>
+            {
                 self.creator_confirm_save();
+            }
+            KeyCode::Char('n') | KeyCode::Char('N')
+                if self.ui.menu_cursor == 1
+                    && self.constitution.creator.active
+                    && self.constitution.creator.step
+                        == raios_surface_tui::app::state::CreatorStep::ConfirmGlobal =>
+            {
+                self.constitution.creator.step = raios_surface_tui::app::state::CreatorStep::Preview;
             }
             KeyCode::Enter if self.ui.menu_cursor == 1 && self.constitution.item_editing => {
                 self.commit_item_edit();

@@ -103,26 +103,41 @@ fn render_creator(frame: &mut Frame, area: Rect, app: &App) {
     ];
     match c.step {
         CreatorStep::ChooseTarget => {
-            lines.push(Line::from(" [p] Project-specific file   [g] Global (from scratch, requires confirm)"));
+            lines.push(Line::from(" [p] Project-specific file   [g] Append to Global constitution (requires confirm)"));
         }
         CreatorStep::Notes => {
-            lines.push(Line::from(" Project-specific notes (appended as \"## Project-Specific Rules\"):"));
+            lines.push(Line::from(" Notes to append (as a new \"## Project-Specific Rules\" section):"));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(format!(" {}█", c.notes_input), Style::new().fg(GREEN))));
         }
         CreatorStep::Preview => {
-            lines.push(Line::from(" Preview — [Enter] to save, [Esc] to cancel:"));
+            lines.push(Line::from(if c.target_is_global {
+                " Preview — [Enter] to continue to confirmation, [Esc] to cancel:"
+            } else {
+                " Preview — [Enter] to save, [Esc] to cancel:"
+            }));
             lines.push(Line::from(""));
             if c.target_is_global {
-                lines.push(Line::from(Span::styled(" ⚠ Overwriting the GLOBAL constitution file.", Style::new().fg(AMBER).bold())));
+                lines.push(Line::from(Span::styled(
+                    " Appended to the end of the existing global constitution (nothing is removed):",
+                    Style::new().fg(AMBER),
+                )));
             } else {
                 lines.push(Line::from("@/home/alaz/AGENT_CONSTITUTION.md"));
-                lines.push(Line::from(""));
-                lines.push(Line::from("## Project-Specific Rules"));
-                for line in c.notes_input.lines() {
-                    lines.push(Line::from(line.to_string()));
-                }
             }
+            lines.push(Line::from(""));
+            lines.push(Line::from("## Project-Specific Rules"));
+            for line in c.notes_input.lines() {
+                lines.push(Line::from(line.to_string()));
+            }
+        }
+        CreatorStep::ConfirmGlobal => {
+            lines.push(Line::from(Span::styled(
+                " ⚠ This appends a new section to AGENT_CONSTITUTION.md — the single file every agent reads.",
+                Style::new().fg(AMBER).bold(),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(" [y] Confirm and continue to save   [n / Esc] Back / cancel"));
         }
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), area);

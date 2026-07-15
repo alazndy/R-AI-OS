@@ -344,6 +344,9 @@ pub enum CreatorStep {
     ChooseTarget,
     Notes,
     Preview,
+    /// Extra are-you-sure gate before writing to the global constitution —
+    /// the single file every agent reads. Only reached when target_is_global.
+    ConfirmGlobal,
 }
 
 #[derive(Debug, Default, Clone)]
