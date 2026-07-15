@@ -55,6 +55,9 @@ fn mem_history_returns_revision_nodes_newest_first() {
             body: "v1",
             session_id: None,
             layer: 1,
+            provenance: None,
+            confidence: None,
+            last_used_at: None,
         },
     )
     .unwrap();
@@ -84,6 +87,9 @@ fn mem_upsert_replaces_body_and_archives_revision() {
         body,
         session_id: None,
         layer: 1,
+        provenance: None,
+        confidence: None,
+        last_used_at: None,
     };
     mem_upsert(&conn, up("first version")).unwrap();
     mem_upsert(&conn, up("second version")).unwrap();
@@ -112,6 +118,9 @@ fn mem_upsert_identical_or_empty_body_creates_no_revision() {
         body,
         session_id: None,
         layer: 1,
+        provenance: None,
+        confidence: None,
+        last_used_at: None,
     };
     mem_upsert(&conn, up("same")).unwrap();
     mem_upsert(&conn, up("same")).unwrap(); // identical → no revision
@@ -167,6 +176,9 @@ fn mem_upsert_rolls_back_revision_archiving_when_final_insert_fails() {
             body: "first version",
             session_id: None,
             layer: 1,
+            provenance: None,
+            confidence: None,
+            last_used_at: None,
         },
     )
     .unwrap();
@@ -189,6 +201,9 @@ fn mem_upsert_rolls_back_revision_archiving_when_final_insert_fails() {
             body: "second version",
             session_id: None,
             layer: 1,
+            provenance: None,
+            confidence: None,
+            last_used_at: None,
         },
     );
     assert!(result.is_err(), "invalid item_type must fail the final insert/update");
@@ -218,6 +233,7 @@ fn mem_export_groups_by_layer_persona_first() {
         mem_upsert(&conn, MemUpsert {
             project_key: key, item_type: t, slug, title: slug,
             description: "d", body: "b", session_id: None, layer,
+            provenance: None, confidence: None, last_used_at: None,
         }).unwrap();
     }
     let dir = std::env::temp_dir().join(format!("raios-mem-test-{}", std::process::id()));
@@ -234,3 +250,46 @@ fn mem_export_groups_by_layer_persona_first() {
     assert!(p3 < p2 && p2 < p1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn mem_provenance_and_decay() {
+    let conn = in_memory();
+    let key = "-home-alaz-p";
+
+    mem_upsert(
+        &conn,
+        MemUpsert {
+            project_key: key,
+            item_type: "project",
+            slug: "decay-test",
+            title: "Decay Test",
+            description: "testing lazy confidence decay",
+            body: "content",
+            session_id: None,
+            layer: 1,
+            provenance: Some(Provenance::UserStated),
+            confidence: Some(1.0),
+            last_used_at: Some("2026-06-01 12:00:00"),
+        },
+    )
+    .unwrap();
+
+    let item = mem_get(&conn, key, "decay-test").unwrap().unwrap();
+    assert_eq!(item.provenance, Provenance::UserStated);
+    assert_eq!(item.confidence, 1.0);
+
+    // Calculate effective confidence at a date 30 days after last_used_at (30-day half-life for project items)
+    let at_30_days = chrono::NaiveDateTime::parse_from_str("2026-07-01 12:00:00", "%Y-%m-%d %H:%M:%S")
+        .unwrap()
+        .and_local_timezone(chrono::Local)
+        .unwrap();
+    let eff = item.effective_confidence_at(at_30_days);
+    // 1 half-life = 0.5
+    assert!((eff - 0.5).abs() < 0.01, "expected ~0.5 effective confidence after 1 half-life, got {}", eff);
+
+    // Test mem_on_used
+    mem_on_used(&conn, key, "decay-test").unwrap();
+    let updated_item = mem_get(&conn, key, "decay-test").unwrap().unwrap();
+    assert!(updated_item.last_used_at.as_deref().unwrap() > "2026-06-01 12:00:00");
+}
+

@@ -1,5 +1,45 @@
 use rusqlite::{params, Connection, OptionalExtension, Result};
+
 // ─── Memory Items (mem_items) ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Provenance {
+    UserStated,
+    Observed,
+    Inferred,
+    Corrected,
+}
+
+impl Provenance {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Provenance::UserStated => "user_stated",
+            Provenance::Observed => "observed",
+            Provenance::Inferred => "inferred",
+            Provenance::Corrected => "corrected",
+        }
+    }
+}
+
+impl std::fmt::Display for Provenance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for Provenance {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(match s.to_ascii_lowercase().as_str() {
+            "user_stated" | "userstated" | "user" => Provenance::UserStated,
+            "inferred" => Provenance::Inferred,
+            "corrected" => Provenance::Corrected,
+            _ => Provenance::Observed,
+        })
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemItemRow {
@@ -14,6 +54,58 @@ pub struct MemItemRow {
     pub updated_at: String,
     pub session_id: Option<String>,
     pub layer: i64,
+    pub provenance: Provenance,
+    pub confidence: f64,
+    pub last_used_at: Option<String>,
+}
+
+impl MemItemRow {
+    /// Calculate lazy confidence decay based on time elapsed since `last_used_at` (or fallback `updated_at`/`created_at`).
+    /// Half-life depends on `item_type`:
+    /// - feedback: 90 days
+    /// - project: 30 days
+    /// - user: 120 days
+    /// - reference: 60 days
+    /// - default: 30 days
+    pub fn effective_confidence_at(&self, at: chrono::DateTime<chrono::Local>) -> f64 {
+        let reference_str = self
+            .last_used_at
+            .as_deref()
+            .unwrap_or(&self.updated_at);
+
+        let parsed_time = chrono::NaiveDateTime::parse_from_str(reference_str, "%Y-%m-%d %H:%M:%S")
+            .or_else(|_| chrono::NaiveDateTime::parse_from_str(reference_str, "%Y-%m-%dT%H:%M:%SZ"))
+            .or_else(|_| chrono::NaiveDateTime::parse_from_str(&self.created_at, "%Y-%m-%d %H:%M:%S"))
+            .or_else(|_| chrono::NaiveDateTime::parse_from_str(&self.created_at, "%Y-%m-%dT%H:%M:%SZ"))
+            .ok();
+
+        let Some(ref_dt) = parsed_time else {
+            return self.confidence;
+        };
+
+        let ref_local = ref_dt.and_local_timezone(chrono::Local).latest().unwrap_or(at);
+        let elapsed_secs = at.timestamp() - ref_local.timestamp();
+
+        if elapsed_secs <= 0 {
+            return self.confidence;
+        }
+
+        let half_life_days: f64 = match self.item_type.as_str() {
+            "feedback" => 90.0,
+            "user" => 120.0,
+            "reference" => 60.0,
+            "project" => 30.0,
+            _ => 30.0,
+        };
+
+        let elapsed_days = elapsed_secs as f64 / 86400.0;
+        let decayed = self.confidence * 0.5f64.powf(elapsed_days / half_life_days);
+        decayed.clamp(0.0, 1.0)
+    }
+
+    pub fn effective_confidence(&self) -> f64 {
+        self.effective_confidence_at(chrono::Local::now())
+    }
 }
 
 pub struct MemUpsert<'a> {
@@ -25,6 +117,9 @@ pub struct MemUpsert<'a> {
     pub body: &'a str,
     pub session_id: Option<&'a str>,
     pub layer: i64,
+    pub provenance: Option<Provenance>,
+    pub confidence: Option<f64>,
+    pub last_used_at: Option<&'a str>,
 }
 
 /// Archive-then-replace a mem_item's body. Runs the revision-archiving check
@@ -48,7 +143,13 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
         body,
         session_id,
         layer,
+        provenance,
+        confidence,
+        last_used_at,
     } = item;
+
+    let provenance_str = provenance.unwrap_or(Provenance::Observed).as_str();
+    let conf_val = confidence.unwrap_or(1.0);
 
     let tx = conn.unchecked_transaction()?;
 
@@ -73,10 +174,12 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
     let now = chrono::Local::now()
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();
+    let last_used_str = last_used_at.unwrap_or(&now);
+
     tx.execute(
         "INSERT INTO mem_items
-             (id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?9,?10)
+             (id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer, provenance, confidence, last_used_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?9,?10,?11,?12,?13)
          ON CONFLICT(project_key, slug) DO UPDATE SET
              item_type   = excluded.item_type,
              title       = excluded.title,
@@ -87,8 +190,25 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
                            END,
              updated_at  = excluded.updated_at,
              session_id  = excluded.session_id,
-             layer       = excluded.layer",
-        params![id, project_key, item_type, slug, title, description, body, now, session_id, layer],
+             layer       = excluded.layer,
+             provenance  = excluded.provenance,
+             confidence  = excluded.confidence,
+             last_used_at = excluded.last_used_at",
+        params![
+            id,
+            project_key,
+            item_type,
+            slug,
+            title,
+            description,
+            body,
+            now,
+            session_id,
+            layer,
+            provenance_str,
+            conf_val,
+            last_used_str
+        ],
     )?;
 
     tx.commit()?;
@@ -97,11 +217,13 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
 
 pub fn mem_list(conn: &Connection, project_key: &str) -> Result<Vec<MemItemRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer
+        "SELECT id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer, provenance, confidence, last_used_at
          FROM mem_items WHERE project_key = ?1 ORDER BY layer DESC, item_type, slug",
     )?;
     let rows = stmt
         .query_map(params![project_key], |row| {
+            let prov_str: String = row.get(11)?;
+            let provenance = prov_str.parse().unwrap_or(Provenance::Observed);
             Ok(MemItemRow {
                 id: row.get(0)?,
                 project_key: row.get(1)?,
@@ -114,6 +236,9 @@ pub fn mem_list(conn: &Connection, project_key: &str) -> Result<Vec<MemItemRow>>
                 updated_at: row.get(8)?,
                 session_id: row.get(9)?,
                 layer: row.get(10)?,
+                provenance,
+                confidence: row.get(12)?,
+                last_used_at: row.get(13)?,
             })
         })?
         .flatten()
@@ -123,10 +248,12 @@ pub fn mem_list(conn: &Connection, project_key: &str) -> Result<Vec<MemItemRow>>
 
 pub fn mem_get(conn: &Connection, project_key: &str, slug: &str) -> Result<Option<MemItemRow>> {
     conn.query_row(
-        "SELECT id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer
+        "SELECT id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer, provenance, confidence, last_used_at
          FROM mem_items WHERE project_key = ?1 AND slug = ?2",
         params![project_key, slug],
         |row| {
+            let prov_str: String = row.get(11)?;
+            let provenance = prov_str.parse().unwrap_or(Provenance::Observed);
             Ok(MemItemRow {
                 id: row.get(0)?,
                 project_key: row.get(1)?,
@@ -139,10 +266,29 @@ pub fn mem_get(conn: &Connection, project_key: &str, slug: &str) -> Result<Optio
                 updated_at: row.get(8)?,
                 session_id: row.get(9)?,
                 layer: row.get(10)?,
+                provenance,
+                confidence: row.get(12)?,
+                last_used_at: row.get(13)?,
             })
         },
     )
-    .optional()}
+    .optional()
+}
+
+/// Mark a mem_item as used: updates `last_used_at` to current time and boosts `confidence` towards 1.0.
+pub fn mem_on_used(conn: &Connection, project_key: &str, slug: &str) -> Result<bool> {
+    let now = chrono::Local::now()
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    let n = conn.execute(
+        "UPDATE mem_items
+         SET last_used_at = ?1,
+             confidence = MIN(1.0, confidence + 0.1)
+         WHERE project_key = ?2 AND slug = ?3",
+        params![now, project_key, slug],
+    )?;
+    Ok(n > 0)
+}
 
 pub fn mem_delete(conn: &Connection, project_key: &str, slug: &str) -> Result<bool> {
     let n = conn.execute(

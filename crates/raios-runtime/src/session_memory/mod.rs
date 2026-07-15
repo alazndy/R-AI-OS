@@ -220,16 +220,19 @@ pub fn auto_sync_agent_memory(
         let title = first_n_words(&fact.text, 8);
         let ok = raios_core::db::mem_upsert(
             &conn,
-            raios_core::db::MemUpsert {
-                project_key: &project_key,
-                item_type: fact.item_type,
-                slug: &slug,
-                title: &title,
-                description: &fact.text,
-                body: &fact.text,
-                session_id: None,
-                layer: 1,
-            },
+                raios_core::db::MemUpsert {
+                    project_key: &project_key,
+                    item_type: fact.item_type,
+                    slug: &slug,
+                    title: &title,
+                    description: &fact.text,
+                    body: &fact.text,
+                    session_id: None,
+                    layer: 1,
+                    provenance: Some(raios_core::db::Provenance::Observed),
+                    confidence: None,
+                    last_used_at: None,
+                },
         )
         .is_ok();
 
@@ -327,6 +330,9 @@ mod tests {
                         body: &fact.text,
                         session_id: None,
                         layer: 1,
+                        provenance: None,
+                        confidence: None,
+                        last_used_at: None,
                     },
                 )
                 .unwrap();

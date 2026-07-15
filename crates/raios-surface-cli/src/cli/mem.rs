@@ -52,12 +52,13 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
             let key = project_key_for(&project);
             match raios_core::db::mem_get(&conn, &key, &slug) {
                 Ok(Some(item)) => {
+                    let _ = raios_core::db::mem_on_used(&conn, &key, &slug);
                     if json {
                         println!("{}", serde_json::to_string_pretty(&item).unwrap_or_default());
                     } else {
-                        println!("\n  [{}/{}]\n  Type: {}\n  Description: {}\n\n{}\n",
+                        println!("\n  [{}/{}]\n  Type: {}\n  Description: {}\n  Provenance: {} | Confidence: {:.2} (effective: {:.2})\n\n{}\n",
                             item.project_key, item.slug, item.item_type,
-                            item.description, item.body);
+                            item.description, item.provenance, item.confidence, item.effective_confidence(), item.body);
                     }
                 }
                 Ok(None) => eprintln!("  Not found: {}", slug),
@@ -92,6 +93,9 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
                 body: &body,
                 session_id: None,
                 layer: 1,
+                provenance: None,
+                confidence: None,
+                last_used_at: None,
             }) {
                 Ok(()) => {
                     if json {

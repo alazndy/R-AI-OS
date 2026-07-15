@@ -33,6 +33,11 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "ALTER TABLE mem_items ADD COLUMN layer INTEGER NOT NULL DEFAULT 2",
     );
+    let _ = conn.execute_batch(
+        "ALTER TABLE mem_items ADD COLUMN provenance TEXT NOT NULL DEFAULT 'observed';
+         ALTER TABLE mem_items ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0;
+         ALTER TABLE mem_items ADD COLUMN last_used_at TEXT;",
+    );
 
     conn.execute_batch(
         "
@@ -433,6 +438,9 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             updated_at  TEXT NOT NULL DEFAULT (datetime('now','utc')),
             session_id  TEXT,
             layer       INTEGER NOT NULL DEFAULT 2,
+            provenance  TEXT NOT NULL DEFAULT 'observed',
+            confidence  REAL NOT NULL DEFAULT 1.0,
+            last_used_at TEXT,
             UNIQUE(project_key, slug)
         );
         CREATE INDEX IF NOT EXISTS idx_mem_items_project ON mem_items(project_key);

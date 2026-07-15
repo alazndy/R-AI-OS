@@ -161,7 +161,7 @@ pub fn save_constitution_file(path: &Path, new_content: &str) -> std::io::Result
         fs::write(&backup_path, existing)?;
         prune_old_backups(path)?;
     }
-    save_file_content(path, new_content)
+    fs::write(path, new_content)
 }
 
 fn prune_old_backups(path: &Path) -> std::io::Result<()> {

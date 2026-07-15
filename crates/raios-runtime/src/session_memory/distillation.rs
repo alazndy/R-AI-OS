@@ -38,6 +38,9 @@ pub(super) fn upsert_scene_block(
             body: &body,
             session_id: None,
             layer: 2,
+            provenance: Some(raios_core::db::Provenance::Inferred),
+            confidence: None,
+            last_used_at: None,
         },
     )
     .ok()?;
@@ -102,6 +105,9 @@ pub fn rebuild_persona(conn: &rusqlite::Connection, project_key: &str) -> Option
             body: body.trim_end(),
             session_id: None,
             layer: 3,
+            provenance: Some(raios_core::db::Provenance::Inferred),
+            confidence: None,
+            last_used_at: None,
         },
     )
     .ok()?;
@@ -132,7 +138,7 @@ mod tests {
             let slug = fact_slug(t, txt);
             raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
                 project_key: key, item_type: t, slug: &slug, title: txt,
-                description: txt, body: txt, session_id: None, layer: 1,
+                description: txt, body: txt, session_id: None, layer: 1, provenance: None, confidence: None, last_used_at: None,
             }).unwrap();
         }
         let slugs: Vec<(String, &'static str, String)> = vec![
@@ -164,7 +170,7 @@ mod tests {
         let slug1 = fact_slug(t1, txt1);
         raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
             project_key: key, item_type: t1, slug: &slug1, title: txt1,
-            description: txt1, body: txt1, session_id: None, layer: 1,
+            description: txt1, body: txt1, session_id: None, layer: 1, provenance: None, confidence: None, last_used_at: None,
         }).unwrap();
         let fact1_tuple: (String, &'static str, String) = (slug1.clone(), t1, txt1.into());
 
@@ -175,7 +181,7 @@ mod tests {
         let slug2 = fact_slug(t2, txt2);
         raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
             project_key: key, item_type: t2, slug: &slug2, title: txt2,
-            description: txt2, body: txt2, session_id: None, layer: 1,
+            description: txt2, body: txt2, session_id: None, layer: 1, provenance: None, confidence: None, last_used_at: None,
         }).unwrap();
         let fact2_tuple: (String, &'static str, String) = (slug2.clone(), t2, txt2.into());
 
@@ -230,7 +236,7 @@ mod tests {
             let slug = fact_slug(t, txt);
             raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
                 project_key: key, item_type: t, slug: &slug, title: txt,
-                description: txt, body: txt, session_id: None, layer: 1,
+                description: txt, body: txt, session_id: None, layer: 1, provenance: None, confidence: None, last_used_at: None,
             }).unwrap();
         }
 
