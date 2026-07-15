@@ -338,17 +338,12 @@ pub fn flatten_sections(
     rows
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CreatorStep {
+    #[default]
     ChooseTarget,
     Notes,
     Preview,
-}
-
-impl Default for CreatorStep {
-    fn default() -> Self {
-        CreatorStep::ChooseTarget
-    }
 }
 
 #[derive(Debug, Default, Clone)]
