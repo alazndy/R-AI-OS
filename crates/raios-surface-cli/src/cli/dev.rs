@@ -1,5 +1,27 @@
 use std::path::Path;
 
+pub(super) fn cmd_doctor(agent: String, tier: Option<String>, json: bool) {
+    let requested_tier = tier.as_deref().and_then(|t| t.parse::<raios_runtime::system_scan::DoctorTier>().ok());
+    let res = raios_runtime::system_scan::run_doctor_check(&agent, requested_tier);
+
+    if let Ok(conn) = raios_core::db::open_db() {
+        let _ = raios_runtime::system_scan::save_doctor_result(&conn, &res);
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        return;
+    }
+
+    println!("Agent Doctor Check: {}", res.agent);
+    println!("  Tier Reached : {:?}", res.tier_reached);
+    println!("  Checked At   : {}", res.checked_at);
+    println!("  Notes:");
+    for note in &res.notes {
+        println!("    • {}", note);
+    }
+}
+
 pub(super) fn cmd_disk(project: Option<String>, dev_ops: &Path, json: bool) {
     use raios_core::core::disk;
     let reports = if project.is_none() {

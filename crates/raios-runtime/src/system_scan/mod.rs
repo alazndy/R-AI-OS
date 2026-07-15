@@ -2,8 +2,11 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 mod db_budget;
+pub mod doctor;
 mod tools;
 mod usage;
+
+pub use doctor::{get_doctor_result, run_doctor_check, save_doctor_result, DoctorResult, DoctorTier};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemAiTool {

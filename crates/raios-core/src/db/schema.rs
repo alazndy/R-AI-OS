@@ -38,6 +38,9 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
          ALTER TABLE mem_items ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0;
          ALTER TABLE mem_items ADD COLUMN last_used_at TEXT;",
     );
+    let _ = conn.execute_batch(
+        "ALTER TABLE cp_task_graph_nodes ADD COLUMN node_kind TEXT NOT NULL DEFAULT 'work'",
+    );
 
     conn.execute_batch(
         "
@@ -295,6 +298,7 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             task_id TEXT NOT NULL REFERENCES cp_tasks(id) ON DELETE CASCADE,
             agent_run_id TEXT NOT NULL REFERENCES cp_agent_runs(id) ON DELETE CASCADE,
             shell_cmd TEXT NOT NULL,
+            node_kind TEXT NOT NULL DEFAULT 'work',
             created_at TEXT NOT NULL,
             PRIMARY KEY (graph_id, node_id),
             UNIQUE (graph_id, task_id)
@@ -414,6 +418,13 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
 
     conn.execute_batch(
         "
+        CREATE TABLE IF NOT EXISTS agent_doctor_runs (
+            agent        TEXT PRIMARY KEY,
+            tier_reached TEXT NOT NULL,
+            notes_json   TEXT NOT NULL DEFAULT '[]',
+            checked_at   TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS cp_logs (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             ts          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),

@@ -251,6 +251,40 @@ fn compact_rule_part(value: &str, max_chars: usize) -> String {
     out
 }
 
+// ─── Approval streak policy promotion ─────────────────────────────────────────
+
+static APPROVAL_STREAKS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<(String, String), usize>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Record an approval or denial decision for a tool call in a project.
+/// Returns true if N consecutive approvals were reached and a policy promotion candidate was inserted.
+pub fn record_approval_decision(
+    store: &CandidateStore,
+    tool_name: &str,
+    project: &str,
+    approved: bool,
+    threshold: usize,
+) -> bool {
+    let key = (tool_name.to_string(), project.to_string());
+    let mut streaks = APPROVAL_STREAKS.lock().unwrap_or_else(|e| e.into_inner());
+
+    if !approved {
+        streaks.insert(key, 0);
+        return false;
+    }
+
+    let count = streaks.entry(key).or_insert(0);
+    *count += 1;
+
+    if *count >= threshold {
+        let rule = format!("[policy] allow tool {} in {}", tool_name, project);
+        store.insert(&rule, tool_name, 0.85);
+        return true;
+    }
+
+    false
+}
+
 // ─── Background worker ────────────────────────────────────────────────────────
 
 /// Subscribe to the broadcast channel and process job events indefinitely.
@@ -393,5 +427,45 @@ mod tests {
         assert!(candidates[0].contains("token fallback"));
         store.promote(&candidates[0]);
         assert!(store.list_pending(10).is_empty());
+    }
+
+    #[tokio::test]
+    async fn approval_streak_promotes_policy_rule_after_n_consecutive_approvals() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("workspace.db");
+        let store = CandidateStore::new(&db_path);
+
+        let tool = "custom_exec";
+        let project = "test_project";
+
+        // 4 approvals (threshold 5) -> no candidate yet
+        for _ in 0..4 {
+            let res = record_approval_decision(&store, tool, project, true, 5);
+            assert!(!res);
+        }
+        assert!(store.list_pending(10).is_empty());
+
+        // 5th approval -> emits candidate
+        let res = record_approval_decision(&store, tool, project, true, 5);
+        assert!(res);
+
+        let candidates = store.list_pending(10);
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].contains("[policy] allow tool custom_exec in test_project"));
+
+        // Interleaved denial resets streak
+        let tool2 = "reset_tool";
+        for _ in 0..3 {
+            record_approval_decision(&store, tool2, project, true, 5);
+        }
+        // Denial
+        record_approval_decision(&store, tool2, project, false, 5);
+
+        // 2 more approvals (total 2 after reset) -> still 0 for tool2
+        for _ in 0..2 {
+            record_approval_decision(&store, tool2, project, true, 5);
+        }
+        let candidates_after = store.list_pending(10);
+        assert_eq!(candidates_after.len(), 1, "existing candidate preserved, tool2 not added");
     }
 }

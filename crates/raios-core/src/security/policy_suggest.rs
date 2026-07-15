@@ -155,6 +155,7 @@ mod tests {
             egress: None,
             rate_limits: None,
             quarantine: None,
+            hooks: None,
         }
     }
 

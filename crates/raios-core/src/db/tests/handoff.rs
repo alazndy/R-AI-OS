@@ -266,3 +266,80 @@ fn legacy_free_text_handoff_has_no_structured_report() {
         "legacy free-text handoff must not fabricate a structured report"
     );
 }
+
+#[test]
+fn verify_gate_blocks_handoff_success_until_completed() {
+    let conn = in_memory();
+    let _project_id = upsert_project(
+        &conn, "RAIOS", "kernel", "/repo", None, "active", None, None, None, None,
+    )
+    .unwrap();
+
+    // Create a task graph with a verify gate node
+    let graph_id = "g-1";
+    conn.execute(
+        "INSERT INTO task_graphs (id, goal, agent, status) VALUES (?1, 'goal', 'agent', 'pending')",
+        params![graph_id],
+    )
+    .unwrap();
+
+    let node_ids = insert_verify_gate_node(
+        &conn,
+        graph_id,
+        "v1",
+        "run cargo test",
+        "cargo test",
+        "claude_kaira",
+        true,
+    )
+    .unwrap();
+
+    // Handoff with status = SUCCESS while verify_gate is unpassed -> expect error
+    let res = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo",
+            from_agent: "claude_kaira",
+            to_agent: "opencode_kaira",
+            status: "SUCCESS",
+            msg: "work complete",
+            diff_stat: None,
+            report: None,
+        },
+    );
+    assert!(res.is_err(), "handoff SUCCESS must be blocked by unpassed verify gate");
+    assert!(res.unwrap_err().to_string().contains("verify_gate node 'v1' has not passed yet"));
+
+    // Handoff with status = BLOCKER is NOT blocked by verify gate
+    let res_blocker = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo",
+            from_agent: "claude_kaira",
+            to_agent: "opencode_kaira",
+            status: "BLOCKER",
+            msg: "need help",
+            diff_stat: None,
+            report: None,
+        },
+    );
+    assert!(res_blocker.is_ok(), "non-SUCCESS handoffs are not blocked by verify gate");
+
+    // Complete the verify_gate task
+    mark_control_task_completed(&conn, &node_ids.task_id, &node_ids.agent_run_id, "test passed").unwrap();
+
+    // Handoff SUCCESS now succeeds
+    let res_after = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo",
+            from_agent: "claude_kaira",
+            to_agent: "opencode_kaira",
+            status: "SUCCESS",
+            msg: "work complete after gate passed",
+            diff_stat: None,
+            report: None,
+        },
+    );
+    assert!(res_after.is_ok(), "handoff SUCCESS must pass once verify gate is completed");
+}

@@ -21,6 +21,16 @@ pub struct PolicyConfig {
     pub rate_limits: Option<RateLimitConfig>,
     /// Optional quarantine rules (Phase 14)
     pub quarantine: Option<QuarantineConfig>,
+    /// Optional scriptable lifecycle hooks
+    pub hooks: Option<HooksPolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HooksPolicy {
+    pub pre_tool_call: Option<String>,
+    pub run_start: Option<String>,
+    pub run_end: Option<String>,
+    pub handoff_sent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +200,34 @@ impl PolicyConfig {
                 tool_name
             )),
         }
+    }
+
+    /// Validates tool call against TOML policy action AND executes pre_tool_call hook if configured and allowed.
+    pub fn validate_tool_call_with_hook(
+        &self,
+        tool_name: &str,
+        payload: Option<super::hooks::HookPayload>,
+    ) -> Result<()> {
+        self.validate_tool_call(tool_name)?;
+
+        if let Some(h) = &self.hooks {
+            if let Some(script) = &h.pre_tool_call {
+                let default_payload = super::hooks::HookPayload {
+                    hook: "pre_tool_call".into(),
+                    tool_name: Some(tool_name.into()),
+                    args_json: None,
+                    project: None,
+                    agent: None,
+                    timestamp: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                };
+                let p = payload.as_ref().unwrap_or(&default_payload);
+                if let super::hooks::HookOutcome::Blocked { reason } = super::hooks::run_hook("pre_tool_call", script, p) {
+                    return Err(anyhow!("Hook Blocked pre_tool_call: {}", reason));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns `true` if this tool needs interactive confirmation.

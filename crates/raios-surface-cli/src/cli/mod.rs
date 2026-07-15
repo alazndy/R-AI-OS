@@ -87,6 +87,7 @@ pub fn run(cli: Cli) {
         Commands::View { name } => workspace::cmd_view(name, &cfg.master_md_path, cli.json),
         Commands::Discover => workspace::cmd_discover(&cfg.dev_ops_path, cli.json),
         Commands::Health { project } => health::cmd_health(project, &cfg.dev_ops_path, cli.json),
+        Commands::Doctor { agent, tier } => dev::cmd_doctor(agent, tier, cli.json),
         Commands::Version => println!("raios v{}", env!("CARGO_PKG_VERSION")),
         Commands::McpServer => {
             if let Err(e) = raios_surface_mcp::mcp_server::run_stdio() {

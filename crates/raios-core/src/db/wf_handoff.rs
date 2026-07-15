@@ -53,6 +53,30 @@ pub fn create_handoff_workflow(
     let artifact_id = uuid::Uuid::new_v4().to_string();
     let approval_id = uuid::Uuid::new_v4().to_string();
     let status_lc = status.to_lowercase();
+
+    if status_lc == "success" {
+        let unpassed_gate: Option<String> = conn
+            .query_row(
+                "SELECT meta.node_id
+                 FROM cp_task_graph_nodes meta
+                 JOIN cp_tasks t ON t.id = meta.task_id
+                 WHERE meta.node_kind = 'verify_gate'
+                   AND t.status != 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(gate_node) = unpassed_gate {
+            let msg = format!(
+                "Handoff SUCCESS blocked: verify_gate node '{}' has not passed yet",
+                gate_node
+            );
+            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                std::io::Error::other(msg),
+            )));
+        }
+    }
     let title = format!("Handoff → {}", to_agent);
     let description = format!(
         "Agent handoff from {} to {} (status: {}): {}",

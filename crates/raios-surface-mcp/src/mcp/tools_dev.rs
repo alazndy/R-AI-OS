@@ -255,4 +255,33 @@ impl McpServer {
             json!({ "content": [{ "type": "text", "text": text }], "ok": r.ok, "passed": r.passed, "failed": r.failed, "ignored": r.ignored, "duration_ms": r.duration_ms, "project_type": r.project_type }),
         )
     }
+
+    pub(super) fn tool_agent_doctor(&self, args: &Value) -> Result<Value, String> {
+        let agent = args["agent"]
+            .as_str()
+            .ok_or_else(|| "Missing required string field 'agent'".to_string())?;
+        let tier_str = args["tier"].as_str();
+        let requested_tier = tier_str.and_then(|t| t.parse::<raios_runtime::system_scan::DoctorTier>().ok());
+
+        let res = raios_runtime::system_scan::run_doctor_check(agent, requested_tier);
+
+        if let Ok(conn) = raios_core::db::open_db() {
+            let _ = raios_runtime::system_scan::save_doctor_result(&conn, &res);
+        }
+
+        let mut lines = vec![
+            format!("Agent: {}", res.agent),
+            format!("Tier Reached: {:?}", res.tier_reached),
+            format!("Checked At: {}", res.checked_at),
+            "Notes:".to_string(),
+        ];
+        for note in &res.notes {
+            lines.push(format!("  • {}", note));
+        }
+
+        Ok(json!({
+            "content": [{ "type": "text", "text": lines.join("\n") }],
+            "result": res
+        }))
+    }
 }

@@ -68,6 +68,23 @@ pub fn create_task_graph_node_workflow(
     })
 }
 
+pub fn insert_verify_gate_node(
+    conn: &Connection,
+    graph_id: &str,
+    node_id: &str,
+    description: &str,
+    shell_cmd: &str,
+    agent_name: &str,
+    ready: bool,
+) -> Result<raios_core::control_plane::FileChangeWorkflowIds> {
+    let ids = create_task_graph_node_workflow(conn, graph_id, node_id, description, shell_cmd, agent_name, ready)?;
+    conn.execute(
+        "UPDATE cp_task_graph_nodes SET node_kind = 'verify_gate' WHERE graph_id = ?1 AND node_id = ?2",
+        params![graph_id, node_id],
+    )?;
+    Ok(ids)
+}
+
 pub fn create_task_graph_edges(
     conn: &Connection,
     graph_id: &str,

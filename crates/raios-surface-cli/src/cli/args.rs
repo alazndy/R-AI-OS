@@ -64,6 +64,14 @@ pub enum Commands {
     Discover,
     /// Get health report for a project (dirty, compliance, etc.)
     Health { project: Option<String> },
+    /// Tiered health check for a provider or agent
+    Doctor {
+        /// Provider/agent name (e.g. claude, codex, opencode, agy)
+        agent: String,
+        /// Maximum tier to test (offline, auth, full)
+        #[arg(short, long)]
+        tier: Option<String>,
+    },
     /// Print current version
     Version,
     /// Run as MCP server (stdio transport)
