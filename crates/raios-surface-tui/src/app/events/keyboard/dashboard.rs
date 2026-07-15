@@ -180,6 +180,14 @@ impl App {
                 self.constitution.item_editing = false;
                 self.constitution.item_input.clear();
             }
+            // Creator-mode Esc closes the creator at any step — must precede the generic
+            // "back out of panel" Esc arm below for the same reason as the item-editing Esc
+            // arm just above (same precedence bug/fix Task 7 documented): that catch-all is
+            // guarded only by `right_panel_focus`, which is always true while the creator is
+            // active, so it would otherwise swallow every Esc before this arm is ever reached.
+            KeyCode::Esc if self.ui.menu_cursor == 1 && self.constitution.creator.active => {
+                self.close_creator();
+            }
             // Esc always backs out of a focused right panel to the menu — universal
             // "go back" regardless of which panel (Extensions, Tasks, files, ...).
             KeyCode::Esc if self.ui.right_panel_focus => {
@@ -251,6 +259,62 @@ impl App {
                     && !self.constitution.creator.active =>
             {
                 self.delete_item_at_cursor();
+            }
+            KeyCode::Char('c')
+                if self.ui.menu_cursor == 1
+                    && self.ui.right_panel_focus
+                    && !self.constitution.item_editing
+                    && !self.constitution.creator.active =>
+            {
+                self.open_creator();
+            }
+            KeyCode::Char('p')
+                if self.ui.menu_cursor == 1
+                    && self.constitution.creator.active
+                    && self.constitution.creator.step
+                        == raios_surface_tui::app::state::CreatorStep::ChooseTarget =>
+            {
+                self.creator_choose_target(false);
+            }
+            KeyCode::Char('g')
+                if self.ui.menu_cursor == 1
+                    && self.constitution.creator.active
+                    && self.constitution.creator.step
+                        == raios_surface_tui::app::state::CreatorStep::ChooseTarget =>
+            {
+                self.creator_choose_target(true);
+            }
+            KeyCode::Enter
+                if self.ui.menu_cursor == 1
+                    && self.constitution.creator.active
+                    && self.constitution.creator.step
+                        == raios_surface_tui::app::state::CreatorStep::Notes =>
+            {
+                self.constitution.creator.step = raios_surface_tui::app::state::CreatorStep::Preview;
+            }
+            KeyCode::Char(ch)
+                if self.ui.menu_cursor == 1
+                    && self.constitution.creator.active
+                    && self.constitution.creator.step
+                        == raios_surface_tui::app::state::CreatorStep::Notes =>
+            {
+                self.constitution.creator.notes_input.push(ch);
+            }
+            KeyCode::Backspace
+                if self.ui.menu_cursor == 1
+                    && self.constitution.creator.active
+                    && self.constitution.creator.step
+                        == raios_surface_tui::app::state::CreatorStep::Notes =>
+            {
+                self.constitution.creator.notes_input.pop();
+            }
+            KeyCode::Enter
+                if self.ui.menu_cursor == 1
+                    && self.constitution.creator.active
+                    && self.constitution.creator.step
+                        == raios_surface_tui::app::state::CreatorStep::Preview =>
+            {
+                self.creator_confirm_save();
             }
             KeyCode::Enter if self.ui.menu_cursor == 1 && self.constitution.item_editing => {
                 self.commit_item_edit();

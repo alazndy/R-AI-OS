@@ -137,6 +137,39 @@ impl App {
         self.constitution.pending_save = None;
     }
 
+    pub(crate) fn open_creator(&mut self) {
+        self.constitution.creator = raios_surface_tui::app::state::CreatorState {
+            active: true,
+            ..Default::default()
+        };
+    }
+
+    pub(crate) fn close_creator(&mut self) {
+        self.constitution.creator = raios_surface_tui::app::state::CreatorState::default();
+    }
+
+    pub(crate) fn creator_choose_target(&mut self, is_global: bool) {
+        use raios_surface_tui::app::state::CreatorStep;
+        self.constitution.creator.target_is_global = is_global;
+        self.constitution.creator.step = CreatorStep::Notes;
+    }
+
+    pub(crate) fn creator_confirm_save(&mut self) {
+        let creator = self.constitution.creator.clone();
+        if creator.target_is_global {
+            let notes = format!("## Project-Specific Rules\n{}\n", creator.notes_input);
+            self.request_constitution_save(self.config.master_md_path.clone(), notes);
+        } else if let Some(ref proj) = self.projects.active.clone() {
+            let path = proj.local_path.join("CLAUDE.md");
+            let content = format!(
+                "@/home/alaz/AGENT_CONSTITUTION.md\n\n## Project-Specific Rules\n{}\n",
+                creator.notes_input
+            );
+            self.request_constitution_save(path, content);
+        }
+        self.close_creator();
+    }
+
     pub(crate) fn begin_item_edit(&mut self) {
         use raios_surface_tui::app::state::OutlineRow;
         let Some(&row) = self.constitution.rows.get(self.constitution.outline_cursor) else { return };
