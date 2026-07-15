@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::path::PathBuf;
 
+mod db_budget;
 mod tools;
 mod usage;
 
@@ -80,12 +81,44 @@ impl UsageSnapshot {
     }
 }
 
+/// Row count for one budget-tracked table (see `db_budget_check`).
+#[derive(Debug, Clone, Serialize)]
+pub struct TableRowCount {
+    pub table: String,
+    pub row_count: i64,
+}
+
+/// `mem_items` row count for a single project, checked against the
+/// per-project soft cap.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectMemBudget {
+    pub project_key: String,
+    pub row_count: i64,
+    pub soft_cap: i64,
+    pub over_budget: bool,
+}
+
+/// Read-only snapshot of `workspace.db`'s size and hot-table row counts,
+/// checked against hardcoded soft caps. Nothing here writes to the DB.
+#[derive(Debug, Clone, Serialize)]
+pub struct DbBudgetReport {
+    pub db_size_bytes: i64,
+    pub db_size_soft_cap_bytes: i64,
+    pub db_size_over_budget: bool,
+    pub table_counts: Vec<TableRowCount>,
+    pub mem_items_by_project: Vec<ProjectMemBudget>,
+    pub mem_items_over_budget: bool,
+    /// Set instead of the above fields when `workspace.db` couldn't be opened.
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AiAuditReport {
     pub tools: Vec<SystemAiTool>,
     pub env_keys: Vec<String>,
     pub local_models: Vec<String>,
     pub usage: Vec<UsageSnapshot>,
+    pub db_budget: DbBudgetReport,
 }
 
 pub fn scan_system() -> AiAuditReport {
@@ -103,7 +136,18 @@ pub fn scan_system() -> AiAuditReport {
         env_keys: tools::scan_env_keys(),
         local_models: tools::scan_local_models(),
         usage: scan_usage(),
+        db_budget: db_budget_check(),
     }
+}
+
+/// Standalone entry point for the `workspace.db` size/row budget check.
+///
+/// Deliberately not routed through `scan_system()` when only this is needed
+/// (e.g. from `raios health`) — `scan_system()` also shells out to detect
+/// installed AI tools and scans usage/auth files, which is unrelated work
+/// this caller shouldn't have to pay for.
+pub fn db_budget_check() -> DbBudgetReport {
+    db_budget::check()
 }
 
 fn scan_usage() -> Vec<UsageSnapshot> {

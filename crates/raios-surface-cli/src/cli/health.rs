@@ -22,8 +22,14 @@ pub(super) fn cmd_health(project: Option<String>, dev_ops: &Path, json: bool) {
         }
     }
 
+    let db_budget = raios_runtime::system_scan::db_budget_check();
+
     if json {
-        match serde_json::to_string_pretty(&results) {
+        let out = serde_json::json!({
+            "projects": results,
+            "db_budget": db_budget,
+        });
+        match serde_json::to_string_pretty(&out) {
             Ok(j) => println!("{j}"),
             Err(e) => eprintln!("JSON error: {e}"),
         }
@@ -48,6 +54,61 @@ pub(super) fn cmd_health(project: Option<String>, dev_ops: &Path, json: bool) {
                 );
             }
         }
+        print_db_budget(&db_budget);
+    }
+}
+
+fn print_db_budget(budget: &raios_runtime::system_scan::DbBudgetReport) {
+    println!();
+    println!("DB Budget — workspace.db");
+    println!("{}", "─".repeat(46));
+
+    if let Some(err) = &budget.error {
+        println!("  ✗ could not check: {err}");
+        return;
+    }
+
+    let size_flag = if budget.db_size_over_budget {
+        "⚠  OVER CAP"
+    } else {
+        "✓"
+    };
+    println!(
+        "  Size: {} / {} cap  {}",
+        human_bytes(budget.db_size_bytes),
+        human_bytes(budget.db_size_soft_cap_bytes),
+        size_flag
+    );
+
+    for t in &budget.table_counts {
+        println!("  {:<16} {:>8} rows", t.table, t.row_count);
+    }
+
+    if budget.mem_items_over_budget {
+        println!("  ⚠  mem_items over the per-project soft cap:");
+        for p in &budget.mem_items_by_project {
+            if p.over_budget {
+                println!(
+                    "     - {:<24} {} rows (cap {})",
+                    p.project_key, p.row_count, p.soft_cap
+                );
+            }
+        }
+    }
+}
+
+fn human_bytes(bytes: i64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[0])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
     }
 }
 
