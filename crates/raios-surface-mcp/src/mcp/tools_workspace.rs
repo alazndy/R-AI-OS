@@ -246,9 +246,14 @@ impl McpServer {
                 let h = raios_runtime::health::check_project(p);
                 json!({ "name": h.name, "status": h.status, "git_dirty": h.git_dirty, "compliance_grade": h.compliance_grade, "compliance_score": h.compliance_score, "has_memory": h.has_memory, "remote_url": h.remote_url, "graphify_done": h.graphify_done, "constitution_issues": h.constitution_issues })
             }).collect();
+        // workspace.db size/row budget is global (one DB, not one per project),
+        // so it's a sibling field rather than duplicated into every project
+        // entry — mirrors how `raios health` (CLI) prints it once regardless
+        // of whether a --project filter narrows the per-project list.
+        let db_budget = raios_runtime::system_scan::db_budget_check();
         let summary = format!("{} project(s) checked", reports.len());
         Ok(
-            json!({ "content": [{ "type": "text", "text": format!("{}\n\n{}", summary, serde_json::to_string_pretty(&reports).unwrap_or_default()) }] }),
+            json!({ "content": [{ "type": "text", "text": format!("{}\n\n{}", summary, serde_json::to_string_pretty(&reports).unwrap_or_default()) }], "db_budget": db_budget }),
         )
     }
 

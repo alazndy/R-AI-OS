@@ -82,7 +82,8 @@ impl McpServer {
 
         Ok(json!({
             "content": [{ "type": "text", "text": text }],
-            "usage": report.usage
+            "usage": report.usage,
+            "db_budget": report.db_budget
         }))
     }
 
