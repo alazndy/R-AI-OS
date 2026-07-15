@@ -1,3 +1,4 @@
+use crate::db::wf_handoff::HandoffReport;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -185,5 +186,8 @@ pub struct HandoffContext {
     pub to_agent: String,
     pub status: String,
     pub context_summary: String,
+    /// Structured findings, when the handoff was filed with `--report` instead
+    /// of (or alongside) a bare `--msg`. `None` for legacy free-text handoffs.
+    pub report: Option<HandoffReport>,
     pub diff_stat: Option<String>,
 }

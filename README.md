@@ -201,6 +201,14 @@ Agents hand work to each other through the same control plane that already track
 raios handoff --to codex-kaira --status success --msg "skeleton ready, implement auth handlers"
 ```
 
+For evidence-rich handoffs, use a JSON report instead of `--msg` (the two flags are mutually exclusive):
+
+```bash
+raios handoff --to codex-kaira --status success --report handoff-report.json
+```
+
+The report carries `findings`, `evidence`, `edge_cases_considered`, `open_questions`, `confidence`, and `what_i_did_not_check`. It is stored in the existing handoff artifact metadata, rendered by the Inbox panel, and delivered with the normal handoff context; legacy `--msg` handoffs remain supported.
+
 - `--msg` is scanned for obvious secrets (AWS/Anthropic/OpenAI/GitHub keys, PEM blocks) and refused before it touches the DB or a process argument list.
 - `git diff --stat HEAD` is attached automatically — the receiving agent sees what changed without being told.
 - A new handoff to the same agent/project supersedes any still-pending one (old approval → `expired`, artifact → `superseded`, task → `cancelled`), so the queue never accumulates stale notes.

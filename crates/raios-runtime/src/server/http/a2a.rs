@@ -126,12 +126,15 @@ fn a2a_message_send(params: &Value) -> Result<Value, String> {
     let conn = raios_core::db::open_db().map_err(|e| e.to_string())?;
     let ids = raios_core::db::create_handoff_workflow(
         &conn,
-        project_path,
-        "a2a_remote",
-        to_agent,
-        "SUCCESS",
-        &text,
-        None,
+        raios_core::db::HandoffWorkflowInput {
+            project_path,
+            from_agent: "a2a_remote",
+            to_agent,
+            status: "SUCCESS",
+            msg: &text,
+            diff_stat: None,
+            report: None,
+        },
     )
     .map_err(|e| e.to_string())?;
 

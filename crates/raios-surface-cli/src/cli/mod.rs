@@ -190,10 +190,11 @@ pub fn run(cli: Cli) {
             to,
             status,
             msg,
+            report,
             project,
         } => {
             let project_path = resolve_project_path(project, &cfg.dev_ops_path);
-            handoff::cmd_handoff(to, status, msg, &project_path, cli.json);
+            handoff::cmd_handoff(to, status, msg, report, &project_path, cli.json);
         }
         Commands::Bootstrap => new::cmd_bootstrap(),
         Commands::VersionBump {

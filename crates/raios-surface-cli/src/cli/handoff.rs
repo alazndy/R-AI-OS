@@ -1,14 +1,81 @@
 use super::{HandoffStatus, HandoffTarget};
-use std::path::Path;
+use raios_core::db::HandoffReport;
+use std::path::{Path, PathBuf};
+
+/// Scans every free-text field of a `HandoffReport` for secrets, not just
+/// `findings` — evidence/edge-cases/open-questions/not-checked are all
+/// agent-authored free text and can just as easily carry a pasted token.
+fn report_secret_label(report: &HandoffReport) -> Option<&'static str> {
+    let mut joined = report.findings.clone();
+    for field in report
+        .evidence
+        .iter()
+        .chain(report.edge_cases_considered.iter())
+        .chain(report.open_questions.iter())
+        .chain(report.what_i_did_not_check.iter())
+    {
+        joined.push('\n');
+        joined.push_str(field);
+    }
+    raios_core::security::looks_like_secret(&joined)
+}
+
+/// Resolves the mutually-exclusive `--msg` / `--report` pair into a single
+/// `HandoffReport`. Back-compat: a bare `--msg` becomes
+/// `HandoffReport { findings: msg, ..Default::default() }`. Exits the process
+/// with a clear message on misuse (neither given, both given, unreadable or
+/// malformed `--report` file) — the same "fail loud, fail early" pattern the
+/// rest of this command already uses for secret-detection refusals.
+fn resolve_report(msg: Option<String>, report_path: Option<PathBuf>) -> HandoffReport {
+    match (msg, report_path) {
+        (Some(_), Some(_)) => {
+            eprintln!("Handoff failed: pass either --msg or --report, not both.");
+            std::process::exit(1);
+        }
+        (None, None) => {
+            eprintln!("Handoff failed: either --msg <text> or --report <path-to-json> is required.");
+            std::process::exit(1);
+        }
+        (Some(msg), None) => HandoffReport {
+            findings: msg,
+            ..Default::default()
+        },
+        (None, Some(path)) => {
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!(
+                        "Handoff failed: could not read --report file {}: {e}",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+            };
+            match serde_json::from_str::<HandoffReport>(&content) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!(
+                        "Handoff failed: --report file {} is not a valid HandoffReport JSON: {e}",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
 
 pub(super) fn cmd_handoff(
     to: HandoffTarget,
     status: HandoffStatus,
-    msg: String,
+    msg: Option<String>,
+    report_path: Option<PathBuf>,
     project_path: &Path,
     json: bool,
 ) {
-    if let Some(label) = raios_core::security::looks_like_secret(&msg) {
+    let mut report = resolve_report(msg, report_path);
+
+    if let Some(label) = report_secret_label(&report) {
         eprintln!(
             "Handoff refused: message looks like it contains a {label}. \
              Remove it and resend — handoffs are stored in plain text (DB + process argv)."
@@ -29,13 +96,16 @@ pub(super) fn cmd_handoff(
             std::process::exit(1);
         }
     };
-    let trace_block =
-        raios_runtime::trace_recall::relevant_trace_block(&conn, Some(&project_path_str), &msg, 3);
-    let handoff_msg = match &trace_block {
-        Some(block) => format!("{msg}\n\n{block}"),
-        None => msg.clone(),
-    };
-    if let Some(label) = raios_core::security::looks_like_secret(&handoff_msg) {
+    let trace_block = raios_runtime::trace_recall::relevant_trace_block(
+        &conn,
+        Some(&project_path_str),
+        &report.findings,
+        3,
+    );
+    if let Some(block) = &trace_block {
+        report.evidence.push(block.clone());
+    }
+    if let Some(label) = report_secret_label(&report) {
         eprintln!(
             "Handoff refused: enriched context looks like it contains a {label}. \
              Remove it and resend — handoffs are stored in plain text (DB + process argv)."
@@ -45,12 +115,15 @@ pub(super) fn cmd_handoff(
 
     let ids = match raios_core::db::create_handoff_workflow(
         &conn,
-        &project_path_str,
-        &from_agent,
-        to_agent,
-        status_str,
-        &handoff_msg,
-        diff_stat.as_deref(),
+        raios_core::db::HandoffWorkflowInput {
+            project_path: &project_path_str,
+            from_agent: &from_agent,
+            to_agent,
+            status: status_str,
+            msg: &report.findings,
+            diff_stat: diff_stat.as_deref(),
+            report: Some(&report),
+        },
     ) {
         Ok(ids) => ids,
         Err(e) => {
@@ -81,6 +154,7 @@ pub(super) fn cmd_handoff(
             "project_id": ids.project_id,
             "diff_stat": diff_stat,
             "trace_memory_attached": trace_block.is_some(),
+            "report": serde_json::to_value(&report).ok(),
             "tunnel": "agent_action_required",
             "tunnel_hint": tunnel_hint,
         });
@@ -95,6 +169,7 @@ pub(super) fn cmd_handoff(
         if trace_block.is_some() {
             println!("  trace memory: attached");
         }
+        println!("  confidence:  {:.0}%", report.confidence * 100.0);
         println!(
             "  Next: {to_agent} will receive this as [HANDOVER CONTEXT] on its next `raios run`/`raios task`."
         );

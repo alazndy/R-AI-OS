@@ -15,6 +15,7 @@ use rusqlite::{Connection, Result};
 
 use super::agent_stats::cp_agent_stats_for;
 use super::control_plane::ApprovalInboxRow;
+use super::wf_handoff::HandoffReport;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct FileImpact {
@@ -35,6 +36,10 @@ pub struct ScoredApproval {
     pub file_impact: Option<FileImpact>,
     pub agent_success_rate: Option<f64>,
     pub suggested_action: &'static str,
+    /// Structured `HandoffReport`, parsed from the artifact's `metadata_json`
+    /// when this is a `handover` approval filed with `--report`. `None` for
+    /// non-handover approvals and legacy free-text handoffs.
+    pub handoff_report: Option<HandoffReport>,
 }
 
 /// Parses the last summary line of `git diff --stat` output, e.g.
@@ -164,11 +169,20 @@ pub fn cp_query_pending_approvals_scored(conn: &Connection) -> Result<Vec<Scored
 
     let mut out = Vec::with_capacity(rows.len());
     for raw in rows {
-        let file_impact = raw
+        let metadata_value = raw
             .metadata_json
             .as_deref()
-            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-            .and_then(|meta| derive_file_impact(&raw.approval.approval_type, &meta));
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
+
+        let file_impact = metadata_value
+            .as_ref()
+            .and_then(|meta| derive_file_impact(&raw.approval.approval_type, meta));
+
+        let handoff_report: Option<HandoffReport> = metadata_value
+            .as_ref()
+            .and_then(|meta| meta.get("report"))
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok());
 
         let agent_success_rate = match &raw.agent_name {
             Some(name) => cp_agent_stats_for(conn, name)?.and_then(|s| s.success_rate),
@@ -185,6 +199,7 @@ pub fn cp_query_pending_approvals_scored(conn: &Connection) -> Result<Vec<Scored
             file_impact,
             agent_success_rate,
             suggested_action,
+            handoff_report,
         });
     }
     Ok(out)

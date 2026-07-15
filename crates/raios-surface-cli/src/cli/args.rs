@@ -189,9 +189,15 @@ pub enum Commands {
         /// Outcome of the work being handed off
         #[arg(long)]
         status: HandoffStatus,
-        /// Verbatim context for the next agent — no filler
+        /// Verbatim context for the next agent — no filler. Mutually exclusive
+        /// with --report; either one is required.
         #[arg(long)]
-        msg: String,
+        msg: Option<String>,
+        /// Path to a JSON file with a structured HandoffReport (findings,
+        /// evidence, edge_cases_considered, open_questions, confidence,
+        /// what_i_did_not_check) instead of a bare --msg string.
+        #[arg(long)]
+        report: Option<PathBuf>,
         #[arg(short, long)]
         project: Option<String>,
     },

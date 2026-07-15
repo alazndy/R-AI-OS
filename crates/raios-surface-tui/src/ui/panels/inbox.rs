@@ -76,10 +76,13 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
                     Style::new().fg(risk_color).bold(),
                 ),
             ]));
-            lines.push(Line::from(Span::styled(
-                format!("      {}", truncate(&ap.reason, 90)),
-                Style::new().fg(DIM),
-            )));
+            match &scored.handoff_report {
+                Some(report) => lines.extend(render_handoff_report_lines(report)),
+                None => lines.push(Line::from(Span::styled(
+                    format!("      {}", truncate(&ap.reason, 90)),
+                    Style::new().fg(DIM),
+                ))),
+            }
             let impact = scored
                 .file_impact
                 .as_ref()
@@ -167,6 +170,35 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+}
+
+/// Pretty-prints a structured `HandoffReport` as a handful of indented lines,
+/// in place of the single raw-reason line used for legacy free-text handoffs.
+fn render_handoff_report_lines(report: &raios_core::db::HandoffReport) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(
+        format!("      {}", truncate(&report.findings, 90)),
+        Style::new().fg(DIM),
+    ))];
+
+    let mut sub = |label: &str, items: &[String]| {
+        if items.is_empty() {
+            return;
+        }
+        lines.push(Line::from(Span::styled(
+            format!("        {label}: {}", truncate(&items.join("; "), 90)),
+            Style::new().fg(DIM).italic(),
+        )));
+    };
+    sub("evidence", &report.evidence);
+    sub("edge cases", &report.edge_cases_considered);
+    sub("open questions", &report.open_questions);
+    sub("not checked", &report.what_i_did_not_check);
+
+    lines.push(Line::from(Span::styled(
+        format!("        confidence: {:.0}%", report.confidence * 100.0),
+        Style::new().fg(DIM).italic(),
+    )));
+    lines
 }
 
 fn truncate(s: &str, max: usize) -> String {

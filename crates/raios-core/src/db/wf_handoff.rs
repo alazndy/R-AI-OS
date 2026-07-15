@@ -1,14 +1,51 @@
 use super::*;
 use rusqlite::{params, Connection, OptionalExtension, Result};
+use serde::{Deserialize, Serialize};
+
+/// Structured findings a handoff can carry instead of (or alongside) a bare
+/// free-text `--msg`. Serialized into the existing `cp_artifacts.metadata_json`
+/// blob under a `"report"` key — no new column, no new table.
+///
+/// `Default` makes `..Default::default()` cheap for the back-compat path: a
+/// bare `--msg` string becomes `HandoffReport { findings: msg, ..Default::default() }`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HandoffReport {
+    pub findings: String,
+    pub evidence: Vec<String>,
+    pub edge_cases_considered: Vec<String>,
+    pub open_questions: Vec<String>,
+    pub confidence: f32,
+    pub what_i_did_not_check: Vec<String>,
+}
+
+/// Complete input contract for one atomic handoff workflow.
+///
+/// Grouping the payload keeps the workflow API stable as handoff metadata grows
+/// while making every caller name its fields explicitly.
+pub struct HandoffWorkflowInput<'a> {
+    pub project_path: &'a str,
+    pub from_agent: &'a str,
+    pub to_agent: &'a str,
+    pub status: &'a str,
+    pub msg: &'a str,
+    pub diff_stat: Option<&'a str>,
+    pub report: Option<&'a HandoffReport>,
+}
+
 pub fn create_handoff_workflow(
     conn: &Connection,
-    project_path: &str,
-    from_agent: &str,
-    to_agent: &str,
-    status: &str,
-    msg: &str,
-    diff_stat: Option<&str>,
+    input: HandoffWorkflowInput<'_>,
 ) -> Result<raios_core::control_plane::HandoffWorkflowIds> {
+    let HandoffWorkflowInput {
+        project_path,
+        from_agent,
+        to_agent,
+        status,
+        msg,
+        diff_stat,
+        report,
+    } = input;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let project_id = project_id_for_file_path(conn, project_path);
     let task_id = uuid::Uuid::new_v4().to_string();
@@ -21,15 +58,18 @@ pub fn create_handoff_workflow(
         "Agent handoff from {} to {} (status: {}): {}",
         from_agent, to_agent, status_lc, msg
     );
-    let metadata_json = serde_json::json!({
+    let mut metadata_value = serde_json::json!({
         "from": from_agent,
         "to": to_agent,
         "status": status_lc,
         "context_summary": msg,
         "diff_stat": diff_stat,
         "flow": "agent_handoff"
-    })
-    .to_string();
+    });
+    if let Some(report) = report {
+        metadata_value["report"] = serde_json::to_value(report).unwrap_or(serde_json::Value::Null);
+    }
+    let metadata_json = metadata_value.to_string();
 
     let tx = conn.unchecked_transaction()?;
 
@@ -165,6 +205,10 @@ pub fn cp_take_pending_handoff(
         .unwrap_or_default()
         .to_string();
     let diff_stat = metadata["diff_stat"].as_str().map(|s| s.to_string());
+    let report: Option<HandoffReport> = metadata
+        .get("report")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok());
 
     Ok(Some(raios_core::control_plane::HandoffContext {
         approval_id,
@@ -175,6 +219,7 @@ pub fn cp_take_pending_handoff(
         to_agent: to_agent.to_string(),
         status,
         context_summary,
+        report,
         diff_stat,
     }))
 }
