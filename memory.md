@@ -53,7 +53,7 @@
 
 ## Current Focus
 - Health worker RAM resolved (5.8GB → 1.1GB peak). Project in hardening/expansion mode.
-- v3.6.0 release candidate: typed TUI control plane, Windows installer/service support, PowerShell hooks/wrappers, and cross-platform CI. GitHub `master` is published; release tag/notes are being finalized.
+- v3.6.0 released 2026-07-17: typed TUI control plane, Windows installer/service support, PowerShell hooks/wrappers, and cross-platform CI. GitHub `master` and the public release are published.
 - TUI control-plane migration is active; next delivery target is a reproducible Windows 10/11 install with native CLI/TUI, daemon Scheduled Task, PowerShell hooks/wrappers, and platform config paths.
 
 ## Change Log & Agent Trail
