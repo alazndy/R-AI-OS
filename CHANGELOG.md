@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.6.0 — 2026-07-17
+### Added
+- **Typed TUI control plane:** introduced the serialization-only `raios-contracts` crate, coherent daemon snapshots, typed commands/events, idempotency caching, transactional audit logging, and four attention-first routes: Now, Work, Explore, and Govern.
+- **Windows installation:** added `install-system.ps1` for locked release builds, `%APPDATA%\raios` configuration/policy setup, user `PATH` registration, and the `RAIOS_Daemon` Scheduled Task.
+- **Windows runtime parity:** added native Scheduled Task daemon management, `netstat.exe` PID lookup, PowerShell lifecycle hooks, PowerShell agent wrappers, and portable tray startup paths.
+- **Cross-platform CI:** Windows, macOS, and Linux now build and test the full Cargo workspace with the lockfile enforced.
+### Fixed
+- Removed clippy blockers in control-plane, search, and preflight test paths; full workspace clippy now passes with `-D warnings`.
+- Corrected Windows installation documentation, config/token paths, and stale README version/agent references.
+### Verification
+- `cargo test --workspace`: **678 passed, 2 ignored, 0 failed**.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `pnpm audit --audit-level=high`: no known vulnerabilities.
+
 ## v3.5.0 — 2026-07-11
 ### Changed
 - **`raios grep` renamed to `raios locate`** (MCP `grep_search` → `locate_search`), including the core engine (`trigram::grep` → `trigram::locate`, `GrepMatch` → `LocateMatch`) — the command name no longer collides with "grep" as a concept.

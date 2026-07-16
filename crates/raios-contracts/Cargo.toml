@@ -1,6 +1,6 @@
 [package]
 name = "raios-contracts"
-version = "3.5.0"
+version = "3.6.0"
 edition = "2021"
 description = "Serialization-only DTOs, Queries, Commands, Events, Problems, and Snapshots for R-AI-OS Control Plane"
 

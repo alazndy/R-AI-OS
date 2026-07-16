@@ -15,7 +15,7 @@
     ║║   ▀█▄  ───│   · │ · │───  ▄█▀            ║║
     ║║      ▀█▄  └─────────┘  ▄█▀               ║║
   ╔═╝║         ▀█████████████▀                  ║╚═╗
-  ║ ╔╝   · · ·   R - A I - O S   KERNEL  v3.4   ╚╗ ║
+  ║ ╔╝   · · ·   R - A I - O S   KERNEL  v3.6   ╚╗ ║
   ╚═╝ ══════════════════════════════════════════ ╚═╝
 </pre>
 </p>
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.5.0-blue?style=for-the-badge" alt="Version"></a>
+  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.6.0-blue?style=for-the-badge" alt="Version"></a>
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
@@ -52,7 +52,7 @@ R-AI-OS is not a CLI tool — it is a **Kernel**. While traditional operating sy
 It solves the fundamental problem of **unsupervised agent execution**: agents that run unchecked can leak secrets, corrupt files, and make unauthorized network calls. R-AI-OS sits between the human and the swarm as a hardened control plane — enforcing policies, auditing every action, and managing context economics.
 
 ```
-Human → [ R-AI-OS Kernel ] → Agent Swarm (Claude / Gemini / MCP)
+Human → [ R-AI-OS Kernel ] → Agent Swarm (Claude / Codex / OpenCode / AGY / MCP)
               ↓
     ┌──────────────────────────────────────────────┐
     │  Security Kernel  │  Cortex  │  Swarm Mesh  │

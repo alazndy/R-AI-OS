@@ -53,7 +53,7 @@
 
 ## Current Focus
 - Health worker RAM resolved (5.8GB → 1.1GB peak). Project in hardening/expansion mode.
-- v3.5.0 tagged 2026-07-11 (locate rename, MCP semantic_search daemon delegation, Dart support, worktrees dedup). Not yet pushed/GitHub-released — pending explicit go-ahead.
+- v3.6.0 release candidate: typed TUI control plane, Windows installer/service support, PowerShell hooks/wrappers, and cross-platform CI. GitHub `master` is published; release tag/notes are being finalized.
 - TUI control-plane migration is active; next delivery target is a reproducible Windows 10/11 install with native CLI/TUI, daemon Scheduled Task, PowerShell hooks/wrappers, and platform config paths.
 
 ## Change Log & Agent Trail
