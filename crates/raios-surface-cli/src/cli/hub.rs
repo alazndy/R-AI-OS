@@ -53,7 +53,9 @@ fn probe_port(port: u16) -> bool {
     if TcpStream::connect_timeout(
         &format!("127.0.0.1:{port}").parse().unwrap(),
         Duration::from_millis(200),
-    ).is_ok() {
+    )
+    .is_ok()
+    {
         return true;
     }
 
@@ -62,7 +64,9 @@ fn probe_port(port: u16) -> bool {
         if TcpStream::connect_timeout(
             &format!("{ip}:{port}").parse().unwrap(),
             Duration::from_millis(200),
-        ).is_ok() {
+        )
+        .is_ok()
+        {
             return true;
         }
     }
@@ -87,7 +91,9 @@ pub fn cmd_start(json: bool) {
                 Some(p) => println!("  Hub already running  (PID {p})"),
                 None => {
                     println!("  Hub already running  (orphaned — no PID file)");
-                    println!("  To adopt it: find its PID with `raios ps` or `ss -tlnp | grep 42069`");
+                    println!(
+                        "  To adopt it: find its PID with `raios ps` or `ss -tlnp | grep 42069`"
+                    );
                 }
             }
         }
@@ -122,11 +128,7 @@ pub fn cmd_start(json: bool) {
 
     let aiosd = which::which("aiosd").unwrap_or_else(|_| PathBuf::from("aiosd"));
 
-    match Command::new(&aiosd)
-        .stdout(stdout)
-        .stderr(stderr)
-        .spawn()
-    {
+    match Command::new(&aiosd).stdout(stdout).stderr(stderr).spawn() {
         Ok(child) => {
             let pid = child.id();
             if let Err(e) = fs::write(pid_path(), pid.to_string()) {
@@ -136,8 +138,10 @@ pub fn cmd_start(json: bool) {
             std::mem::forget(child);
 
             if json {
-                println!("{{\"status\":\"started\",\"pid\":{pid},\"log\":\"{}\"}}",
-                    log_path().display());
+                println!(
+                    "{{\"status\":\"started\",\"pid\":{pid},\"log\":\"{}\"}}",
+                    log_path().display()
+                );
             } else {
                 println!("  Hub started  PID {pid}");
                 println!("  Log  {}", log_path().display());
@@ -211,6 +215,7 @@ fn resolve_running_pid() -> Option<u32> {
 }
 
 /// Scan /proc/*/net/tcp to find which PID owns a given listen port.
+#[cfg(unix)]
 fn find_pid_by_port(port: u16) -> Option<u32> {
     let hex_port = format!("{:04X}", port);
 
@@ -259,6 +264,27 @@ fn find_pid_by_port(port: u16) -> Option<u32> {
     None
 }
 
+/// Use the built-in netstat command on Windows to resolve the owning PID.
+#[cfg(windows)]
+fn find_pid_by_port(port: u16) -> Option<u32> {
+    let output = Command::new("netstat.exe")
+        .args(["-ano", "-p", "TCP"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines().find_map(|line| {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 5 || !cols[0].eq_ignore_ascii_case("TCP") {
+            return None;
+        }
+        let local_port = cols[1].rsplit(':').next()?.parse::<u16>().ok()?;
+        if local_port != port || !cols[3].eq_ignore_ascii_case("LISTENING") {
+            return None;
+        }
+        cols[4].parse::<u32>().ok()
+    })
+}
+
 // ─── status ───────────────────────────────────────────────────────────────────
 
 pub fn cmd_status(json: bool) {
@@ -286,8 +312,18 @@ pub fn cmd_status(json: bool) {
         return;
     }
 
-    let bullet = |up: bool| if up { "\x1b[32m●\x1b[0m" } else { "\x1b[90m○\x1b[0m" };
-    let state = if running { "\x1b[32mrunning\x1b[0m" } else { "\x1b[31mstopped\x1b[0m" };
+    let bullet = |up: bool| {
+        if up {
+            "\x1b[32m●\x1b[0m"
+        } else {
+            "\x1b[90m○\x1b[0m"
+        }
+    };
+    let state = if running {
+        "\x1b[32mrunning\x1b[0m"
+    } else {
+        "\x1b[31mstopped\x1b[0m"
+    };
 
     println!();
     println!("  R-AI-OS Hub  —  {state}");
@@ -310,14 +346,22 @@ pub fn cmd_status(json: bool) {
 // ─── install ──────────────────────────────────────────────────────────────────
 
 pub fn cmd_install(enable: bool, json: bool) {
-    let aiosd_bin = which::which("aiosd")
-        .unwrap_or_else(|_| PathBuf::from("/home/alaz/.cargo/bin/aiosd"));
+    #[cfg(windows)]
+    {
+        cmd_install_windows(enable, json);
+        return;
+    }
 
-    let user = std::env::var("USER").unwrap_or_else(|_| "alaz".into());
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home").join(&user));
+    #[cfg(not(windows))]
+    {
+        let aiosd_bin =
+            which::which("aiosd").unwrap_or_else(|_| PathBuf::from("/home/alaz/.cargo/bin/aiosd"));
 
-    let service = format!(
-        "[Unit]
+        let user = std::env::var("USER").unwrap_or_else(|_| "alaz".into());
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home").join(&user));
+
+        let service = format!(
+            "[Unit]
 Description=R-AI-OS Hub (aiosd — Tri-Protocol Kernel)
 After=network.target
 
@@ -333,52 +377,124 @@ Environment=HOME={home}
 [Install]
 WantedBy=default.target
 ",
-        aiosd = aiosd_bin.display(),
-        log = log_path().display(),
-        home = home.display(),
-    );
+            aiosd = aiosd_bin.display(),
+            log = log_path().display(),
+            home = home.display(),
+        );
 
-    let service_dir = home.join(".config/systemd/user");
-    let _ = fs::create_dir_all(&service_dir);
-    let service_path = service_dir.join("raios-hub.service");
+        let service_dir = home.join(".config/systemd/user");
+        let _ = fs::create_dir_all(&service_dir);
+        let service_path = service_dir.join("raios-hub.service");
 
-    if let Err(e) = fs::write(&service_path, &service) {
-        eprintln!("  Failed to write service file: {e}");
-        std::process::exit(1);
-    }
+        if let Err(e) = fs::write(&service_path, &service) {
+            eprintln!("  Failed to write service file: {e}");
+            std::process::exit(1);
+        }
 
-    if json {
-        println!("{{\"status\":\"installed\",\"path\":\"{}\"}}", service_path.display());
-    } else {
-        println!("  Wrote  {}", service_path.display());
-    }
+        if json {
+            println!(
+                "{{\"status\":\"installed\",\"path\":\"{}\"}}",
+                service_path.display()
+            );
+        } else {
+            println!("  Wrote  {}", service_path.display());
+        }
 
-    if enable {
-        let reload = Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .status();
-        let enabled = Command::new("systemctl")
-            .args(["--user", "enable", "--now", "raios-hub.service"])
-            .status();
+        if enable {
+            let reload = Command::new("systemctl")
+                .args(["--user", "daemon-reload"])
+                .status();
+            let enabled = Command::new("systemctl")
+                .args(["--user", "enable", "--now", "raios-hub.service"])
+                .status();
 
-        match (reload, enabled) {
-            (Ok(_), Ok(s)) if s.success() => {
-                if !json {
-                    println!("  Enabled & started via systemd");
-                    println!("  Run: systemctl --user status raios-hub");
+            match (reload, enabled) {
+                (Ok(_), Ok(s)) if s.success() => {
+                    if !json {
+                        println!("  Enabled & started via systemd");
+                        println!("  Run: systemctl --user status raios-hub");
+                    }
+                }
+                _ => {
+                    eprintln!("  systemctl enable failed — run manually:");
+                    eprintln!("    systemctl --user daemon-reload");
+                    eprintln!("    systemctl --user enable --now raios-hub.service");
                 }
             }
-            _ => {
-                eprintln!("  systemctl enable failed — run manually:");
-                eprintln!("    systemctl --user daemon-reload");
-                eprintln!("    systemctl --user enable --now raios-hub.service");
+        } else if !json {
+            println!();
+            println!("  To enable at boot:");
+            println!("    systemctl --user daemon-reload");
+            println!("    systemctl --user enable --now raios-hub.service");
+        }
+    }
+}
+
+#[cfg(windows)]
+fn cmd_install_windows(enable: bool, json: bool) {
+    let aiosd_bin = which::which("aiosd.exe")
+        .or_else(|_| which::which("aiosd"))
+        .or_else(|_| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("aiosd.exe")))
+                .filter(|p| p.exists())
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "aiosd"))
+        })
+        .unwrap_or_else(|_| PathBuf::from("aiosd.exe"));
+    let task_name = "RAIOS_Daemon";
+    let task_run = format!("\"{}\"", aiosd_bin.display());
+    let mut args = vec![
+        "/Create".to_string(),
+        "/TN".to_string(),
+        task_name.to_string(),
+        "/TR".to_string(),
+        task_run,
+        "/SC".to_string(),
+        "ONLOGON".to_string(),
+        "/F".to_string(),
+    ];
+    match Command::new("schtasks.exe").args(&args).output() {
+        Ok(output) if output.status.success() => {
+            if !enable {
+                let disabled = Command::new("schtasks.exe")
+                    .args(["/Change", "/TN", task_name, "/DISABLE"])
+                    .status()
+                    .map(|status| status.success())
+                    .unwrap_or(false);
+                if !disabled {
+                    eprintln!("  schtasks created the task but could not disable it");
+                    std::process::exit(1);
+                }
+            }
+            if json {
+                println!(
+                    "{{\"status\":\"installed\",\"task\":\"{}\",\"binary\":\"{}\"}}",
+                    task_name,
+                    aiosd_bin.display()
+                );
+            } else {
+                println!("  Windows Scheduled Task installed: {task_name}");
+                println!("  Binary  {}", aiosd_bin.display());
+                println!(
+                    "  {}",
+                    if enable {
+                        "Starts at user logon"
+                    } else {
+                        "Task created disabled"
+                    }
+                );
             }
         }
-    } else if !json {
-        println!();
-        println!("  To enable at boot:");
-        println!("    systemctl --user daemon-reload");
-        println!("    systemctl --user enable --now raios-hub.service");
+        Ok(output) => {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            eprintln!("  schtasks failed: {}", detail.trim());
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("  Could not start schtasks.exe: {error}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -409,16 +525,24 @@ pub fn cmd_logs(lines: usize) {
         println!("{line}");
     }
 
-    // Follow mode — stream new lines until Ctrl-C
-    println!("\x1b[90m--- following {} (Ctrl-C to exit) ---\x1b[0m", path.display());
-    let mut tail = Command::new("tail")
-        .args(["-f", "-n", "0"])
-        .arg(&path)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("tail not found");
-    let _ = tail.wait();
+    #[cfg(unix)]
+    {
+        // Follow mode — stream new lines until Ctrl-C.
+        println!(
+            "\x1b[90m--- following {} (Ctrl-C to exit) ---\x1b[0m",
+            path.display()
+        );
+        let mut tail = Command::new("tail")
+            .args(["-f", "-n", "0"])
+            .arg(&path)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("tail not found");
+        let _ = tail.wait();
+    }
+    #[cfg(windows)]
+    println!("--- end of log (Windows follow mode: Get-Content -Wait) ---");
 }
 
 // ─── api-key ──────────────────────────────────────────────────────────────────
@@ -456,7 +580,9 @@ pub fn cmd_api_key_show(reveal: bool) {
                 println!("  {}\n", key);
             } else {
                 println!("  {}", mask_secret(key));
-                println!("  (pass --reveal to print the full key; avoid recorded/logged terminals)\n");
+                println!(
+                    "  (pass --reveal to print the full key; avoid recorded/logged terminals)\n"
+                );
             }
             println!("  Usage:  Authorization: Bearer <key>");
             println!("  Stored: {}\n", path.display());
@@ -497,7 +623,10 @@ pub fn cmd_api_key_generate(force: bool) {
 
     println!("\n  New API key generated.\n");
     println!("  Key:  {key}");
-    println!("  ⚠ This is the only time the full key is printed. It is saved to {}", path.display());
+    println!(
+        "  ⚠ This is the only time the full key is printed. It is saved to {}",
+        path.display()
+    );
     println!("    Retrieve it later (masked) with: raios hub api-key show");
     println!("  Hash: {key_hash}\n");
 
@@ -512,7 +641,11 @@ pub fn cmd_api_key_generate(force: bool) {
         let overwriting_existing = content.contains("api_key_hash");
         println!(
             "  {} raios-policy.toml at {}",
-            if overwriting_existing { "Updating" } else { "Writing" },
+            if overwriting_existing {
+                "Updating"
+            } else {
+                "Writing"
+            },
             pol_path.display()
         );
         let new_line = format!("api_key_hash = \"{key_hash}\"");
@@ -563,7 +696,10 @@ mod tests {
         let masked = mask_secret(key);
         assert!(masked.starts_with("a1b2"));
         assert!(masked.ends_with("a1b2"));
-        assert!(!masked.contains(&key[10..20]), "middle of secret must not leak");
+        assert!(
+            !masked.contains(&key[10..20]),
+            "middle of secret must not leak"
+        );
     }
 
     #[test]

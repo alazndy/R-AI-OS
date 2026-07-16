@@ -159,6 +159,62 @@ pub async fn handle_client_connection(h: ClientHandle) {
         tokio::select! {
             res = reader.read_line(&mut line) => {
                 if res.unwrap_or(0) == 0 { break; }
+
+                if let Ok(query) = serde_json::from_str::<raios_contracts::Query>(&line) {
+                    // The TUI Store is an envelope, so every typed snapshot query
+                    // returns a coherent projection instead of replacing unrelated
+                    // route state with defaults.
+                    let snapshot_result = raios_core::db::open_db()
+                        .map_err(|error| error.to_string())
+                        .and_then(|conn| crate::control_plane::service::load_system_snapshot(&conn));
+                    let event = match snapshot_result {
+                        Ok(snapshot) => raios_contracts::Event::SnapshotUpdated(Box::new(snapshot)),
+                        Err(error) => raios_contracts::Event::CommandFailed {
+                            idempotency_key: format!("query:{query:?}"),
+                            problem: raios_contracts::Problem::internal(error),
+                        },
+                    };
+                    if let Ok(serialized) = serde_json::to_string(&event) {
+                        let _ = writer.write_all(format!("{serialized}\n").as_bytes()).await;
+                    }
+                    line.clear();
+                    continue;
+                }
+
+                if let Ok(cmd) = serde_json::from_str::<raios_contracts::Command>(&line) {
+                    if let Ok(mut conn) = raios_core::db::open_db() {
+                        let actor = if addr.ip().is_loopback() {
+                            crate::control_plane::service::ControlActor::local_session()
+                        } else {
+                            crate::control_plane::service::ControlActor::remote_session("remote_tcp_session")
+                        };
+                        match crate::control_plane::service::dispatch_control_command(&mut conn, &actor, &cmd) {
+                            Ok(res_val) => {
+                                let ack = raios_contracts::Event::CommandSucceeded {
+                                    idempotency_key: cmd.idempotency_key().to_string(),
+                                    result: res_val,
+                                };
+                                if let Ok(serialized) = serde_json::to_string(&ack) {
+                                    let _ = writer.write_all(format!("{serialized}\n").as_bytes()).await;
+                                }
+                                if let Ok(snap) = crate::control_plane::service::load_system_snapshot(&conn) {
+                                    let evt = raios_contracts::Event::SnapshotUpdated(Box::new(snap));
+                                    let _ = writer.write_all(format!("{}\n", serde_json::to_string(&evt).unwrap()).as_bytes()).await;
+                                }
+                            }
+                            Err(problem) => {
+                                let err_evt = raios_contracts::Event::CommandFailed {
+                                    idempotency_key: cmd.idempotency_key().to_string(),
+                                    problem,
+                                };
+                                let _ = writer.write_all(format!("{}\n", serde_json::to_string(&err_evt).unwrap()).as_bytes()).await;
+                            }
+                        }
+                    }
+                    line.clear();
+                    continue;
+                }
+
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
                     let cmd_name = v["command"].as_str().unwrap_or("");
                     let combined_payload = collect_scan_payload(&v);
@@ -828,7 +884,7 @@ mod dispatch_loop_tests {
         let (socket, peer_addr) = listener.accept().await.unwrap();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        let mut handle = test_client_handle(socket, peer_addr, "test-token".into(), &tmp);
+        let handle = test_client_handle(socket, peer_addr, "test-token".into(), &tmp);
         {
             let mut s = handle.state.write().await;
             s.cortex_tx = None;

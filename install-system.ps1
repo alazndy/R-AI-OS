@@ -1,91 +1,125 @@
-# R-AI-OS System Master Installer
+[CmdletBinding()]
+param(
+    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "R-AI-OS"),
+    [string]$WorkspaceRoot = (Join-Path $HOME "Dev_Ops"),
+    [switch]$SkipBuild,
+    [switch]$NoScheduledTask,
+    [switch]$NoPath
+)
+
 $ErrorActionPreference = "Stop"
-Write-Host "R-AI-OS Kurulumu Baslatiliyor..." -ForegroundColor Cyan
-
-# 1. Klasor Yapisi Olusturma
-$BaseDir = Join-Path $HOME "Desktop\Dev_Ops_New"
-$SystemDir = Join-Path $BaseDir "00_System"
+$RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$BinDir = Join-Path $InstallRoot "bin"
+$ConfigDir = Join-Path $env:APPDATA "raios"
+$SystemDir = Join-Path $WorkspaceRoot "00_System"
 $SkillsDir = Join-Path $SystemDir ".agents\skills"
+$AiosdPath = Join-Path $BinDir "aiosd.exe"
+$RaiosPath = Join-Path $BinDir "raios.exe"
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-if (!(Test-Path $BaseDir)) {
-    Write-Host "Klasor yapisi olusturuluyor: $BaseDir" -ForegroundColor Yellow
-    New-Item -Path $SkillsDir -ItemType Directory -Force
-}
-
-# 2. Bagimlilik Kontrolu (Node.js & Rust)
-function Check-Command($cmd, $install_msg) {
-    if (!(Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        Write-Host "Hata: $cmd bulunamadi. $install_msg" -ForegroundColor Red
-        return $false
-    }
-    return $true
-}
-
-$hasNode = Check-Command "node" "Lutfen Node.js (v20+) kurun: https://nodejs.org/"
-$hasRust = Check-Command "cargo" "Lutfen Rust kurun: https://rustup.rs/"
-
-if (-not ($hasNode -and $hasRust)) {
-    Write-Host "Temel gereksinimler eksik." -ForegroundColor Red
-    exit
-}
-
-# 3. Global AI Araclari (NPM)
-Write-Host "AI Agent'lar kuruluyor..." -ForegroundColor Cyan
-# npm install -g @anthropic-ai/claude-code @google/generative-ai # Zaten kurulu oldugunu varsayiyoruz
-
-# 4. R-AI-OS Build
-Write-Host "R-AI-OS derleniyor (raios & aiosd)..." -ForegroundColor Cyan
-cargo build --release
-
-# 5. PATH ve Launcher Kaydi
-$BinaryDestFolder = Join-Path $HOME ".aios"
-if (!(Test-Path $BinaryDestFolder)) { New-Item -Path $BinaryDestFolder -ItemType Directory }
-
-$Binaries = @("raios.exe", "aiosd.exe")
-foreach ($bin in $Binaries) {
-    $src = Join-Path (Get-Location) "target\release\$bin"
-    if (Test-Path $src) {
-        Copy-Item $src (Join-Path $BinaryDestFolder $bin) -Force
-        Write-Host "$bin kopyalandi." -ForegroundColor Green
+function Require-Command([string]$Name, [string]$Hint) {
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+        throw "$Name bulunamadi. $Hint"
     }
 }
 
-# Kullanici PATH'ine ekle
-$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($UserPath -notlike "*$BinaryDestFolder*") {
-    Write-Host "PATH guncelleniyor..." -ForegroundColor Yellow
-    $NewPath = $UserPath + ";" + $BinaryDestFolder
-    [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
-    $env:Path += ";$BinaryDestFolder"
+function To-TomlPath([string]$Path) {
+    return $Path.Replace('\', '/')
 }
 
-# 6. MASTER.md Baslatma
-$MasterFile = Join-Path $SystemDir "MASTER.md"
-if (!(Test-Path $MasterFile)) {
-    Write-Host "MASTER.md olusturuluyor..." -ForegroundColor Yellow
-    $Content = @"
-# R-AI-OS MASTER CONSTITUTION
-## Core Rules
-1. Be concise, be direct.
-2. Code in English, Communicate in Turkish.
-3. Functional first, error handling always.
-"@
-    Set-Content -Path $MasterFile -Value $Content
-}
+Write-Host "R-AI-OS Windows kurulumu basliyor..." -ForegroundColor Cyan
+Write-Host "  Repo:      $RepoRoot"
+Write-Host "  Binary:    $BinDir"
+Write-Host "  Workspace: $WorkspaceRoot"
 
-# 7. Otomatik Baslatma (Scheduled Task)
-Write-Host "7. Otomatik baslatma ayarlaniyor..." -ForegroundColor Cyan
-$AiosdPath = Join-Path $BinaryDestFolder "aiosd.exe"
-if (Test-Path $AiosdPath) {
+if (-not $SkipBuild) {
+    Require-Command "cargo" "Rust toolchain'i rustup.rs adresinden kurun."
+    Push-Location $RepoRoot
     try {
-        $Action = New-ScheduledTaskAction -Execute $AiosdPath -WorkingDirectory $BinaryDestFolder
+        Write-Host "Rust binary'leri derleniyor..." -ForegroundColor Cyan
+        & cargo build --release --locked --bin raios --bin aiosd
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo build basarisiz oldu (exit code: $LASTEXITCODE)"
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+New-Item -ItemType Directory -Force -Path $BinDir, $ConfigDir, $SystemDir, $SkillsDir | Out-Null
+
+foreach ($Binary in @("raios.exe", "aiosd.exe")) {
+    $Source = Join-Path $RepoRoot "target\release\$Binary"
+    if (-not (Test-Path $Source)) {
+        throw "$Source bulunamadi. Once cargo build --release calistirin veya -SkipBuild kullanmayin."
+    }
+    Copy-Item -Force $Source (Join-Path $BinDir $Binary)
+    Write-Host "  $Binary kuruldu" -ForegroundColor Green
+}
+
+# Keep the policy beside the platform config so the daemon and CLI resolve it
+# identically regardless of the current working directory.
+$PolicySource = Join-Path $RepoRoot "raios-policy.toml"
+if (Test-Path $PolicySource) {
+    Copy-Item -Force $PolicySource (Join-Path $ConfigDir "raios-policy.toml")
+}
+
+# Git symlinks used by the Linux development workspace are not portable to a
+# normal Windows checkout. Preserve the same role with a real bootstrap file.
+$ConstitutionCandidates = @(
+    (Join-Path $RepoRoot "AGENT_CONSTITUTION.md"),
+    (Join-Path $HOME "AGENT_CONSTITUTION.md")
+)
+$ConstitutionSource = $ConstitutionCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$MasterPath = Join-Path $SystemDir "MASTER.md"
+if ($ConstitutionSource) {
+    Copy-Item -Force $ConstitutionSource $MasterPath
+} elseif (-not (Test-Path $MasterPath)) {
+    $Bootstrap = @"
+# R-AI-OS Windows Bootstrap
+
+Copy the shared AGENT_CONSTITUTION.md into this file before using agent
+wrappers. The runtime configuration is already prepared for this path.
+"@
+    [System.IO.File]::WriteAllText($MasterPath, $Bootstrap, $Utf8NoBom)
+    Write-Warning "AGENT_CONSTITUTION.md bulunamadi; $MasterPath bootstrap olarak olusturuldu."
+}
+
+$DevOpsToml = To-TomlPath $WorkspaceRoot
+$MasterToml = To-TomlPath $MasterPath
+$SkillsToml = To-TomlPath $SkillsDir
+$Config = @"
+dev_ops_path = "$DevOpsToml"
+master_md_path = "$MasterToml"
+skills_path = "$SkillsToml"
+vault_projects_path = ""
+system_name = "k-ai-ra"
+agent_wrapper_enabled = false
+"@
+[System.IO.File]::WriteAllText((Join-Path $ConfigDir "config.toml"), $Config, $Utf8NoBom)
+
+if (-not $NoPath) {
+    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $PathEntries = @($UserPath -split ';' | Where-Object { $_ })
+    if ($PathEntries -notcontains $BinDir) {
+        [Environment]::SetEnvironmentVariable("Path", (($PathEntries + $BinDir) -join ';'), "User")
+        $env:Path = "$BinDir;$env:Path"
+        Write-Host "  Kullanici PATH guncellendi" -ForegroundColor Green
+    }
+}
+
+if (-not $NoScheduledTask) {
+    try {
+        $Action = New-ScheduledTaskAction -Execute $AiosdPath -WorkingDirectory $InstallRoot
         $Trigger = New-ScheduledTaskTrigger -AtLogOn
         $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-        Register-ScheduledTask -TaskName "RAIOS_Daemon" -Action $Action -Trigger $Trigger -Settings $Settings -Description "R-AI-OS Background Intelligence Daemon" -Force -ErrorAction Stop
-        Write-Host "✅ Otomatik baslatma (Scheduled Task) basariyla olusturuldu." -ForegroundColor Green
+        Register-ScheduledTask -TaskName "RAIOS_Daemon" -Action $Action -Trigger $Trigger -Settings $Settings -Description "R-AI-OS Background Intelligence Daemon" -Force | Out-Null
+        Start-ScheduledTask -TaskName "RAIOS_Daemon"
+        Write-Host "  RAIOS_Daemon Scheduled Task kuruldu ve baslatildi" -ForegroundColor Green
     } catch {
-        Write-Host "⚠️ Uyari: Otomatik baslatma ayarlanamadi. (Yonetici haklari gerekebilir)" -ForegroundColor Yellow
+        Write-Warning "Scheduled Task kurulamadı: $($_.Exception.Message)"
+        Write-Host "  Elle baslatmak icin: & '$AiosdPath'" -ForegroundColor Yellow
     }
 }
 
-Write-Host "Kurulum tamamlandi! Yeni bir terminal acip 'raios' yazarak baslayabilirsin." -ForegroundColor Green
+Write-Host "Kurulum tamamlandi. Yeni bir PowerShell acip 'raios --help' calistirin." -ForegroundColor Green

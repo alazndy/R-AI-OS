@@ -2,6 +2,7 @@ extern crate self as raios_runtime;
 pub mod agent_runner;
 pub mod agent_wrapper;
 pub mod daemon;
+pub mod control_plane;
 pub mod workers;
 pub mod swarm;
 pub mod cortex;

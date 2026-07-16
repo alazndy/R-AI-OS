@@ -22,7 +22,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --bin raios --bin aiosd
+        run: cargo build --release --workspace --locked
 
   test:
     name: Test (${{ matrix.os }})
@@ -36,7 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
-        run: cargo test --lib
+        run: cargo test --workspace --locked
 
   clippy:
     name: Clippy
@@ -48,7 +48,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy --lib -- -W clippy::all
+        run: cargo clippy --workspace --all-targets --locked -- -W clippy::all
 
   coverage:
     name: Coverage

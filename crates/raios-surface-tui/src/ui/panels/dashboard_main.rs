@@ -1,5 +1,6 @@
-use raios_surface_tui::app::App;
-use raios_surface_tui::ui::*;
+use crate::app::App;
+use crate::ui::routes::render_route_view;
+use crate::ui::*;
 use ratatui::{
     layout::{Constraint, Layout},
     Frame,
@@ -20,6 +21,6 @@ pub fn render_dashboard(frame: &mut Frame, app: &App) {
 
     render_header(frame, header_area, app);
     render_menu(frame, menu_area, app);
-    render_content(frame, content_area, app);
+    render_route_view(frame, content_area, &app.store);
     render_launcher(frame, launcher_area, app);
 }

@@ -128,6 +128,7 @@ pub enum BgMsg {
     Tasks(Vec<raios_runtime::tasks::Task>),
     VaultStatus(Vec<String>),
     ActivePorts(Vec<u16>),
+    ControlEvent(raios_contracts::Event),
     AiAuditReport(raios_runtime::system_scan::AiAuditReport),
     FileChanged(PathBuf),
     SearchResults(Vec<SearchResult>),

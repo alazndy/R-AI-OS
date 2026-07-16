@@ -1,6 +1,10 @@
+[CmdletBinding()]
+param(
+    [string]$ProjectDir = $PSScriptRoot
+)
+
 $ErrorActionPreference = "Stop"
 
-$ProjectDir = Join-Path $HOME "dev\tools\raios-tray"
 $Python = "python"
 $Script = Join-Path $ProjectDir "raios-tray.py"
 

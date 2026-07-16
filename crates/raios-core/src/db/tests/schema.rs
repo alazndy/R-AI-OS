@@ -120,6 +120,14 @@ fn bm25_tables_exist_after_migrate() {
         .query_row("SELECT COUNT(*) FROM bm25_files", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 0);
+
+    let mut stmt = conn.prepare("PRAGMA index_list(bm25_postings)").unwrap();
+    let indexes: Vec<String> = stmt
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+    assert!(indexes.contains(&"idx_bm25_postings_file".to_string()));
 }
 
 #[test]
@@ -236,6 +244,24 @@ fn control_plane_tables_exist() {
     assert_eq!(count_edges, 0);
     assert_eq!(count_graph_nodes, 0);
     assert_eq!(count_graphs, 0);
+}
+
+#[test]
+fn approvals_have_an_owner_and_owner_status_index() {
+    let conn = in_memory();
+    let cols = table_columns(&conn, "cp_approvals");
+    assert!(cols.contains(&"owner_subject".to_string()), "columns: {cols:?}");
+
+    let mut stmt = conn.prepare("PRAGMA index_list(cp_approvals)").unwrap();
+    let indexes: Vec<String> = stmt
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+    assert!(
+        indexes.contains(&"idx_cp_approvals_owner_status".to_string()),
+        "indexes: {indexes:?}"
+    );
 }
 
 #[test]

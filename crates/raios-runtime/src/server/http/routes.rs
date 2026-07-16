@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     response::IntoResponse,
     Json,
 };
@@ -237,6 +237,60 @@ fn resolve_pending_diff_target(file_path: &Path, allowed_base: &Path) -> Option<
     // symlink or Windows's \\?\ canonical prefix.
     let allowed_base = allowed_base.canonicalize().unwrap_or_else(|_| allowed_base.to_path_buf());
     resolved.starts_with(&allowed_base).then_some(resolved)
+}
+
+pub(super) async fn handle_cp_query(
+    Json(query): Json<raios_contracts::Query>,
+) -> impl IntoResponse {
+    let Ok(conn) = raios_core::db::open_db() else {
+        return Json(json!({"status": "error", "problem": raios_contracts::Problem::internal("Failed to open database")}));
+    };
+    match query {
+        raios_contracts::Query::GetSystemSnapshot => {
+            match crate::control_plane::service::load_system_snapshot(&conn) {
+                Ok(snap) => Json(json!({"status": "ok", "snapshot": snap})),
+                Err(e) => Json(json!({"status": "error", "problem": raios_contracts::Problem::internal(e)})),
+            }
+        }
+        raios_contracts::Query::GetNowSnapshot => {
+            match crate::control_plane::service::load_now_snapshot(&conn) {
+                Ok(snap) => Json(json!({"status": "ok", "now": snap})),
+                Err(e) => Json(json!({"status": "error", "problem": raios_contracts::Problem::internal(e)})),
+            }
+        }
+        raios_contracts::Query::GetWorkSnapshot => {
+            match crate::control_plane::service::load_work_snapshot(&conn) {
+                Ok(snap) => Json(json!({"status": "ok", "work": snap})),
+                Err(e) => Json(json!({"status": "error", "problem": raios_contracts::Problem::internal(e)})),
+            }
+        }
+        raios_contracts::Query::GetExploreSnapshot { search_query, .. } => {
+            match crate::control_plane::service::load_explore_snapshot(&conn, search_query.as_deref()) {
+                Ok(snap) => Json(json!({"status": "ok", "explore": snap})),
+                Err(e) => Json(json!({"status": "error", "problem": raios_contracts::Problem::internal(e)})),
+            }
+        }
+        raios_contracts::Query::GetGovernSnapshot => {
+            match crate::control_plane::service::load_govern_snapshot(&conn) {
+                Ok(snap) => Json(json!({"status": "ok", "govern": snap})),
+                Err(e) => Json(json!({"status": "error", "problem": raios_contracts::Problem::internal(e)})),
+            }
+        }
+        _ => Json(json!({"status": "error", "problem": raios_contracts::Problem::not_implemented("Query variant not supported via HTTP API")})),
+    }
+}
+
+pub(super) async fn handle_cp_command(
+    Extension(actor): Extension<crate::control_plane::service::ControlActor>,
+    Json(cmd): Json<raios_contracts::Command>,
+) -> impl IntoResponse {
+    let Ok(mut conn) = raios_core::db::open_db() else {
+        return Json(json!({"status": "error", "problem": raios_contracts::Problem::internal("Failed to open database")}));
+    };
+    match crate::control_plane::service::dispatch_control_command(&mut conn, &actor, &cmd) {
+        Ok(val) => Json(json!({"status": "ok", "result": val})),
+        Err(problem) => Json(json!({"status": "error", "problem": problem})),
+    }
 }
 
 fn decode_base64(s: &str) -> anyhow::Result<Vec<u8>> {

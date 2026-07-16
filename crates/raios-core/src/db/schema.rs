@@ -41,6 +41,17 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "ALTER TABLE cp_task_graph_nodes ADD COLUMN node_kind TEXT NOT NULL DEFAULT 'work'",
     );
+    // Keep the idempotent column upgrade separate from the index creation.
+    // Once the column exists, SQLite reports a duplicate-column error and
+    // stops that batch; bundling the CREATE INDEX with it used to leave older
+    // databases without the ownership lookup index forever.
+    let _ = conn.execute_batch(
+        "ALTER TABLE cp_approvals ADD COLUMN owner_subject TEXT NOT NULL DEFAULT 'local_control_owner'",
+    );
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_cp_approvals_owner_status
+             ON cp_approvals(owner_subject, status)",
+    );
 
     conn.execute_batch(
         "
@@ -118,6 +129,10 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             snippet TEXT    NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_bm25_token ON bm25_postings(token);
+        -- The token index cannot serve ON DELETE CASCADE lookups by file_id.
+        -- Without this, a scoped reindex repeatedly scans the whole postings
+        -- table while removing stale files.
+        CREATE INDEX IF NOT EXISTS idx_bm25_postings_file ON bm25_postings(file_id);
         ",
     )?;
 
@@ -259,11 +274,13 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             approval_type TEXT NOT NULL,
             reason TEXT NOT NULL,
             status TEXT NOT NULL,
+            owner_subject TEXT NOT NULL DEFAULT 'local_control_owner',
             requested_at TEXT NOT NULL,
             resolved_at TEXT,
             resolved_by TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_cp_approvals_status ON cp_approvals(status);
+        CREATE INDEX IF NOT EXISTS idx_cp_approvals_owner_status ON cp_approvals(owner_subject, status);
 
         CREATE TABLE IF NOT EXISTS cp_budget_ledger (
             id TEXT PRIMARY KEY,

@@ -39,6 +39,22 @@ cargo install --path .
 ```
 Ensure that `~/.cargo/bin` (or `%USERPROFILE%\.cargo\bin` on Windows) is included in your system's `PATH` environment variable.
 
+### Windows one-command installer
+
+For a normal Windows 10/11 machine, run the repository installer from
+PowerShell instead of copying binaries manually:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+.\install-system.ps1
+```
+
+It builds `raios.exe` and `aiosd.exe`, installs them under
+`%LOCALAPPDATA%\R-AI-OS\bin`, prepares `%APPDATA%\raios\config.toml` and
+`raios-policy.toml`, adds the binary directory to the user `PATH`, and creates
+the `RAIOS_Daemon` logon task. Use `-NoScheduledTask` when the daemon should be
+started manually.
+
 ## The Bootstrap Command
 
 After installation, you must initialize the system using the bootstrap command:
@@ -58,14 +74,14 @@ The `bootstrap` command is the "Day 0" operation that prepares the R-AI-OS kerne
 
 R-AI-OS relies on a few key configuration files and security tokens to function correctly.
 
-### 1. IPC Token (`.ipc_token`)
+### 1. IPC Token (`.session_token`)
 Security is handled via a rolling IPC token.
-- **Location:** `~/.config/raios/.ipc_token`
-- **Behavior:** The `aiosd` daemon generates a random UUID upon startup and writes it to this file. The `raios` CLI reads this token to authenticate every request.
+- **Location:** `~/.config/raios/.session_token` (Windows: `%APPDATA%\raios\.session_token`)
+- **Behavior:** The `aiosd` daemon generates a random secret upon startup and writes it to this file. Local clients read this token to authenticate every request.
 - **Security:** This file is created with restricted filesystem permissions to ensure only the local user can access it.
 
 ### 2. Configuration Files
-- **Global Config:** `~/.config/raios/config.yaml` (or `.json`) stores global preferences such as default AI models, log levels, and UI theme settings.
+- **Global Config:** `~/.config/raios/config.toml` (Windows: `%APPDATA%\raios\config.toml`) stores workspace and daemon settings.
 - **Project Manifest:** You can place a `.raios.yaml` file in any project root to override global settings for that specific workspace.
 
 ### 3. Environment Variables

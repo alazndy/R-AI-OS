@@ -40,9 +40,23 @@ pub fn run_hook(_name: &str, hook_script: &str, payload: &HookPayload) -> HookOu
         payload_json.into_bytes()
     };
 
-    let mut child = match Command::new("sh")
-        .arg("-c")
-        .arg(hook_script)
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            hook_script,
+        ]);
+        command
+    } else {
+        let mut command = Command::new("sh");
+        command.args(["-c", hook_script]);
+        command
+    };
+
+    let mut child = match command
         .env("RAIOS_HOOKS_DISABLED", "1")
         .env("RAIOS_HOOK_NAME", &payload.hook)
         .stdin(Stdio::piped())
@@ -52,7 +66,10 @@ pub fn run_hook(_name: &str, hook_script: &str, payload: &HookPayload) -> HookOu
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[Hooks] Failed to spawn hook script '{}': {}", hook_script, e);
+            eprintln!(
+                "[Hooks] Failed to spawn hook script '{}': {}",
+                hook_script, e
+            );
             return HookOutcome::Allowed; // Fail open
         }
     };
@@ -64,7 +81,10 @@ pub fn run_hook(_name: &str, hook_script: &str, payload: &HookPayload) -> HookOu
     let output = match child.wait_with_output() {
         Ok(out) => out,
         Err(e) => {
-            eprintln!("[Hooks] Error waiting for hook script '{}': {}", hook_script, e);
+            eprintln!(
+                "[Hooks] Error waiting for hook script '{}': {}",
+                hook_script, e
+            );
             return HookOutcome::Allowed; // Fail open
         }
     };
@@ -94,7 +114,10 @@ pub fn run_hook(_name: &str, hook_script: &str, payload: &HookPayload) -> HookOu
             HookOutcome::Allowed
         }
         None => {
-            eprintln!("[Hooks] Hook script '{}' terminated by signal (fail-open)", hook_script);
+            eprintln!(
+                "[Hooks] Hook script '{}' terminated by signal (fail-open)",
+                hook_script
+            );
             HookOutcome::Allowed
         }
     }
@@ -128,7 +151,12 @@ mod tests {
             agent: None,
             timestamp: "2026-07-15 12:00:00".into(),
         };
-        let outcome = run_hook("pre_tool_call", "echo 'Security Violation' >&2; exit 2", &payload);
+        let script = if cfg!(windows) {
+            "[Console]::Error.WriteLine('Security Violation'); exit 2"
+        } else {
+            "echo 'Security Violation' >&2; exit 2"
+        };
+        let outcome = run_hook("pre_tool_call", script, &payload);
         assert_eq!(
             outcome,
             HookOutcome::Blocked {

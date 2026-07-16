@@ -1,4 +1,4 @@
-use raios_surface_tui::app::{App, MENU_ITEMS};
+use raios_surface_tui::app::{route::Route, App};
 use raios_surface_tui::ui::*;
 use ratatui::{
     layout::Rect,
@@ -9,20 +9,18 @@ use ratatui::{
 };
 
 pub fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<ListItem> = MENU_ITEMS
+    let items: Vec<ListItem> = Route::all()
         .iter()
-        .enumerate()
-        .map(|(i, &item)| {
-            let has_files = matches!(i, 1 | 3 | 4 | 5);
-            let arrow = if has_files { " ›" } else { "" };
-            let full = format!("  {}{}  ", item, arrow);
+        .map(|route| {
+            let label = format!("{} {}", route.icon(), route.title());
+            let full = format!("  {label}  ");
 
-            if i == app.ui.menu_cursor {
-                if app.ui.right_panel_focus {
+            if *route == app.store.current_route {
+                if app.store.right_panel_focus {
                     ListItem::new(Line::from(Span::styled(full, Style::new().fg(DIM))))
                 } else {
                     ListItem::new(Line::from(Span::styled(
-                        format!("▶ {}{}", item, arrow),
+                        format!("▶ {label}"),
                         Style::new()
                             .fg(GREEN)
                             .bg(Color::Rgb(0, 20, 45))

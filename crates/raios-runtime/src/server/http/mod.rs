@@ -17,8 +17,8 @@ mod websocket;
 use a2a::{handle_a2a, handle_agent_card};
 use auth::auth_middleware;
 use routes::{
-    handle_approve, handle_git_status, handle_health, handle_inbox, handle_plans, handle_projects,
-    handle_swarm, handle_tasks, handle_usage,
+    handle_approve, handle_cp_command, handle_cp_query, handle_git_status, handle_health,
+    handle_inbox, handle_plans, handle_projects, handle_swarm, handle_tasks, handle_usage,
 };
 use websocket::handle_websocket;
 
@@ -82,6 +82,8 @@ pub async fn start_http_server(
         .route("/api/approve", post(handle_approve))
         .route("/api/git-status", get(handle_git_status))
         .route("/api/swarm", get(handle_swarm))
+        .route("/api/v1/control/query", post(handle_cp_query))
+        .route("/api/v1/control/command", post(handle_cp_command))
         .route("/api/stream", get(handle_websocket))
         .route("/.well-known/agent.json", get(handle_agent_card))
         .route("/a2a", post(handle_a2a))

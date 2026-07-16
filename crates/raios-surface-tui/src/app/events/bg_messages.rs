@@ -19,6 +19,9 @@ impl App {
             BgMsg::BootResult { name, pass, done } => self.handle_boot_result(name, pass, done),
             BgMsg::TransitionToSetup => self.handle_transition_to_setup(),
             BgMsg::TransitionToDashboard => self.handle_transition_to_dashboard(),
+            BgMsg::ControlEvent(evt) => {
+                crate::app::reducer::reduce_event(&mut self.store, evt);
+            }
             BgMsg::SearchResults(results) => {
                 self.search.results = results;
                 self.search.cursor = 0;
@@ -294,6 +297,9 @@ impl App {
 
     fn handle_transition_to_dashboard(&mut self) {
         self.state = AppState::Dashboard;
+        if let Err(problem) = self.client.send_query(raios_contracts::Query::GetSystemSnapshot) {
+            self.store.last_error = Some(problem.message);
+        }
         self.system.graphify_script =
             raios_runtime::health::find_graphify_script(&self.config.dev_ops_path);
         let tx = self.tx.clone();

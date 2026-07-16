@@ -245,7 +245,8 @@ fn open_trigram_db(db_path: &Path) -> Result<Connection> {
              file_id INTEGER NOT NULL REFERENCES trigram_files(id) ON DELETE CASCADE
          );
          CREATE INDEX IF NOT EXISTS idx_trigram ON trigram_postings(trigram);
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_trigram_file ON trigram_postings(trigram, file_id);",
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_trigram_file ON trigram_postings(trigram, file_id);
+         CREATE INDEX IF NOT EXISTS idx_trigram_postings_file ON trigram_postings(file_id);",
     )?;
     Ok(conn)
 }
@@ -449,6 +450,50 @@ mod tests {
         ensure_index(&ws, &db, true).unwrap();
 
         assert_eq!(file_count(&db), 2);
+    }
+
+    #[test]
+    fn force_rebuild_prunes_paths_that_are_now_skipped() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("ws");
+        let db = tmp.path().join("test.db");
+        write_file(&ws.join("live.rs"), "fn live() {}");
+        write_file(&ws.join("archives/old.rs"), "fn archived() {}");
+
+        // Seed a legacy cache row that predates the archive exclusion.
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE trigram_files (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 path TEXT UNIQUE NOT NULL,
+                 mtime_secs INTEGER NOT NULL
+             );
+             CREATE TABLE trigram_postings (
+                 trigram TEXT NOT NULL,
+                 file_id INTEGER NOT NULL REFERENCES trigram_files(id) ON DELETE CASCADE
+             );",
+        )
+        .unwrap();
+        let archived = ws.join("archives/old.rs").canonicalize().unwrap();
+        conn.execute(
+            "INSERT INTO trigram_files (path, mtime_secs) VALUES (?1, 0)",
+            params![archived.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        drop(conn);
+
+        ensure_index(&ws, &db, true).unwrap();
+
+        let conn = Connection::open(&db).unwrap();
+        let stale: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM trigram_files WHERE path = ?1",
+                params![archived.to_string_lossy().to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale, 0);
     }
 
     #[test]

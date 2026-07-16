@@ -21,6 +21,12 @@ pub use ipc::*;
 pub mod ipc_support;
 pub mod ipc_events;
 
+pub mod client;
+pub mod intent;
+pub mod reducer;
+pub mod route;
+pub mod store;
+
 pub mod services;
 pub use services::*;
 
@@ -211,6 +217,10 @@ pub struct App {
 
     // Constitution Editor
     pub constitution: ConstitutionState,
+
+    // Control-Plane Typed State & Client
+    pub store: store::Store,
+    pub client: client::Client,
 }
 
 impl Default for App {
@@ -247,6 +257,8 @@ impl App {
 
         // --- Connect to aiosd Daemon (or spawn embedded workers if offline) ---
         let tx_daemon = ipc::connect_daemon(tx.clone());
+        let store = store::Store::new();
+        let client = client::Client::new(tx_daemon.clone());
 
         // Spawn embedded workers when aiosd is not available (local only)
         if !config.dev_ops_path.as_os_str().is_empty() {
@@ -301,6 +313,8 @@ impl App {
             _watcher: None,
             wizard: WizardState::default(),
             constitution: ConstitutionState::default(),
+            store,
+            client,
         }
     }
 
@@ -330,7 +344,10 @@ impl App {
                 .ok();
         });
 
+        // Remote connections use the remote host for daemon IPC
         let tx_daemon = ipc::connect_daemon_addr(tx.clone(), Some(host.clone()));
+        let store = store::Store::new();
+        let client = client::Client::new(tx_daemon.clone());
 
         Self {
             state: AppState::Booting,
@@ -359,6 +376,8 @@ impl App {
             _watcher: None,
             wizard: WizardState::default(),
             constitution: ConstitutionState::default(),
+            store,
+            client,
         }
     }
 

@@ -10,10 +10,14 @@ use walkdir::WalkDir;
 /// entire Android/Kotlin project (GT-Launcher): only doc/config-adjacent
 /// languages were covered, no mainstream compiled/mobile languages at all.
 pub(crate) const INDEXED_EXTS: &[&str] = &[
-    "md", "rs", "ts", "tsx", "js", "jsx", "py", "toml", "json", "yaml", "yml",
-    "go", "kt", "kts", "java", "swift", "c", "cc", "cpp", "h", "hpp", "cs",
-    "rb", "php", "sh", "sql", "dart",
+    "md", "rs", "ts", "tsx", "js", "jsx", "py", "toml", "json", "yaml", "yml", "go", "kt", "kts",
+    "java", "swift", "c", "cc", "cpp", "h", "hpp", "cs", "rb", "php", "sh", "sql", "dart",
 ];
+
+/// Search is optimized for source and documentation, not large generated or
+/// vendored text blobs. A single such file can yield millions of distinct
+/// trigrams and disproportionately inflate the shared SQLite cache.
+pub(crate) const MAX_INDEX_FILE_BYTES: u64 = 1_048_576;
 
 /// Single source of truth for which directories raios's search engines never
 /// descend into (see `cortex::SKIP_DIRS` re-export). Extended 2026-07-10 after
@@ -47,6 +51,11 @@ pub(crate) const SKIP_DIRS: &[&str] = &[
     // match twice on GT-Launcher — once from the real source, once from a
     // stale 56MB worktree copy — because "worktrees" wasn't skipped.
     "worktrees",
+    // Archive/backup trees are immutable history, not live workspace source.
+    // Indexing them duplicates projects and can grow the shared search DB by GBs.
+    "archives",
+    "Gemini_CLI_System_Backup",
+    "backups",
 ];
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -95,6 +104,13 @@ impl ProjectIndex {
             let path = entry.path();
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if !INDEXED_EXTS.contains(&ext) {
+                continue;
+            }
+            if entry
+                .metadata()
+                .map(|metadata| metadata.len() > MAX_INDEX_FILE_BYTES)
+                .unwrap_or(true)
+            {
                 continue;
             }
             if let Ok(content) = std::fs::read_to_string(path) {
@@ -209,16 +225,16 @@ impl ProjectIndex {
         let mut stale_ids: Vec<i64> = Vec::new();
         let mut warm_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        if !force {
-            for (path, (file_id, cached_mtime, _)) in &cached {
-                match fs.get(path.as_str()) {
-                    Some(&fs_mtime) if fs_mtime == *cached_mtime => {
-                        warm_paths.insert(path.clone());
-                    }
-                    _ => {
-                        stale_ids.push(*file_id);
-                    }
+        for (path, (file_id, cached_mtime, _)) in &cached {
+            match fs.get(path.as_str()) {
+                Some(&fs_mtime) if !force && fs_mtime == *cached_mtime => {
+                    warm_paths.insert(path.clone());
                 }
+                // A force rebuild must first evict every cached row in this
+                // root, including paths that disappeared because they are now
+                // covered by SKIP_DIRS. Otherwise old archive rows live on
+                // indefinitely even after `--reindex`.
+                _ => stale_ids.push(*file_id),
             }
         }
 
@@ -334,7 +350,8 @@ fn open_bm25_db(db_path: &Path) -> anyhow::Result<Connection> {
              line_no INTEGER NOT NULL,
              snippet TEXT NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS idx_bm25_token ON bm25_postings(token);",
+         CREATE INDEX IF NOT EXISTS idx_bm25_token ON bm25_postings(token);
+         CREATE INDEX IF NOT EXISTS idx_bm25_postings_file ON bm25_postings(file_id);",
     )?;
     Ok(conn)
 }
@@ -353,10 +370,15 @@ pub(crate) fn fs_mtimes(root: &Path) -> HashMap<String, u64> {
         if !INDEXED_EXTS.contains(&ext) {
             continue;
         }
-        let mtime = entry
-            .metadata()
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.len() > MAX_INDEX_FILE_BYTES {
+            continue;
+        }
+        let mtime = metadata
+            .modified()
             .ok()
-            .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
@@ -416,6 +438,39 @@ mod tests {
     }
 
     #[test]
+    fn fs_mtimes_skips_archive_and_backup_trees() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(ws.join("live.rs"), "fn live() {}").unwrap();
+        fs::create_dir_all(ws.join("archives")).unwrap();
+        fs::write(ws.join("archives/old.rs"), "fn archived() {}").unwrap();
+        fs::create_dir_all(ws.join("Gemini_CLI_System_Backup")).unwrap();
+        fs::write(ws.join("Gemini_CLI_System_Backup/old.rs"), "fn backup() {}").unwrap();
+
+        let files = fs_mtimes(&ws);
+        assert_eq!(files.len(), 1);
+        assert!(files.keys().next().unwrap().ends_with("live.rs"));
+    }
+
+    #[test]
+    fn fs_mtimes_skips_oversized_source_files() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(ws.join("small.rs"), "fn small() {}").unwrap();
+        fs::write(
+            ws.join("generated.rs"),
+            vec![b'x'; MAX_INDEX_FILE_BYTES as usize + 1],
+        )
+        .unwrap();
+
+        let files = fs_mtimes(&ws);
+        assert_eq!(files.len(), 1);
+        assert!(files.keys().next().unwrap().ends_with("small.rs"));
+    }
+
+    #[test]
     fn second_load_uses_cache() {
         let tmp = TempDir::new().unwrap();
         let ws = make_workspace(&tmp);
@@ -467,7 +522,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 1, "project A's cached row must survive indexing project B");
+        assert_eq!(
+            count, 1,
+            "project A's cached row must survive indexing project B"
+        );
 
         // Re-loading A must warm-reuse the surviving cache, not rebuild from scratch.
         let idx_a2 = ProjectIndex::load_or_build(&ws_a, &db, false).unwrap();
@@ -513,8 +571,8 @@ mod tests {
         let db = tmp.path().join("test.db");
         let ws = tmp.path().join("ws");
         fs::create_dir_all(&ws).unwrap();
-        fs::write(&ws.join("a.rs"), "alpha bravo").unwrap();
-        fs::write(&ws.join("b.rs"), "charlie delta echo").unwrap();
+        fs::write(ws.join("a.rs"), "alpha bravo").unwrap();
+        fs::write(ws.join("b.rs"), "charlie delta echo").unwrap();
 
         ProjectIndex::load_or_build(&ws, &db, false).unwrap();
 
@@ -522,7 +580,10 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM bm25_postings", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 5, "posting count must equal exact per-file token occurrences, no duplication or loss");
+        assert_eq!(
+            count, 5,
+            "posting count must equal exact per-file token occurrences, no duplication or loss"
+        );
     }
 
     #[test]
@@ -538,9 +599,61 @@ mod tests {
         let file_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM bm25_files", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(file_count, 2, "REPLACE semantics must not duplicate rows across repeated force rebuilds");
+        assert_eq!(
+            file_count, 2,
+            "REPLACE semantics must not duplicate rows across repeated force rebuilds"
+        );
 
         let results = idx2.search("println");
         assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn force_rebuild_prunes_paths_that_are_now_skipped() {
+        let tmp = TempDir::new().unwrap();
+        let db = tmp.path().join("test.db");
+        let ws = tmp.path().join("ws");
+        fs::create_dir_all(ws.join("archives")).unwrap();
+        fs::write(ws.join("live.rs"), "fn live() {}").unwrap();
+        fs::write(ws.join("archives/old.rs"), "fn archived() {}").unwrap();
+
+        // Seed the cache as if it were built before `archives` became a
+        // skipped directory; this exercises the real upgrade path.
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE bm25_files (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 path TEXT UNIQUE NOT NULL,
+                 mtime_secs INTEGER NOT NULL,
+                 doc_length INTEGER NOT NULL
+             );
+             CREATE TABLE bm25_postings (
+                 token TEXT NOT NULL,
+                 file_id INTEGER NOT NULL REFERENCES bm25_files(id) ON DELETE CASCADE,
+                 line_no INTEGER NOT NULL,
+                 snippet TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        let archived = ws.join("archives/old.rs").canonicalize().unwrap();
+        conn.execute(
+            "INSERT INTO bm25_files (path, mtime_secs, doc_length) VALUES (?1, 0, 1)",
+            params![archived.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        drop(conn);
+
+        ProjectIndex::load_or_build(&ws, &db, true).unwrap();
+
+        let conn = Connection::open(&db).unwrap();
+        let stale: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bm25_files WHERE path = ?1",
+                params![archived.to_string_lossy().to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale, 0);
     }
 }

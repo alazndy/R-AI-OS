@@ -37,12 +37,19 @@ pub fn cmd_preflight(project: Option<String>, dev_ops_path: &Path) -> bool {
         }
     };
 
-    let project_name = project
-        .as_deref()
-        .unwrap_or_else(|| target_path.file_name().unwrap_or_default().to_str().unwrap_or("?"));
+    let project_name = project.as_deref().unwrap_or_else(|| {
+        target_path
+            .file_name()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or("?")
+    });
 
     println!();
-    println!("━━━ PRE-FLIGHT CHECK: {} ━━━━━━━━━━━━━━━━━━━━━━━━━━", project_name);
+    println!(
+        "━━━ PRE-FLIGHT CHECK: {} ━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        project_name
+    );
     println!();
 
     let checks = run_checks(&target_path, PreflightMode::CommitGate);
@@ -50,7 +57,13 @@ pub fn cmd_preflight(project: Option<String>, dev_ops_path: &Path) -> bool {
     let warnings: Vec<_> = checks.iter().filter(|c| !c.pass && !c.blocking).collect();
 
     for c in &checks {
-        let icon = if c.pass { "✓" } else if c.blocking { "✗" } else { "⚠" };
+        let icon = if c.pass {
+            "✓"
+        } else if c.blocking {
+            "✗"
+        } else {
+            "⚠"
+        };
         let detail = if c.detail.is_empty() {
             String::new()
         } else {
@@ -63,10 +76,7 @@ pub fn cmd_preflight(project: Option<String>, dev_ops_path: &Path) -> bool {
     if blockers.is_empty() && warnings.is_empty() {
         println!("  RESULT: ✓ READY TO COMMIT");
     } else if blockers.is_empty() {
-        println!(
-            "  RESULT: ⚠ READY (with {} warning(s))",
-            warnings.len()
-        );
+        println!("  RESULT: ⚠ READY (with {} warning(s))", warnings.len());
     } else {
         println!(
             "  RESULT: ✗ BLOCKED ({} blocker(s), {} warning(s))",
@@ -190,7 +200,11 @@ fn check_readme(path: &Path) -> Check {
     Check {
         label: "README.md",
         pass: exists,
-        detail: if exists { String::new() } else { "missing — create it".into() },
+        detail: if exists {
+            String::new()
+        } else {
+            "missing — create it".into()
+        },
         blocking: false,
     }
 }
@@ -229,7 +243,11 @@ fn check_sigmap(path: &Path) -> Check {
     Check {
         label: "SIGMAP.md",
         pass: exists,
-        detail: if exists { String::new() } else { "missing — run: sigmap".into() },
+        detail: if exists {
+            String::new()
+        } else {
+            "missing — run: sigmap".into()
+        },
         blocking: false,
     }
 }
@@ -332,7 +350,14 @@ fn check_secrets_in_diff(path: &Path, mode: PreflightMode) -> Check {
         .output();
     let diff = match out {
         Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-        Err(_) => return Check { label: "Secrets in diff", pass: true, detail: String::new(), blocking: false },
+        Err(_) => {
+            return Check {
+                label: "Secrets in diff",
+                pass: true,
+                detail: String::new(),
+                blocking: false,
+            }
+        }
     };
 
     // Simple pattern matching — no regex dep needed
@@ -363,28 +388,12 @@ fn check_secrets_in_diff(path: &Path, mode: PreflightMode) -> Check {
         Check {
             label: "Secrets in diff",
             pass: false,
-            detail: format!("possible secret detected: {} — review diff", found.join(", ")),
+            detail: format!(
+                "possible secret detected: {} — review diff",
+                found.join(", ")
+            ),
             blocking: true,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn agent_run_gate_skips_git_staging_checks() {
-        let checks = enabled_checks_for_mode(PreflightMode::AgentRunGate);
-        assert!(!checks.contains(&CheckKind::GitStaged));
-        assert!(!checks.contains(&CheckKind::GitUnstaged));
-    }
-
-    #[test]
-    fn commit_gate_keeps_git_staging_checks() {
-        let checks = enabled_checks_for_mode(PreflightMode::CommitGate);
-        assert!(checks.contains(&CheckKind::GitStaged));
-        assert!(checks.contains(&CheckKind::GitUnstaged));
     }
 }
 
@@ -393,7 +402,12 @@ fn check_security_scan(path: &Path) -> Check {
     let high_count = report
         .issues
         .iter()
-        .filter(|i| matches!(i.severity, raios_core::security::Severity::High | raios_core::security::Severity::Critical))
+        .filter(|i| {
+            matches!(
+                i.severity,
+                raios_core::security::Severity::High | raios_core::security::Severity::Critical
+            )
+        })
         .count();
     let total = report.issues.len();
 
@@ -403,7 +417,10 @@ fn check_security_scan(path: &Path) -> Check {
         detail: if total == 0 {
             "clean".into()
         } else if high_count > 0 {
-            format!("{} HIGH/CRITICAL finding(s) — run: raios security", high_count)
+            format!(
+                "{} HIGH/CRITICAL finding(s) — run: raios security",
+                high_count
+            )
         } else {
             format!("{} low/medium finding(s)", total)
         },
@@ -429,4 +446,23 @@ fn resolve_path(project: Option<&str>, dev_ops_path: &Path) -> Option<PathBuf> {
     }
     // 3. Fallback: current directory
     std::env::current_dir().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_run_gate_skips_git_staging_checks() {
+        let checks = enabled_checks_for_mode(PreflightMode::AgentRunGate);
+        assert!(!checks.contains(&CheckKind::GitStaged));
+        assert!(!checks.contains(&CheckKind::GitUnstaged));
+    }
+
+    #[test]
+    fn commit_gate_keeps_git_staging_checks() {
+        let checks = enabled_checks_for_mode(PreflightMode::CommitGate);
+        assert!(checks.contains(&CheckKind::GitStaged));
+        assert!(checks.contains(&CheckKind::GitUnstaged));
+    }
 }

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/raios-contracts",
     "crates/raios-core",
     "crates/raios-runtime",
     "crates/raios-surface-tui",

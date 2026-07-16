@@ -2367,6 +2367,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "raios-contracts"
+version = "3.5.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "raios-core"
 version = "3.5.0"
 dependencies = [
@@ -2405,7 +2416,9 @@ dependencies = [
  "notify",
  "notify-rust",
  "ort-sys",
+ "raios-contracts",
  "raios-core",
+ "raios-surface-tui",
  "regex",
  "rusqlite",
  "serde",
@@ -2475,6 +2488,7 @@ dependencies = [
  "crossterm",
  "dirs 5.0.1",
  "notify",
+ "raios-contracts",
  "raios-core",
  "raios-runtime",
  "ratatui",

@@ -336,6 +336,32 @@ cd R-AI-OS
 cargo install --path . --force
 ```
 
+### Windows 10/11 (portable local install)
+
+The core system runs natively on Windows: `raios.exe` is the CLI/TUI and
+`aiosd.exe` is the background daemon. From PowerShell in the cloned repository:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+Set-Location .\R-AI-OS
+.\install-system.ps1
+```
+
+The installer builds locked release binaries, places them under
+`%LOCALAPPDATA%\R-AI-OS\bin`, adds that directory to the user `PATH`, writes
+config/token/policy under `%APPDATA%\raios`, and registers the daemon as the
+per-user `RAIOS_Daemon` Scheduled Task. Start a new PowerShell afterwards:
+
+```powershell
+raios hub status
+raios
+```
+
+Useful switches are `-SkipBuild`, `-NoScheduledTask`, `-NoPath`,
+`-InstallRoot <path>`, and `-WorkspaceRoot <path>`. The bundled agent wrapper
+uses the PowerShell profile (`$PROFILE`); external agent CLIs such as Claude,
+Codex, OpenCode, and `agy` remain separate prerequisites.
+
 ### Reinstall / Upgrade (Linux/macOS)
 
 Use the bundled `install.sh` instead of running the steps above by hand. `cargo install --force` already replaces the binary at its single fixed path (`~/.cargo/bin/{raios,aiosd}`) — it physically cannot leave two copies behind — but a previously *running* `aiosd`/`raios-tray` process would otherwise keep serving the old code in memory until restarted. The script handles the full cycle:

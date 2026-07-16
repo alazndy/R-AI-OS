@@ -75,6 +75,17 @@ impl App {
     }
 
     pub(crate) fn handle_dashboard_key(&mut self, key: KeyEvent) -> Result<()> {
+        if self.handle_control_dashboard_key(key)? {
+            return Ok(());
+        }
+
+        // The four control-plane routes own dashboard interaction. Keep only
+        // global dashboard affordances from the legacy surface while its
+        // detailed screens are retired behind the command palette.
+        if !matches!(key.code, KeyCode::Char('q' | '?' | '/')) {
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('?') => {
@@ -550,5 +561,103 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Handles the live control-plane dashboard before legacy dashboard shortcuts.
+    /// Returning `true` consumes the key so the retired 16-item menu cannot mutate
+    /// state behind the four typed routes.
+    fn handle_control_dashboard_key(&mut self, key: KeyEvent) -> Result<bool> {
+        use crate::app::intent::Intent;
+        use crate::app::reducer::reduce_intent;
+        use crate::app::route::Route;
+        use raios_contracts::{Command, Query};
+
+        match key.code {
+            KeyCode::Char('1') => reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Now)),
+            KeyCode::Char('2') => reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Work)),
+            KeyCode::Char('3') => reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Explore)),
+            KeyCode::Char('4') => reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Govern)),
+            KeyCode::Tab => reduce_intent(&mut self.store, Intent::NextRoute),
+            KeyCode::BackTab => reduce_intent(&mut self.store, Intent::PrevRoute),
+            KeyCode::Up | KeyCode::Char('k') => reduce_intent(&mut self.store, Intent::CursorUp),
+            KeyCode::Down | KeyCode::Char('j') => reduce_intent(&mut self.store, Intent::CursorDown),
+            KeyCode::Left | KeyCode::Char('h') => reduce_intent(&mut self.store, Intent::CursorLeft),
+            KeyCode::Right | KeyCode::Char('l') => reduce_intent(&mut self.store, Intent::CursorRight),
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                if self.store.current_route != Route::Now {
+                    self.store.last_error = Some("Approvals are available only on NOW.".into());
+                } else if let Some(approval_id) = self
+                    .store
+                    .snapshot
+                    .now
+                    .approvals
+                    .get(self.store.cursor)
+                    .map(|approval| approval.id.clone())
+                {
+                    let command = Command::ApproveHandoff {
+                        idempotency_key: format!("approve-{approval_id}"),
+                        approval_id,
+                    };
+                    if let Err(problem) = self.client.send_command(command) {
+                        self.store.last_error = Some(problem.message);
+                    }
+                } else {
+                    self.store.last_error = Some("No approval selected.".into());
+                }
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                if self.store.current_route == Route::Govern {
+                    if let Some(job_id) = self
+                        .store
+                        .snapshot
+                        .govern
+                        .cron_jobs
+                        .get(self.store.cursor)
+                        .map(|job| job.id.clone())
+                    {
+                        let command = Command::TriggerCronJob {
+                            idempotency_key: format!("trigger-{job_id}"),
+                            job_id,
+                        };
+                        if let Err(problem) = self.client.send_command(command) {
+                            self.store.last_error = Some(problem.message);
+                        }
+                    } else {
+                        self.store.last_error = Some("No cron job selected.".into());
+                    }
+                } else if self.store.current_route == Route::Now {
+                    if let Some(approval_id) = self
+                        .store
+                        .snapshot
+                        .now
+                        .approvals
+                        .get(self.store.cursor)
+                        .map(|approval| approval.id.clone())
+                    {
+                        let command = Command::RejectHandoff {
+                            idempotency_key: format!("reject-{approval_id}"),
+                            approval_id,
+                            reason: "Rejected by TUI user".into(),
+                        };
+                        if let Err(problem) = self.client.send_command(command) {
+                            self.store.last_error = Some(problem.message);
+                        }
+                    } else {
+                        self.store.last_error = Some("No approval selected.".into());
+                    }
+                } else {
+                    self.store.last_error = Some("Reject is available only on NOW.".into());
+                }
+            }
+            KeyCode::Char('g') => {
+                if let Err(problem) = self.client.send_query(Query::GetSystemSnapshot) {
+                    self.store.last_error = Some(problem.message);
+                }
+            }
+            KeyCode::Esc => self.store.last_error = None,
+            _ => return Ok(false),
+        }
+
+        Ok(true)
     }
 }

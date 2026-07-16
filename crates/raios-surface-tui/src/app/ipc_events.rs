@@ -5,6 +5,10 @@ use raios_surface_tui::app::state::BgMsg;
 use raios_runtime::indexer::SearchResult;
 
 pub(crate) fn dispatch_event(tx: &Sender<BgMsg>, v: &serde_json::Value) {
+    if let Ok(evt) = serde_json::from_value::<raios_contracts::Event>(v.clone()) {
+        tx.send(BgMsg::ControlEvent(evt)).ok();
+    }
+
     match v["event"].as_str() {
         Some("FileChanged") => handle_file_changed(tx, v),
         Some("SearchResults") => handle_search_results(tx, v),

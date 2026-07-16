@@ -13,9 +13,27 @@ pub struct WrapperResult {
 }
 
 impl WrapperResult {
-    fn ok(desc: impl Into<String>) -> Self { Self { desc: desc.into(), ok: true, skipped: false } }
-    fn fail(desc: impl Into<String>) -> Self { Self { desc: desc.into(), ok: false, skipped: false } }
-    fn skip(desc: impl Into<String>) -> Self { Self { desc: desc.into(), ok: true, skipped: true } }
+    fn ok(desc: impl Into<String>) -> Self {
+        Self {
+            desc: desc.into(),
+            ok: true,
+            skipped: false,
+        }
+    }
+    fn fail(desc: impl Into<String>) -> Self {
+        Self {
+            desc: desc.into(),
+            ok: false,
+            skipped: false,
+        }
+    }
+    fn skip(desc: impl Into<String>) -> Self {
+        Self {
+            desc: desc.into(),
+            ok: true,
+            skipped: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -28,13 +46,36 @@ pub struct AgentShimStatus {
 
 pub fn detect_rc_paths() -> Vec<PathBuf> {
     let home = dirs::home_dir().unwrap_or_default();
+    if cfg!(windows) {
+        let candidates = [
+            dirs::config_dir()
+                .unwrap_or_else(|| home.join("AppData").join("Roaming"))
+                .join("Microsoft")
+                .join("PowerShell")
+                .join("Microsoft.PowerShell_profile.ps1"),
+            home.join("Documents")
+                .join("WindowsPowerShell")
+                .join("Microsoft.PowerShell_profile.ps1"),
+        ];
+        let existing: Vec<_> = candidates.iter().filter(|p| p.exists()).cloned().collect();
+        return if existing.is_empty() {
+            vec![candidates[0].clone()]
+        } else {
+            existing
+        };
+    }
+
     let shell = std::env::var("SHELL").unwrap_or_default();
     let mut candidates: Vec<PathBuf> = if shell.contains("zsh") {
         vec![home.join(".zshrc")]
     } else if shell.contains("bash") {
         let bashrc = home.join(".bashrc");
         let profile = home.join(".bash_profile");
-        if bashrc.exists() { vec![bashrc] } else { vec![profile] }
+        if bashrc.exists() {
+            vec![bashrc]
+        } else {
+            vec![profile]
+        }
     } else {
         // Unknown shell — try both, prefer zsh
         vec![home.join(".zshrc"), home.join(".bashrc")]
@@ -54,8 +95,14 @@ fn make_block(agents: &[&str]) -> String {
     s.push('\n');
     s.push_str("# R-AI-OS: route agent calls through raios (UMAI shield + session capture)\n");
     s.push_str("# Remove with: raios agent-wrapper remove\n");
-    for agent in agents {
-        s.push_str(&format!("{}() {{ raios run {} \"$@\"; }}\n", agent, agent));
+    if cfg!(windows) {
+        for agent in agents {
+            s.push_str(&format!("function {agent} {{ raios run {agent} @args }}\n"));
+        }
+    } else {
+        for agent in agents {
+            s.push_str(&format!("{}() {{ raios run {} \"$@\"; }}\n", agent, agent));
+        }
     }
     s.push_str(BLOCK_END);
     s.push('\n');
@@ -66,9 +113,17 @@ fn strip_block(content: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut skip = false;
     for line in content.lines() {
-        if line.trim_start() == BLOCK_BEGIN { skip = true; continue; }
-        if line.trim_start() == BLOCK_END { skip = false; continue; }
-        if !skip { out.push(line); }
+        if line.trim_start() == BLOCK_BEGIN {
+            skip = true;
+            continue;
+        }
+        if line.trim_start() == BLOCK_END {
+            skip = false;
+            continue;
+        }
+        if !skip {
+            out.push(line);
+        }
     }
     let s = out.join("\n");
     s.trim_end().to_string() + "\n"
@@ -89,8 +144,13 @@ fn remove_agents_from_block(content: &str, agents: &[&str]) -> String {
             continue;
         }
         if in_block {
-            let is_target = agents.iter().any(|a| line.starts_with(&format!("{}() {{", a)));
-            if !is_target { out.push(line.to_string()); }
+            let is_target = agents.iter().any(|a| {
+                line.starts_with(&format!("{}() {{", a))
+                    || line.starts_with(&format!("function {a} {{"))
+            });
+            if !is_target {
+                out.push(line.to_string());
+            }
         } else {
             out.push(line.to_string());
         }
@@ -117,6 +177,9 @@ pub fn install(agents: &[&str]) -> Vec<WrapperResult> {
     let block = make_block(agents);
 
     for rc_path in &rc_files {
+        if let Some(parent) = rc_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let existing = std::fs::read_to_string(rc_path).unwrap_or_default();
         let new_content = if existing.contains(BLOCK_BEGIN) {
             // Replace existing block (agent list may have changed)
@@ -129,18 +192,16 @@ pub fn install(agents: &[&str]) -> Vec<WrapperResult> {
                 "wrapper functions added → {}",
                 rc_path.display()
             ))),
-            Err(e) => log.push(WrapperResult::fail(format!(
-                "{}: {}",
-                rc_path.display(),
-                e
-            ))),
+            Err(e) => log.push(WrapperResult::fail(format!("{}: {}", rc_path.display(), e))),
         }
     }
 
     log.push(WrapperResult::ok(format!("wrapped: {}", agents.join(", "))));
-    log.push(WrapperResult::ok(
-        "restart terminal or run: source ~/.zshrc",
-    ));
+    log.push(WrapperResult::ok(if cfg!(windows) {
+        "restart PowerShell or run: . $PROFILE"
+    } else {
+        "restart terminal or run: source ~/.zshrc"
+    }));
     log
 }
 
@@ -169,11 +230,7 @@ pub fn remove(filter: Option<&[&str]>) -> Vec<WrapperResult> {
                 "removed from {}",
                 rc_path.display()
             ))),
-            Err(e) => log.push(WrapperResult::fail(format!(
-                "{}: {}",
-                rc_path.display(),
-                e
-            ))),
+            Err(e) => log.push(WrapperResult::fail(format!("{}: {}", rc_path.display(), e))),
         }
     }
     log
@@ -190,16 +247,23 @@ pub fn status() -> Vec<AgentShimStatus> {
 
     let rc_label = rc_files
         .iter()
-        .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
+        .map(|p| {
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        })
         .collect::<Vec<_>>()
         .join(", ");
 
     ALL_AGENTS
         .iter()
         .map(|&agent| {
-            let installed =
-                combined_content.contains(&format!("{}() {{ raios run {}", agent, agent));
-            let real_found = std::process::Command::new("which")
+            let installed = combined_content
+                .contains(&format!("{}() {{ raios run {}", agent, agent))
+                || combined_content.contains(&format!("function {agent} {{ raios run {agent}"));
+            let probe = if cfg!(windows) { "where.exe" } else { "which" };
+            let real_found = std::process::Command::new(probe)
                 .arg(agent)
                 .output()
                 .map(|o| o.status.success())
@@ -222,7 +286,12 @@ mod tests {
     fn make_block_contains_all_agents() {
         let block = make_block(ALL_AGENTS);
         for agent in ALL_AGENTS {
-            assert!(block.contains(&format!("{}() {{", agent)), "missing {}", agent);
+            let marker = if cfg!(windows) {
+                format!("function {agent} {{")
+            } else {
+                format!("{agent}() {{")
+            };
+            assert!(block.contains(&marker), "missing {}", agent);
         }
         assert!(block.contains(BLOCK_BEGIN));
         assert!(block.contains(BLOCK_END));

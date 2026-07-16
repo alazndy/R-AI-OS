@@ -40,7 +40,7 @@ fn trusted_proxy_enabled() -> bool {
 pub(super) async fn auth_middleware(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    req: Request,
+    mut req: Request,
     next: axum::middleware::Next,
 ) -> Result<Response, StatusCode> {
     let path = req.uri().path();
@@ -87,6 +87,16 @@ pub(super) async fn auth_middleware(
         eprintln!("[HTTP Auth] Invalid API key (remote)");
         return Err(StatusCode::UNAUTHORIZED);
     }
+
+    let actor = if is_localhost {
+        crate::control_plane::service::ControlActor::local_session()
+    } else {
+        // A remote API key proves authentication but is not an ownership grant.
+        // Mutating control-plane operations therefore fail closed until an
+        // explicit remote-principal provisioning feature exists.
+        crate::control_plane::service::ControlActor::remote_session("remote_api_key")
+    };
+    req.extensions_mut().insert(actor);
 
     Ok(next.run(req).await)
 }
