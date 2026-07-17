@@ -2,13 +2,13 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use raios_core::db::{RunOverviewRow, ScheduledJob, ScoredApproval, UnifiedTaskRow};
+use raios_core::entities::EntityProject;
+use raios_runtime::health::ProjectHealth;
 use raios_surface_tui::app::{
     state::{BgMsg, ExtCmdInfo, ExtConfigField, ExtServiceStatus, ExtensionInfo, SortMode},
     App,
 };
-use raios_core::db::{RunOverviewRow, ScoredApproval, ScheduledJob, UnifiedTaskRow};
-use raios_core::entities::EntityProject;
-use raios_runtime::health::ProjectHealth;
 
 #[derive(Debug, Default, Clone)]
 pub struct InboxPanelData {
@@ -52,6 +52,16 @@ pub struct ProjectDetailData {
     pub git_log: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LocalMemoryPreview {
+    pub has_memory: bool,
+    pub preview: Option<String>,
+}
+
+const MEMORY_PREVIEW_MAX_FILE_BYTES: u64 = 128 * 1024;
+const MEMORY_PREVIEW_MAX_LINES: usize = 8;
+const MEMORY_PREVIEW_MAX_CHARS_PER_LINE: usize = 140;
+
 pub fn load_inbox_panel_data() -> Result<InboxPanelData, String> {
     let conn = raios_core::db::open_db().map_err(|e| e.to_string())?;
     load_inbox_panel_data_from_conn(&conn).map_err(|e| e.to_string())
@@ -76,13 +86,14 @@ pub fn load_scheduler_panel_data() -> Result<SchedulerPanelData, String> {
 
 pub fn load_policies_panel_data() -> PoliciesPanelData {
     let policy = raios_core::security::PolicyConfig::try_load_default();
-    let audit_count = raios_core::db::open_db()
-        .ok()
-        .and_then(|conn| {
-            conn.query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))
-                .ok()
-        });
-    PoliciesPanelData { policy, audit_count }
+    let audit_count = raios_core::db::open_db().ok().and_then(|conn| {
+        conn.query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))
+            .ok()
+    });
+    PoliciesPanelData {
+        policy,
+        audit_count,
+    }
 }
 
 pub fn sort_project_indices(
@@ -118,7 +129,9 @@ pub fn sort_project_indices(
             };
             get_dirty(&projects[b]).cmp(&get_dirty(&projects[a]))
         }),
-        SortMode::Category => indices.sort_by(|&a, &b| projects[a].category.cmp(&projects[b].category)),
+        SortMode::Category => {
+            indices.sort_by(|&a, &b| projects[a].category.cmp(&projects[b].category))
+        }
         SortMode::Status => indices.sort_by(|&a, &b| projects[a].status.cmp(&projects[b].status)),
     }
     indices
@@ -158,6 +171,73 @@ pub fn load_project_detail_data(project_path: &Path) -> ProjectDetailData {
         memory_lines: content.lines().map(str::to_owned).collect(),
         git_log: raios_runtime::filebrowser::get_git_log(project_path),
     }
+}
+
+/// Enriches an old daemon snapshot from the local workspace only. The path is
+/// canonicalized and constrained to the configured workspace before reading,
+/// so a remote daemon cannot make the TUI read arbitrary local files.
+pub(crate) fn load_local_memory_preview(project_path: &Path) -> Option<LocalMemoryPreview> {
+    let workspace_root = raios_core::config::Config::load()?.dev_ops_path;
+    load_workspace_memory_preview(&workspace_root, project_path)
+}
+
+fn load_workspace_memory_preview(
+    workspace_root: &Path,
+    project_path: &Path,
+) -> Option<LocalMemoryPreview> {
+    let workspace_root = workspace_root.canonicalize().ok()?;
+    let project_path = project_path.canonicalize().ok()?;
+    if !project_path.starts_with(&workspace_root) {
+        return None;
+    }
+
+    let memory_path = project_path.join("memory.md");
+    let memory_path = memory_path.canonicalize().ok()?;
+    if !memory_path.starts_with(&project_path) || !memory_path.starts_with(&workspace_root) {
+        return None;
+    }
+
+    let metadata = std::fs::metadata(&memory_path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+
+    if metadata.len() > MEMORY_PREVIEW_MAX_FILE_BYTES {
+        return Some(LocalMemoryPreview {
+            has_memory: true,
+            preview: Some("Memory preview omitted: memory.md exceeds 128 KiB.".into()),
+        });
+    }
+
+    let preview = std::fs::read_to_string(memory_path)
+        .ok()
+        .and_then(|contents| bounded_memory_preview(&contents));
+
+    Some(LocalMemoryPreview {
+        has_memory: true,
+        preview,
+    })
+}
+
+fn bounded_memory_preview(contents: &str) -> Option<String> {
+    let lines: Vec<String> = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(MEMORY_PREVIEW_MAX_LINES)
+        .map(|line| {
+            let mut preview: String = line
+                .chars()
+                .take(MEMORY_PREVIEW_MAX_CHARS_PER_LINE)
+                .collect();
+            if line.chars().count() > MEMORY_PREVIEW_MAX_CHARS_PER_LINE {
+                preview.push_str("...");
+            }
+            preview
+        })
+        .collect();
+
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 pub fn load_graph_report_lines(project_path: &Path) -> Result<Vec<String>, String> {
@@ -280,15 +360,21 @@ pub fn scan_extensions(dev_ops_path: &Path) -> Vec<ExtensionInfo> {
         } else {
             dev_ops_path.join(cat)
         };
-        let Ok(entries) = std::fs::read_dir(&search) else { continue };
+        let Ok(entries) = std::fs::read_dir(&search) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let proj = entry.path();
             let toml_path = proj.join("raios-extension.toml");
             if !toml_path.exists() {
                 continue;
             }
-            let Ok(raw) = std::fs::read_to_string(&toml_path) else { continue };
-            let Ok(m) = toml::from_str::<Manifest>(&raw) else { continue };
+            let Ok(raw) = std::fs::read_to_string(&toml_path) else {
+                continue;
+            };
+            let Ok(m) = toml::from_str::<Manifest>(&raw) else {
+                continue;
+            };
             let env_path = proj.join(".env");
             let services = m.extension.services.unwrap_or_default();
 
@@ -610,6 +696,33 @@ mod tests {
     fn project_detail_data_without_memory_file_is_empty_but_valid() {
         let dir = tempfile::tempdir().unwrap();
         let data = load_project_detail_data(dir.path());
-        assert_eq!(data.memory_lines.first().map(String::as_str), Some("# Error"));
+        assert_eq!(
+            data.memory_lines.first().map(String::as_str),
+            Some("# Error")
+        );
+    }
+
+    #[test]
+    fn bounded_memory_preview_is_compact_and_skips_blank_lines() {
+        assert_eq!(
+            bounded_memory_preview("\n# Memory\n\nStatus: active\n"),
+            Some("# Memory\nStatus: active".into())
+        );
+        assert_eq!(bounded_memory_preview("\n\t"), None);
+    }
+
+    #[test]
+    fn local_memory_preview_stays_within_the_workspace_root() {
+        let workspace = tempfile::tempdir().unwrap();
+        let project = workspace.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(project.join("memory.md"), "# Memory\nStatus: active\n").unwrap();
+
+        let preview = load_workspace_memory_preview(workspace.path(), &project).unwrap();
+        assert!(preview.has_memory);
+        assert_eq!(preview.preview.as_deref(), Some("# Memory\nStatus: active"));
+
+        let outside = tempfile::tempdir().unwrap();
+        assert!(load_workspace_memory_preview(workspace.path(), outside.path()).is_none());
     }
 }

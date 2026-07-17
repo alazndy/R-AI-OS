@@ -237,7 +237,7 @@ pub fn render_initialize(frame: &mut Frame, area: Rect, app: &App) {
 
     if app.wizard.running {
         lines.push(Line::from(Span::styled(
-            "  ⚡ Kurulum çalışıyor...",
+            "  KURULUM ÇALIŞIYOR...",
             Style::new().fg(AMBER).bold(),
         )));
     } else {

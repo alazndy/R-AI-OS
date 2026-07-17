@@ -4,3 +4,4 @@ pub mod commands;
 pub mod ext_actions;
 pub mod helpers;
 pub mod keyboard;
+pub mod mouse;

@@ -96,7 +96,7 @@ pub fn render_quick_stats(frame: &mut Frame, area: Rect, app: &App) {
             result.push(Line::from(""));
             result.push(Line::from(Span::styled(
                 format!(
-                    "  ⚠ REFACTOR: {} HIGH files across {} projects",
+                    "  WARNING REFACTOR: {} HIGH files across {} projects",
                     rf_high_total, rf_projects_total
                 ),
                 Style::new().fg(AMBER).bold(),

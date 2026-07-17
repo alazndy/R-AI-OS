@@ -42,7 +42,7 @@ pub fn render_diagnostics(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             for v in &report.violations {
                 lines.push(Line::from(vec![
-                    Span::styled("  ⚠ ", Style::new().fg(AMBER)),
+                    Span::styled("  WARNING ", Style::new().fg(AMBER)),
                     Span::styled(format!("Line {}: ", v.line), Style::new().fg(DIM)),
                     Span::styled(v.rule, Style::new().fg(MID)),
                 ]));
@@ -129,7 +129,7 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
                 .unwrap_or_else(|| "—".into());
 
             let sec_text = match h.security_score {
-                Some(s) => format!("🔒 {} {}", s, h.security_grade.as_deref().unwrap_or("-")),
+                Some(s) => format!("SECURITY {} {}", s, h.security_grade.as_deref().unwrap_or("-")),
                 None => "—".into(),
             };
 
@@ -145,7 +145,7 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
                 _ => RED,
             };
             let rf_text = if h.refactor_high_count > 0 {
-                format!("{} ⚠{}", h.refactor_grade, h.refactor_high_count)
+                format!("{} WARNING:{}", h.refactor_grade, h.refactor_high_count)
             } else {
                 h.refactor_grade.clone()
             };
@@ -163,7 +163,7 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
             };
 
             let (deps_text, deps_color) = match (h.deps_outdated, h.deps_cve) {
-                (Some(_out), Some(cve)) if cve > 0 => (format!("⚠{}cve", cve), RED),
+                (Some(_out), Some(cve)) if cve > 0 => (format!("WARNING:{}cve", cve), RED),
                 (Some(out), Some(_)) if out > 0 => (format!("↑{}", out), AMBER),
                 (Some(_), Some(_)) => ("✓ ok".into(), GREEN),
                 _ => ("—".into(), DIM),
@@ -276,11 +276,11 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
         Span::styled(format!(" comp:{}/100 ", avg_score), Style::new().fg(MID)),
         if sec_scanned > 0 {
             Span::styled(
-                format!(" 🔒crit:{} ", sec_critical),
+                format!(" SECURITY-CRIT:{} ", sec_critical),
                 Style::new().fg(if sec_critical > 0 { RED } else { GREEN }),
             )
         } else {
-            Span::styled(" 🔒— ", Style::new().fg(DIM))
+            Span::styled(" SECURITY— ", Style::new().fg(DIM))
         },
         Span::styled(
             format!(" ♻ high:{} ", rf_high_total),
@@ -310,7 +310,7 @@ pub fn render_system_audit(frame: &mut Frame, area: Rect, app: &App) {
 
     if app.system.is_scanning {
         lines.push(Line::from(Span::styled(
-            "  ⚡ Scanning entire system... This may take a moment.",
+            "  SCANNING ENTIRE SYSTEM... This may take a moment.",
             Style::new().fg(AMBER).bold(),
         )));
         frame.render_widget(Paragraph::new(Text::from(lines)), area);

@@ -71,6 +71,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, remote: Option
         if event::poll(Duration::from_millis(40))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.handle_key(key)?,
+                Event::Mouse(mouse) => app.handle_mouse(mouse)?,
                 Event::Resize(w, h) => {
                     app.width = w;
                     app.height = h;

@@ -97,7 +97,7 @@ pub fn render_file_view(frame: &mut Frame, app: &App) {
         let issues = report.violations.len();
         Span::styled(
             format!(
-                "  📊 {}/100 {}{} [{} issues]",
+                "  SCORE {}/100 {}{} [{} issues]",
                 report.score,
                 report.grade(),
                 lang_part,
@@ -168,7 +168,7 @@ pub fn render_file_view(frame: &mut Frame, app: &App) {
         .compliance
         .as_ref()
         .and_then(|r| r.first_issue())
-        .map(|txt| Span::styled(format!("   ⚠ {}", txt), Style::new().fg(AMBER)));
+        .map(|txt| Span::styled(format!("   WARNING: {}", txt), Style::new().fg(AMBER)));
     let mut footer_spans = vec![
         Span::styled(
             format!(" Ln {}/{} ({}%)", scroll + 1, total, pct),
@@ -213,7 +213,7 @@ pub fn render_file_edit(frame: &mut Frame, app: &App) {
             _ => RED,
         };
         Span::styled(
-            format!("  📊 {}/100 {}", report.score, report.grade()),
+            format!("  SCORE {}/100 {}", report.score, report.grade()),
             Style::new().fg(color),
         )
     } else {
@@ -221,7 +221,7 @@ pub fn render_file_edit(frame: &mut Frame, app: &App) {
     };
     let header = Paragraph::new(vec![
         Line::from(vec![
-            Span::styled("  ✏ ", Style::new().fg(AMBER)),
+            Span::styled("  EDIT ", Style::new().fg(AMBER)),
             Span::styled(file.name.as_str(), Style::new().fg(AMBER).bold()),
             Span::styled("  ", Style::new()),
             Span::styled(

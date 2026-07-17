@@ -37,7 +37,7 @@ pub fn render_content_body(frame: &mut Frame, area: Rect, app: &App) {
         let text = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
-                "  ⚡ UNIVERSAL SYNC IN PROGRESS...",
+                "  UNIVERSAL SYNC IN PROGRESS...",
                 Style::new().fg(GREEN).bold(),
             )),
             Line::from(Span::styled(

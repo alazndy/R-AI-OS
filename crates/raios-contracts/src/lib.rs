@@ -10,9 +10,7 @@ pub use dto::*;
 pub use event::Event;
 pub use problem::Problem;
 pub use query::Query;
-pub use snapshot::{
-    ExploreSnapshot, GovernSnapshot, NowSnapshot, SnapshotEnvelope, WorkSnapshot,
-};
+pub use snapshot::{ExploreSnapshot, GovernSnapshot, NowSnapshot, SnapshotEnvelope, WorkSnapshot};
 
 #[cfg(test)]
 mod tests {
@@ -46,5 +44,21 @@ mod tests {
         let p = Problem::unauthorized("Access denied");
         assert_eq!(p.code, "UNAUTHORIZED");
         assert!(!p.retryable);
+    }
+
+    #[test]
+    fn project_dto_accepts_snapshots_from_pre_memory_preview_daemons() {
+        let json = r#"{
+            "path":"/workspace/example",
+            "name":"example",
+            "status":"active",
+            "git_branch":null,
+            "dirty_files":0,
+            "last_active":null
+        }"#;
+
+        let project: ProjectDto = serde_json::from_str(json).unwrap();
+        assert!(!project.has_memory);
+        assert_eq!(project.memory_preview, None);
     }
 }

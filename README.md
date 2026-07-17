@@ -364,7 +364,7 @@ Codex, OpenCode, and `agy` remain separate prerequisites.
 
 ### Reinstall / Upgrade (Linux/macOS)
 
-Use the bundled `install.sh` instead of running the steps above by hand. `cargo install --force` already replaces the binary at its single fixed path (`~/.cargo/bin/{raios,aiosd}`) — it physically cannot leave two copies behind — but a previously *running* `aiosd`/`raios-tray` process would otherwise keep serving the old code in memory until restarted. The script handles the full cycle:
+Use the bundled `install.sh` instead of running the steps above by hand. It installs into the active `raios` PATH directory when one already exists, otherwise it uses Cargo's default bin directory (`~/.cargo/bin/{raios,aiosd}`). The install physically replaces the binaries in place, but a previously *running* `aiosd`/`raios-tray` process would otherwise keep serving the old code in memory until restarted. The script handles the full cycle:
 
 ```bash
 ./install.sh
@@ -372,7 +372,7 @@ Use the bundled `install.sh` instead of running the steps above by hand. `cargo 
 
 What it does:
 1. `cargo build --release`
-2. `cargo install --path . --force` — replaces the existing binaries in place
+2. `cargo install --path crates/raios-surface-cli --force` — replaces the existing binaries in the active install directory
 3. Restarts `aiosd.service` and `raios-tray.service` via `systemctl --user` (if present) so the new binary actually takes effect, not just the file on disk
 4. Warns if a stray `raios`/`aiosd` binary exists earlier on `$PATH` outside cargo's bin dir, which would silently shadow the freshly installed one
 
@@ -405,6 +405,20 @@ Launch the TUI:
 ```bash
 raios
 ```
+
+The dashboard uses four top-level tabs (`NOW`, `WORK`, `EXPLORE`, and `GOVERN`).
+Use `1`–`4` or `Tab`/`Shift+Tab` from the keyboard, or click a tab with the
+mouse. `Up`/`Down` stays within the focused route list, while `Left`/`Right`
+switches the focused panel. Clicking route content selects an item; the mouse
+wheel navigates the current route. Click the bottom Command Center bar (or
+press `/`) to open the command palette. Safety-sensitive actions remain
+explicit keyboard commands with the existing approval and audit flow.
+
+`NOW` exposes the pending handoff and approval queue with its source, target,
+type, and risk level. `WORK` lists every registered project with lifecycle
+status, Git state, and `memory.md` availability; selecting a project (or one
+of its tasks) keeps it selected and shows a bounded `memory.md` preview with
+the latest known project status.
 
 Bootstrap your AI factory (syncs the Maestro/ECC agent and skill ecosystems, exact counts printed at the end of the run):
 

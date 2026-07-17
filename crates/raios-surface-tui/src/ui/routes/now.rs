@@ -23,10 +23,10 @@ pub fn render_now_route(f: &mut Frame, area: Rect, store: &Store) {
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(chunks[0]);
 
-    // 1. Pending Approvals
+    // 1. Pending Handoffs and Approvals
     let approval_items: Vec<ListItem> = if store.snapshot.now.approvals.is_empty() {
         vec![ListItem::new(Span::styled(
-            "  ✓ No pending human approvals required.",
+            "No pending handoffs or human approvals.",
             Style::default().fg(Color::Green),
         ))]
     } else {
@@ -54,14 +54,15 @@ pub fn render_now_route(f: &mut Frame, area: Rect, store: &Store) {
 
                 ListItem::new(Line::from(vec![
                     Span::styled(
+                        format!("[{} -> {}] ", app.origin_agent, app.target_agent),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::styled(
                         format!("[Risk:{:2}] ", app.score),
                         Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(&app.title, Style::default().fg(Color::White)),
-                    Span::styled(
-                        format!(" ({})", app.origin_agent),
-                        Style::default().fg(Color::Gray),
-                    ),
+                    Span::styled(format!(" [{}]", app.kind), Style::default().fg(Color::Gray)),
                 ]))
                 .style(Style::default().bg(bg))
             })
@@ -70,8 +71,12 @@ pub fn render_now_route(f: &mut Frame, area: Rect, store: &Store) {
 
     let approvals_block = Block::default()
         .borders(Borders::ALL)
-        .title(" 🚨 Pending Approvals (High Priority) ")
-        .border_style(Style::default().fg(Color::Yellow));
+        .title(" Pending Handoffs & Approvals ")
+        .border_style(Style::default().fg(if !store.right_panel_focus {
+            Color::Green
+        } else {
+            Color::Yellow
+        }));
 
     let approvals_list = List::new(approval_items).block(approvals_block);
     f.render_widget(approvals_list, top_chunks[0]);
@@ -88,19 +93,33 @@ pub fn render_now_route(f: &mut Frame, area: Rect, store: &Store) {
             .now
             .blocked_tasks
             .iter()
-            .map(|t| {
+            .enumerate()
+            .map(|(i, t)| {
+                let bg = if store.right_panel_focus && store.cursor == i {
+                    Color::DarkGray
+                } else {
+                    Color::Reset
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("[{}] ", t.project_name), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("[{}] ", t.project_name),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                     Span::styled(&t.title, Style::default().fg(Color::LightRed)),
                 ]))
+                .style(Style::default().bg(bg))
             })
             .collect()
     };
 
     let blocked_block = Block::default()
         .borders(Borders::ALL)
-        .title(" 🛑 Blocked Tasks ")
-        .border_style(Style::default().fg(Color::Red));
+        .title(" Blocked Tasks ")
+        .border_style(Style::default().fg(if store.right_panel_focus {
+            Color::Green
+        } else {
+            Color::Red
+        }));
 
     let blocked_list = List::new(blocked_items).block(blocked_block);
     f.render_widget(blocked_list, top_chunks[1]);
@@ -119,10 +138,24 @@ pub fn render_now_route(f: &mut Frame, area: Rect, store: &Store) {
             .iter()
             .map(|r| {
                 ListItem::new(Line::from(vec![
-                    Span::styled("⏳ RUNNING ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("{:<14} ", r.agent_name), Style::default().fg(Color::White)),
-                    Span::styled(format!("proj: {:<16} ", r.project_name), Style::default().fg(Color::Gray)),
-                    Span::styled(format!("({}s)", r.duration_secs), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        "RUNNING ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("{:<14} ", r.agent_name),
+                        Style::default().fg(Color::White),
+                    ),
+                    Span::styled(
+                        format!("proj: {:<16} ", r.project_name),
+                        Style::default().fg(Color::Gray),
+                    ),
+                    Span::styled(
+                        format!("({}s)", r.duration_secs),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]))
             })
             .collect()
@@ -130,7 +163,7 @@ pub fn render_now_route(f: &mut Frame, area: Rect, store: &Store) {
 
     let runs_block = Block::default()
         .borders(Borders::ALL)
-        .title(" 🏃 Active Agent Execution Runs ")
+        .title(" Active Agent Execution Runs ")
         .border_style(Style::default().fg(Color::Cyan));
 
     let runs_list = List::new(run_items).block(runs_block);
@@ -147,7 +180,7 @@ pub fn render_now_route(f: &mut Frame, area: Rect, store: &Store) {
 
     let alerts_block = Block::default()
         .borders(Borders::ALL)
-        .title(" 🔔 System Live Telemetry & Alerts ")
+        .title(" System Live Telemetry & Alerts ")
         .border_style(Style::default().fg(Color::Blue));
 
     let alerts_p = Paragraph::new(log_lines)

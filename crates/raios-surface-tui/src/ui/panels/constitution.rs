@@ -133,7 +133,7 @@ fn render_creator(frame: &mut Frame, area: Rect, app: &App) {
         }
         CreatorStep::ConfirmGlobal => {
             lines.push(Line::from(Span::styled(
-                " ⚠ This appends a new section to AGENT_CONSTITUTION.md — the single file every agent reads.",
+                " WARNING: This appends a new section to AGENT_CONSTITUTION.md — the single file every agent reads.",
                 Style::new().fg(AMBER).bold(),
             )));
             lines.push(Line::from(""));

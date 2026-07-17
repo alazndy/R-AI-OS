@@ -77,7 +77,7 @@ pub fn render_bouncing_alert(frame: &mut Frame, app: &App) {
     let text = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "🚨 HUMAN INTERVENTION REQUIRED 🚨",
+            "HUMAN INTERVENTION REQUIRED",
             Style::new().fg(Color::White).bold(),
         )),
         Line::from(Span::styled(
@@ -119,6 +119,22 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(app.ui.command_buf.as_str(), Style::new().fg(Color::White)),
             Span::styled("█", Style::new().fg(GREEN)),
         ])
+    } else if app.state == raios_surface_tui::app::state::AppState::Dashboard {
+        let action_hint = match app.store.current_route {
+            raios_surface_tui::app::route::Route::Now => " [a] approve  [r] reject",
+            raios_surface_tui::app::route::Route::Work => " [/] Command Center",
+            raios_surface_tui::app::route::Route::Explore => " [/] Command Center",
+            raios_surface_tui::app::route::Route::Govern => " [r] run job  [g] refresh",
+        };
+        Line::from(Span::styled(
+            format!(
+                " [ROUTE: {}]  [FOCUS: {}]  [↑↓] select  [←→] focus  [Tab] route{}",
+                app.store.current_route.tab_label(),
+                app.control_focus_label(),
+                action_hint,
+            ),
+            Style::new().fg(DIM),
+        ))
     } else if app.ui.right_panel_focus {
         let hint = match app.ui.menu_cursor {
             0 => " [↑↓] select  [Space] toggle done  [c/x/o/a] send→agent  [←/Esc] menu",
@@ -151,7 +167,7 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
             ""
         };
         Line::from(Span::styled(
-            format!(" [↑↓] menu  [/] or [Tab] command  [?] help{}", hint),
+            format!(" [Click tab] route  [Wheel] navigate  [Click here or /] Command Center  [?] help{}", hint),
             Style::new().fg(DIM),
         ))
     };
@@ -185,7 +201,7 @@ pub fn render_command_palette(frame: &mut Frame, app: &App) {
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(GREEN))
         .title(Span::styled(
-            " Commands — [↑↓] nav  [Tab] fill  [Enter] run ",
+            " Command Center — [Click/↑↓] select  [Tab] fill  [Enter] run ",
             Style::new().fg(DIM),
         ));
     let inner = block.inner(popup);
@@ -234,7 +250,7 @@ pub fn render_file_changed_badge(frame: &mut Frame, _app: &App) {
     };
     frame.render_widget(
         Paragraph::new(Span::styled(
-            "  ⚡ File changed — [R] reload  ",
+            "  FILE CHANGED — [R] RELOAD  ",
             Style::new().fg(Color::Black).bg(AMBER).bold(),
         )),
         badge,
@@ -312,7 +328,7 @@ pub fn render_handover_modal(frame: &mut Frame, app: &App) {
         frame.render_widget(Clear, area);
 
         let block = Block::default()
-            .title(" ⚠️ Human Approval Required: Bouncing Limit ")
+            .title(" HUMAN APPROVAL REQUIRED: BOUNCING LIMIT ")
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
             .border_style(Style::default().fg(AMBER)) // AMBER

@@ -579,10 +579,11 @@ impl App {
             KeyCode::Char('4') => reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Govern)),
             KeyCode::Tab => reduce_intent(&mut self.store, Intent::NextRoute),
             KeyCode::BackTab => reduce_intent(&mut self.store, Intent::PrevRoute),
-            KeyCode::Up | KeyCode::Char('k') => reduce_intent(&mut self.store, Intent::CursorUp),
-            KeyCode::Down | KeyCode::Char('j') => reduce_intent(&mut self.store, Intent::CursorDown),
-            KeyCode::Left | KeyCode::Char('h') => reduce_intent(&mut self.store, Intent::CursorLeft),
-            KeyCode::Right | KeyCode::Char('l') => reduce_intent(&mut self.store, Intent::CursorRight),
+            KeyCode::Up | KeyCode::Char('k') => self.move_control_cursor(false),
+            KeyCode::Down | KeyCode::Char('j') => self.move_control_cursor(true),
+            KeyCode::Left | KeyCode::Char('h') => self.set_control_focus(false),
+            KeyCode::Right | KeyCode::Char('l') => self.set_control_focus(true),
+            KeyCode::Char(' ') => self.set_control_focus(!self.store.right_panel_focus),
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 if self.store.current_route != Route::Now {
                     self.store.last_error = Some("Approvals are available only on NOW.".into());
@@ -654,7 +655,11 @@ impl App {
                     self.store.last_error = Some(problem.message);
                 }
             }
-            KeyCode::Esc => self.store.last_error = None,
+            KeyCode::Esc => {
+                if self.store.last_error.take().is_none() {
+                    self.set_control_focus(false);
+                }
+            }
             _ => return Ok(false),
         }
 

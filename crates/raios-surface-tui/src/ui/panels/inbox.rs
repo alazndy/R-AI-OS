@@ -52,9 +52,9 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
         for scored in &approvals {
             let ap = &scored.approval;
             let (icon, color) = if ap.approval_type == "handover" {
-                ("📨", CYAN)
+                ("INBOX", CYAN)
             } else {
-                ("⏳", AMBER)
+                ("WAIT", AMBER)
             };
             let risk_color = match scored.risk_label {
                 "low" => GREEN,
@@ -156,7 +156,7 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         for task in &blocked {
             lines.push(Line::from(vec![
-                Span::styled("  🚫 ", Style::new().fg(RED)),
+                Span::styled("  DENY ", Style::new().fg(RED)),
                 Span::styled(task.title.as_str(), Style::new().fg(MID)),
                 Span::styled(
                     task.assignee_id

@@ -202,7 +202,7 @@ fn handle_job_submitted(tx: &Sender<BgMsg>, v: &serde_json::Value) {
     let job_id = v["job_id"].as_str().unwrap_or("?");
     tx.send(BgMsg::NewLog(raios_surface_tui::app::ipc_support::log_entry(
         "RUN",
-        format!("⏳ Job queued [{}]", &job_id[..8.min(job_id.len())]),
+        format!("JOB QUEUED [{}]", &job_id[..8.min(job_id.len())]),
     )))
     .ok();
 }

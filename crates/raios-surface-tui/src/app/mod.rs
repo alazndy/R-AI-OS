@@ -22,6 +22,7 @@ pub mod ipc_support;
 pub mod ipc_events;
 
 pub mod client;
+pub mod control_navigation;
 pub mod intent;
 pub mod reducer;
 pub mod route;
@@ -42,6 +43,26 @@ pub struct PaletteItem {
 }
 
 pub const PALETTE_ITEMS: &[PaletteItem] = &[
+    PaletteItem {
+        cmd: "/now",
+        desc: "Open approvals, blockers, and active agent runs",
+    },
+    PaletteItem {
+        cmd: "/work",
+        desc: "Open projects, tasks, and artifacts",
+    },
+    PaletteItem {
+        cmd: "/explore",
+        desc: "Open search, traces, and daemon logs",
+    },
+    PaletteItem {
+        cmd: "/govern",
+        desc: "Open policy, audit ledger, and scheduler controls",
+    },
+    PaletteItem {
+        cmd: "/refresh",
+        desc: "Refresh the typed control-plane system snapshot",
+    },
     PaletteItem {
         cmd: "/discover",
         desc: "Scan Dev Ops for new projects & update entities.json",

@@ -48,8 +48,12 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
 
     let policy_block = Block::default()
         .borders(Borders::ALL)
-        .title(" 🛡️ AgentShield Security & Policies ")
-        .border_style(Style::default().fg(Color::Green));
+        .title(" AgentShield Security & Policies ")
+        .border_style(Style::default().fg(if !store.right_panel_focus {
+            Color::Green
+        } else {
+            Color::DarkGray
+        }));
 
     let policy_p = Paragraph::new(policy_lines).block(policy_block);
     f.render_widget(policy_p, left_chunks[0]);
@@ -70,13 +74,17 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
             Span::styled(aud.confirmed_records.to_string(), Style::default().fg(Color::Yellow)),
         ]),
         Line::from(""),
-        Line::from(Span::styled("🔒 Tamper-evident Ledger: VERIFIED", Style::default().fg(Color::Green))),
+        Line::from(Span::styled("Tamper-evident Ledger: VERIFIED", Style::default().fg(Color::Green))),
     ];
 
     let audit_block = Block::default()
         .borders(Borders::ALL)
-        .title(" 🔐 Audit Ledger Verification ")
-        .border_style(Style::default().fg(Color::Yellow));
+        .title(" Audit Ledger Verification ")
+        .border_style(Style::default().fg(if !store.right_panel_focus {
+            Color::Green
+        } else {
+            Color::Yellow
+        }));
 
     let audit_p = Paragraph::new(audit_lines).block(audit_block);
     f.render_widget(audit_p, left_chunks[1]);
@@ -90,11 +98,17 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
             .govern
             .cron_jobs
             .iter()
-            .map(|j| {
+            .enumerate()
+            .map(|(i, j)| {
                 let status_color = if j.status == "active" {
                     Color::Green
                 } else {
                     Color::Yellow
+                };
+                let bg = if store.right_panel_focus && store.cursor == i {
+                    Color::DarkGray
+                } else {
+                    Color::Reset
                 };
 
                 ListItem::new(Line::from(vec![
@@ -102,14 +116,19 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
                     Span::styled(&j.name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
                     Span::styled(format!(" ({})", j.schedule), Style::default().fg(Color::DarkGray)),
                 ]))
+                .style(Style::default().bg(bg))
             })
             .collect()
     };
 
     let cron_block = Block::default()
         .borders(Borders::ALL)
-        .title(" ⏰ Autonomous Cron Scheduler ")
-        .border_style(Style::default().fg(Color::Blue));
+        .title(" Autonomous Cron Scheduler ")
+        .border_style(Style::default().fg(if store.right_panel_focus {
+            Color::Green
+        } else {
+            Color::Blue
+        }));
 
     let cron_list = List::new(cron_items).block(cron_block);
     f.render_widget(cron_list, chunks[1]);

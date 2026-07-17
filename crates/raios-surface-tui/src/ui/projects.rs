@@ -288,7 +288,7 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     let rf_span = health
         .map(|h| {
             let label = if h.refactor_high_count > 0 {
-                format!("{} (⚠ {} HIGH)", h.refactor_grade, h.refactor_high_count)
+                format!("{} (WARNING: {} HIGH)", h.refactor_grade, h.refactor_high_count)
             } else {
                 format!("{} ✓", h.refactor_grade)
             };
@@ -338,7 +338,7 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
         Line::from(vec![
             Span::styled(" GitHub  ", Style::new().fg(DIM)),
             Span::styled(
-                format!("⭐{}  ", proj.stars.unwrap_or(0)),
+                format!("STARS:{}  ", proj.stars.unwrap_or(0)),
                 Style::new().fg(AMBER),
             ),
             Span::styled(
@@ -383,7 +383,7 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
             )));
             for issue in h.constitution_issues.iter().take(2) {
                 stats.push(Line::from(Span::styled(
-                    format!("  ⚠ {}", issue),
+                    format!("  WARNING: {}", issue),
                     Style::new().fg(AMBER),
                 )));
             }

@@ -10,10 +10,18 @@ cd "$(dirname "$0")"
 echo "[install] building release binaries..."
 cargo build --release
 
-echo "[install] installing raios + aiosd (replacing any existing install)..."
-cargo install --path crates/raios-surface-cli --force
+DEFAULT_BIN_DIR="$(dirname "$(command -v cargo)")"
+ACTIVE_RAIOS="$(command -v raios 2>/dev/null || true)"
+if [ -n "$ACTIVE_RAIOS" ]; then
+  BIN_DIR="$(dirname "$ACTIVE_RAIOS")"
+else
+  BIN_DIR="$DEFAULT_BIN_DIR"
+fi
+INSTALL_ROOT="$(dirname "$BIN_DIR")"
 
-BIN_DIR="$(dirname "$(command -v cargo)")"
+echo "[install] installing raios + aiosd into ${BIN_DIR} (replacing any existing install)..."
+cargo install --path crates/raios-surface-cli --force --root "$INSTALL_ROOT"
+
 echo "[install] checking for stray raios/aiosd binaries outside ${BIN_DIR}..."
 IFS=':' read -ra PATH_DIRS <<< "$PATH"
 for dir in "${PATH_DIRS[@]}"; do

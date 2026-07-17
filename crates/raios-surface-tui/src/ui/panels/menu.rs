@@ -4,41 +4,39 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem},
+    widgets::{Block, BorderType, Borders, Tabs},
     Frame,
 };
 
 pub fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<ListItem> = Route::all()
+    let titles: Vec<Line> = Route::all()
         .iter()
-        .map(|route| {
-            let label = format!("{} {}", route.icon(), route.title());
-            let full = format!("  {label}  ");
-
-            if *route == app.store.current_route {
-                if app.store.right_panel_focus {
-                    ListItem::new(Line::from(Span::styled(full, Style::new().fg(DIM))))
-                } else {
-                    ListItem::new(Line::from(Span::styled(
-                        format!("▶ {label}"),
-                        Style::new()
-                            .fg(GREEN)
-                            .bg(Color::Rgb(0, 20, 45))
-                            .add_modifier(Modifier::BOLD),
-                    )))
-                }
-            } else {
-                ListItem::new(Line::from(Span::styled(full, Style::new().fg(MID))))
-            }
+        .enumerate()
+        .map(|(idx, route)| {
+            Line::from(vec![
+                Span::styled(format!("{} ", idx + 1), Style::new().fg(DIM)),
+                Span::styled(route.tab_label(), Style::new().fg(MID)),
+            ])
         })
         .collect();
 
     let block = Block::new()
-        .borders(Borders::RIGHT)
+        .borders(Borders::BOTTOM)
         .border_type(BorderType::Plain)
         .border_style(Style::new().fg(DIM))
-        .title(Span::styled(" MENU ", Style::new().fg(DIM)))
+        .title(Span::styled(" ROUTES ", Style::new().fg(DIM)))
         .style(Style::new().bg(PANEL_BG));
 
-    frame.render_widget(List::new(items).block(block), area);
+    let tabs = Tabs::new(titles)
+        .block(block)
+        .select(app.store.current_route.to_index())
+        .highlight_style(
+            Style::new()
+                .fg(GREEN)
+                .bg(Color::Rgb(0, 20, 45))
+                .add_modifier(Modifier::BOLD),
+        )
+        .divider(Span::styled(" | ", Style::new().fg(DIM)));
+
+    frame.render_widget(tabs, area);
 }

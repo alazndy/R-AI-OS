@@ -21,7 +21,7 @@ pub fn render_explore_route(f: &mut Frame, area: Rect, store: &Store) {
     // 1. Search input bar
     let search_block = Block::default()
         .borders(Borders::ALL)
-        .title(" 🔍 Search Code & Cortex (Trigram / Vector) [Press '/' to edit] ")
+        .title(" Search Code & Cortex (Trigram / Vector) [Press '/' to edit] ")
         .border_style(Style::default().fg(Color::Yellow));
 
     let search_p = Paragraph::new(format!("  Query: {}_", store.search_input)).block(search_block);
@@ -36,11 +36,17 @@ pub fn render_explore_route(f: &mut Frame, area: Rect, store: &Store) {
             .explore
             .recent_traces
             .iter()
-            .map(|t| {
+            .enumerate()
+            .map(|(i, t)| {
                 let status_color = if t.status == "SUCCESS" {
                     Color::Green
                 } else {
                     Color::Red
+                };
+                let bg = if !store.right_panel_focus && store.cursor == i {
+                    Color::DarkGray
+                } else {
+                    Color::Reset
                 };
 
                 ListItem::new(Line::from(vec![
@@ -48,14 +54,19 @@ pub fn render_explore_route(f: &mut Frame, area: Rect, store: &Store) {
                     Span::styled(&t.tool_name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
                     Span::styled(format!(" ({}ms)", t.duration_ms), Style::default().fg(Color::DarkGray)),
                 ]))
+                .style(Style::default().bg(bg))
             })
             .collect()
     };
 
     let traces_block = Block::default()
         .borders(Borders::ALL)
-        .title(" ⏱️ Tool Execution Traces Timeline ")
-        .border_style(Style::default().fg(Color::Cyan));
+        .title(" Tool Execution Traces Timeline ")
+        .border_style(Style::default().fg(if !store.right_panel_focus {
+            Color::Green
+        } else {
+            Color::Cyan
+        }));
 
     let traces_list = List::new(trace_items).block(traces_block);
     f.render_widget(traces_list, chunks[1]);
@@ -71,19 +82,30 @@ pub fn render_explore_route(f: &mut Frame, area: Rect, store: &Store) {
             .iter()
             .rev()
             .take(20)
-            .map(|l| {
+            .enumerate()
+            .map(|(i, l)| {
+                let bg = if store.right_panel_focus && store.cursor == i {
+                    Color::DarkGray
+                } else {
+                    Color::Reset
+                };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("[{}] ", l.category), Style::default().fg(Color::Blue)),
                     Span::styled(&l.message, Style::default().fg(Color::Gray)),
                 ]))
+                .style(Style::default().bg(bg))
             })
             .collect()
     };
 
     let logs_block = Block::default()
         .borders(Borders::ALL)
-        .title(" 📜 Daemon Log Stream Replay ")
-        .border_style(Style::default().fg(Color::DarkGray));
+        .title(" Daemon Log Stream Replay ")
+        .border_style(Style::default().fg(if store.right_panel_focus {
+            Color::Green
+        } else {
+            Color::DarkGray
+        }));
 
     let logs_list = List::new(log_items).block(logs_block);
     f.render_widget(logs_list, chunks[2]);

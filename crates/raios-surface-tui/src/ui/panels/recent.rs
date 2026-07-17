@@ -51,7 +51,7 @@ pub fn render_recent(frame: &mut Frame, area: Rect, app: &App) {
             .unwrap_or_else(|| Span::styled("", Style::new()));
 
         lines.push(Line::from(vec![
-            Span::styled(" 📁 ", Style::new().fg(CYAN)),
+            Span::styled(" PROJECT ", Style::new().fg(CYAN)),
             Span::styled(proj.name.as_str(), Style::new().fg(CYAN).bold()),
             git_tag,
             branch_tag,

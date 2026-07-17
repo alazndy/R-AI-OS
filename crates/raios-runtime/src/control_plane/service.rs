@@ -138,13 +138,22 @@ pub fn load_work_snapshot(conn: &Connection) -> Result<WorkSnapshot, String> {
     let entity_projects = raios_core::entities::load_entities(&dev_ops);
     let projects: Vec<ProjectDto> = entity_projects
         .into_iter()
-        .map(|p| ProjectDto {
-            path: p.local_path.to_string_lossy().to_string(),
-            name: p.name,
-            status: p.status,
-            git_branch: None,
-            dirty_files: 0,
-            last_active: p.last_commit,
+        .map(|p| {
+            let memory_path = p.local_path.join("memory.md");
+            let memory_preview = std::fs::read_to_string(&memory_path)
+                .ok()
+                .and_then(|contents| compact_memory_preview(&contents));
+
+            ProjectDto {
+                path: p.local_path.to_string_lossy().to_string(),
+                name: p.name,
+                status: p.status,
+                git_branch: None,
+                dirty_files: 0,
+                last_active: p.last_commit,
+                has_memory: memory_path.is_file(),
+                memory_preview,
+            }
         })
         .collect();
 
@@ -173,6 +182,29 @@ pub fn load_work_snapshot(conn: &Connection) -> Result<WorkSnapshot, String> {
         active_runs,
         recent_artifacts,
     })
+}
+
+/// Keeps the control-plane snapshot compact while still making project memory
+/// actionable in the TUI. It never writes or logs the memory contents.
+fn compact_memory_preview(contents: &str) -> Option<String> {
+    const MAX_LINES: usize = 8;
+    const MAX_CHARS_PER_LINE: usize = 140;
+
+    let lines: Vec<String> = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(MAX_LINES)
+        .map(|line| {
+            let mut preview: String = line.chars().take(MAX_CHARS_PER_LINE).collect();
+            if line.chars().count() > MAX_CHARS_PER_LINE {
+                preview.push_str("...");
+            }
+            preview
+        })
+        .collect();
+
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 pub fn load_explore_snapshot(
@@ -569,6 +601,17 @@ mod tests {
         assert!(snap.sequence >= 1);
         assert!(!snap.timestamp.is_empty());
         assert_eq!(snap.now.active_runs.len(), 0);
+    }
+
+    #[test]
+    fn memory_preview_is_bounded_and_skips_blank_lines() {
+        let contents = "\n# Project Memory\n\nStatus: Active\n\nObjective: Improve the TUI\n";
+
+        assert_eq!(
+            compact_memory_preview(contents).as_deref(),
+            Some("# Project Memory\nStatus: Active\nObjective: Improve the TUI")
+        );
+        assert_eq!(compact_memory_preview("\n \n"), None);
     }
 
     #[test]

@@ -50,6 +50,12 @@ pub struct ProjectDto {
     pub git_branch: Option<String>,
     pub dirty_files: usize,
     pub last_active: Option<String>,
+    /// Whether the tracked project has a `memory.md` file.
+    #[serde(default)]
+    pub has_memory: bool,
+    /// Bounded, local-only summary of `memory.md` for the control-surface preview.
+    #[serde(default)]
+    pub memory_preview: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

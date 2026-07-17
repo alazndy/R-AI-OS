@@ -3,6 +3,9 @@ use raios_runtime::sync::sync_universe;
 use anyhow::Result;
 use std::thread;
 
+use raios_surface_tui::app::intent::Intent;
+use raios_surface_tui::app::reducer::reduce_intent;
+use raios_surface_tui::app::route::Route;
 use raios_surface_tui::app::{state::*, App};
 use raios_surface_tui::app::events::helpers::append_memo;
 
@@ -17,6 +20,27 @@ impl App {
         let arg = parts.get(1).copied().unwrap_or("").trim();
 
         match cmd {
+            "/now" | "/approvals" | "/inbox" => {
+                reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Now));
+            }
+            "/work" | "/projects" | "/tasks" => {
+                reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Work));
+            }
+            "/explore" | "/traces" => {
+                reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Explore));
+            }
+            "/govern" | "/policy" | "/cron" => {
+                reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Govern));
+            }
+            "/refresh" => {
+                reduce_intent(&mut self.store, Intent::RefreshSnapshot);
+                if let Err(problem) = self
+                    .client
+                    .send_query(raios_contracts::Query::GetSystemSnapshot)
+                {
+                    self.store.last_error = Some(problem.message);
+                }
+            }
             "/sync" | "/setup" => {
                 self.system.is_syncing = true;
                 self.system.sync_status = None;

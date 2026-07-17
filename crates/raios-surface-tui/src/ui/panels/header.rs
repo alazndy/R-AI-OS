@@ -1,7 +1,7 @@
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
-    layout::{Alignment, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -22,19 +22,19 @@ pub fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     );
     let sync_tag = if app.system.is_syncing {
         Span::styled(
-            " ⚡ SYNCING... ",
+            " SYNCING... ",
             Style::new().fg(AMBER).add_modifier(Modifier::BOLD),
         )
     } else if app.system.memory_refresh_pending {
         Span::styled(" ↺ memory ", Style::new().fg(CYAN))
     } else if app.system.sync_status.is_some() {
-        Span::styled(" ✓ SYNCED ", Style::new().fg(GREEN))
+        Span::styled(" SYNCED ", Style::new().fg(GREEN))
     } else {
         Span::styled("", Style::new())
     };
     let inbox_tag = if !app.system.pending_file_changes.is_empty() {
         Span::styled(
-            format!(" 📥 {} PENDING ", app.system.pending_file_changes.len()),
+            format!(" {} PENDING ", app.system.pending_file_changes.len()),
             Style::new().fg(AMBER).bold(),
         )
     } else {
@@ -73,13 +73,50 @@ pub fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     ];
     header_spans.extend(port_spans);
 
-    let header = Paragraph::new(Line::from(header_spans))
-        .block(
-            Block::new()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::new().fg(DIM))
-                .style(Style::new().bg(HEADER_BG)),
-        )
+    let header_block = || {
+        Block::new()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::new().fg(DIM))
+            .style(Style::new().bg(HEADER_BG))
+    };
+
+    if area.height >= 8 {
+        let [banner_area, status_area] =
+            Layout::horizontal([Constraint::Length(52), Constraint::Min(0)]).areas(area);
+        let banner_colors = [AMBER, AMBER, AMBER, CYAN, CYAN, CYAN];
+        let banner_lines: Vec<Line> = BANNER
+            .lines()
+            .enumerate()
+            .map(|(idx, line)| {
+                Line::from(Span::styled(
+                    line,
+                    Style::new().fg(banner_colors[idx % banner_colors.len()]),
+                ))
+            })
+            .collect();
+        let banner = Paragraph::new(banner_lines)
+            .block(header_block())
+            .alignment(Alignment::Left);
+        frame.render_widget(banner, banner_area);
+
+        let status = Paragraph::new(vec![
+            Line::from(Span::styled(
+                "  CONTROL PLANE",
+                Style::new().fg(GREEN).bold(),
+            )),
+            Line::from(header_spans),
+            Line::from(Span::styled(
+                "  1 NOW   2 WORK   3 EXPLORE   4 GOVERN",
+                Style::new().fg(DIM),
+            )),
+        ])
+        .block(header_block())
         .alignment(Alignment::Left);
-    frame.render_widget(header, area);
+        frame.render_widget(status, status_area);
+    } else {
+        let header = Paragraph::new(Line::from(header_spans))
+            .block(header_block())
+            .alignment(Alignment::Left);
+        frame.render_widget(header, area);
+    }
 }
