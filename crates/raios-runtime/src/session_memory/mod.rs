@@ -2,10 +2,10 @@ mod distillation;
 mod heuristics;
 mod transcript_io;
 pub use heuristics::decision_lines_from_transcript;
-pub use transcript_io::collect_transcript;
+pub use transcript_io::{collect_transcript, extract_transcript};
 use distillation::{rebuild_persona, upsert_scene_block};
 use heuristics::{fact_slug, first_n_words, heuristic_extract_facts};
-use transcript_io::{claude_project_dir_name, extract_transcript, find_latest_conversation};
+use transcript_io::{claude_project_dir_name, find_latest_conversation};
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};

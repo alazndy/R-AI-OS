@@ -1,5 +1,6 @@
 mod agent_stats;
 mod agent_wrapper;
+mod anka;
 mod audit;
 mod cron;
 mod dev;
@@ -23,6 +24,7 @@ mod task_update;
 mod trace;
 mod version;
 mod workspace;
+use self::anka::cmd_anka;
 use self::mem::cmd_mem;
 use self::session::cmd_sessions;
 use self::task_update::cmd_task_update;
@@ -272,6 +274,7 @@ pub fn run(cli: Cli) {
         }
         Commands::Mem { action } => cmd_mem(action, cli.json),
         Commands::Trace { action } => cmd_trace(action, cli.json),
+        Commands::Anka { action } => cmd_anka(action, cli.json),
         Commands::Policy { action } => policy::cmd_policy(action, cli.json),
         Commands::Hub { action } => match action {
             HubAction::Start => hub::cmd_start(cli.json),

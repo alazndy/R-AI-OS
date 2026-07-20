@@ -196,6 +196,36 @@ pub enum TraceAction {
 }
 
 #[derive(Subcommand, Debug, Clone)]
+pub enum AnkaAction {
+    /// Show the ANKA transcript-recall cache boundary and index state
+    Status,
+    /// Build or refresh the rebuildable transcript index
+    Index {
+        /// Restrict indexing to one harness: claude|codex|opencode|antigravity
+        #[arg(long)]
+        harness: Option<String>,
+    },
+    /// Search read-only historical transcript evidence
+    Search {
+        query: String,
+        #[arg(short, long)]
+        project: Option<String>,
+        #[arg(long)]
+        harness: Option<String>,
+        #[arg(short = 'n', long, default_value_t = 8)]
+        limit: usize,
+    },
+    /// Find historical transcript evidence associated with a file path
+    Blame {
+        path: String,
+        #[arg(short = 'n', long, default_value_t = 8)]
+        limit: usize,
+    },
+    /// Tombstone one ANKA cache record without modifying the source transcript
+    Forget { id: String },
+}
+
+#[derive(Subcommand, Debug, Clone)]
 pub enum AgentWrapperCmd {
     /// Install shell functions routing agent commands through raios (all agents by default)
     Install {

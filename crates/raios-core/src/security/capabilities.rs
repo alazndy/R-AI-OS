@@ -38,7 +38,7 @@ pub const PATH_RESOLVING_TOOLS: &[&str] = &[
 /// Keep this in sync by hand if a tool is added or removed there.
 pub const ALL_TOOLS: &[&str] = &[
     "update_state", "handover", "add_task", "get_health", "get_inbox", "list_projects",
-    "get_stats", "semantic_search", "project_info", "portfolio_status",
+    "get_stats", "semantic_search", "anka_recall", "project_info", "portfolio_status",
     "disk_usage", "list_ports", "usage_status", "version_info", "version_bump", "env_status",
     "deps_status", "run_build", "run_tests", "git_status", "git_log", "git_diff",
     "git_commit", "ask_architect", "get_validation_errors", "session_note",
@@ -76,6 +76,11 @@ pub fn default_for(tool: &str) -> ToolCapabilities {
         "semantic_search" | "get_inbox" | "route_capability"
         | "list_evolution_candidates" | "promote_evolution_candidate" => ToolCapabilities {
             network: vec!["127.0.0.1".into(), "localhost".into()],
+            ..Default::default()
+        },
+        // ANKA reads its fixed owner-only local cache; it accepts no caller-supplied filesystem path.
+        "anka_recall" => ToolCapabilities {
+            fs_read: vec!["<anka-cache>".into()],
             ..Default::default()
         },
         // Everything else (get_stats, list_ports, usage_status, list_projects,

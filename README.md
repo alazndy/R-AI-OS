@@ -236,6 +236,32 @@ raios trace kg-export "partial phrase" --project R-AI-OS
 - `raios evolve from-traces` converts useful trace fixes into pending instinct candidates; promotion remains a human-controlled step.
 - `raios trace kg-export` emits MemPalace-compatible KG triple JSON for MCP ingestion without silently writing to an external semantic store.
 
+### 🪶 ANKA — Historical Transcript Recall
+
+ANKA (*Agent Narrative Knowledge Archive*) is the planned read-only recall layer
+for historical coding-agent transcripts. Unlike Trace Memory and curated project
+memory, ANKA will keep redacted transcript search material in a separate,
+rebuildable cache rather than `workspace.db`.
+
+The current branch wires its public CLI and transport contracts only:
+
+```bash
+raios anka status
+raios anka index --harness codex
+raios anka search "JWT refresh rotation" --project R-AI-OS
+raios anka blame crates/raios-core/src/db/mem.rs
+raios anka forget <record-id>
+```
+
+ANKA indexes only local history, redacts recognized secret-shaped values before
+writing its owner-only cache, supports project exclusions and durable local
+tombstones, and never writes to curated memory automatically. Automatic context
+injection and curated-memory promotion remain disabled. See
+[`docs/ANKA.md`](docs/ANKA.md) for the authority and cache boundaries.
+
+MCP exposes only `anka_recall`; it is read-only, capped at eight results, and
+frames every non-empty response as untrusted historical evidence.
+
 ### ⏳ Lifecycle Worker
 
 Background daemon task (`src/daemon/lifecycle.rs`) that keeps project status honest without manual upkeep. Every `lifecycle_interval_secs`, it checks each tracked project's last commit time and transitions status automatically:

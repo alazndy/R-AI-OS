@@ -393,6 +393,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: TraceAction,
     },
+    /// Search historical agent transcripts through the read-only ANKA cache
+    Anka {
+        #[command(subcommand)]
+        action: AnkaAction,
+    },
     /// Manage the MCP/WS tool-call security policy (raios-policy.toml)
     Policy {
         #[command(subcommand)]

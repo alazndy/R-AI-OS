@@ -35,7 +35,7 @@ pub use policy_suggest::{render_rules_toml, suggest_policy_rules, PolicySuggesti
 pub use rate_limiter::{RateLimitConfig, RateLimiter, ToolRateStatus};
 pub use sandbox::{is_path_safe, validate_path};
 pub use scanner::{scan_project, scan_project_fast};
-pub use secret_scan::looks_like_secret;
+pub use secret_scan::{looks_like_secret, redact_secrets};
 pub use verify_chain::{record_audit_event, record_tool_decision, verify_chain};
 
 // ─── Types ───────────────────────────────────────────────────────────────────

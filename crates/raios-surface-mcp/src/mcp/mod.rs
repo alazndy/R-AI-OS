@@ -149,7 +149,7 @@ impl McpServer {
         json!({
             "tools": [
                 "update_state","handover","add_task","get_health","get_inbox","list_projects",
-                "get_stats","semantic_search","project_info","portfolio_status",
+                "get_stats","semantic_search","anka_recall","project_info","portfolio_status",
                 "disk_usage","list_ports","usage_status","version_info","version_bump","env_status",
                 "deps_status","run_build","run_tests","git_status","git_log","git_diff",
                 "git_commit","ask_architect","get_validation_errors","session_note",

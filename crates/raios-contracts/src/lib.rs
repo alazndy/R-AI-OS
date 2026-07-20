@@ -1,3 +1,4 @@
+pub mod anka;
 pub mod command;
 pub mod dto;
 pub mod event;
@@ -5,6 +6,7 @@ pub mod problem;
 pub mod query;
 pub mod snapshot;
 
+pub use anka::{AnkaHitDto, AnkaIndexStatusDto, AnkaSearchRequestDto};
 pub use command::Command;
 pub use dto::*;
 pub use event::Event;
