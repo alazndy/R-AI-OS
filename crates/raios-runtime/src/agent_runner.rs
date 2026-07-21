@@ -37,6 +37,7 @@ fn wrapper_launch_input<'a>(agent: &str, extra_args: &'a [String]) -> Option<&'a
     if input.is_empty()
         || input.starts_with('-')
         || input.chars().count() > MAX_WRAPPER_LAUNCH_INPUT_CHARS
+        || raios_core::security::looks_like_secret(input).is_some()
     {
         return None;
     }
@@ -702,6 +703,10 @@ mod tests {
         );
         assert_eq!(
             wrapper_launch_input("codex", &["x".repeat(MAX_WRAPPER_LAUNCH_INPUT_CHARS + 1)]),
+            None
+        );
+        assert_eq!(
+            wrapper_launch_input("codex", &["password = 'superSecretValue123'".to_string()]),
             None
         );
     }
