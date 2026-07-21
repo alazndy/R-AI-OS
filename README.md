@@ -410,9 +410,14 @@ Tune background load in `~/.config/raios/config.toml` when needed, especially on
 Wrapper memory imports only transcripts that prove their project or workspace
 scope. Claude project transcripts and AGY records carrying the active workspace
 are eligible. Codex and OpenCode history formats are currently global and do
-not carry enough project identity, so R-AI-OS skips their automatic memory
-import rather than risk cross-project fact contamination. Their agent sessions,
-handoffs, and post-run reviews continue to work normally.
+not carry enough project identity, so R-AI-OS skips their automatic history
+import rather than risk cross-project fact contamination. For those agents
+only, one explicit positional launch prompt (for example, `raios run codex
+"use SQLite"`) may be captured after a successful session with the local
+project path and wrapper run ID; flags, multi-argument invocations, oversized
+input, and secret-like content are never captured. Interactive follow-up turns
+remain outside automatic capture until an upstream project/session identity is
+available.
 
 ```toml
 [daemon]

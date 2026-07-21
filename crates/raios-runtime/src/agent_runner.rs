@@ -14,12 +14,33 @@ const MEMORY_SYNC_INTERVAL_SECS: u64 = 90;
 
 const BUDGET_LIMIT_KB: u64 = 300;
 
+const MAX_WRAPPER_LAUNCH_INPUT_CHARS: usize = 600;
+
 /// Informational invocations must not consume a pending handoff intended for
 /// an interactive work session.
 fn is_informational_invocation(extra_args: &[String]) -> bool {
     extra_args
         .iter()
         .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V"))
+}
+
+/// A wrapper-local memory fallback is deliberately narrow: only a single,
+/// explicit launch prompt for agents whose upstream history is globally scoped.
+fn wrapper_launch_input<'a>(agent: &str, extra_args: &'a [String]) -> Option<&'a str> {
+    if !matches!(agent.to_ascii_lowercase().as_str(), "codex" | "opencode") {
+        return None;
+    }
+    let [input] = extra_args else {
+        return None;
+    };
+    let input = input.trim();
+    if input.is_empty()
+        || input.starts_with('-')
+        || input.chars().count() > MAX_WRAPPER_LAUNCH_INPUT_CHARS
+    {
+        return None;
+    }
+    Some(input)
 }
 
 pub fn run_agent(
@@ -454,6 +475,12 @@ pub fn run_agent(
     if success {
         if let Some(ref dir) = project_dir {
             crate::session_memory::auto_sync_agent_memory(agent, dir, session_start_time, true);
+            if let (Some((_, run_id)), Some(input)) = (
+                session_ids.as_ref(),
+                wrapper_launch_input(agent, &extra_args),
+            ) {
+                crate::session_memory::sync_wrapper_launch_input(agent, dir, run_id, input, true);
+            }
             if agent.to_lowercase() == "claude" {
                 crate::session_memory::post_session_memory_prompt(dir, session_start_time);
             }
@@ -650,6 +677,34 @@ fn get_dir_size(path: &Path) -> std::io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrapper_local_capture_accepts_only_one_bounded_prompt_for_unscoped_agents() {
+        assert_eq!(
+            wrapper_launch_input("codex", &["we decided to use SQLite".to_string()]),
+            Some("we decided to use SQLite")
+        );
+        assert_eq!(
+            wrapper_launch_input("opencode", &["use pnpm".to_string()]),
+            Some("use pnpm")
+        );
+        assert_eq!(
+            wrapper_launch_input("claude", &["use pnpm".to_string()]),
+            None
+        );
+        assert_eq!(
+            wrapper_launch_input("codex", &["--version".to_string()]),
+            None
+        );
+        assert_eq!(
+            wrapper_launch_input("codex", &["--model".to_string(), "gpt-5".to_string()]),
+            None
+        );
+        assert_eq!(
+            wrapper_launch_input("codex", &["x".repeat(MAX_WRAPPER_LAUNCH_INPUT_CHARS + 1)]),
+            None
+        );
+    }
 
     #[test]
     fn informational_invocations_do_not_consume_handoffs() {

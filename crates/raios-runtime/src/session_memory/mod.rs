@@ -205,7 +205,47 @@ pub fn auto_sync_agent_memory(
         return;
     }
 
-    let facts = heuristic_extract_facts(&transcript);
+    persist_verified_transcript(agent, project_path, None, &transcript, verbose);
+}
+
+/// Persist one explicit wrapper launch prompt for agents whose native history
+/// format cannot prove project ownership. The input is already project-bound
+/// because the wrapper resolved the working directory before it launched the
+/// child process.
+pub fn sync_wrapper_launch_input(
+    agent: &str,
+    project_path: &str,
+    wrapper_run_id: &str,
+    input: &str,
+    verbose: bool,
+) {
+    if !matches!(agent.to_ascii_lowercase().as_str(), "codex" | "opencode") {
+        return;
+    }
+    if raios_core::security::looks_like_secret(input).is_some() {
+        if verbose {
+            eprintln!("  memory sync skipped [{agent}]: launch input resembles a secret");
+        }
+        return;
+    }
+    let transcript = format!("User: {input}");
+    persist_verified_transcript(
+        agent,
+        project_path,
+        Some(wrapper_run_id),
+        &transcript,
+        verbose,
+    );
+}
+
+fn persist_verified_transcript(
+    agent: &str,
+    project_path: &str,
+    session_id: Option<&str>,
+    transcript: &str,
+    verbose: bool,
+) {
+    let facts = heuristic_extract_facts(transcript);
     if facts.is_empty() {
         return;
     }
@@ -224,7 +264,7 @@ pub fn auto_sync_agent_memory(
             "l0_raw",
             agent,
             &fact.raw_line,
-            None,
+            session_id,
         ) else {
             continue;
         };
@@ -241,7 +281,7 @@ pub fn auto_sync_agent_memory(
                 title: &title,
                 description: &fact.text,
                 body: &fact.text,
-                session_id: None,
+                session_id,
                 layer: 1,
                 provenance: Some(raios_core::db::Provenance::Observed),
                 confidence: None,
