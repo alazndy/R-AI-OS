@@ -94,6 +94,72 @@ pub struct SessionRow {
     pub summary: Option<String>,
 }
 
+/// A verified user note submitted by a live child of `raios run`.
+///
+/// The caller supplies only the opaque wrapper run ID, its current project
+/// path, and the note. `cp_record_wrapper_memory_note` checks all ownership
+/// boundaries against the control plane before persisting the content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrapperMemoryNote {
+    pub event_id: String,
+    pub agent_name: String,
+    pub project_id: i64,
+}
+
+fn invalid_wrapper_note(reason: &str) -> rusqlite::Error {
+    rusqlite::Error::InvalidParameterName(reason.to_string())
+}
+
+/// Store an explicit interactive note only for an open, project-bound wrapper
+/// run. The run ID is an unguessable UUID passed only to the wrapper's child.
+pub fn cp_record_wrapper_memory_note(
+    conn: &Connection,
+    run_id: &str,
+    project_path: &str,
+    note: &str,
+) -> Result<WrapperMemoryNote> {
+    let note = note.trim();
+    if note.is_empty() || note.chars().count() > 500 {
+        return Err(invalid_wrapper_note(
+            "wrapper note must contain 1..=500 characters",
+        ));
+    }
+    if raios_core::security::looks_like_secret(note).is_some() {
+        return Err(invalid_wrapper_note("wrapper note resembles a secret"));
+    }
+
+    let project_id = project_id_for_file_path(conn, project_path)
+        .ok_or_else(|| invalid_wrapper_note("wrapper note path is not a registered project"))?;
+    let (agent_name, run_project_id): (String, Option<i64>) = conn
+        .query_row(
+            "SELECT agent_name, project_id
+             FROM cp_agent_runs
+             WHERE id=?1 AND provider='wrapper' AND status='running'",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| invalid_wrapper_note("wrapper run is not active"))?;
+    if run_project_id != Some(project_id) {
+        return Err(invalid_wrapper_note(
+            "wrapper note project does not match its run",
+        ));
+    }
+
+    let event_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    conn.execute(
+        "INSERT INTO cp_wrapper_events (id, agent_run_id, project_id, event_kind, content, created_at)
+         VALUES (?1, ?2, ?3, 'memory_note', ?4, ?5)",
+        params![event_id, run_id, project_id, note, now],
+    )?;
+
+    Ok(WrapperMemoryNote {
+        event_id,
+        agent_name,
+        project_id,
+    })
+}
+
 pub fn cp_sessions_list(conn: &Connection, limit: usize) -> Result<Vec<SessionRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, agent_name, status, started_at, ended_at, exit_reason, summary
@@ -114,4 +180,63 @@ pub fn cp_sessions_list(conn: &Connection, limit: usize) -> Result<Vec<SessionRo
         })
     })?;
     rows.collect::<Result<Vec<_>>>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scoped_run(conn: &Connection) -> (String, i64) {
+        let project_id = upsert_project(
+            conn,
+            "Test",
+            "core",
+            "/workspace/project",
+            None,
+            "active",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let (_, run_id) = cp_session_start(conn, "codex_kaira", Some(project_id)).unwrap();
+        (run_id, project_id)
+    }
+
+    #[test]
+    fn wrapper_memory_note_requires_live_matching_project_and_safe_content() {
+        let conn = crate::db::tests::in_memory();
+        let (run_id, project_id) = scoped_run(&conn);
+
+        let event = cp_record_wrapper_memory_note(
+            &conn,
+            &run_id,
+            "/workspace/project/src",
+            "We decided to keep the project boundary strict.",
+        )
+        .unwrap();
+        assert_eq!(event.agent_name, "codex_kaira");
+        assert_eq!(event.project_id, project_id);
+
+        assert!(cp_record_wrapper_memory_note(&conn, &run_id, "/other", "cross project").is_err());
+        assert!(cp_record_wrapper_memory_note(
+            &conn,
+            &run_id,
+            "/workspace/project",
+            "password = 'superSecretValue123'"
+        )
+        .is_err());
+
+        let (task_id, _) = cp_session_start(&conn, "codex_kaira", Some(project_id)).unwrap();
+        let (_, ended_run) = cp_session_start(&conn, "codex_kaira", Some(project_id)).unwrap();
+        cp_session_end(&conn, &task_id, &ended_run, true).unwrap();
+        assert!(cp_record_wrapper_memory_note(
+            &conn,
+            &ended_run,
+            "/workspace/project",
+            "late note"
+        )
+        .is_err());
+    }
 }

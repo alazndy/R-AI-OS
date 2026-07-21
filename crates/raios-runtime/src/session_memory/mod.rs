@@ -238,6 +238,28 @@ pub fn sync_wrapper_launch_input(
     );
 }
 
+/// Persist a user-provided interactive note after the control plane has bound
+/// it to a live wrapper run and its registered project. Unlike global upstream
+/// histories, this is explicit evidence with a trustworthy ownership boundary.
+pub fn sync_wrapper_session_note(
+    agent: &str,
+    project_path: &str,
+    wrapper_run_id: &str,
+    note: &str,
+) {
+    if note.trim().is_empty() || raios_core::security::looks_like_secret(note).is_some() {
+        return;
+    }
+    let transcript = format!("User: {}", note.trim());
+    persist_verified_transcript(
+        agent,
+        project_path,
+        Some(wrapper_run_id),
+        &transcript,
+        false,
+    );
+}
+
 fn persist_verified_transcript(
     agent: &str,
     project_path: &str,

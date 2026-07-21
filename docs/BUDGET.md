@@ -15,6 +15,7 @@ This is the ratchet checklist for that growth — read-only today, checked by
 | `workspace.db` total file size | 500 MB | **warn** — `raios health` flags `OVER CAP`; nothing blocks yet |
 | `cp_tasks` | — (counted only) | none yet — establishing a baseline |
 | `cp_agent_runs` | — (counted only) | none yet — establishing a baseline |
+| `cp_wrapper_events` | — (counted only) | explicit wrapper-note evidence; bounded to 500 characters per row and retained for run auditability |
 | `cp_artifacts` | — (counted only) | none yet — establishing a baseline |
 | `audit_log` | — (counted only) | none yet — has its own hash-chain integrity check (`raios verify-chain`), not a size cap |
 
@@ -60,7 +61,7 @@ transcripts):
 
 > **Does this change grow a hot table without a corresponding budget bump?**
 > If it adds writes to `mem_items`, `cp_tasks`, `cp_agent_runs`,
-> `cp_artifacts`, or `audit_log` — or introduces a new table that will
+> `cp_wrapper_events`, `cp_artifacts`, or `audit_log` — or introduces a new table that will
 > accumulate rows over the life of the workspace — either (a) add/adjust a
 > soft cap for it in this file and in `db_budget.rs`, or (b) explain in the
 > PR why it's bounded by construction (e.g. a ring buffer like `cp_logs`,

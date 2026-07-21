@@ -273,6 +273,20 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_cp_runs_status ON cp_agent_runs(status);
         CREATE INDEX IF NOT EXISTS idx_cp_runs_agent ON cp_agent_runs(agent_name);
 
+        -- Explicit, wrapper-owned user notes. These deliberately remain
+        -- separate from legacy `sessions`/`session_events`: wrapper runs are
+        -- authenticated by a live cp_agent_runs row and a project boundary.
+        CREATE TABLE IF NOT EXISTS cp_wrapper_events (
+            id           TEXT PRIMARY KEY,
+            agent_run_id TEXT NOT NULL REFERENCES cp_agent_runs(id) ON DELETE CASCADE,
+            project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            event_kind   TEXT NOT NULL CHECK(event_kind IN ('memory_note')),
+            content      TEXT NOT NULL,
+            created_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cp_wrapper_events_run
+            ON cp_wrapper_events(agent_run_id, created_at);
+
         CREATE TABLE IF NOT EXISTS cp_artifacts (
             id TEXT PRIMARY KEY,
             task_id TEXT NOT NULL REFERENCES cp_tasks(id) ON DELETE CASCADE,

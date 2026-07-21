@@ -28,7 +28,7 @@ mod workspace;
 use self::anka::cmd_anka;
 use self::factory::cmd_factory;
 use self::mem::cmd_mem;
-use self::session::cmd_sessions;
+use self::session::{cmd_sessions, cmd_wrapper_note};
 use self::task_update::cmd_task_update;
 pub use self::task_update::run_refactor_flag;
 use self::trace::cmd_trace;
@@ -108,6 +108,12 @@ pub fn run(cli: Cli) {
             if let Err(e) = raios_runtime::agent_runner::run_agent(&agent, project, timeout, extra)
             {
                 eprintln!("Agent Runner Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::WrapperNote { note } => {
+            if let Err(e) = cmd_wrapper_note(&note, cli.json) {
+                eprintln!("Wrapper note rejected: {e}");
                 std::process::exit(1);
             }
         }

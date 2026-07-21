@@ -1,6 +1,10 @@
 use crate::instinct::InstinctEngine;
 use raios_core::shield::AgentShield;
 use std::io::{self, BufRead};
+#[cfg(unix)]
+use std::io::{Read, Write};
+#[cfg(unix)]
+use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
 use std::process::Command;
 use std::sync::{
@@ -15,6 +19,88 @@ const MEMORY_SYNC_INTERVAL_SECS: u64 = 90;
 const BUDGET_LIMIT_KB: u64 = 300;
 
 const MAX_WRAPPER_LAUNCH_INPUT_CHARS: usize = 600;
+
+/// Codex's own `workspace-write` sandbox (its default for agentic shell
+/// commands) blocks all outbound sockets, including loopback TCP, unless
+/// this is set — live-verified against a real `codex exec` child: identical
+/// `Operation not permitted` failures with no flag and with a bare
+/// `--sandbox workspace-write`, success only once this exact key was passed.
+/// Namespaced under `sandbox_workspace_write`, so it is inert whenever
+/// Codex's effective sandbox is `read-only` or `danger-full-access` instead.
+/// This does widen network egress for every shell command Codex's own
+/// agentic loop runs while wrapped by `raios run codex` — an explicit,
+/// deliberate trade-off to make `wrapper-note` reachable out of the box,
+/// not an incidental side effect.
+const CODEX_NETWORK_ACCESS_CONFIG: &str = "sandbox_workspace_write.network_access=true";
+
+/// The one place a `codex` child is constructed, so the network-access
+/// override above can never be added at one call site and forgotten at
+/// the other.
+fn codex_command() -> Command {
+    let mut c = Command::new("codex");
+    c.arg("-c").arg(CODEX_NETWORK_ACCESS_CONFIG);
+    c
+}
+
+/// A short-lived, wrapper-owned transport for sandboxed agent children. The
+/// child never opens workspace.db itself; the wrapper validates and persists
+/// the note on its behalf. Loopback TCP (not a Unix domain socket) is used
+/// deliberately: a real live test against `codex exec --sandbox
+/// workspace-write` showed Landlock denies `connect()` on a Unix socket even
+/// when its directory is explicitly allow-listed, while loopback TCP is
+/// reachable from inside that sandbox once `CODEX_NETWORK_ACCESS_CONFIG` is
+/// also passed to the child. The random opaque `run_id` UUID is the actual
+/// access-control boundary, not the transport's reachability.
+#[cfg(unix)]
+struct WrapperNoteIpc {
+    addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    worker: thread::JoinHandle<()>,
+}
+
+#[cfg(unix)]
+fn start_wrapper_note_ipc(run_id: String, project_path: String) -> std::io::Result<WrapperNoteIpc> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let addr = listener.local_addr()?;
+    listener.set_nonblocking(true)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    let worker = thread::spawn(move || {
+        while !worker_stop.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut payload = String::new();
+                    let _ = Read::take(&mut stream, 2048).read_to_string(&mut payload);
+                    let response = match serde_json::from_str::<serde_json::Value>(&payload) {
+                        Ok(value) if value["run_id"].as_str() == Some(run_id.as_str()) => {
+                            match value["note"].as_str() {
+                                Some(note) => match raios_core::db::open_db().and_then(|conn| {
+                                    raios_core::db::cp_record_wrapper_memory_note(&conn, &run_id, &project_path, note)
+                                }) {
+                                    Ok(event) => {
+                                        crate::session_memory::sync_wrapper_session_note(
+                                            &event.agent_name, &project_path, &run_id, note,
+                                        );
+                                        serde_json::json!({"recorded": true, "event_id": event.event_id}).to_string()
+                                    }
+                                    Err(error) => serde_json::json!({"recorded": false, "error": error.to_string()}).to_string(),
+                                },
+                                None => serde_json::json!({"recorded": false, "error": "missing note"}).to_string(),
+                            }
+                        }
+                        _ => serde_json::json!({"recorded": false, "error": "invalid wrapper note capability"}).to_string(),
+                    };
+                    let _ = stream.write_all(response.as_bytes());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    Ok(WrapperNoteIpc { addr, stop, worker })
+}
 
 /// Informational invocations must not consume a pending handoff intended for
 /// an interactive work session.
@@ -206,7 +292,7 @@ pub fn run_agent(
             c
         }
         "codex" => {
-            let mut c = Command::new("codex");
+            let mut c = codex_command();
             if let Some(block) = &handover_block {
                 c.arg(block);
             }
@@ -279,6 +365,23 @@ pub fn run_agent(
         .as_ref()
         .map(|(_, run_id)| format!("  session: {}", &run_id[..8]))
         .unwrap_or_default();
+    #[cfg(unix)]
+    let wrapper_note_ipc = match (session_ids.as_ref(), project_dir.as_ref()) {
+        (Some((_, run_id)), Some(dir)) => start_wrapper_note_ipc(run_id.clone(), dir.clone()).ok(),
+        _ => None,
+    };
+    if let Some((_, run_id)) = &session_ids {
+        // This opaque ID is scoped by cp_record_wrapper_memory_note to the
+        // still-running child session and its registered project.
+        cmd.env("RAIOS_WRAPPER_RUN_ID", run_id);
+        if let Some(dir) = &project_dir {
+            cmd.env("RAIOS_WRAPPER_PROJECT_PATH", dir);
+        }
+        #[cfg(unix)]
+        if let Some(ipc) = &wrapper_note_ipc {
+            cmd.env("RAIOS_WRAPPER_NOTE_SOCKET", ipc.addr.to_string());
+        }
+    }
     println!(
         "\x1b[32m⟦ RAIOS WRAPPER ✓ ⟧\x1b[0m  agent: {}{}",
         canonical_agent_identity(agent).unwrap_or(agent),
@@ -370,6 +473,11 @@ pub fn run_agent(
     // Stop periodic sync thread before doing the final verbose sync below.
     stop_sync.store(true, Ordering::Relaxed);
     let _ = sync_thread.join();
+    #[cfg(unix)]
+    if let Some(ipc) = wrapper_note_ipc {
+        ipc.stop.store(true, Ordering::Relaxed);
+        let _ = ipc.worker.join();
+    }
 
     // 6. Close session row in DB and print post-session summary.
     if injected_claude_md {
@@ -530,7 +638,7 @@ pub fn spawn_agent_detached(
             c
         }
         "codex" => {
-            let mut c = Command::new("codex");
+            let mut c = codex_command();
             c.arg(task_prompt);
             c
         }
@@ -678,6 +786,14 @@ fn get_dir_size(path: &Path) -> std::io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_command_always_enables_workspace_write_network_access() {
+        let cmd = codex_command();
+        assert_eq!(cmd.get_program(), "codex");
+        let args: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
+        assert_eq!(args, vec!["-c", CODEX_NETWORK_ACCESS_CONFIG]);
+    }
 
     #[test]
     fn wrapper_local_capture_accepts_only_one_bounded_prompt_for_unscoped_agents() {
@@ -863,5 +979,130 @@ mod tests {
         let file = tmp.path().join("solo.txt");
         std::fs::write(&file, b"some bytes").unwrap();
         assert_eq!(get_dir_size(&file).unwrap(), 0);
+    }
+
+    // ─── wrapper-note IPC — real loopback TCP transport ────────────────────
+
+    #[cfg(unix)]
+    mod wrapper_note_ipc {
+        use super::*;
+        use rusqlite::params;
+        use std::net::TcpStream;
+        use std::sync::Mutex;
+
+        // `RAIOS_DB_PATH` is process-global; serialize any test in this
+        // binary that reads or writes it so parallel `cargo test` threads
+        // never race on the same env var.
+        static DB_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+        fn send_note(addr: SocketAddr, run_id: &str, note: &str) -> serde_json::Value {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            let payload = serde_json::json!({"run_id": run_id, "note": note}).to_string();
+            stream.write_all(payload.as_bytes()).unwrap();
+            stream.shutdown(std::net::Shutdown::Write).unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            serde_json::from_str(&response).unwrap()
+        }
+
+        fn stop(ipc: WrapperNoteIpc) {
+            ipc.stop.store(true, Ordering::Relaxed);
+            let _ = ipc.worker.join();
+        }
+
+        #[test]
+        fn wrapper_note_ipc_two_projects_parallel_no_cross_leak() {
+            let _lock = DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let original_db_path = std::env::var("RAIOS_DB_PATH").ok();
+            let tmp_db = tempfile::NamedTempFile::new().unwrap();
+            std::env::set_var("RAIOS_DB_PATH", tmp_db.path());
+
+            let conn = raios_core::db::open_db().unwrap();
+            let project_a = raios_core::db::upsert_project(
+                &conn,
+                "Project A",
+                "core",
+                "/tmp/raios-wrapper-note-test-a",
+                None,
+                "active",
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let project_b = raios_core::db::upsert_project(
+                &conn,
+                "Project B",
+                "core",
+                "/tmp/raios-wrapper-note-test-b",
+                None,
+                "active",
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let (_, run_a) =
+                raios_core::db::cp_session_start(&conn, "codex_kaira", Some(project_a)).unwrap();
+            let (_, run_b) =
+                raios_core::db::cp_session_start(&conn, "codex_kaira", Some(project_b)).unwrap();
+            drop(conn);
+
+            let ipc_a = start_wrapper_note_ipc(
+                run_a.clone(),
+                "/tmp/raios-wrapper-note-test-a".to_string(),
+            )
+            .unwrap();
+            let ipc_b = start_wrapper_note_ipc(
+                run_b.clone(),
+                "/tmp/raios-wrapper-note-test-b".to_string(),
+            )
+            .unwrap();
+
+            // Legitimate note into each project's own socket succeeds.
+            let resp_a = send_note(ipc_a.addr, &run_a, "note for A");
+            assert_eq!(resp_a["recorded"], true, "resp_a = {resp_a}");
+            let resp_b = send_note(ipc_b.addr, &run_b, "note for B");
+            assert_eq!(resp_b["recorded"], true, "resp_b = {resp_b}");
+
+            // Cross-wiring: each socket only recognizes the run ID it was
+            // started with, so presenting the *other* project's run ID must
+            // be rejected by the socket itself, never reach the DB as a
+            // write into the wrong project.
+            let cross_into_a = send_note(ipc_a.addr, &run_b, "cross leak into A");
+            assert_eq!(cross_into_a["recorded"], false, "cross_into_a = {cross_into_a}");
+            let cross_into_b = send_note(ipc_b.addr, &run_a, "cross leak into B");
+            assert_eq!(cross_into_b["recorded"], false, "cross_into_b = {cross_into_b}");
+
+            stop(ipc_a);
+            stop(ipc_b);
+
+            let conn = raios_core::db::open_db().unwrap();
+            let events_a: Vec<String> = conn
+                .prepare("SELECT content FROM cp_wrapper_events WHERE project_id=?1")
+                .unwrap()
+                .query_map(params![project_a], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(events_a, vec!["note for A".to_string()]);
+
+            let events_b: Vec<String> = conn
+                .prepare("SELECT content FROM cp_wrapper_events WHERE project_id=?1")
+                .unwrap()
+                .query_map(params![project_b], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(events_b, vec!["note for B".to_string()]);
+            drop(conn);
+
+            match original_db_path {
+                Some(v) => std::env::set_var("RAIOS_DB_PATH", v),
+                None => std::env::remove_var("RAIOS_DB_PATH"),
+            }
+        }
     }
 }

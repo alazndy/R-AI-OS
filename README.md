@@ -15,7 +15,7 @@
     ║║   ▀█▄  ───│   · │ · │───  ▄█▀            ║║
     ║║      ▀█▄  └─────────┘  ▄█▀               ║║
   ╔═╝║         ▀█████████████▀                  ║╚═╗
-  ║ ╔╝   · · ·   R - A I - O S   KERNEL  v3.6   ╚╗ ║
+  ║ ╔╝   · · ·   R - A I - O S   KERNEL  v3.7   ╚╗ ║
   ╚═╝ ══════════════════════════════════════════ ╚═╝
 </pre>
 </p>
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.6.0-blue?style=for-the-badge" alt="Version"></a>
+  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.7.0-blue?style=for-the-badge" alt="Version"></a>
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
@@ -417,7 +417,13 @@ only, one explicit positional launch prompt (for example, `raios run codex
 project path and wrapper run ID; flags, multi-argument invocations, oversized
 input, and secret-like content are never captured. Interactive follow-up turns
 remain outside automatic capture until an upstream project/session identity is
-available.
+available. A hook or an agent can record an explicit follow-up safely with
+`raios wrapper-note "decision or progress"`: the command is available only to
+a live `raios run` child through its opaque `RAIOS_WRAPPER_RUN_ID`, verifies
+that its current directory resolves to the run's registered project, limits
+content to 500 characters, and rejects secret-like input before it reaches the
+database. Accepted notes become wrapper events and pass through the same
+project-bound L0→L3 memory pipeline.
 
 ```toml
 [daemon]

@@ -71,6 +71,9 @@ pub fn open_db() -> Result<Connection> {
 }
 
 fn db_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("RAIOS_DB_PATH") {
+        return std::path::PathBuf::from(path);
+    }
     dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("raios")

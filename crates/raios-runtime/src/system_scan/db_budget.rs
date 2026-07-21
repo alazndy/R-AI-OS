@@ -29,6 +29,7 @@ const BUDGET_TABLES: &[&str] = &[
     "mem_items",
     "cp_tasks",
     "cp_agent_runs",
+    "cp_wrapper_events",
     "cp_artifacts",
     "audit_log",
 ];
@@ -108,6 +109,7 @@ fn table_row_count(conn: &Connection, table: &str) -> SqlResult<i64> {
         "mem_items" => "SELECT COUNT(*) FROM mem_items",
         "cp_tasks" => "SELECT COUNT(*) FROM cp_tasks",
         "cp_agent_runs" => "SELECT COUNT(*) FROM cp_agent_runs",
+        "cp_wrapper_events" => "SELECT COUNT(*) FROM cp_wrapper_events",
         "cp_artifacts" => "SELECT COUNT(*) FROM cp_artifacts",
         "audit_log" => "SELECT COUNT(*) FROM audit_log",
         _ => return Err(rusqlite::Error::QueryReturnedNoRows),

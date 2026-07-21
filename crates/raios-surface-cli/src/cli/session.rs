@@ -119,3 +119,62 @@ pub(super) fn cmd_sessions(agent: Option<&str>, top: usize, canvas: Option<&str>
     }
     println!();
 }
+
+pub(super) fn cmd_wrapper_note(note: &str, json: bool) -> Result<(), String> {
+    let run_id = std::env::var("RAIOS_WRAPPER_RUN_ID")
+        .map_err(|_| "missing RAIOS_WRAPPER_RUN_ID; run this only inside raios run".to_string())?;
+    let project_path = std::env::current_dir()
+        .map_err(|e| format!("cannot resolve current project: {e}"))?
+        .to_string_lossy()
+        .into_owned();
+    #[cfg(unix)]
+    if let Ok(addr) = std::env::var("RAIOS_WRAPPER_NOTE_SOCKET") {
+        let mut stream = TcpStream::connect(&addr)
+            .map_err(|e| format!("cannot reach wrapper note channel: {e}"))?;
+        let payload = serde_json::json!({"run_id": run_id, "note": note}).to_string();
+        stream
+            .write_all(payload.as_bytes())
+            .map_err(|e| format!("cannot send wrapper note: {e}"))?;
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .map_err(|e| format!("cannot read wrapper note response: {e}"))?;
+        let response: serde_json::Value = serde_json::from_str(&response)
+            .map_err(|_| "invalid wrapper note response".to_string())?;
+        if response["recorded"] != true {
+            return Err(response["error"]
+                .as_str()
+                .unwrap_or("wrapper note rejected")
+                .to_string());
+        }
+        if json {
+            println!("{}", response);
+        } else {
+            println!("✓ Wrapper note recorded for run {}", &run_id[..8]);
+        }
+        return Ok(());
+    }
+    let conn = raios_core::db::open_db().map_err(|e| format!("DB error: {e}"))?;
+    let event = raios_core::db::cp_record_wrapper_memory_note(&conn, &run_id, &project_path, note)
+        .map_err(|e| e.to_string())?;
+
+    raios_runtime::session_memory::sync_wrapper_session_note(
+        &event.agent_name,
+        &project_path,
+        &run_id,
+        note,
+    );
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"recorded": true, "event_id": event.event_id, "run_id": run_id})
+        );
+    } else {
+        println!("✓ Wrapper note recorded for run {}", &run_id[..8]);
+    }
+    Ok(())
+}
+#[cfg(unix)]
+use std::io::{Read, Write};
+#[cfg(unix)]
+use std::net::TcpStream;

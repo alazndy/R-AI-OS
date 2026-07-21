@@ -88,6 +88,12 @@ pub enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
     },
+    /// Record an explicit interactive note for the current wrapper child session.
+    #[command(name = "wrapper-note")]
+    WrapperNote {
+        /// User decision or progress note (1..=500 characters; secrets rejected)
+        note: String,
+    },
     /// Commit dirty projects in bulk (optionally push)
     Commit {
         #[arg(short, long)]
