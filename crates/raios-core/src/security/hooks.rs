@@ -126,9 +126,20 @@ pub fn run_hook(_name: &str, hook_script: &str, payload: &HookPayload) -> HookOu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // `run_hook` reads the process-global RAIOS_HOOKS_DISABLED env var, and
+    // hook_recursion_disabled_returns_skipped below mutates it. std::env
+    // mutation is process-wide, not thread-local, and #[test] functions run
+    // on parallel threads by default — without this lock, any test here can
+    // observe another test's env::set_var mid-flight (flaky: reproduced on
+    // macOS CI as `hook_exit_code_zero_is_allowed` seeing Skipped instead of
+    // Allowed because the recursion test's set_var raced it).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn hook_exit_code_zero_is_allowed() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let payload = HookPayload {
             hook: "pre_tool_call".into(),
             tool_name: Some("test_tool".into()),
@@ -143,6 +154,7 @@ mod tests {
 
     #[test]
     fn hook_exit_code_two_is_blocked() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let payload = HookPayload {
             hook: "pre_tool_call".into(),
             tool_name: Some("test_tool".into()),
@@ -167,6 +179,7 @@ mod tests {
 
     #[test]
     fn hook_crash_or_non_two_exit_fails_open() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let payload = HookPayload {
             hook: "pre_tool_call".into(),
             tool_name: Some("test_tool".into()),
@@ -181,6 +194,8 @@ mod tests {
 
     #[test]
     fn hook_recursion_disabled_returns_skipped() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = env::var("RAIOS_HOOKS_DISABLED").ok();
         env::set_var("RAIOS_HOOKS_DISABLED", "1");
         let payload = HookPayload {
             hook: "pre_tool_call".into(),
@@ -191,7 +206,10 @@ mod tests {
             timestamp: "2026-07-15 12:00:00".into(),
         };
         let outcome = run_hook("pre_tool_call", "exit 2", &payload);
-        env::remove_var("RAIOS_HOOKS_DISABLED");
+        match original {
+            Some(v) => env::set_var("RAIOS_HOOKS_DISABLED", v),
+            None => env::remove_var("RAIOS_HOOKS_DISABLED"),
+        }
         assert_eq!(outcome, HookOutcome::Skipped);
     }
 }
