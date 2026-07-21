@@ -107,12 +107,17 @@ pub fn cp_scheduled_job_mark_fired(conn: &Connection, id: &str, interval_secs: i
     Ok(())
 }
 
-pub fn cp_scheduled_job_revert_firing(conn: &Connection, id: &str) -> Result<()> {
+pub fn cp_scheduled_job_revert_firing(
+    conn: &Connection,
+    id: &str,
+    interval_secs: i64,
+) -> Result<()> {
     conn.execute(
         "UPDATE cp_scheduled_jobs
-         SET status = 'active'
+         SET status = 'active',
+             next_run_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?2 || ' seconds')
          WHERE id = ?1 AND status = 'firing'",
-        params![id],
+        params![id, interval_secs],
     )?;
     Ok(())
 }

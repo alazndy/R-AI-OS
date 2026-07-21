@@ -405,6 +405,35 @@ fn scheduled_job_mark_fired_advances_next_run() {
 }
 
 #[test]
+fn scheduled_job_revert_firing_backs_off_next_run() {
+    let conn = in_memory();
+    let id = cp_scheduled_job_create(&conn, "Test Job", "claude", "desc", 60).unwrap();
+
+    conn.execute("UPDATE cp_scheduled_jobs SET next_run_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-10 seconds') WHERE id = ?1", params![id]).unwrap();
+
+    let claimed = cp_scheduled_jobs_claim_due(&conn).unwrap();
+    assert_eq!(claimed.len(), 1);
+
+    cp_scheduled_job_revert_firing(&conn, &id, 60).unwrap();
+
+    let jobs = cp_scheduled_jobs_list(&conn).unwrap();
+    assert_eq!(jobs[0].status, "active");
+    assert_eq!(jobs[0].run_count, 0);
+    assert!(jobs[0].last_run_at.is_none());
+    assert!(
+        jobs[0].next_run_at > jobs[0].created_at,
+        "a failed spawn must back off next_run_at instead of leaving it due, \
+         or the scheduler retries it every tick forever"
+    );
+
+    // Immediately re-checking due jobs must NOT reclaim it — this is the
+    // exact retry-storm the bug caused (JSON Backup job hammered every
+    // ~60s for 3 days instead of respecting its 86400s interval).
+    let due_again = cp_scheduled_jobs_claim_due(&conn).unwrap();
+    assert!(due_again.is_empty());
+}
+
+#[test]
 fn scheduled_jobs_reset_firing_on_restart() {
     let conn = in_memory();
     let _id = cp_scheduled_job_create(&conn, "Test Job", "claude", "desc", -5).unwrap();
