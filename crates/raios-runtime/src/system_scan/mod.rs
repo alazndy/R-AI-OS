@@ -6,7 +6,9 @@ pub mod doctor;
 mod tools;
 mod usage;
 
-pub use doctor::{get_doctor_result, run_doctor_check, save_doctor_result, DoctorResult, DoctorTier};
+pub use doctor::{
+    get_doctor_result, run_doctor_check, save_doctor_result, DoctorResult, DoctorTier,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemAiTool {
@@ -101,6 +103,14 @@ pub struct ProjectMemBudget {
     pub over_budget: bool,
 }
 
+/// Largest SQLite tables or indexes in the workspace database. This is a
+/// read-only diagnostic projection used to explain a budget breach.
+#[derive(Debug, Clone, Serialize)]
+pub struct DbStorageConsumer {
+    pub name: String,
+    pub bytes: i64,
+}
+
 /// Read-only snapshot of `workspace.db`'s size and hot-table row counts,
 /// checked against hardcoded soft caps. Nothing here writes to the DB.
 #[derive(Debug, Clone, Serialize)]
@@ -111,6 +121,7 @@ pub struct DbBudgetReport {
     pub table_counts: Vec<TableRowCount>,
     pub mem_items_by_project: Vec<ProjectMemBudget>,
     pub mem_items_over_budget: bool,
+    pub largest_storage_consumers: Vec<DbStorageConsumer>,
     /// Set instead of the above fields when `workspace.db` couldn't be opened.
     pub error: Option<String>,
 }

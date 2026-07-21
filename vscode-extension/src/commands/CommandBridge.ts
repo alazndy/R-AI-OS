@@ -125,7 +125,26 @@ export class CommandBridge {
     const url = await vscode.window.showInputBox({
       prompt: "URL to audit with Lighthouse",
       placeHolder: "https://example.com",
-      validateInput: (v) => (v.startsWith("http") ? null : "Must start with http:// or https://"),
+      validateInput: (v) => {
+        const trimmed = v.trim();
+        try {
+          const parsed = new URL(trimmed);
+          if (parsed.protocol === "https:") {
+            return null;
+          }
+          if (
+            parsed.protocol === "http:" &&
+            (parsed.hostname === "localhost" ||
+              parsed.hostname === "127.0.0.1" ||
+              parsed.hostname === "[::1]")
+          ) {
+            return null;
+          }
+      return "URL must use HTTPS; HTTP is allowed only for local loopback";
+        } catch {
+          return "Invalid URL format";
+        }
+      },
     });
     if (!url?.trim()) return;
     this.runCli(["audit", url.trim()], "Audit complete");

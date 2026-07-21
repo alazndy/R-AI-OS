@@ -84,6 +84,13 @@ fn print_db_budget(budget: &raios_runtime::system_scan::DbBudgetReport) {
         println!("  {:<16} {:>8} rows", t.table, t.row_count);
     }
 
+    if !budget.largest_storage_consumers.is_empty() {
+        println!("  Largest storage consumers:");
+        for consumer in &budget.largest_storage_consumers {
+            println!("     - {:<30} {}", consumer.name, human_bytes(consumer.bytes));
+        }
+    }
+
     if budget.mem_items_over_budget {
         println!("  ⚠  mem_items over the per-project soft cap:");
         for p in &budget.mem_items_by_project {

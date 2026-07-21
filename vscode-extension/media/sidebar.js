@@ -30,6 +30,21 @@
       }
     });
 
+    function createEmptyState(text, isError = false) {
+      const div = document.createElement("div");
+      div.className = "empty-state";
+      if (isError) {
+        div.style.color = "var(--error-color)";
+      }
+      div.textContent = text;
+      return div;
+    }
+
+    function setEmptyState(container, text, isError = false) {
+      if (!container) return;
+      container.replaceChildren(createEmptyState(text, isError));
+    }
+
     async function updateDashboard() {
       const statusDot    = document.getElementById("status-dot");
       const statusText   = document.getElementById("status-text");
@@ -53,22 +68,36 @@
           const git = await apiFetch("/api/git-status" + pathParam);
           if (git.error) {
             document.getElementById("git-branch-label").textContent = "";
-            gitBody.innerHTML = `<div class="empty-state">${esc(git.error)}</div>`;
+            setEmptyState(gitBody, git.error);
           } else {
             document.getElementById("git-branch-label").textContent = git.branch || "";
-            const badgeClass = git.dirty ? "dirty" : "clean";
-            const badgeText  = git.dirty ? "Dirty" : "Clean";
-            let stats = "";
-            if (git.staged    > 0) stats += `<span class="git-stat"><b>${git.staged}</b> staged</span>`;
-            if (git.modified  > 0) stats += `<span class="git-stat"><b>${git.modified}</b> modified</span>`;
-            if (git.untracked > 0) stats += `<span class="git-stat"><b>${git.untracked}</b> untracked</span>`;
-            gitBody.innerHTML = `<div class="git-meta">
-              <span class="git-badge ${badgeClass}">${badgeText}</span>
-              ${stats}
-            </div>`;
+            const metaDiv = document.createElement("div");
+            metaDiv.className = "git-meta";
+
+            const badgeSpan = document.createElement("span");
+            badgeSpan.className = `git-badge ${git.dirty ? "dirty" : "clean"}`;
+            badgeSpan.textContent = git.dirty ? "Dirty" : "Clean";
+            metaDiv.appendChild(badgeSpan);
+
+            const addStat = (count, label) => {
+              if (count > 0) {
+                const statSpan = document.createElement("span");
+                statSpan.className = "git-stat";
+                const b = document.createElement("b");
+                b.textContent = String(count);
+                statSpan.appendChild(b);
+                statSpan.appendChild(document.createTextNode(` ${label}`));
+                metaDiv.appendChild(statSpan);
+              }
+            };
+            addStat(git.staged, "staged");
+            addStat(git.modified, "modified");
+            addStat(git.untracked, "untracked");
+
+            gitBody.replaceChildren(metaDiv);
           }
         } catch {
-          gitBody.innerHTML = '<div class="empty-state" style="color:var(--error-color)">Load failed</div>';
+          setEmptyState(gitBody, "Load failed", true);
         }
 
         // Plans
@@ -77,32 +106,65 @@
           const plans = planData.plans || [];
           document.getElementById("plans-count").textContent = plans.length + " plans";
           if (plans.length === 0) {
-            plansList.innerHTML = '<div class="empty-state">No plans found</div>';
+            setEmptyState(plansList, "No plans found");
           } else {
-            plansList.innerHTML = plans.map(p => {
+            plansList.replaceChildren();
+            plans.forEach(p => {
               const pctLabel = p.status === "done"
                 ? "Done"
                 : p.status === "not_started"
                   ? "Not started"
                   : p.total > 0 ? p.checked + "/" + p.total : "—";
               const barWidth = p.status === "done" ? 100 : (p.total > 0 ? Math.round(p.checked * 100 / p.total) : 0);
-              return `<div class="plan-item">
-                <div class="plan-dot ${esc(p.status)}"></div>
-                <div class="plan-body">
-                  <div class="plan-title" title="${esc(p.title)}">${esc(p.title)}</div>
-                  <div class="plan-meta">
-                    <span class="plan-date">${esc(p.date)}</span>
-                    <div class="plan-progress-bar">
-                      <div class="plan-progress-fill ${esc(p.status)}" style="width:${barWidth}%"></div>
-                    </div>
-                    <span class="plan-pct">${esc(pctLabel)}</span>
-                  </div>
-                </div>
-              </div>`;
-            }).join("");
+
+              const item = document.createElement("div");
+              item.className = "plan-item";
+
+              const dot = document.createElement("div");
+              dot.className = `plan-dot ${p.status || ""}`;
+
+              const body = document.createElement("div");
+              body.className = "plan-body";
+
+              const title = document.createElement("div");
+              title.className = "plan-title";
+              title.title = p.title || "";
+              title.textContent = p.title || "";
+
+              const meta = document.createElement("div");
+              meta.className = "plan-meta";
+
+              const dateSpan = document.createElement("span");
+              dateSpan.className = "plan-date";
+              dateSpan.textContent = p.date || "";
+
+              const bar = document.createElement("div");
+              bar.className = "plan-progress-bar";
+
+              const fill = document.createElement("div");
+              fill.className = `plan-progress-fill ${p.status || ""}`;
+              fill.style.width = `${barWidth}%`;
+              bar.appendChild(fill);
+
+              const pctSpan = document.createElement("span");
+              pctSpan.className = "plan-pct";
+              pctSpan.textContent = pctLabel;
+
+              meta.appendChild(dateSpan);
+              meta.appendChild(bar);
+              meta.appendChild(pctSpan);
+
+              body.appendChild(title);
+              body.appendChild(meta);
+
+              item.appendChild(dot);
+              item.appendChild(body);
+
+              plansList.appendChild(item);
+            });
           }
         } catch {
-          plansList.innerHTML = '<div class="empty-state" style="color:var(--error-color)">Load failed</div>';
+          setEmptyState(plansList, "Load failed", true);
         }
 
         // Tasks
@@ -110,35 +172,48 @@
           const taskData = await apiFetch("/api/tasks");
           const tasks = taskData.tasks || [];
           if (tasks.length === 0) {
-            tasksList.innerHTML = '<div class="empty-state">No tasks</div>';
+            setEmptyState(tasksList, "No tasks");
           } else {
-            tasksList.innerHTML = tasks.map(t => {
+            tasksList.replaceChildren();
+            tasks.forEach(t => {
               const done = t.status === "completed" || t.status === "Completed" || t.completed === true;
-              const id = esc(t.id || t.task_id || "");
-              return `<div class="task-item">
-                <input type="checkbox" class="task-checkbox" ${done ? "checked" : ""} data-task-id="${id}" data-done="${done}" />
-                <div class="task-content">
-                  <span class="task-desc ${done ? "completed" : ""}">${esc(t.description || t.title || "Task")}</span>
-                </div>
-              </div>`;
-            }).join("");
+              const id = t.id || t.task_id || "";
 
-            // write-back: toggle task status on checkbox click
-            tasksList.querySelectorAll(".task-checkbox").forEach(cb => {
+              const item = document.createElement("div");
+              item.className = "task-item";
+
+              const cb = document.createElement("input");
+              cb.type = "checkbox";
+              cb.className = "task-checkbox";
+              if (done) cb.checked = true;
+              cb.dataset.taskId = id;
+              cb.dataset.done = done;
+
+              const content = document.createElement("div");
+              content.className = "task-content";
+
+              const desc = document.createElement("span");
+              desc.className = `task-desc ${done ? "completed" : ""}`;
+              desc.textContent = t.description || t.title || "Task";
+              content.appendChild(desc);
+
+              item.appendChild(cb);
+              item.appendChild(content);
+
               cb.addEventListener("change", (e) => {
                 const el = e.target;
                 const taskId = el.dataset.taskId;
                 const completed = el.checked;
                 if (!taskId) return;
                 vscode.postMessage({ type: "toggleTask", taskId, completed });
-                // optimistic UI update
-                const desc = el.closest(".task-item").querySelector(".task-desc");
-                if (desc) { desc.classList.toggle("completed", completed); }
+                desc.classList.toggle("completed", completed);
               });
+
+              tasksList.appendChild(item);
             });
           }
         } catch {
-          tasksList.innerHTML = '<div class="empty-state" style="color:var(--error-color)">Load failed</div>';
+          setEmptyState(tasksList, "Load failed", true);
         }
 
         // Swarm
@@ -147,38 +222,60 @@
           const swarmTasks = swarmData.tasks || [];
           document.getElementById("swarm-count").textContent = swarmTasks.length > 0 ? swarmTasks.length + " active" : "";
           if (swarmTasks.length === 0) {
-            swarmList.innerHTML = '<div class="empty-state">No active swarm tasks</div>';
+            setEmptyState(swarmList, "No active swarm tasks");
           } else {
-            swarmList.innerHTML = swarmTasks.map(t => {
+            swarmList.replaceChildren();
+            swarmTasks.forEach(t => {
               const dotClass = t.status === "running" ? "running"
                 : t.status === "awaiting_review" ? "awaiting_review" : "initializing";
-              const approveBtn = t.status === "awaiting_review"
-                ? `<button class="btn-approve" data-id="${esc(t.id)}">Approve</button>`
-                : "";
-              return `<div class="swarm-item">
-                <div class="swarm-dot ${dotClass}"></div>
-                <div class="swarm-body">
-                  <div class="swarm-desc" title="${esc(t.description)}">${esc(t.description)}</div>
-                  <div class="swarm-meta">${esc(t.project)} · ${esc(t.agent)}</div>
-                </div>
-                ${approveBtn}
-              </div>`;
-            }).join("");
-            swarmList.querySelectorAll(".btn-approve").forEach(btn => {
-              btn.addEventListener("click", async () => {
-                btn.textContent = "...";
-                btn.disabled = true;
-                try {
-                  await apiFetch("/api/approve", "POST", { task_id: btn.dataset.id });
-                  updateSwarm();
-                } catch {
-                  btn.textContent = "Failed";
-                }
-              });
+
+              const item = document.createElement("div");
+              item.className = "swarm-item";
+
+              const dot = document.createElement("div");
+              dot.className = `swarm-dot ${dotClass}`;
+
+              const body = document.createElement("div");
+              body.className = "swarm-body";
+
+              const desc = document.createElement("div");
+              desc.className = "swarm-desc";
+              desc.title = t.description || "";
+              desc.textContent = t.description || "";
+
+              const meta = document.createElement("div");
+              meta.className = "swarm-meta";
+              meta.textContent = `${t.project || ""} · ${t.agent || ""}`;
+
+              body.appendChild(desc);
+              body.appendChild(meta);
+
+              item.appendChild(dot);
+              item.appendChild(body);
+
+              if (t.status === "awaiting_review") {
+                const btn = document.createElement("button");
+                btn.className = "btn-approve";
+                btn.dataset.id = t.id || "";
+                btn.textContent = "Approve";
+                btn.addEventListener("click", async () => {
+                  btn.textContent = "...";
+                  btn.disabled = true;
+                  try {
+                    await apiFetch("/api/approve", "POST", { task_id: btn.dataset.id });
+                    updateSwarm();
+                  } catch {
+                    btn.textContent = "Failed";
+                  }
+                });
+                item.appendChild(btn);
+              }
+
+              swarmList.appendChild(item);
             });
           }
         } catch {
-          swarmList.innerHTML = '<div class="empty-state" style="color:var(--error-color)">Load failed</div>';
+          setEmptyState(swarmList, "Load failed", true);
         }
 
       } catch {
@@ -186,10 +283,10 @@
         statusText.textContent = "Offline";
         approvalBox.style.display = "none";
         offlineBox.style.display = "block";
-        if (gitBody)    gitBody.innerHTML   = '<div class="empty-state">—</div>';
-        if (plansList)  plansList.innerHTML  = '<div class="empty-state">—</div>';
-        if (tasksList)  tasksList.innerHTML  = '<div class="empty-state">—</div>';
-        if (swarmList)  swarmList.innerHTML  = '<div class="empty-state">—</div>';
+        setEmptyState(gitBody, "—");
+        setEmptyState(plansList, "—");
+        setEmptyState(tasksList, "—");
+        setEmptyState(swarmList, "—");
         document.getElementById("git-branch-label").textContent = "";
       }
     }
@@ -201,24 +298,20 @@
         const swarmTasks = swarmData.tasks || [];
         document.getElementById("swarm-count").textContent = swarmTasks.length > 0 ? swarmTasks.length + " active" : "";
         if (swarmTasks.length === 0) {
-          swarmList.innerHTML = '<div class="empty-state">No active swarm tasks</div>';
+          setEmptyState(swarmList, "No active swarm tasks");
         }
       } catch { /* silent */ }
-    }
-
-    function esc(str) {
-      return String(str ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
     }
 
     setInterval(updateDashboard, 10000);
 
     document.getElementById("refresh-btn").addEventListener("click", () => {
       const btn = document.getElementById("refresh-btn");
-      btn.innerHTML = '<span class="loading-spinner"></span>Refreshing...';
+      btn.replaceChildren();
+      const spinner = document.createElement("span");
+      spinner.className = "loading-spinner";
+      btn.appendChild(spinner);
+      btn.appendChild(document.createTextNode("Refreshing..."));
       updateDashboard().finally(() => { btn.textContent = "Refresh"; });
     });
 

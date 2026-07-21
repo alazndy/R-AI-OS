@@ -6,7 +6,7 @@
 //! `docs/BUDGET.md` at the repo root for the caps table and what happens
 //! when a cap is exceeded.
 
-use super::{DbBudgetReport, ProjectMemBudget, TableRowCount};
+use super::{DbBudgetReport, DbStorageConsumer, ProjectMemBudget, TableRowCount};
 use rusqlite::{Connection, Result as SqlResult};
 
 /// Soft cap on `mem_items` rows per project. Distillation/pruning should
@@ -52,6 +52,7 @@ fn compute(conn: &Connection) -> DbBudgetReport {
         .collect();
 
     let mem_items_by_project = mem_items_by_project(conn).unwrap_or_default();
+    let largest_storage_consumers = largest_storage_consumers(conn).unwrap_or_default();
     let mem_items_over_budget = mem_items_by_project.iter().any(|p| p.over_budget);
 
     DbBudgetReport {
@@ -61,6 +62,7 @@ fn compute(conn: &Connection) -> DbBudgetReport {
         table_counts,
         mem_items_by_project,
         mem_items_over_budget,
+        largest_storage_consumers,
         error: None,
     }
 }
@@ -73,8 +75,22 @@ fn error_report(message: String) -> DbBudgetReport {
         table_counts: Vec::new(),
         mem_items_by_project: Vec::new(),
         mem_items_over_budget: false,
+        largest_storage_consumers: Vec::new(),
         error: Some(message),
     }
+}
+
+fn largest_storage_consumers(conn: &Connection) -> SqlResult<Vec<DbStorageConsumer>> {
+    let mut stmt = conn.prepare(
+        "SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC LIMIT 5",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(DbStorageConsumer {
+            name: row.get(0)?,
+            bytes: row.get(1)?,
+        })
+    })?;
+    rows.collect()
 }
 
 fn db_size_bytes(conn: &Connection) -> SqlResult<i64> {
@@ -88,7 +104,15 @@ fn db_size_bytes(conn: &Connection) -> SqlResult<i64> {
 /// intentionally uses string interpolation over a fixed, non-user-supplied
 /// list rather than a parameterized query.
 fn table_row_count(conn: &Connection, table: &str) -> SqlResult<i64> {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+    let query = match table {
+        "mem_items" => "SELECT COUNT(*) FROM mem_items",
+        "cp_tasks" => "SELECT COUNT(*) FROM cp_tasks",
+        "cp_agent_runs" => "SELECT COUNT(*) FROM cp_agent_runs",
+        "cp_artifacts" => "SELECT COUNT(*) FROM cp_artifacts",
+        "audit_log" => "SELECT COUNT(*) FROM audit_log",
+        _ => return Err(rusqlite::Error::QueryReturnedNoRows),
+    };
+    conn.query_row(query, [], |r| r.get(0))
 }
 
 fn mem_items_by_project(conn: &Connection) -> SqlResult<Vec<ProjectMemBudget>> {
@@ -176,7 +200,10 @@ mod tests {
             .iter()
             .find(|t| t.table == "mem_items")
             .unwrap();
-        assert_eq!(mem_table_count.row_count, MEM_ITEMS_SOFT_CAP_PER_PROJECT + 6);
+        assert_eq!(
+            mem_table_count.row_count,
+            MEM_ITEMS_SOFT_CAP_PER_PROJECT + 6
+        );
     }
 
     #[test]
