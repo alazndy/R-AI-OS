@@ -34,6 +34,29 @@ for dir in "${PATH_DIRS[@]}"; do
 done
 
 if command -v systemctl >/dev/null 2>&1; then
+  # aiosd.service's ExecStart is a path baked in once by `raios hub install`
+  # (resolved via `which aiosd` at whatever moment that ran). This script's
+  # own BIN_DIR is resolved independently via `command -v raios`, at install
+  # time. Both are PATH-order-dependent, and they run at different moments —
+  # if PATH order ever differs between those two moments, ExecStart silently
+  # points at a directory this script isn't installing into, and a restart
+  # keeps serving a stale binary while looking like it worked. Detect and
+  # self-heal that drift before restarting, so "only one copy is ever
+  # active" (see header) is actually guaranteed, not just assumed.
+  AIOSD_UNIT="$HOME/.config/systemd/user/aiosd.service"
+  if [ -f "$AIOSD_UNIT" ]; then
+    CURRENT_EXEC="$(grep -m1 '^ExecStart=' "$AIOSD_UNIT" | cut -d= -f2-)"
+    DESIRED_EXEC="${BIN_DIR}/aiosd"
+    if [ -n "$CURRENT_EXEC" ] && [ "$CURRENT_EXEC" != "$DESIRED_EXEC" ]; then
+      echo "[install] aiosd.service ExecStart drift detected:"
+      echo "[install]   unit points to : $CURRENT_EXEC"
+      echo "[install]   this install to: $DESIRED_EXEC"
+      echo "[install] rewriting ExecStart to match this install..."
+      sed -i "s|^ExecStart=.*|ExecStart=${DESIRED_EXEC}|" "$AIOSD_UNIT"
+      systemctl --user daemon-reload
+    fi
+  fi
+
   for unit in aiosd.service raios-tray.service; do
     if systemctl --user list-unit-files "$unit" 2>/dev/null | grep -q "$unit"; then
       echo "[install] restarting $unit so it picks up the new binary..."
