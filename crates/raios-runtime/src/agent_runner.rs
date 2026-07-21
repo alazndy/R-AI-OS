@@ -14,6 +14,14 @@ const MEMORY_SYNC_INTERVAL_SECS: u64 = 90;
 
 const BUDGET_LIMIT_KB: u64 = 300;
 
+/// Informational invocations must not consume a pending handoff intended for
+/// an interactive work session.
+fn is_informational_invocation(extra_args: &[String]) -> bool {
+    extra_args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V"))
+}
+
 pub fn run_agent(
     agent: &str,
     project_dir: Option<String>,
@@ -87,32 +95,37 @@ pub fn run_agent(
     // (see AGENT_CONSTITUTION.md Section 10 — no STATE.json involved). Resolved here,
     // before the Command is built, so each agent's native prompt-injection flag can be
     // used instead of an env var no CLI actually reads.
-    let pending_handoff = canonical_agent_identity(agent).and_then(|identity| {
-        let conn = raios_core::db::open_db().ok()?;
-        let project_id = project_dir
-            .as_deref()
-            .and_then(|dir| raios_core::db::project_id_for_file_path(&conn, dir));
-        let ctx = raios_core::db::cp_take_pending_handoff(&conn, project_id, identity).ok()??;
-        let mut block = format!(
-            "[HANDOVER CONTEXT]\nFrom: {}  Status: {}\n{}",
-            ctx.from_agent, ctx.status, ctx.context_summary
-        );
-        if let Some(diff_stat) = &ctx.diff_stat {
-            block.push_str(&format!("\n\n[Changed files since handoff]\n{diff_stat}"));
-        }
-        if let Some(trace_block) = crate::trace_recall::relevant_trace_block(
-            &conn,
-            project_dir.as_deref(),
-            &ctx.context_summary,
-            3,
-        ) {
-            if !block.contains("[Relevant trace memory]") {
-                block.push_str("\n\n");
-                block.push_str(&trace_block);
+    let pending_handoff = if is_informational_invocation(&extra_args) {
+        None
+    } else {
+        canonical_agent_identity(agent).and_then(|identity| {
+            let conn = raios_core::db::open_db().ok()?;
+            let project_id = project_dir
+                .as_deref()
+                .and_then(|dir| raios_core::db::project_id_for_file_path(&conn, dir));
+            let ctx =
+                raios_core::db::cp_take_pending_handoff(&conn, project_id, identity).ok()??;
+            let mut block = format!(
+                "[HANDOVER CONTEXT]\nFrom: {}  Status: {}\n{}",
+                ctx.from_agent, ctx.status, ctx.context_summary
+            );
+            if let Some(diff_stat) = &ctx.diff_stat {
+                block.push_str(&format!("\n\n[Changed files since handoff]\n{diff_stat}"));
             }
-        }
-        Some((conn, identity, ctx, block))
-    });
+            if let Some(trace_block) = crate::trace_recall::relevant_trace_block(
+                &conn,
+                project_dir.as_deref(),
+                &ctx.context_summary,
+                3,
+            ) {
+                if !block.contains("[Relevant trace memory]") {
+                    block.push_str("\n\n");
+                    block.push_str(&trace_block);
+                }
+            }
+            Some((conn, identity, ctx, block))
+        })
+    };
     let handover_block = pending_handoff
         .as_ref()
         .map(|(_, _, _, block)| block.clone());
@@ -272,10 +285,18 @@ pub fn run_agent(
         let dir = project_dir.clone();
         let started = session_start_time;
         thread::spawn(move || {
-            let period = Duration::from_secs(MEMORY_SYNC_INTERVAL_SECS);
             loop {
-                thread::sleep(period);
-                if stop.load(Ordering::Relaxed) {
+                // Check the stop flag once per second instead of blocking the
+                // wrapper shutdown for the full memory-sync interval.
+                let mut stopped = false;
+                for _ in 0..MEMORY_SYNC_INTERVAL_SECS {
+                    if stop.load(Ordering::Relaxed) {
+                        stopped = true;
+                        break;
+                    }
+                    thread::sleep(Duration::from_secs(1));
+                }
+                if stopped || stop.load(Ordering::Relaxed) {
                     break;
                 }
                 if let Some(ref d) = dir {
@@ -349,25 +370,32 @@ pub fn run_agent(
     };
     let review_summary = review.as_ref().map(|r| r.to_json());
     if let Some((task_id, run_id)) = &session_ids {
-        if let Ok(conn) = raios_core::db::open_db() {
-            let _ = raios_core::db::cp_session_end_with_summary(
-                &conn,
-                task_id,
-                run_id,
-                success,
-                review_summary.as_deref(),
-            );
-            if let (Some(review), Some(dir)) = (review.as_ref(), project_dir.as_deref()) {
-                if let Err(e) = crate::trace_recall::record_post_run_review_trace(
+        match raios_core::db::open_db() {
+            Ok(conn) => {
+                if let Err(e) = raios_core::db::cp_session_end_with_summary(
                     &conn,
-                    agent,
-                    dir,
+                    task_id,
+                    run_id,
                     success,
-                    review,
-                    Some(run_id),
+                    review_summary.as_deref(),
                 ) {
-                    eprintln!("Warning: failed to record trace memory: {e}");
+                    eprintln!("Warning: failed to close wrapper session {run_id}: {e}");
                 }
+                if let (Some(review), Some(dir)) = (review.as_ref(), project_dir.as_deref()) {
+                    if let Err(e) = crate::trace_recall::record_post_run_review_trace(
+                        &conn,
+                        agent,
+                        dir,
+                        success,
+                        review,
+                        Some(run_id),
+                    ) {
+                        eprintln!("Warning: failed to record trace memory: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to open database to close wrapper session {run_id}: {e}")
             }
         }
     }
@@ -622,6 +650,19 @@ fn get_dir_size(path: &Path) -> std::io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn informational_invocations_do_not_consume_handoffs() {
+        assert!(is_informational_invocation(&["--help".to_string()]));
+        assert!(is_informational_invocation(&["-V".to_string()]));
+        assert!(is_informational_invocation(&[
+            "exec".to_string(),
+            "--version".to_string(),
+        ]));
+        assert!(!is_informational_invocation(&[
+            "implement the feature".to_string()
+        ]));
+    }
 
     // ─── canonical_agent_identity ────────────────────────────────────────
 
