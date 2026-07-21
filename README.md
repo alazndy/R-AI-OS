@@ -236,6 +236,27 @@ raios trace kg-export "partial phrase" --project R-AI-OS
 - `raios evolve from-traces` converts useful trace fixes into pending instinct candidates; promotion remains a human-controlled step.
 - `raios trace kg-export` emits MemPalace-compatible KG triple JSON for MCP ingestion without silently writing to an external semantic store.
 
+### 🪶 ANKA — Historical Transcript Recall
+
+ANKA (*Agent Narrative Knowledge Archive*) searches local coding-agent history
+through a separate, rebuildable cache; it never writes raw transcripts into
+`workspace.db` or curated memory.
+
+```bash
+raios anka status
+raios anka index --harness codex
+raios anka search "JWT refresh rotation" --project R-AI-OS
+raios anka blame crates/raios-core/src/db/mem.rs
+raios anka forget <record-id>
+```
+
+- Only local history is indexed; recognized secret-shaped values are redacted before cache writes.
+- Cache records are owner-only, support project exclusions and local tombstones, and can be rebuilt from sources.
+- No automatic context injection, synchronization, sharing, or curated-memory promotion occurs.
+- MCP exposes only read-only `anka_recall`, capped at eight results and framed as untrusted historical evidence.
+
+See [`docs/ANKA.md`](docs/ANKA.md) for cache and authority boundaries.
+
 ### ⏳ Lifecycle Worker
 
 Background daemon task (`src/daemon/lifecycle.rs`) that keeps project status honest without manual upkeep. Every `lifecycle_interval_secs`, it checks each tracked project's last commit time and transitions status automatically:
@@ -418,7 +439,9 @@ explicit keyboard commands with the existing approval and audit flow.
 type, and risk level. `WORK` lists every registered project with lifecycle
 status, Git state, and `memory.md` availability; selecting a project (or one
 of its tasks) keeps it selected and shows a bounded `memory.md` preview with
-the latest known project status.
+the latest known project status. If an older local daemon has not yet been
+restarted, the TUI safely fills a missing preview from a project path only
+after confirming that it is inside the configured workspace root.
 
 Bootstrap your AI factory (syncs the Maestro/ECC agent and skill ecosystems, exact counts printed at the end of the run):
 
@@ -445,6 +468,8 @@ raios bootstrap
 | `raios trace record/search/forget` | Store, recall, and delete local tool/session trace memory |
 | `raios trace kg-export [query]` | Export trace memory as MemPalace-compatible KG triple JSON |
 | `raios evolve from-traces` | Generate pending instinct candidates from successful trace fixes |
+| `raios factory overview [--json]` | Read the canonical Product Factory snapshot without changing state |
+| `raios factory execute --file <command.json> [--json]` | Dispatch one bounded local typed `FactoryCommand`; human-only approval, cancellation, stage activation/completion, requirement application, and release approval commands are rejected |
 | `raios bootstrap` | Replicate AI factory on a new machine |
 
 ### Security
@@ -528,6 +553,7 @@ vscode-extension/
 
 - [x] **Phase 1–7:** Core TUI, workspace mapping, health dashboard, BM25 search
 - [x] **Phase 8:** Universal Kernel — Tri-protocol, Lock Manager, Radar Whispers, Factory Mode
+- [x] **Factory Phase 9:** Local impact approval, immutable requirement revisions, and approved-plan lifecycle-cycle materialization (no autonomous execution)
 - [x] **Phase 9:** Refactor & Modularization — all large files split into focused modules
 - [x] **Phase 10:** Hardened Kernel Alpha — Sentry, Redaction Engine, Audit Ledger
 - [x] **Phase 10B:** Security Kernel (Phases 1–4) — Sandbox + Policy + Audit Chain + Egress
@@ -549,6 +575,7 @@ vscode-extension/
 - [x] **Phase 24:** Trigram Locate (renamed 2026-07-11 from `raios grep`) — `raios locate` + MCP `locate_search`: trigram-indexed, exhaustive exact/regex search at 0.015s warm with proven `grep -rn` parity; conservative literal extraction with full-scan fallback
 - [x] **Phase 25:** Resident Cortex — long-lived model+HNSW worker inside `aiosd` (mpsc/oneshot, lazy dirty rebuilds); `raios search` delegates via TCP with silent in-process fallback — semantic search ~1.0s warm (was ~4-6s)
 - [x] **Phase 26:** MCP Parity + Dart/Flutter — MCP `semantic_search` now delegates to the resident Cortex daemon too (was >60s in-process per call, now ~1s warm); Dart/Flutter ecosystem support; stale-worktree duplicate-match fix; `tool_pin` re-verified and re-pinned
+- [ ] **Phase 27:** Product Factory — Local lifecycle control now has two explicit modes: `quick` requires only problem, core outcome, and success metric before a compact Charter; `governed` retains the full five-question intake and every lifecycle control. Neither mode bypasses human plan/release approval, stage approval, ownership checks, audit logging, or external-distribution protections. Agents can set the mode through the same typed, idempotent, audited local MCP/TUI Factory service; no public HTTP write route, automatic executor, external integration, or store action is enabled.
 
 ---
 
