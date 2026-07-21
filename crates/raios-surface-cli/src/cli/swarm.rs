@@ -64,8 +64,11 @@ pub(super) fn cmd_swarm(action: SwarmAction, json: bool) {
         SwarmAction::Approve { task_id } => match store.get(&task_id) {
             Some(task) => {
                 let msg = format!("swarm merge: {}", task.task_description);
-                match raios_runtime::swarm::merge::merge_branch(&task.project_path, &task.branch_name, &msg)
-                {
+                match raios_runtime::swarm::merge::merge_branch(
+                    &task.project_path,
+                    &task.branch_name,
+                    &msg,
+                ) {
                     Ok(_) => {
                         let _ = raios_runtime::swarm::worktree::remove_worktree(
                             &task.project_path,
@@ -89,7 +92,10 @@ pub(super) fn cmd_swarm(action: SwarmAction, json: bool) {
                     &task.project_path,
                     &task.worktree_path,
                 );
-                let _ = raios_runtime::swarm::merge::delete_branch(&task.project_path, &task.branch_name);
+                let _ = raios_runtime::swarm::merge::delete_branch(
+                    &task.project_path,
+                    &task.branch_name,
+                );
                 store.set_status(&task_id, SwarmStatus::Rejected);
                 if json {
                     println!("{}", serde_json::json!({"status":"ok","rejected":task_id}));

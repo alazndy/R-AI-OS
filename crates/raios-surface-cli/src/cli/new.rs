@@ -201,7 +201,9 @@ pub(super) fn cmd_bootstrap() {
     }
 
     println!("\nBOOTSTRAP COMPLETE: Your AI OS Factory is fully operational!");
-    println!("Synced {copied} skill/rule file(s). Run `raios agents` to see registered agent configs.");
+    println!(
+        "Synced {copied} skill/rule file(s). Run `raios agents` to see registered agent configs."
+    );
 }
 
 /// Returns the number of files actually copied, so callers can report a

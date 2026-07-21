@@ -1,5 +1,5 @@
-use crate::app::App;
 use crate::app::route::{dashboard_header_height, LAUNCHER_HEIGHT, TABS_HEIGHT};
+use crate::app::App;
 use crate::ui::routes::render_route_view;
 use crate::ui::*;
 use ratatui::{

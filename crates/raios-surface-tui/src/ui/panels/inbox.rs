@@ -72,7 +72,11 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
                     Style::new().fg(MID),
                 ),
                 Span::styled(
-                    format!(" [{} risk:{}]", scored.risk_label.to_uppercase(), scored.risk_score),
+                    format!(
+                        " [{} risk:{}]",
+                        scored.risk_label.to_uppercase(),
+                        scored.risk_score
+                    ),
                     Style::new().fg(risk_color).bold(),
                 ),
             ]));
@@ -89,8 +93,12 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
                 .map(|fi| {
                     format!(
                         "files={} lines={}",
-                        fi.files_changed.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
-                        fi.lines_changed.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+                        fi.files_changed
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "?".into()),
+                        fi.lines_changed
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "?".into()),
                     )
                 })
                 .unwrap_or_else(|| "no file impact data".into());
@@ -99,7 +107,10 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
                 .map(|r| format!("agent success rate: {:.0}%", r * 100.0))
                 .unwrap_or_else(|| "no agent history".into());
             lines.push(Line::from(Span::styled(
-                format!("      {impact}  ·  {history}  ·  suggested: {}", scored.suggested_action),
+                format!(
+                    "      {impact}  ·  {history}  ·  suggested: {}",
+                    scored.suggested_action
+                ),
                 Style::new().fg(DIM).italic(),
             )));
         }
@@ -128,13 +139,15 @@ pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
             };
             lines.push(Line::from(vec![
                 Span::styled("  ● ", Style::new().fg(agent_color)),
-                Span::styled(format!("{} ", run.agent_name), Style::new().fg(agent_color).bold()),
                 Span::styled(
-                    format!("({}) ", run.status),
-                    Style::new().fg(DIM),
+                    format!("{} ", run.agent_name),
+                    Style::new().fg(agent_color).bold(),
                 ),
+                Span::styled(format!("({}) ", run.status), Style::new().fg(DIM)),
                 Span::styled(
-                    run.task_title.clone().unwrap_or_else(|| run.task_id.clone()),
+                    run.task_title
+                        .clone()
+                        .unwrap_or_else(|| run.task_id.clone()),
                     Style::new().fg(MID),
                 ),
             ]));

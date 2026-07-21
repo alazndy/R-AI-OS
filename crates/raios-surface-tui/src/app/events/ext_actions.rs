@@ -34,7 +34,9 @@ impl App {
         // Read the manifest to get python interpreter + entry + args
         let toml_path = ext_path.join("raios-extension.toml");
         thread::spawn(move || {
-            raios_surface_tui::app::run_extension_command_bg(&tx, &ext_path, &toml_path, &ext_name, &cmd_name);
+            raios_surface_tui::app::run_extension_command_bg(
+                &tx, &ext_path, &toml_path, &ext_name, &cmd_name,
+            );
         });
     }
 

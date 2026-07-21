@@ -105,7 +105,11 @@ pub fn cp_sync_personal_tasks(
 
     for (order, input) in inputs.iter().enumerate() {
         let display_order = order as i64;
-        let status = if input.completed { "completed" } else { "queued" };
+        let status = if input.completed {
+            "completed"
+        } else {
+            "queued"
+        };
         let assignee_kind: Option<&str> = input.agent.as_ref().map(|_| "agent");
 
         let task_id: String = if let Some(ref id) = input.id {
@@ -191,8 +195,7 @@ pub fn cp_sync_personal_tasks(
         );
         let mut stmt = conn.prepare(&sql)?;
         stmt.execute(rusqlite::params_from_iter(
-            std::iter::once(now.as_str())
-                .chain(active_ids.iter().map(|s| s.as_str())),
+            std::iter::once(now.as_str()).chain(active_ids.iter().map(|s| s.as_str())),
         ))?;
     }
 

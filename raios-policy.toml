@@ -51,6 +51,17 @@ action = "allow"
 name = "semantic_search"
 action = "allow"
 
+[[tools.rules]]
+name = "factory_overview"
+action = "allow"
+
+# This tool has its own typed Factory allowlist. It cannot approve releases,
+# apply requirement changes, execute stages, cancel cycles, access secrets, or
+# launch shell commands; those actions remain human-controlled.
+[[tools.rules]]
+name = "factory_execute"
+action = "allow"
+
 # Deny or restrict high-risk tools
 [[tools.rules]]
 name = "run_build"

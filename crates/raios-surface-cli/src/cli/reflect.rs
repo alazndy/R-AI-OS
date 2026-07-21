@@ -20,10 +20,7 @@ pub fn cmd_reflect(dev_ops_path: &Path, json: bool) {
         return;
     }
 
-    let snapshots: Vec<ProjectSnapshot> = projects
-        .iter()
-        .map(snapshot)
-        .collect();
+    let snapshots: Vec<ProjectSnapshot> = projects.iter().map(snapshot).collect();
 
     if json {
         print_json(&snapshots);
@@ -74,10 +71,7 @@ fn git_days_since_last_commit(dir: &Path) -> Option<u64> {
         .args(["-C", &dir.to_string_lossy(), "log", "-1", "--format=%ct"])
         .output()
         .ok()?;
-    let ts: i64 = String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse()
-        .ok()?;
+    let ts: i64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
@@ -88,9 +82,7 @@ fn git_days_since_last_commit(dir: &Path) -> Option<u64> {
 fn file_age_days(path: &Path) -> Option<u64> {
     let meta = std::fs::metadata(path).ok()?;
     let modified = meta.modified().ok()?;
-    let age = std::time::SystemTime::now()
-        .duration_since(modified)
-        .ok()?;
+    let age = std::time::SystemTime::now().duration_since(modified).ok()?;
     Some(age.as_secs() / 86400)
 }
 

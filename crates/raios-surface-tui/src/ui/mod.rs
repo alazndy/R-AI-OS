@@ -30,12 +30,12 @@ use raios_surface_tui::app::{App, AppState};
 
 // ─── Colour palette ──────────────────────────────────────────────────────────
 
-const GREEN: Color = Color::Rgb(0, 200, 180);   // Turquoise (turkuaz)
-const CYAN: Color = Color::Rgb(0, 180, 255);    // Cyan (cyan)
+const GREEN: Color = Color::Rgb(0, 200, 180); // Turquoise (turkuaz)
+const CYAN: Color = Color::Rgb(0, 180, 255); // Cyan (cyan)
 const DIM: Color = Color::Rgb(80, 80, 80);
 const MID: Color = Color::Rgb(170, 170, 170);
-const AMBER: Color = Color::Rgb(255, 100, 20);   // Orange (turuncu)
-const RED: Color = Color::Rgb(255, 60, 0);       // Orange-Red
+const AMBER: Color = Color::Rgb(255, 100, 20); // Orange (turuncu)
+const RED: Color = Color::Rgb(255, 60, 0); // Orange-Red
 const MAGENTA: Color = Color::Rgb(30, 120, 255); // Blue (mavi)
 const PANEL_BG: Color = Color::Rgb(8, 12, 16);
 const HEADER_BG: Color = Color::Rgb(0, 12, 30);

@@ -6,7 +6,11 @@ pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, scope: &Path,
     if reindex {
         if let Some(indexed) = daemon_cortex_reindex(scope) {
             if !json {
-                println!("Cortex: Re-indexed {} via daemon ({} chunks).", scope.display(), indexed);
+                println!(
+                    "Cortex: Re-indexed {} via daemon ({} chunks).",
+                    scope.display(),
+                    indexed
+                );
             }
             vector_hits = daemon_vector_search(query, top_k, scope);
         }
@@ -53,7 +57,9 @@ pub(super) fn cmd_search(query: &str, top_k: usize, reindex: bool, scope: &Path,
                 );
             }
 
-            cortex.search_scoped(query, top_k, scope).unwrap_or_default()
+            cortex
+                .search_scoped(query, top_k, scope)
+                .unwrap_or_default()
         }
     };
     let bm25_hits = match raios_runtime::indexer::ProjectIndex::load_or_build(
@@ -188,24 +194,41 @@ fn embedding_mode() -> &'static str {
     }
 }
 
-fn daemon_vector_search(query: &str, top_k: usize, scope: &Path)
-    -> Option<Vec<raios_runtime::cortex::store::VectorResult>> {
+fn daemon_vector_search(
+    query: &str,
+    top_k: usize,
+    scope: &Path,
+) -> Option<Vec<raios_runtime::cortex::store::VectorResult>> {
     daemon_vector_search_opt(query, top_k, scope, None)
 }
 
-fn daemon_vector_search_opt(query: &str, top_k: usize, scope: &Path, port: Option<u16>)
-    -> Option<Vec<raios_runtime::cortex::store::VectorResult>> {
+fn daemon_vector_search_opt(
+    query: &str,
+    top_k: usize,
+    scope: &Path,
+    port: Option<u16>,
+) -> Option<Vec<raios_runtime::cortex::store::VectorResult>> {
     use std::io::{BufRead, BufReader, Write};
     let port = port.unwrap_or(42069);
     let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
-    let stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).ok()?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(15))).ok()?;
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(2))).ok()?;
+    let stream =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).ok()?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+        .ok()?;
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_secs(2)))
+        .ok()?;
     let mut writer = stream.try_clone().ok()?;
     let token_path = raios_core::config::Config::config_file()
-        .parent().map(|p| p.to_path_buf()).unwrap_or_default().join(".session_token");
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default()
+        .join(".session_token");
     let token = std::fs::read_to_string(token_path).ok()?;
-    writer.write_all(format!("AUTH {}\n", token.trim()).as_bytes()).ok()?;
+    writer
+        .write_all(format!("AUTH {}\n", token.trim()).as_bytes())
+        .ok()?;
     let req = serde_json::json!({
         "command": "VectorSearch", "query": query, "top_k": top_k,
         "scope": scope.to_string_lossy(),
@@ -230,14 +253,24 @@ fn daemon_cortex_reindex_opt(scope: &Path, port: Option<u16>) -> Option<usize> {
     use std::io::{BufRead, BufReader, Write};
     let port = port.unwrap_or(42069);
     let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
-    let stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).ok()?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(65))).ok()?;
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(2))).ok()?;
+    let stream =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).ok()?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(65)))
+        .ok()?;
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_secs(2)))
+        .ok()?;
     let mut writer = stream.try_clone().ok()?;
     let token_path = raios_core::config::Config::config_file()
-        .parent().map(|p| p.to_path_buf()).unwrap_or_default().join(".session_token");
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default()
+        .join(".session_token");
     let token = std::fs::read_to_string(token_path).ok()?;
-    writer.write_all(format!("AUTH {}\n", token.trim()).as_bytes()).ok()?;
+    writer
+        .write_all(format!("AUTH {}\n", token.trim()).as_bytes())
+        .ok()?;
     let req = serde_json::json!({
         "command": "CortexReindex",
         "scope": scope.to_string_lossy(),

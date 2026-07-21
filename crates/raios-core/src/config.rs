@@ -80,6 +80,35 @@ pub struct Config {
     pub agent_wrapper_enabled: bool,
     #[serde(default)]
     pub daemon: DaemonConfig,
+    /// Product Factory is opt-in until its lifecycle services are implemented
+    /// and explicitly enabled by the control owner.
+    #[serde(default)]
+    pub factory: FactoryConfig,
+}
+
+/// Configuration boundary for the Product Factory domain.
+///
+/// This is intentionally data-only in the skeleton phase. It does not create
+/// databases, move existing indexes, or enable any external integration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FactoryConfig {
+    /// Kill switch for every Product Factory entry point. Defaults to deny.
+    pub enabled: bool,
+    /// Optional future locations for data separated by durability class.
+    pub storage: FactoryStorageConfig,
+}
+
+/// Planned storage locations. `None` means "do not create or migrate yet".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FactoryStorageConfig {
+    /// Rebuildable search cache target, planned as `search.db`.
+    pub search_cache_path: Option<PathBuf>,
+    /// Content-addressed artifact root.
+    pub artifact_root: Option<PathBuf>,
+    /// Recovery snapshot root.
+    pub snapshot_root: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -93,6 +122,7 @@ impl Default for Config {
             github_user: String::new(),
             agent_wrapper_enabled: false,
             daemon: DaemonConfig::default(),
+            factory: FactoryConfig::default(),
         }
     }
 }
@@ -169,6 +199,7 @@ impl Config {
             github_user: String::new(),
             agent_wrapper_enabled: false,
             daemon: DaemonConfig::default(),
+            factory: FactoryConfig::default(),
         }
     }
 }
@@ -285,6 +316,8 @@ mod tests {
         assert!(!config.daemon.startup_bm25_indexing); // disabled by default to prevent startup CPU spike
         assert!(config.daemon.enable_port_monitor);
         assert!(config.daemon.port_monitor_interval_secs > 0);
+        assert!(!config.factory.enabled);
+        assert!(config.factory.storage.search_cache_path.is_none());
     }
 
     #[test]
@@ -303,5 +336,6 @@ skills_path = "/tmp/.agents/skills"
             config.daemon.git_interval_secs,
             DaemonConfig::default().git_interval_secs
         );
+        assert!(!config.factory.enabled);
     }
 }

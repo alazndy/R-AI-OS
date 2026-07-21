@@ -1,3 +1,5 @@
+use super::ACCENT;
+use super::DIM_B;
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -7,8 +9,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use super::ACCENT;
-use super::DIM_B;
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_agent(
@@ -121,18 +121,12 @@ pub fn render_agent_wrapper(frame: &mut Frame, area: Rect, app: &App) {
     let choice = app.wizard.field_cursor;
 
     let choices: &[(&str, &str)] = &[
-        (
-            "Evet — tümü  (claude, codex, opencode, agy)",
-            "Önerilen",
-        ),
+        ("Evet — tümü  (claude, codex, opencode, agy)", "Önerilen"),
         ("Hayır — atla", ""),
     ];
 
     let mut lines = vec![
-        Line::from(Span::styled(
-            "  AGENT WRAPPER",
-            Style::new().fg(MID).bold(),
-        )),
+        Line::from(Span::styled("  AGENT WRAPPER", Style::new().fg(MID).bold())),
         Line::from(""),
         Line::from(Span::styled(
             "  Ajanlar herzaman raios üzerinden çalışsın mı?",
@@ -180,10 +174,7 @@ pub fn render_agent_wrapper(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(lines)), left);
 
     let mut r = vec![
-        Line::from(Span::styled(
-            "  NE YAZILIR",
-            Style::new().fg(DIM).bold(),
-        )),
+        Line::from(Span::styled("  NE YAZILIR", Style::new().fg(DIM).bold())),
         Line::from(""),
     ];
     if choice == 0 {
@@ -307,10 +298,7 @@ pub fn render_done(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             "  ✓ KURULUM TAMAMLANDI",
-            Style::new()
-                .fg(ACCENT)
-                .bold()
-                .add_modifier(Modifier::BOLD),
+            Style::new().fg(ACCENT).bold().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![

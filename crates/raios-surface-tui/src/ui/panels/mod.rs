@@ -11,9 +11,9 @@ pub mod logs;
 pub mod menu;
 pub mod policies;
 pub mod recent;
+pub mod scheduler;
 pub mod stats;
 pub mod tasks;
-pub mod scheduler;
 pub mod timeline;
 
 pub use agents::*;

@@ -73,7 +73,10 @@ pub fn render_help(frame: &mut Frame, area: Rect, _app: &App) {
         key_line("Ctrl + C", "Hard exit"),
         key_line("Ctrl + P", "Neural fuzzy search (global)"),
         key_line("/", "Open Command Center"),
-        key_line("Mouse", "Click tabs/items; wheel navigates; click bottom bar for commands"),
+        key_line(
+            "Mouse",
+            "Click tabs/items; wheel navigates; click bottom bar for commands",
+        ),
         key_line("1–4 / Tab", "Switch NOW, WORK, EXPLORE, and GOVERN routes"),
         key_line("↑↓ / j k", "Move through menu & lists"),
         key_line("→ / l", "Focus right panel"),

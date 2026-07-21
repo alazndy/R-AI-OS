@@ -29,8 +29,8 @@ pub struct KillResult {
 }
 
 pub use command::{
-    command_exists, copy_to_clipboard, launch_in_terminal, open_in_system_editor,
-    python_command, resolve_command_path, shell_command,
+    command_exists, copy_to_clipboard, launch_in_terminal, open_in_system_editor, python_command,
+    resolve_command_path, shell_command,
 };
 pub use kill::{kill_pid, kill_port};
 pub use ports::list_ports;

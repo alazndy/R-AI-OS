@@ -139,12 +139,12 @@ pub fn cp_scheduled_job_delete(conn: &Connection, id: &str) -> Result<()> {
 
 pub fn cp_scheduled_job_set_status(conn: &Connection, id: &str, status: &str) -> Result<()> {
     if status != "active" && status != "paused" {
-        return Err(rusqlite::Error::ToSqlConversionFailure(
-            Box::new(std::io::Error::new(
+        return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+            std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Status must be active or paused",
-            )),
-        ));
+            ),
+        )));
     }
     conn.execute(
         "UPDATE cp_scheduled_jobs

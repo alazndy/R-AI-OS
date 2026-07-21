@@ -67,10 +67,7 @@ pub fn render_scheduler(frame: &mut Frame, area: Rect, app: &App) {
                     Span::styled(format!("{title:<32} "), Style::new().fg(MID)),
                     Span::styled(format!("{:<8} ", job.agent), Style::new().fg(CYAN)),
                     Span::styled(format!("/{interval}"), Style::new().fg(AMBER)),
-                    Span::styled(
-                        format!("  runs:{}", job.run_count),
-                        Style::new().fg(DIM),
-                    ),
+                    Span::styled(format!("  runs:{}", job.run_count), Style::new().fg(DIM)),
                 ]));
                 lines.push(Line::from(vec![
                     Span::styled("             next: ", Style::new().fg(DIM)),
@@ -99,10 +96,7 @@ pub fn render_scheduler(frame: &mut Frame, area: Rect, app: &App) {
                     Span::styled(format!("  [{id8}] "), Style::new().fg(DIM)),
                     Span::styled(format!("{title:<32} "), Style::new().fg(DIM).italic()),
                     Span::styled(format!("{:<8}", job.agent), Style::new().fg(DIM)),
-                    Span::styled(
-                        format!("  runs:{}", job.run_count),
-                        Style::new().fg(DIM),
-                    ),
+                    Span::styled(format!("  runs:{}", job.run_count), Style::new().fg(DIM)),
                 ]));
             }
         }

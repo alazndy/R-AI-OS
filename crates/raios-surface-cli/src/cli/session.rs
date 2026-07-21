@@ -87,7 +87,10 @@ pub(super) fn cmd_sessions(agent: Option<&str>, top: usize, canvas: Option<&str>
         w4 = col_w[4],
         w5 = col_w[5],
     );
-    println!("  {}", "─".repeat(col_w.iter().sum::<usize>() + col_w.len() * 2));
+    println!(
+        "  {}",
+        "─".repeat(col_w.iter().sum::<usize>() + col_w.len() * 2)
+    );
 
     for r in &rows {
         let status_col = match r.status.as_str() {

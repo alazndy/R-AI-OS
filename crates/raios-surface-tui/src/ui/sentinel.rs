@@ -1,5 +1,5 @@
-use raios_surface_tui::app::App;
 use raios_runtime::sentinel::SentinelState;
+use raios_surface_tui::app::App;
 use ratatui::{
     layout::Rect,
     style::{Color, Style, Stylize},

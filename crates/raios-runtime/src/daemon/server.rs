@@ -1,9 +1,9 @@
 use super::state::DaemonState;
-use raios_core::config::Config;
 use crate::factory::Factory;
 use crate::proxy_store::{CapabilityProxy, CapabilityStore};
 use crate::session::SessionStore;
 use notify::{RecursiveMode, Watcher};
+use raios_core::config::Config;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, RwLock};
@@ -85,9 +85,15 @@ impl Server {
                                 let event = v["event"].as_str().unwrap_or("");
                                 let entry: Option<(&str, String)> = match event {
                                     "NewLog" => {
-                                        let sender = v["log"]["sender"].as_str().unwrap_or("daemon");
-                                        let content = v["log"]["content"].as_str().unwrap_or("").to_string();
-                                        if content.is_empty() { None } else { Some((sender, content)) }
+                                        let sender =
+                                            v["log"]["sender"].as_str().unwrap_or("daemon");
+                                        let content =
+                                            v["log"]["content"].as_str().unwrap_or("").to_string();
+                                        if content.is_empty() {
+                                            None
+                                        } else {
+                                            Some((sender, content))
+                                        }
                                     }
                                     "JobSubmitted" => {
                                         let job_id = v["job_id"].as_str().unwrap_or("?");
@@ -98,7 +104,8 @@ impl Server {
                                 };
                                 if let Some((sender, content)) = entry {
                                     if let Ok(conn) = raios_core::db::open_db() {
-                                        let _ = raios_core::db::cp_log_append(&conn, sender, &content);
+                                        let _ =
+                                            raios_core::db::cp_log_append(&conn, sender, &content);
                                     }
                                 }
                             }
@@ -145,9 +152,11 @@ impl Server {
                     if v["event"] == "FileChanged" {
                         if let Some(path) = v["path"].as_str() {
                             if super::cortex::is_indexable(path) {
-                                let _ = cortex_tx_for_watcher.send(super::cortex::CortexRequest::IndexFile {
-                                    path: std::path::PathBuf::from(path),
-                                }).await;
+                                let _ = cortex_tx_for_watcher
+                                    .send(super::cortex::CortexRequest::IndexFile {
+                                        path: std::path::PathBuf::from(path),
+                                    })
+                                    .await;
                             }
                         }
                     }
@@ -184,8 +193,7 @@ impl Server {
 
         let lifecycle_tx = tx.clone();
         let lifecycle_state = self.state.clone();
-        let lifecycle_interval =
-            std::time::Duration::from_secs(daemon_cfg.lifecycle_interval_secs);
+        let lifecycle_interval = std::time::Duration::from_secs(daemon_cfg.lifecycle_interval_secs);
         let standby_days = daemon_cfg.lifecycle_standby_days;
         let archive_days = daemon_cfg.lifecycle_archive_days;
         tokio::spawn(async move {
@@ -202,8 +210,7 @@ impl Server {
         let scheduler_tx = tx.clone();
         let scheduler_state = self.state.clone();
         if daemon_cfg.enable_scheduler_worker {
-            let sched_interval =
-                std::time::Duration::from_secs(daemon_cfg.scheduler_interval_secs);
+            let sched_interval = std::time::Duration::from_secs(daemon_cfg.scheduler_interval_secs);
             tokio::spawn(async move {
                 super::scheduler::start_scheduler_worker(
                     scheduler_state,
@@ -277,8 +284,7 @@ impl Server {
             let rx = tx.subscribe();
             let telem_rx = telem_tx.subscribe();
             let state_for_client = self.state.clone();
-            let proxy_for_client = self.execution_proxy.clone()
-                .with_event_tx(tx.clone());
+            let proxy_for_client = self.execution_proxy.clone().with_event_tx(tx.clone());
             let _tx_sender = tx.clone();
             let server_token = token.clone();
             let sessions_for_client = self.sessions.clone();
@@ -313,7 +319,7 @@ impl Server {
                     swarm_store: swarm_store_for_client,
                     evolution_store: evolution_store_for_client,
                     umai,
-                }
+                },
             ));
         }
     }
@@ -368,9 +374,8 @@ mod bootstrap_session_token_tests {
     #[test]
     fn never_writes_a_legacy_ipc_token_file() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let mgr = raios_core::security::SessionTokenManager::with_path(
-            tmp.path().join(".session_token"),
-        );
+        let mgr =
+            raios_core::security::SessionTokenManager::with_path(tmp.path().join(".session_token"));
 
         bootstrap_session_token(&mgr, tmp.path()).unwrap();
 

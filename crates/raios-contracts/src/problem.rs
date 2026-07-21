@@ -50,7 +50,10 @@ impl Problem {
     pub fn duplicate_command(key: impl Into<String>) -> Self {
         Self::new(
             "DUPLICATE_COMMAND",
-            format!("Command with idempotency key '{}' already processed", key.into()),
+            format!(
+                "Command with idempotency key '{}' already processed",
+                key.into()
+            ),
             false,
         )
     }

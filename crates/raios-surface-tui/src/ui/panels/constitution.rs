@@ -51,7 +51,11 @@ pub fn render_constitution(frame: &mut Frame, area: Rect, app: &App) {
 fn render_tab_bar(app: &App) -> Line<'static> {
     let mut spans = Vec::new();
     for (i, tab) in app.constitution.tabs.iter().enumerate() {
-        let marker = if i == app.constitution.active_tab { GREEN } else { DIM };
+        let marker = if i == app.constitution.active_tab {
+            GREEN
+        } else {
+            DIM
+        };
         spans.push(Span::styled(
             format!(" [{}] {} ", i + 1, tab.label()),
             Style::new().fg(marker).bold(),
@@ -73,10 +77,16 @@ fn render_row(app: &App, row: &OutlineRow, selected: bool) -> Line<'static> {
             Line::from(Span::styled(format!("{}◈ {}", prefix, title), base_style))
         }
         OutlineRow::Child { idx, child_idx } => {
-            let title = app.constitution.sections[idx].children[child_idx].title.clone();
+            let title = app.constitution.sections[idx].children[child_idx]
+                .title
+                .clone();
             Line::from(Span::styled(format!("{}  ◦ {}", prefix, title), base_style))
         }
-        OutlineRow::Item { idx, child_idx, item_idx } => {
+        OutlineRow::Item {
+            idx,
+            child_idx,
+            item_idx,
+        } => {
             let text = if let Some(c) = child_idx {
                 if selected && app.constitution.item_editing {
                     app.constitution.item_input.clone()
@@ -88,8 +98,15 @@ fn render_row(app: &App, row: &OutlineRow, selected: bool) -> Line<'static> {
             } else {
                 app.constitution.sections[idx].items[item_idx].clone()
             };
-            let indent = if child_idx.is_some() { "      " } else { "    " };
-            Line::from(Span::styled(format!("{}{}• {}", prefix, indent, text), base_style))
+            let indent = if child_idx.is_some() {
+                "      "
+            } else {
+                "    "
+            };
+            Line::from(Span::styled(
+                format!("{}{}• {}", prefix, indent, text),
+                base_style,
+            ))
         }
     }
 }
@@ -98,17 +115,27 @@ fn render_creator(frame: &mut Frame, area: Rect, app: &App) {
     use raios_surface_tui::app::state::CreatorStep;
     let c = &app.constitution.creator;
     let mut lines = vec![
-        Line::from(Span::styled(" CONSTITUTION CREATOR", Style::new().fg(MID).bold())),
+        Line::from(Span::styled(
+            " CONSTITUTION CREATOR",
+            Style::new().fg(MID).bold(),
+        )),
         Line::from(""),
     ];
     match c.step {
         CreatorStep::ChooseTarget => {
-            lines.push(Line::from(" [p] Project-specific file   [g] Append to Global constitution (requires confirm)"));
+            lines.push(Line::from(
+                " [p] Project-specific file   [g] Append to Global constitution (requires confirm)",
+            ));
         }
         CreatorStep::Notes => {
-            lines.push(Line::from(" Notes to append (as a new \"## Project-Specific Rules\" section):"));
+            lines.push(Line::from(
+                " Notes to append (as a new \"## Project-Specific Rules\" section):",
+            ));
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(format!(" {}█", c.notes_input), Style::new().fg(GREEN))));
+            lines.push(Line::from(Span::styled(
+                format!(" {}█", c.notes_input),
+                Style::new().fg(GREEN),
+            )));
         }
         CreatorStep::Preview => {
             lines.push(Line::from(if c.target_is_global {
@@ -137,7 +164,9 @@ fn render_creator(frame: &mut Frame, area: Rect, app: &App) {
                 Style::new().fg(AMBER).bold(),
             )));
             lines.push(Line::from(""));
-            lines.push(Line::from(" [y] Confirm and continue to save   [n / Esc] Back / cancel"));
+            lines.push(Line::from(
+                " [y] Confirm and continue to save   [n / Esc] Back / cancel",
+            ));
         }
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), area);

@@ -1,5 +1,5 @@
-use anyhow::{bail, Result};
 use super::types::{NodeSpec, NodeStatus};
+use anyhow::{bail, Result};
 
 pub(super) fn validate_dag(nodes: &[NodeSpec]) -> Result<()> {
     let ids: std::collections::HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();

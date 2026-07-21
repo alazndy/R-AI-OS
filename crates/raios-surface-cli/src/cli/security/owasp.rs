@@ -1,12 +1,6 @@
 use std::path::Path;
 
-pub fn cmd_security(
-    target: Option<String>,
-    full: bool,
-    watch: bool,
-    dev_ops: &Path,
-    json: bool,
-) {
+pub fn cmd_security(target: Option<String>, full: bool, watch: bool, dev_ops: &Path, json: bool) {
     let (scan_path, project_filter): (Option<std::path::PathBuf>, Option<String>) = match &target {
         None => (None, None),
         Some(t) => {
@@ -186,8 +180,8 @@ pub fn cmd_security(
 }
 
 pub fn cmd_security_watch(path: &Path, json: bool) -> anyhow::Result<()> {
-    use raios_core::security::{scan_file, WATCHED_EXTS};
     use notify::{RecursiveMode, Watcher};
+    use raios_core::security::{scan_file, WATCHED_EXTS};
     use std::sync::mpsc::channel;
 
     let (tx, rx) = channel();

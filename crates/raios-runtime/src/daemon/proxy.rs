@@ -50,7 +50,10 @@ pub struct ExecutionProxy {
 
 impl ExecutionProxy {
     pub fn new(state: Arc<RwLock<DaemonState>>) -> Self {
-        Self { state, event_tx: None }
+        Self {
+            state,
+            event_tx: None,
+        }
     }
 
     pub fn with_event_tx(mut self, tx: tokio::sync::broadcast::Sender<String>) -> Self {
@@ -77,7 +80,10 @@ impl ExecutionProxy {
         timeout_secs: u64,
     ) -> Result<String> {
         let (program, program_args) = agent_command(agent_name).ok_or_else(|| {
-            anyhow::anyhow!("Unknown agent identity '{}' — refusing to spawn", agent_name)
+            anyhow::anyhow!(
+                "Unknown agent identity '{}' — refusing to spawn",
+                agent_name
+            )
         })?;
 
         let process_id = Uuid::new_v4();
@@ -187,12 +193,15 @@ impl ExecutionProxy {
             }
 
             if let Some(tx) = &event_tx_cloned {
-                let _ = tx.send(serde_json::json!({
-                    "event": "AgentStopped",
-                    "agent_id": process_id.to_string(),
-                    "name": agent_name_cloned,
-                    "final_status": result,
-                }).to_string());
+                let _ = tx.send(
+                    serde_json::json!({
+                        "event": "AgentStopped",
+                        "agent_id": process_id.to_string(),
+                        "name": agent_name_cloned,
+                        "final_status": result,
+                    })
+                    .to_string(),
+                );
             }
 
             println!(

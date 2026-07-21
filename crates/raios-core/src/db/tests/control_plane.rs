@@ -1,6 +1,12 @@
 use super::*;
 
-fn insert_task(conn: &Connection, id: &str, status: &str, plan_id: Option<&str>, assignee_id: Option<&str>) {
+fn insert_task(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    plan_id: Option<&str>,
+    assignee_id: Option<&str>,
+) {
     conn.execute(
         "INSERT INTO cp_tasks (id, plan_id, title, description, priority, status, assignee_id, created_at, updated_at)
          VALUES (?1, ?2, ?3, 'desc', 50, ?4, ?5, datetime('now'), datetime('now'))",
@@ -44,7 +50,10 @@ fn scheduler_list_ready_excludes_task_with_pending_approval() {
     insert_task(&conn, "t1", "ready", None, None);
     insert_approval(&conn, "ap1", "t1", "file_write", "pending");
     let ready = cp_scheduler_list_ready(&conn).unwrap();
-    assert!(ready.is_empty(), "task with a pending approval must not be scheduled");
+    assert!(
+        ready.is_empty(),
+        "task with a pending approval must not be scheduled"
+    );
 }
 
 #[test]
@@ -69,17 +78,28 @@ fn scheduler_list_ready_blocks_task_on_hard_budget_block() {
     .unwrap();
 
     let ready = cp_scheduler_list_ready(&conn).unwrap();
-    assert!(ready.is_empty(), "exhausted budget should hard-block the task");
+    assert!(
+        ready.is_empty(),
+        "exhausted budget should hard-block the task"
+    );
 
     let status: String = conn
-        .query_row("SELECT status FROM cp_tasks WHERE id='t1'", [], |r| r.get(0))
+        .query_row("SELECT status FROM cp_tasks WHERE id='t1'", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(status, "blocked", "task should be moved to blocked status");
 }
 
 // ─── cp_task_graph_node_ids / cp_task_graph_shell_cmd ────────────────────────
 
-fn seed_task_graph_node(conn: &Connection, graph_id: &str, node_id: &str, task_id: &str, shell_cmd: &str) {
+fn seed_task_graph_node(
+    conn: &Connection,
+    graph_id: &str,
+    node_id: &str,
+    task_id: &str,
+    shell_cmd: &str,
+) {
     conn.execute(
         "INSERT INTO task_graphs (id, goal, agent) VALUES (?1, 'goal', 'claude')",
         params![graph_id],
@@ -106,14 +126,20 @@ fn task_graph_node_ids_round_trip() {
 #[test]
 fn task_graph_node_ids_returns_none_for_unknown_task() {
     let conn = in_memory();
-    assert_eq!(cp_task_graph_node_ids(&conn, "does-not-exist").unwrap(), None);
+    assert_eq!(
+        cp_task_graph_node_ids(&conn, "does-not-exist").unwrap(),
+        None
+    );
 }
 
 #[test]
 fn task_graph_shell_cmd_round_trip() {
     let conn = in_memory();
     seed_task_graph_node(&conn, "g1", "n1", "t1", "echo hi");
-    assert_eq!(cp_task_graph_shell_cmd(&conn, "t1").unwrap().as_deref(), Some("echo hi"));
+    assert_eq!(
+        cp_task_graph_shell_cmd(&conn, "t1").unwrap().as_deref(),
+        Some("echo hi")
+    );
 }
 
 // ─── cp_query_active_tasks / cp_query_blocked_tasks ──────────────────────────

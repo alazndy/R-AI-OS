@@ -1,8 +1,8 @@
-use raios_surface_tui::app::state::AppState;
-use raios_surface_tui::app::App;
-use raios_runtime::filebrowser::{load_file_content, FileEntry};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use raios_runtime::filebrowser::{load_file_content, FileEntry};
+use raios_surface_tui::app::state::AppState;
+use raios_surface_tui::app::App;
 
 impl App {
     pub(crate) fn handle_key_search(&mut self, key: KeyEvent) -> Result<()> {

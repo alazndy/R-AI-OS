@@ -277,9 +277,8 @@ mod tests {
             learned: vec![],
         };
 
-        let id =
-            record_post_run_review_trace(&conn, "codex", "/tmp/R-AI-OS", true, &review, None)
-                .unwrap();
+        let id = record_post_run_review_trace(&conn, "codex", "/tmp/R-AI-OS", true, &review, None)
+            .unwrap();
 
         assert!(id.is_none());
     }
@@ -294,10 +293,9 @@ mod tests {
             learned: vec!["use trace recall before handoff".to_string()],
         };
 
-        let id =
-            record_post_run_review_trace(&conn, "codex", "/tmp/R-AI-OS", true, &review, None)
-                .unwrap()
-                .unwrap();
+        let id = record_post_run_review_trace(&conn, "codex", "/tmp/R-AI-OS", true, &review, None)
+            .unwrap()
+            .unwrap();
         let row = raios_core::db::tool_trace_get(&conn, &id).unwrap().unwrap();
 
         assert_eq!(row.project, "R-AI-OS");

@@ -21,7 +21,11 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
     };
 
     match action {
-        MemAction::List { project, item_type, layer } => {
+        MemAction::List {
+            project,
+            item_type,
+            layer,
+        } => {
             let key = project_key_for(&project);
             let items = raios_core::db::mem_list(&conn, &key).unwrap_or_default();
             let items: Vec<_> = if let Some(t) = &item_type {
@@ -35,7 +39,10 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
                 items
             };
             if json {
-                println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&items).unwrap_or_default()
+                );
                 return;
             }
             if items.is_empty() {
@@ -44,7 +51,10 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
             }
             println!("\n  MEMORY ITEMS  {}\n", key);
             for i in &items {
-                println!("  [L{}][{:<10}] {}  \x1b[90m{}\x1b[0m", i.layer, i.item_type, i.slug, i.description);
+                println!(
+                    "  [L{}][{:<10}] {}  \x1b[90m{}\x1b[0m",
+                    i.layer, i.item_type, i.slug, i.description
+                );
             }
             println!();
         }
@@ -54,7 +64,10 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
                 Ok(Some(item)) => {
                     let _ = raios_core::db::mem_on_used(&conn, &key, &slug);
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&item).unwrap_or_default());
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&item).unwrap_or_default()
+                        );
                     } else {
                         println!("\n  [{}/{}]\n  Type: {}\n  Description: {}\n  Provenance: {} | Confidence: {:.2} (effective: {:.2})\n\n{}\n",
                             item.project_key, item.slug, item.item_type,
@@ -71,32 +84,50 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
                 Ok(revs) if revs.is_empty() => println!("  No revisions for {}", slug),
                 Ok(revs) => {
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&revs).unwrap_or_default());
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&revs).unwrap_or_default()
+                        );
                         return;
                     }
                     println!("\n  REVISIONS  {}/{}  ({})\n", key, slug, revs.len());
                     for r in &revs {
-                        println!("  \x1b[90m{}\x1b[0m  node:{}\n{}\n", r.created_at, &r.id[..8], r.content);
+                        println!(
+                            "  \x1b[90m{}\x1b[0m  node:{}\n{}\n",
+                            r.created_at,
+                            &r.id[..8],
+                            r.content
+                        );
                     }
                 }
                 Err(e) => eprintln!("  Error: {e}"),
             }
         }
-        MemAction::Add { item_type, slug, title, description, body, project } => {
+        MemAction::Add {
+            item_type,
+            slug,
+            title,
+            description,
+            body,
+            project,
+        } => {
             let key = project_key_for(&project);
-            match raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
-                project_key: &key,
-                item_type: &item_type,
-                slug: &slug,
-                title: &title,
-                description: &description,
-                body: &body,
-                session_id: None,
-                layer: 1,
-                provenance: None,
-                confidence: None,
-                last_used_at: None,
-            }) {
+            match raios_core::db::mem_upsert(
+                &conn,
+                raios_core::db::MemUpsert {
+                    project_key: &key,
+                    item_type: &item_type,
+                    slug: &slug,
+                    title: &title,
+                    description: &description,
+                    body: &body,
+                    session_id: None,
+                    layer: 1,
+                    provenance: None,
+                    confidence: None,
+                    last_used_at: None,
+                },
+            ) {
                 Ok(()) => {
                     if json {
                         println!("{{\"ok\":true,\"slug\":\"{}\"}}", slug);
@@ -127,7 +158,11 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
                     if json {
                         println!("{{\"exported\":{}}}", n);
                     } else {
-                        println!("  \x1b[32m✓\x1b[0m  {} item(s) → {}", n, memory_dir.display());
+                        println!(
+                            "  \x1b[32m✓\x1b[0m  {} item(s) → {}",
+                            n,
+                            memory_dir.display()
+                        );
                     }
                 }
                 Err(e) => eprintln!("  \x1b[31m✗\x1b[0m  {e}"),
@@ -139,7 +174,10 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_else(|_| ".".to_string())
             });
-            println!("  \x1b[90mScanning transcript for [{}] → {}…\x1b[0m", agent, project_path);
+            println!(
+                "  \x1b[90mScanning transcript for [{}] → {}…\x1b[0m",
+                agent, project_path
+            );
             raios_runtime::session_memory::auto_sync_agent_memory(
                 &agent,
                 &project_path,
@@ -149,4 +187,3 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
         }
     }
 }
-

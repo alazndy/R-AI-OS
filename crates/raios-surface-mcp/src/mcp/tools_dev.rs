@@ -89,8 +89,8 @@ impl McpServer {
 
     pub(super) fn tool_version_info(&self, args: &Value) -> Result<Value, String> {
         let path = self.resolve_git_path(args)?;
-        let v =
-            raios_core::core::version::info(&path).ok_or_else(|| "No version file found".to_string())?;
+        let v = raios_core::core::version::info(&path)
+            .ok_or_else(|| "No version file found".to_string())?;
         let text = format!(
             "Version: {} ({})\nFile: {}\nLast tag: {}\nCommits since tag: {}",
             v.current,
@@ -261,7 +261,8 @@ impl McpServer {
             .as_str()
             .ok_or_else(|| "Missing required string field 'agent'".to_string())?;
         let tier_str = args["tier"].as_str();
-        let requested_tier = tier_str.and_then(|t| t.parse::<raios_runtime::system_scan::DoctorTier>().ok());
+        let requested_tier =
+            tier_str.and_then(|t| t.parse::<raios_runtime::system_scan::DoctorTier>().ok());
 
         let res = raios_runtime::system_scan::run_doctor_check(agent, requested_tier);
 

@@ -76,11 +76,7 @@ impl CapabilityStore {
                 backend: Backend::Internal {
                     handler: "health_check".into(),
                 },
-                platforms: vec![
-                    "claude".into(),
-                    "codex".into(),
-                    "antigravity".into(),
-                ],
+                platforms: vec!["claude".into(), "codex".into(), "antigravity".into()],
             },
             Capability {
                 name: "list_projects".into(),
@@ -88,11 +84,7 @@ impl CapabilityStore {
                 backend: Backend::Internal {
                     handler: "list_projects".into(),
                 },
-                platforms: vec![
-                    "claude".into(),
-                    "codex".into(),
-                    "antigravity".into(),
-                ],
+                platforms: vec!["claude".into(), "codex".into(), "antigravity".into()],
             },
             Capability {
                 name: "search_codebase".into(),
@@ -100,11 +92,7 @@ impl CapabilityStore {
                 backend: Backend::Internal {
                     handler: "search_codebase".into(),
                 },
-                platforms: vec![
-                    "claude".into(),
-                    "codex".into(),
-                    "antigravity".into(),
-                ],
+                platforms: vec!["claude".into(), "codex".into(), "antigravity".into()],
             },
             Capability {
                 name: "run_sentinel".into(),
@@ -368,7 +356,9 @@ mod tests {
         store.register(Capability {
             name: "echo_input".into(),
             description: "test-only echo wrapper".into(),
-            backend: Backend::Shell { command: "echo {input}".into() },
+            backend: Backend::Shell {
+                command: "echo {input}".into(),
+            },
             platforms: vec!["claude".into()],
         });
         CapabilityProxy::new(store)

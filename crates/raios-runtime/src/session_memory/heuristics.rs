@@ -1,5 +1,8 @@
 pub(super) fn first_n_words(text: &str, n: usize) -> String {
-    text.split_whitespace().take(n).collect::<Vec<_>>().join(" ")
+    text.split_whitespace()
+        .take(n)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub(crate) struct AtomicFact {
@@ -40,11 +43,31 @@ pub(super) fn heuristic_extract_facts(transcript: &str) -> Vec<AtomicFact> {
         let lower = text.to_lowercase();
 
         // Feedback — user corrects or confirms a non-obvious approach (EN + TR)
-        if ["don't ", "do not ", "stop ", "avoid ", "no, ", "wrong", "not that", "incorrect", "please don't",
-            "yapma", "etme", "hayır", "yanlış", "olmaz", "değil", "bunu yapma", "böyle değil",
-            "istemiyorum", "kullanma", "ekleme", "silme"]
-            .iter()
-            .any(|p| lower.contains(p))
+        if [
+            "don't ",
+            "do not ",
+            "stop ",
+            "avoid ",
+            "no, ",
+            "wrong",
+            "not that",
+            "incorrect",
+            "please don't",
+            "yapma",
+            "etme",
+            "hayır",
+            "yanlış",
+            "olmaz",
+            "değil",
+            "bunu yapma",
+            "böyle değil",
+            "istemiyorum",
+            "kullanma",
+            "ekleme",
+            "silme",
+        ]
+        .iter()
+        .any(|p| lower.contains(p))
         {
             facts.push(AtomicFact {
                 item_type: "feedback",
@@ -54,11 +77,31 @@ pub(super) fn heuristic_extract_facts(transcript: &str) -> Vec<AtomicFact> {
         }
 
         // Project decisions / architecture choices (EN + TR)
-        if ["we'll use", "we're using", "we decided", "let's use", "going with", "we chose", "architecture is", "we're building",
-            "kullanalım", "kullanıyoruz", "karar verdik", "yapacağız", "tercih", "mimari", "gideceğiz",
-            "yapıyoruz", "seçtik", "geçiyoruz", "kullanacağız", "artık", "bundan sonra"]
-            .iter()
-            .any(|p| lower.contains(p))
+        if [
+            "we'll use",
+            "we're using",
+            "we decided",
+            "let's use",
+            "going with",
+            "we chose",
+            "architecture is",
+            "we're building",
+            "kullanalım",
+            "kullanıyoruz",
+            "karar verdik",
+            "yapacağız",
+            "tercih",
+            "mimari",
+            "gideceğiz",
+            "yapıyoruz",
+            "seçtik",
+            "geçiyoruz",
+            "kullanacağız",
+            "artık",
+            "bundan sonra",
+        ]
+        .iter()
+        .any(|p| lower.contains(p))
         {
             facts.push(AtomicFact {
                 item_type: "project",
@@ -68,10 +111,26 @@ pub(super) fn heuristic_extract_facts(transcript: &str) -> Vec<AtomicFact> {
         }
 
         // User background (EN + TR)
-        if ["i'm a ", "i am a ", "i work ", "i've been", "my role", "my stack", "my background", "i specialize",
-            "ben ", "benim ", "çalışıyorum", "uzmanlık", "stack'im", "yıldır", "geliştiriciyim", "mühendisim"]
-            .iter()
-            .any(|p| lower.contains(p))
+        if [
+            "i'm a ",
+            "i am a ",
+            "i work ",
+            "i've been",
+            "my role",
+            "my stack",
+            "my background",
+            "i specialize",
+            "ben ",
+            "benim ",
+            "çalışıyorum",
+            "uzmanlık",
+            "stack'im",
+            "yıldır",
+            "geliştiriciyim",
+            "mühendisim",
+        ]
+        .iter()
+        .any(|p| lower.contains(p))
         {
             facts.push(AtomicFact {
                 item_type: "user",

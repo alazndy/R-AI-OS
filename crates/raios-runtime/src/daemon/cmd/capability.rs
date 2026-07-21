@@ -10,8 +10,7 @@ pub async fn handle_execute_capability<W: AsyncWriteExt + Unpin>(
     let capability = v["capability"].as_str().unwrap_or("").to_string();
     let input = v["input"].as_str().unwrap_or("").to_string();
     if capability.is_empty() {
-        let err =
-            serde_json::json!({ "event": "CapabilityError", "error": "capability name is required" });
+        let err = serde_json::json!({ "event": "CapabilityError", "error": "capability name is required" });
         let _ = writer.write_all(format!("{}\n", err).as_bytes()).await;
         return;
     }

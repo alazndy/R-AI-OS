@@ -31,6 +31,7 @@ pub use ios::{build_ios, build_ios_check, build_ios_release, test_ios};
 pub enum ProjectType {
     Rust,
     Node,
+    ReactNative,
     Python,
     Go,
     Flutter,
@@ -48,6 +49,7 @@ impl ProjectType {
         match self {
             Self::Rust => "Rust",
             Self::Node => "Node",
+            Self::ReactNative => "React Native",
             Self::Python => "Python",
             Self::Go => "Go",
             Self::Flutter => "Flutter",
@@ -65,6 +67,9 @@ impl ProjectType {
 pub fn detect_type(dir: &Path) -> ProjectType {
     if dir.join("Cargo.toml").exists() {
         return ProjectType::Rust;
+    }
+    if is_react_native_project(dir) {
+        return ProjectType::ReactNative;
     }
     if dir.join("package.json").exists() {
         return ProjectType::Node;
@@ -120,10 +125,29 @@ pub fn detect_type(dir: &Path) -> ProjectType {
     ProjectType::Unknown
 }
 
+/// React Native must be recognized before generic Node because its provider,
+/// device, signing, and store constraints are materially different.
+fn is_react_native_project(dir: &Path) -> bool {
+    let Ok(manifest) = std::fs::read_to_string(dir.join("package.json")) else {
+        return false;
+    };
+    let Ok(package) = serde_json::from_str::<serde_json::Value>(&manifest) else {
+        return false;
+    };
+    ["dependencies", "devDependencies", "peerDependencies"]
+        .iter()
+        .any(|section| {
+            package.get(section).is_some_and(|dependencies| {
+                dependencies.get("react-native").is_some() || dependencies.get("expo").is_some()
+            })
+        })
+}
+
 pub fn build(dir: &Path) -> BuildResult {
     match detect_type(dir) {
         ProjectType::Rust => rust::build_rust(dir),
         ProjectType::Node => node::build_node(dir),
+        ProjectType::ReactNative => build_react_native(dir),
         ProjectType::Python => python::build_python(dir),
         ProjectType::Go => go::build_go(dir),
         ProjectType::Flutter => build_flutter(dir),
@@ -152,6 +176,7 @@ pub fn test(dir: &Path) -> TestResult {
     match detect_type(dir) {
         ProjectType::Rust => rust::test_rust(dir),
         ProjectType::Node => node::test_node(dir),
+        ProjectType::ReactNative => test_react_native(dir),
         ProjectType::Python => python::test_python(dir),
         ProjectType::Go => go::test_go(dir),
         ProjectType::Flutter => test_flutter(dir),
@@ -173,6 +198,18 @@ pub fn test(dir: &Path) -> TestResult {
             raw_output: String::new(),
         },
     }
+}
+
+fn build_react_native(dir: &Path) -> BuildResult {
+    let mut result = node::build_node(dir);
+    result.project_type = ProjectType::ReactNative.label().into();
+    result
+}
+
+fn test_react_native(dir: &Path) -> TestResult {
+    let mut result = node::test_node(dir);
+    result.project_type = ProjectType::ReactNative.label().into();
+    result
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
+use super::ExtensionManifest;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use super::ExtensionManifest;
 
 pub(super) fn find_extension_path(name: &str, dev_ops_path: &Path) -> Option<PathBuf> {
     // 1. entities.json lookup
@@ -93,10 +93,17 @@ pub(super) fn discover_and_register_extensions(dev_ops_path: &Path) -> Vec<(Stri
 
     for (path, manifest) in extensions {
         let name = manifest.extension.name.clone();
-        println!("  Found extension: {} v{}", name, manifest.extension.version);
+        println!(
+            "  Found extension: {} v{}",
+            name, manifest.extension.version
+        );
 
         let req_path = path.join("requirements.txt");
-        let interp = manifest.extension.interpreter.as_deref().unwrap_or("venv/bin/python");
+        let interp = manifest
+            .extension
+            .interpreter
+            .as_deref()
+            .unwrap_or("venv/bin/python");
         let venv_path = path.join(interp.split('/').next().unwrap_or("venv"));
 
         if req_path.exists() {
@@ -117,7 +124,14 @@ pub(super) fn discover_and_register_extensions(dev_ops_path: &Path) -> Vec<(Stri
                     .status()
                     .map(|s| s.success())
                     .unwrap_or(false);
-                println!(" {}", if ok { "done" } else { "failed (check manually)" });
+                println!(
+                    " {}",
+                    if ok {
+                        "done"
+                    } else {
+                        "failed (check manually)"
+                    }
+                );
             }
         }
         if !manifest.schedules.is_empty() {

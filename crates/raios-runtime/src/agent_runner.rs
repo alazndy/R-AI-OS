@@ -3,7 +3,10 @@ use raios_core::shield::AgentShield;
 use std::io::{self, BufRead};
 use std::path::Path;
 use std::process::Command;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -41,8 +44,18 @@ pub fn run_agent(
             );
             let blockers: Vec<_> = checks.iter().filter(|c| !c.pass && c.blocking).collect();
             for c in &checks {
-                let icon = if c.pass { "✓" } else if c.blocking { "✗" } else { "⚠" };
-                let detail = if c.detail.is_empty() { String::new() } else { format!("  {}", c.detail) };
+                let icon = if c.pass {
+                    "✓"
+                } else if c.blocking {
+                    "✗"
+                } else {
+                    "⚠"
+                };
+                let detail = if c.detail.is_empty() {
+                    String::new()
+                } else {
+                    format!("  {}", c.detail)
+                };
                 println!("  {}  {:<28}{}", icon, c.label, detail);
             }
             if !blockers.is_empty() {
@@ -100,7 +113,9 @@ pub fn run_agent(
         }
         Some((conn, identity, ctx, block))
     });
-    let handover_block = pending_handoff.as_ref().map(|(_, _, _, block)| block.clone());
+    let handover_block = pending_handoff
+        .as_ref()
+        .map(|(_, _, _, block)| block.clone());
 
     // 4. Build the Command, wiring the handover into each agent's native prompt flag.
     // NOTE: --append-system-prompt on claude only works with --print (non-interactive).
@@ -111,12 +126,19 @@ pub fn run_agent(
         let width = 62usize;
         let border = "═".repeat(width);
         println!("\n\x1b[1;33m╔{border}╗\x1b[0m");
-        println!("\x1b[1;33m║\x1b[0m  \x1b[1;33m✦ HANDOVER CONTEXT\x1b[0m{}\x1b[1;33m║\x1b[0m", " ".repeat(width - 20));
+        println!(
+            "\x1b[1;33m║\x1b[0m  \x1b[1;33m✦ HANDOVER CONTEXT\x1b[0m{}\x1b[1;33m║\x1b[0m",
+            " ".repeat(width - 20)
+        );
         println!("\x1b[1;33m╠{border}╣\x1b[0m");
         for line in block.lines() {
             let truncated: String = line.chars().take(width - 2).collect();
             let pad = width.saturating_sub(truncated.chars().count() + 2);
-            println!("\x1b[33m║\x1b[0m  {}{} \x1b[33m║\x1b[0m", truncated, " ".repeat(pad));
+            println!(
+                "\x1b[33m║\x1b[0m  {}{} \x1b[33m║\x1b[0m",
+                truncated,
+                " ".repeat(pad)
+            );
         }
         println!("\x1b[1;33m╚{border}╝\x1b[0m");
         println!("\n  \x1b[90mHandoff alındı — devam etmek için \x1b[37m[Enter]\x1b[0m\x1b[90m'a bas...\x1b[0m");
@@ -195,7 +217,8 @@ pub fn run_agent(
         let conn_res = raios_core::db::open_db();
         match conn_res {
             Ok(conn) => {
-                let project_id = project_dir.as_deref()
+                let project_id = project_dir
+                    .as_deref()
                     .and_then(|dir| raios_core::db::project_id_for_file_path(&conn, dir));
                 match raios_core::db::cp_session_start(&conn, identity, project_id) {
                     Ok(ids) => Some((ids.0, ids.1)),
@@ -217,7 +240,8 @@ pub fn run_agent(
     }
 
     // Wrapper-active indicator — always printed so the user can confirm routing is live.
-    let session_label = session_ids.as_ref()
+    let session_label = session_ids
+        .as_ref()
         .map(|(_, run_id)| format!("  session: {}", &run_id[..8]))
         .unwrap_or_default();
     println!(
@@ -231,7 +255,10 @@ pub fn run_agent(
         Err(e) => return Err(format!("Failed to spawn agent: {}", e)),
     };
     if let Some((conn, identity, ctx, _)) = &pending_handoff {
-        println!("📨 Handover delivered from {} ({}).", ctx.from_agent, ctx.status);
+        println!(
+            "📨 Handover delivered from {} ({}).",
+            ctx.from_agent, ctx.status
+        );
         if let Err(e) = raios_core::db::cp_consume_handoff(conn, ctx, identity) {
             eprintln!("Warning: failed to mark handoff as consumed: {e}");
         }
@@ -248,7 +275,9 @@ pub fn run_agent(
             let period = Duration::from_secs(MEMORY_SYNC_INTERVAL_SECS);
             loop {
                 thread::sleep(period);
-                if stop.load(Ordering::Relaxed) { break; }
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
                 if let Some(ref d) = dir {
                     crate::session_memory::auto_sync_agent_memory(&agent_name, d, started, false);
                 }
@@ -342,7 +371,8 @@ pub fn run_agent(
             }
         }
     }
-    let session_short = session_ids.as_ref()
+    let session_short = session_ids
+        .as_ref()
         .map(|(_, run_id)| format!("  \x1b[90mrun: {}\x1b[0m", &run_id[..8]))
         .unwrap_or_default();
     let identity = canonical_agent_identity(agent).unwrap_or(agent);
@@ -365,7 +395,11 @@ pub fn run_agent(
         }
         println!(
             "  \x1b[90mTests in session:\x1b[0m {}",
-            if review.tests_run_during_session { "yes" } else { "no" }
+            if review.tests_run_during_session {
+                "yes"
+            } else {
+                "no"
+            }
         );
         if !review.risks.is_empty() {
             println!("  \x1b[90mRisks:\x1b[0m {}", review.risks.join(" | "));
@@ -474,9 +508,13 @@ pub fn spawn_agent_detached(
 /// and tracking info appear inside Claude Code's own UI (visible via /status
 /// and referenced in the system context). Strips any stale block first.
 fn inject_session_to_claude_md(run_id: &str, agent_identity: &str, started_at: &str) {
-    let Some(home) = std::env::var_os("HOME") else { return };
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
     let path = Path::new(&home).join(".claude/CLAUDE.md");
-    let Ok(content) = std::fs::read_to_string(&path) else { return };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return;
+    };
     let stripped = strip_session_block(&content);
     let block = format!(
         "\n<!-- raios-session-begin -->\n\
@@ -495,9 +533,13 @@ fn inject_session_to_claude_md(run_id: &str, agent_identity: &str, started_at: &
 
 /// Remove the RAIOS session block from ~/.claude/CLAUDE.md.
 fn strip_session_from_claude_md() {
-    let Some(home) = std::env::var_os("HOME") else { return };
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
     let path = Path::new(&home).join(".claude/CLAUDE.md");
-    let Ok(content) = std::fs::read_to_string(&path) else { return };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return;
+    };
     let stripped = strip_session_block(&content);
     if stripped != content {
         let _ = std::fs::write(&path, stripped.trim_end().to_string() + "\n");
@@ -588,7 +630,10 @@ mod tests {
         assert_eq!(canonical_agent_identity("claude"), Some("claude_kaira"));
         assert_eq!(canonical_agent_identity("codex"), Some("codex_kaira"));
         assert_eq!(canonical_agent_identity("opencode"), Some("opencode_kaira"));
-        assert_eq!(canonical_agent_identity("antigravity"), Some("antigravity_kaira"));
+        assert_eq!(
+            canonical_agent_identity("antigravity"),
+            Some("antigravity_kaira")
+        );
         assert_eq!(canonical_agent_identity("agy"), Some("antigravity_kaira"));
     }
 

@@ -1,7 +1,7 @@
-use raios_surface_tui::app::state::AppState;
-use raios_surface_tui::app::App;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use raios_surface_tui::app::state::AppState;
+use raios_surface_tui::app::App;
 
 pub mod dashboard;
 pub mod editor;

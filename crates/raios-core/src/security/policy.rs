@@ -64,8 +64,12 @@ pub struct HubPolicy {
 }
 
 impl HubPolicy {
-    fn default_bind_mode() -> String { "localhost".into() }
-    fn default_trusted_cidr() -> String { "100.64.0.0/10".into() }
+    fn default_bind_mode() -> String {
+        "localhost".into()
+    }
+    fn default_trusted_cidr() -> String {
+        "100.64.0.0/10".into()
+    }
 }
 
 impl Default for HubPolicy {
@@ -221,7 +225,9 @@ impl PolicyConfig {
                     timestamp: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
                 };
                 let p = payload.as_ref().unwrap_or(&default_payload);
-                if let super::hooks::HookOutcome::Blocked { reason } = super::hooks::run_hook("pre_tool_call", script, p) {
+                if let super::hooks::HookOutcome::Blocked { reason } =
+                    super::hooks::run_hook("pre_tool_call", script, p)
+                {
                     return Err(anyhow!("Hook Blocked pre_tool_call: {}", reason));
                 }
             }
@@ -357,9 +363,8 @@ action = "deny"
     #[test]
     fn hub_trusted_proxy_can_be_enabled_explicitly() {
         let tmp = TempDir::new().unwrap();
-        let toml = format!(
-            "{SAMPLE_TOML}\n[server.hub]\nbind_mode = \"all\"\ntrusted_proxy = true\n"
-        );
+        let toml =
+            format!("{SAMPLE_TOML}\n[server.hub]\nbind_mode = \"all\"\ntrusted_proxy = true\n");
         let path = write_policy(&tmp, &toml);
         let config = PolicyConfig::load_from_file(&path).unwrap();
         assert!(config.server.unwrap().hub.unwrap().trusted_proxy);
@@ -381,8 +386,8 @@ action = "deny"
         }
 
         let readme_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md");
-        let content = std::fs::read_to_string(&readme_path)
-            .expect("README.md should exist at repo root");
+        let content =
+            std::fs::read_to_string(&readme_path).expect("README.md should exist at repo root");
 
         let after_marker = content
             .split("### Phase 2 — Policy Manager")

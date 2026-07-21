@@ -1,13 +1,14 @@
+use anyhow::Result;
+use raios_contracts::FactoryCommand;
 use raios_runtime::filebrowser::find_file_by_name;
 use raios_runtime::sync::sync_universe;
-use anyhow::Result;
 use std::thread;
 
+use raios_surface_tui::app::events::helpers::append_memo;
 use raios_surface_tui::app::intent::Intent;
 use raios_surface_tui::app::reducer::reduce_intent;
 use raios_surface_tui::app::route::Route;
 use raios_surface_tui::app::{state::*, App};
-use raios_surface_tui::app::events::helpers::append_memo;
 
 impl App {
     pub(crate) fn execute_command(&mut self, raw: &str) -> Result<()> {
@@ -41,6 +42,17 @@ impl App {
                     self.store.last_error = Some(problem.message);
                 }
             }
+            "/factory" => match factory_command_from_input(arg) {
+                Ok(command) => {
+                    if let Err(problem) = self.client.send_factory_command(command) {
+                        self.store.last_error = Some(problem.message);
+                    } else {
+                        self.system.sync_status =
+                            Some("Factory command sent; waiting for audited result.".into());
+                    }
+                }
+                Err(usage) => self.system.sync_status = Some(usage),
+            },
             "/sync" | "/setup" => {
                 self.system.is_syncing = true;
                 self.system.sync_status = None;
@@ -60,7 +72,8 @@ impl App {
                         self.system.sync_status = Some("Refreshing remote state...".into());
                     }
                 } else {
-                    let projects = raios_core::entities::discover_entities(&self.config.dev_ops_path);
+                    let projects =
+                        raios_core::entities::discover_entities(&self.config.dev_ops_path);
                     self.projects.list = projects.clone();
                     match raios_core::entities::save_entities(&self.config.dev_ops_path, projects) {
                         Ok(_) => {
@@ -89,8 +102,10 @@ impl App {
                     let tx = self.tx.clone();
                     let dev_ops = self.config.dev_ops_path.clone();
                     thread::spawn(move || {
-                        tx.send(BgMsg::MemPalaceBuilt(raios_core::mempalace::build(&dev_ops)))
-                            .ok();
+                        tx.send(BgMsg::MemPalaceBuilt(raios_core::mempalace::build(
+                            &dev_ops,
+                        )))
+                        .ok();
                     });
                 }
                 self.state = AppState::MemPalaceView;
@@ -170,7 +185,11 @@ impl App {
                 self.ui.right_panel_focus = false;
                 // Request fresh log replay from daemon (restores history after reconnect)
                 if let Some(ref tx) = self.tx_daemon {
-                    let limit = if arg.is_empty() { 200 } else { arg.parse::<u64>().unwrap_or(200) };
+                    let limit = if arg.is_empty() {
+                        200
+                    } else {
+                        arg.parse::<u64>().unwrap_or(200)
+                    };
                     let _ = tx.send(raios_surface_tui::app::daemon_get_logs_command(limit));
                 }
             }
@@ -185,21 +204,23 @@ impl App {
                     // Parse the line using the same parser (add checkbox prefix)
                     let fake_line = format!("- [ ] {}", rest);
                     // Re-use load logic: parse inline
-                    let new_task = raios_runtime::tasks::parse_task_line(&fake_line).unwrap_or_else(|| {
-                        raios_runtime::tasks::Task {
+                    let new_task = raios_runtime::tasks::parse_task_line(&fake_line)
+                        .unwrap_or_else(|| raios_runtime::tasks::Task {
                             id: None,
                             text: rest.to_string(),
                             completed: false,
                             agent: None,
                             project: None,
-                        }
-                    });
+                        });
                     let agent_hint = new_task.agent.as_deref().unwrap_or("-");
                     let proj_hint = new_task.project.as_deref().unwrap_or("-");
                     self.system.sync_status =
                         Some(format!("Task added [{}→{}]", agent_hint, proj_hint));
                     self.tasks.list.push(new_task);
-                    let _ = raios_runtime::tasks::save_tasks(&self.config.dev_ops_path, &self.tasks.list);
+                    let _ = raios_runtime::tasks::save_tasks(
+                        &self.config.dev_ops_path,
+                        &self.tasks.list,
+                    );
                 } else if let Some(agent) = arg.strip_prefix("send ") {
                     self.dispatch_task(agent.trim());
                 } else if arg == "load" {
@@ -217,7 +238,10 @@ impl App {
                 } else {
                     let proj = self.projects.list.iter().find(|p| p.name == name).cloned();
                     if let Some(p) = proj {
-                        match raios_surface_tui::app::create_vault_note(&self.config.vault_projects_path, &p) {
+                        match raios_surface_tui::app::create_vault_note(
+                            &self.config.vault_projects_path,
+                            &p,
+                        ) {
                             Ok(true) => {
                                 self.system.vault_projects.push(p.name.clone());
                                 self.system.sync_status =
@@ -349,5 +373,306 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+}
+
+fn factory_command_from_input(input: &str) -> Result<FactoryCommand, String> {
+    let mut parts = input.trim().splitn(2, ' ');
+    let action = parts.next().unwrap_or_default();
+    let payload = parts.next().unwrap_or_default().trim();
+    let idempotency_key = format!("factory-tui-{}", uuid::Uuid::new_v4());
+
+    match action {
+        "workspace" if !payload.is_empty() => Ok(FactoryCommand::CreateWorkspace {
+            name: payload.into(),
+            idempotency_key,
+        }),
+        "product" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::CreateProductDraft {
+                workspace_id: fields[0].into(),
+                title: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        "mode" => {
+            let fields = split_factory_fields(payload, 2)?;
+            let mode = match fields[1] {
+                "quick" => raios_contracts::FactoryMode::Quick,
+                "governed" => raios_contracts::FactoryMode::Governed,
+                _ => return Err(factory_usage()),
+            };
+            Ok(FactoryCommand::SetProductMode { product_id: fields[0].into(), mode, idempotency_key })
+        }
+        "scaffold" if !payload.is_empty() => Ok(FactoryCommand::ScaffoldProject {
+            product_id: payload.into(), idempotency_key,
+        }),
+        "intake" if !payload.is_empty() => Ok(FactoryCommand::StartIntake {
+            product_id: payload.into(),
+            idempotency_key,
+        }),
+        "answer" => {
+            let fields = split_factory_fields(payload, 3)?;
+            Ok(FactoryCommand::RecordIntakeAnswer {
+                session_id: fields[0].into(),
+                question_key: fields[1].into(),
+                response: fields[2].into(),
+                idempotency_key,
+            })
+        }
+        "charter" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::CreateCharterDraft {
+                product_id: fields[0].into(),
+                content: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        "generate" if !payload.is_empty() => Ok(FactoryCommand::GenerateCharterDraft {
+            product_id: payload.into(),
+            idempotency_key,
+        }),
+        "requirement" => {
+            let fields = split_factory_fields(payload, 3)?;
+            Ok(FactoryCommand::CreateRequirementDraft {
+                product_id: fields[0].into(),
+                stable_key: fields[1].into(),
+                content: fields[2].into(),
+                idempotency_key,
+            })
+        }
+        "change" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::SubmitChangeRequest {
+                product_id: fields[0].into(),
+                summary: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        "assess" if !payload.is_empty() => Ok(FactoryCommand::AssessChangeRequest {
+            change_request_id: payload.into(),
+            idempotency_key,
+        }),
+        "plan" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::CreatePlanDraft {
+                product_id: fields[0].into(),
+                title: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        "approve-plan" if !payload.is_empty() => Ok(FactoryCommand::ApprovePlan {
+            plan_id: payload.into(),
+            idempotency_key,
+        }),
+        "cycle" if !payload.is_empty() => Ok(FactoryCommand::MaterializePlannedCycle {
+            plan_id: payload.into(),
+            idempotency_key,
+        }),
+        "pause-cycle" if !payload.is_empty() => Ok(FactoryCommand::PauseCycle {
+            cycle_id: payload.into(),
+            idempotency_key,
+        }),
+        "resume-cycle" if !payload.is_empty() => Ok(FactoryCommand::ResumeCycle {
+            cycle_id: payload.into(),
+            idempotency_key,
+        }),
+        "cancel-cycle" if !payload.is_empty() => Ok(FactoryCommand::CancelCycle {
+            cycle_id: payload.into(),
+            idempotency_key,
+        }),
+        "stage-graph" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::MaterializeStageTaskGraph {
+                cycle_id: fields[0].into(),
+                stage: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        "activate-stage" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::ActivateApprovedStage {
+                cycle_id: fields[0].into(),
+                stage: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        "stage-evidence" => {
+            let fields = split_factory_fields(payload, 3)?;
+            Ok(FactoryCommand::RecordStageEvidence {
+                cycle_id: fields[0].into(),
+                stage: fields[1].into(),
+                content_ref: fields[2].into(),
+                idempotency_key,
+            })
+        }
+        "link-evidence" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::LinkStageEvidenceToRequirement {
+                evidence_id: fields[0].into(),
+                requirement_id: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        "complete-stage" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::CompleteStage {
+                cycle_id: fields[0].into(),
+                stage: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        "readiness" if !payload.is_empty() => Ok(FactoryCommand::InspectReleaseReadiness {
+            product_id: payload.into(),
+            idempotency_key,
+        }),
+        "quality" => {
+            let fields = split_factory_fields(payload, 3)?;
+            let required = match fields[2] {
+                "required" => true,
+                "optional" => false,
+                _ => return Err(factory_usage()),
+            };
+            Ok(FactoryCommand::CreateQualityProfile {
+                product_id: fields[0].into(),
+                name: fields[1].into(),
+                required,
+                idempotency_key,
+            })
+        }
+        "rn-quality" if !payload.is_empty() => Ok(
+            FactoryCommand::EnsureReactNativeClosedTestingQualityProfile {
+                product_id: payload.into(),
+                idempotency_key,
+            },
+        ),
+        "check" => {
+            let fields = split_factory_fields(payload, 3)?;
+            let passed = match fields[1] {
+                "passed" => true,
+                "failed" => false,
+                _ => return Err(factory_usage()),
+            };
+            Ok(FactoryCommand::RecordQualityCheck {
+                profile_id: fields[0].into(),
+                passed,
+                evidence_ref: fields[2].into(),
+                idempotency_key,
+            })
+        }
+        "release" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::CreateReleaseDraft {
+                product_id: fields[0].into(),
+                build_ref: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        "approve-release" if !payload.is_empty() => {
+            Ok(FactoryCommand::ApproveClosedTestingRelease {
+                release_id: payload.into(),
+                idempotency_key,
+            })
+        }
+        "support" => {
+            let fields = split_factory_fields(payload, 3)?;
+            Ok(FactoryCommand::CreateSupportItem {
+                product_id: fields[0].into(),
+                source_kind: fields[1].into(),
+                summary: fields[2].into(),
+                idempotency_key,
+            })
+        }
+        "support-report" if !payload.is_empty() => Ok(FactoryCommand::InspectSupportOverview {
+            product_id: payload.into(),
+            idempotency_key,
+        }),
+        "triage" if !payload.is_empty() => Ok(FactoryCommand::TriageSupportItem {
+            support_item_id: payload.into(),
+            idempotency_key,
+        }),
+        "resolve-support" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::ResolveSupportItem {
+                support_item_id: fields[0].into(),
+                resolution_ref: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        "link-support" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::LinkSupportToChangeRequest {
+                support_item_id: fields[0].into(),
+                change_request_id: fields[1].into(),
+                idempotency_key,
+            })
+        }
+        _ => Err(factory_usage()),
+    }
+}
+
+fn split_factory_fields(input: &str, expected: usize) -> Result<Vec<&str>, String> {
+    let fields: Vec<&str> = input.split('|').map(str::trim).collect();
+    if fields.len() == expected && fields.iter().all(|field| !field.is_empty()) {
+        Ok(fields)
+    } else {
+        Err(factory_usage())
+    }
+}
+
+fn factory_usage() -> String {
+    "Usage: /factory workspace <name> | product <workspace_id> | <title> | mode <product_id> | quick|governed | scaffold <product_id> | intake <product_id> | answer <session_id> | <question_key> | <response> | charter <product_id> | <content> | generate <product_id> | requirement <product_id> | <stable_key> | <content> | change <product_id> | <summary> | assess <change_request_id> | plan <product_id> | <title> | approve-plan <plan_id> | cycle <plan_id> | pause-cycle <cycle_id> | resume-cycle <cycle_id> | cancel-cycle <cycle_id> | stage-graph <cycle_id> | <stage> | activate-stage <cycle_id> | <stage> | stage-evidence <cycle_id> | <stage> | <content_ref> | link-evidence <evidence_id> | <requirement_id> | complete-stage <cycle_id> | <stage> | readiness <product_id> | quality <product_id> | <name> | required|optional | rn-quality <product_id> | check <profile_id> | passed|failed | <evidence_ref> | release <product_id> | <build_ref> | approve-release <release_id> | support <product_id> | <source_kind> | <summary> | triage <support_item_id> | resolve-support <support_item_id> | <resolution_ref> | link-support <support_item_id> | <change_request_id>".into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn factory_palette_parser_builds_bounded_contract_variants() {
+        let product =
+            factory_command_from_input("product workspace-1 | React Native pilot").unwrap();
+        assert!(
+            matches!(product, FactoryCommand::CreateProductDraft { workspace_id, title, .. } if workspace_id == "workspace-1" && title == "React Native pilot")
+        );
+        let answer =
+            factory_command_from_input("answer session-1 | target_user | Independent builders")
+                .unwrap();
+        assert!(
+            matches!(answer, FactoryCommand::RecordIntakeAnswer { question_key, response, .. } if question_key == "target_user" && response == "Independent builders")
+        );
+        assert!(factory_command_from_input("charter product-1").is_err());
+        assert!(matches!(
+            factory_command_from_input("mode product-1 | quick"),
+            Ok(FactoryCommand::SetProductMode { mode: raios_contracts::FactoryMode::Quick, .. })
+        ));
+        assert!(matches!(
+            factory_command_from_input("generate product-1").unwrap(),
+            FactoryCommand::GenerateCharterDraft { product_id, .. } if product_id == "product-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("change product-1 | Add export flow").unwrap(),
+            FactoryCommand::SubmitChangeRequest { product_id, summary, .. } if product_id == "product-1" && summary == "Add export flow"
+        ));
+        assert!(matches!(
+            factory_command_from_input("link-support support-1 | change-1").unwrap(),
+            FactoryCommand::LinkSupportToChangeRequest { support_item_id, change_request_id, .. } if support_item_id == "support-1" && change_request_id == "change-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("readiness product-1").unwrap(),
+            FactoryCommand::InspectReleaseReadiness { product_id, .. } if product_id == "product-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("pause-cycle cycle-1").unwrap(),
+            FactoryCommand::PauseCycle { cycle_id, .. } if cycle_id == "cycle-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("link-evidence evidence-1 | requirement-1").unwrap(),
+            FactoryCommand::LinkStageEvidenceToRequirement { evidence_id, requirement_id, .. } if evidence_id == "evidence-1" && requirement_id == "requirement-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("rn-quality product-1").unwrap(),
+            FactoryCommand::EnsureReactNativeClosedTestingQualityProfile { product_id, .. } if product_id == "product-1"
+        ));
     }
 }

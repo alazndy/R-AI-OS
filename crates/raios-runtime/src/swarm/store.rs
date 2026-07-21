@@ -203,7 +203,8 @@ impl SwarmStore {
             match &status {
                 SwarmStatus::Initializing => {}
                 SwarmStatus::Running => {
-                    let _ = raios_core::db::mark_swarm_workflow_running(&conn, &task_id, &agent_run_id);
+                    let _ =
+                        raios_core::db::mark_swarm_workflow_running(&conn, &task_id, &agent_run_id);
                 }
                 SwarmStatus::AwaitingReview => {
                     if let Ok((artifact_id_new, approval_id_new)) =
@@ -312,7 +313,8 @@ mod tests {
         let worktree = tmp.path().join("wt").join(id.to_string());
         let now = "2026-01-01 00:00:00".to_string();
         let conn = store.connect().unwrap();
-        let workflow = raios_core::db::create_swarm_workflow(&conn, "/tmp/proj", desc, agent).unwrap();
+        let workflow =
+            raios_core::db::create_swarm_workflow(&conn, "/tmp/proj", desc, agent).unwrap();
         conn.execute(
             "INSERT INTO swarm_tasks
              (id,project_name,project_path,worktree_path,branch_name,description,agent,created_at,cp_task_id,cp_agent_run_id,cp_artifact_id,cp_approval_id)

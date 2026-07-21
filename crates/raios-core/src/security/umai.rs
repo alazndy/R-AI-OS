@@ -130,7 +130,10 @@ mod tests {
                 allowed_paths: vec![],
                 blocked_paths: vec![],
             },
-            tools: ToolsPolicy { default_action: default, rules },
+            tools: ToolsPolicy {
+                default_action: default,
+                rules,
+            },
             preflight: None,
             egress: None,
             rate_limits: None,
@@ -149,17 +152,27 @@ mod tests {
     fn denies_blocked_tool() {
         let policy = policy_with_rules(
             PolicyAction::Allow,
-            vec![ToolRule { name: "run_build".into(), action: PolicyAction::Deny, capabilities: None }],
+            vec![ToolRule {
+                name: "run_build".into(),
+                action: PolicyAction::Deny,
+                capabilities: None,
+            }],
         );
         let umai = Umai::new(Some(policy));
-        assert!(matches!(umai.check("run_build", None), UmaiDecision::Deny(_)));
+        assert!(matches!(
+            umai.check("run_build", None),
+            UmaiDecision::Deny(_)
+        ));
     }
 
     #[test]
     fn confirm_for_unknown_when_default_is_confirm() {
         let policy = policy_with_rules(PolicyAction::Confirm, vec![]);
         let umai = Umai::new(Some(policy));
-        assert!(matches!(umai.check("SomeNewCommand", None), UmaiDecision::Confirm(_)));
+        assert!(matches!(
+            umai.check("SomeNewCommand", None),
+            UmaiDecision::Confirm(_)
+        ));
     }
 
     #[test]
@@ -175,7 +188,11 @@ mod tests {
     fn rule_source_distinguishes_explicit_rule_from_default() {
         let policy = policy_with_rules(
             PolicyAction::Confirm,
-            vec![ToolRule { name: "run_build".into(), action: PolicyAction::Allow, capabilities: None }],
+            vec![ToolRule {
+                name: "run_build".into(),
+                action: PolicyAction::Allow,
+                capabilities: None,
+            }],
         );
         let umai = Umai::new(Some(policy));
         assert_eq!(umai.rule_source("run_build"), "rule");
@@ -192,9 +209,16 @@ mod tests {
     fn allow_passes_both_layers() {
         let policy = policy_with_rules(
             PolicyAction::Allow,
-            vec![ToolRule { name: "list_projects".into(), action: PolicyAction::Allow, capabilities: None }],
+            vec![ToolRule {
+                name: "list_projects".into(),
+                action: PolicyAction::Allow,
+                capabilities: None,
+            }],
         );
         let umai = Umai::new(Some(policy));
-        assert_eq!(umai.check("list_projects", Some("safe payload")), UmaiDecision::Allow);
+        assert_eq!(
+            umai.check("list_projects", Some("safe payload")),
+            UmaiDecision::Allow
+        );
     }
 }

@@ -434,7 +434,12 @@ pub(super) fn write_android_version(
     std::fs::write(&path, final_content).map_err(|e| e.to_string())
 }
 
-pub(super) fn write_version(path: &Path, project_type: &str, old: &str, new: &str) -> Result<(), String> {
+pub(super) fn write_version(
+    path: &Path,
+    project_type: &str,
+    old: &str,
+    new: &str,
+) -> Result<(), String> {
     if project_type == "Flutter" {
         let dir = path
             .parent()
@@ -685,12 +690,18 @@ mod tests {
     #[test]
     fn plist_key_not_present_returns_none() {
         let content = "<key>SomeOtherKey</key>\n<string>1.2.3</string>\n";
-        assert_eq!(extract_plist_key(content, "CFBundleShortVersionString"), None);
+        assert_eq!(
+            extract_plist_key(content, "CFBundleShortVersionString"),
+            None
+        );
     }
 
     #[test]
     fn plist_key_present_but_value_not_a_string_tag_returns_none() {
         let content = "<key>CFBundleShortVersionString</key>\n<integer>3</integer>\n";
-        assert_eq!(extract_plist_key(content, "CFBundleShortVersionString"), None);
+        assert_eq!(
+            extract_plist_key(content, "CFBundleShortVersionString"),
+            None
+        );
     }
 }

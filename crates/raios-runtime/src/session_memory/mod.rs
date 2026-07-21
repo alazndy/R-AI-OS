@@ -1,11 +1,11 @@
 mod distillation;
 mod heuristics;
 mod transcript_io;
-pub use heuristics::decision_lines_from_transcript;
-pub use transcript_io::collect_transcript;
 use distillation::{rebuild_persona, upsert_scene_block};
+pub use heuristics::decision_lines_from_transcript;
 use heuristics::{fact_slug, first_n_words, heuristic_extract_facts};
-use transcript_io::{claude_project_dir_name, extract_transcript, find_latest_conversation};
+pub use transcript_io::{collect_transcript, extract_transcript};
+use transcript_io::{claude_project_dir_name, find_latest_conversation};
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -74,9 +74,7 @@ pub fn post_session_memory_prompt(project_path: &str, session_started: SystemTim
         return;
     };
 
-    print!(
-        "\n  \x1b[36m✦\x1b[0m  memory.md güncelle?  \x1b[90m[y = oto-özet / s = atla]\x1b[0m  "
-    );
+    print!("\n  \x1b[36m✦\x1b[0m  memory.md güncelle?  \x1b[90m[y = oto-özet / s = atla]\x1b[0m  ");
     let _ = std::io::stdout().flush();
 
     let stdin = std::io::stdin();
@@ -204,13 +202,20 @@ pub fn auto_sync_agent_memory(
     }
 
     let project_key = claude_project_dir_name(project_path);
-    let Ok(conn) = raios_core::db::open_db() else { return };
+    let Ok(conn) = raios_core::db::open_db() else {
+        return;
+    };
 
     let mut written: Vec<(String, &'static str, String)> = Vec::new();
     for fact in &facts {
         // L0: immutable raw evidence
         let Ok(node_id) = raios_core::db::mem_node_add(
-            &conn, &project_key, "l0_raw", agent, &fact.raw_line, None,
+            &conn,
+            &project_key,
+            "l0_raw",
+            agent,
+            &fact.raw_line,
+            None,
         ) else {
             continue;
         };
@@ -220,19 +225,19 @@ pub fn auto_sync_agent_memory(
         let title = first_n_words(&fact.text, 8);
         let ok = raios_core::db::mem_upsert(
             &conn,
-                raios_core::db::MemUpsert {
-                    project_key: &project_key,
-                    item_type: fact.item_type,
-                    slug: &slug,
-                    title: &title,
-                    description: &fact.text,
-                    body: &fact.text,
-                    session_id: None,
-                    layer: 1,
-                    provenance: Some(raios_core::db::Provenance::Observed),
-                    confidence: None,
-                    last_used_at: None,
-                },
+            raios_core::db::MemUpsert {
+                project_key: &project_key,
+                item_type: fact.item_type,
+                slug: &slug,
+                title: &title,
+                description: &fact.text,
+                body: &fact.text,
+                session_id: None,
+                layer: 1,
+                provenance: Some(raios_core::db::Provenance::Observed),
+                confidence: None,
+                last_used_at: None,
+            },
         )
         .is_ok();
 
@@ -240,7 +245,12 @@ pub fn auto_sync_agent_memory(
         if ok {
             if let Ok(Some(item)) = raios_core::db::mem_get(&conn, &project_key, &slug) {
                 let _ = raios_core::db::mem_lineage_add(
-                    &conn, "item", &item.id, "node", &node_id, "derived_from",
+                    &conn,
+                    "item",
+                    &item.id,
+                    "node",
+                    &node_id,
+                    "derived_from",
                 );
                 written.push((slug.clone(), fact.item_type, fact.text.clone()));
             }
@@ -248,7 +258,10 @@ pub fn auto_sync_agent_memory(
     }
     let _ = upsert_scene_block(&conn, &project_key, &written);
 
-    if written.iter().any(|(_, t, _)| *t == "user" || *t == "feedback") {
+    if written
+        .iter()
+        .any(|(_, t, _)| *t == "user" || *t == "feedback")
+    {
         let _ = rebuild_persona(&conn, &project_key);
     }
 
@@ -308,12 +321,20 @@ mod tests {
         // Mirrors the fact loop body inside `auto_sync_agent_memory` exactly.
         let run_sync_tick = |conn: &rusqlite::Connection| {
             let facts = heuristic_extract_facts(TRANSCRIPT);
-            assert!(!facts.is_empty(), "fixture transcript must yield at least one fact");
+            assert!(
+                !facts.is_empty(),
+                "fixture transcript must yield at least one fact"
+            );
 
             let mut written: Vec<(String, &'static str, String)> = Vec::new();
             for fact in &facts {
                 let node_id = raios_core::db::mem_node_add(
-                    conn, key, "l0_raw", "claude", &fact.raw_line, None,
+                    conn,
+                    key,
+                    "l0_raw",
+                    "claude",
+                    &fact.raw_line,
+                    None,
                 )
                 .unwrap();
 
@@ -339,7 +360,12 @@ mod tests {
 
                 let item = raios_core::db::mem_get(conn, key, &slug).unwrap().unwrap();
                 raios_core::db::mem_lineage_add(
-                    conn, "item", &item.id, "node", &node_id, "derived_from",
+                    conn,
+                    "item",
+                    &item.id,
+                    "node",
+                    &node_id,
+                    "derived_from",
                 )
                 .unwrap();
                 written.push((slug, fact.item_type, fact.text.clone()));

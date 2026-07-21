@@ -2,9 +2,9 @@ use raios_surface_tui::app::Editor;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-use raios_surface_tui::app::{state::*, App};
 use raios_runtime::compliance;
 use raios_runtime::filebrowser::{load_file_content, save_file_content, FileEntry};
+use raios_surface_tui::app::{state::*, App};
 
 impl App {
     pub(crate) fn open_file_view(&mut self, entry: FileEntry) {
@@ -52,7 +52,14 @@ impl App {
     }
 
     pub(crate) fn jump_to_constitution_raw_edit(&mut self) {
-        let Some(target) = self.constitution.tabs.get(self.constitution.active_tab).cloned() else { return };
+        let Some(target) = self
+            .constitution
+            .tabs
+            .get(self.constitution.active_tab)
+            .cloned()
+        else {
+            return;
+        };
         let line = self.outline_cursor_line();
         let entry = FileEntry::new(target.label(), target.path().to_path_buf());
         self.open_file_edit(entry);
@@ -64,7 +71,10 @@ impl App {
 
     fn outline_cursor_line(&self) -> Option<usize> {
         use raios_surface_tui::app::state::OutlineRow;
-        let row = self.constitution.rows.get(self.constitution.outline_cursor)?;
+        let row = self
+            .constitution
+            .rows
+            .get(self.constitution.outline_cursor)?;
         let sections = &self.constitution.sections;
         Some(match *row {
             OutlineRow::Section { idx } => sections[idx].line_start,
@@ -120,18 +130,22 @@ impl App {
         let diff_lines = raios_surface_tui::app::editor::simple_diff(&old_content, &new_content);
         let added = diff_lines.iter().filter(|l| l.starts_with('+')).count();
         let removed = diff_lines.iter().filter(|l| l.starts_with('-')).count();
-        self.constitution.pending_save = Some(raios_surface_tui::app::state::PendingConstitutionSave {
-            path,
-            new_content,
-            diff_lines,
-            added,
-            removed,
-        });
+        self.constitution.pending_save =
+            Some(raios_surface_tui::app::state::PendingConstitutionSave {
+                path,
+                new_content,
+                diff_lines,
+                added,
+                removed,
+            });
     }
 
     pub(crate) fn confirm_constitution_save(&mut self) {
         if let Some(pending) = self.constitution.pending_save.take() {
-            match raios_runtime::filebrowser::save_constitution_file(&pending.path, &pending.new_content) {
+            match raios_runtime::filebrowser::save_constitution_file(
+                &pending.path,
+                &pending.new_content,
+            ) {
                 Ok(()) => {
                     self.editor.save_msg = Some("Saved!".into());
                     self.state = AppState::FileView;
@@ -192,8 +206,15 @@ impl App {
 
     pub(crate) fn begin_item_edit(&mut self) {
         use raios_surface_tui::app::state::OutlineRow;
-        let Some(&row) = self.constitution.rows.get(self.constitution.outline_cursor) else { return };
-        if let OutlineRow::Item { idx, child_idx, item_idx } = row {
+        let Some(&row) = self.constitution.rows.get(self.constitution.outline_cursor) else {
+            return;
+        };
+        if let OutlineRow::Item {
+            idx,
+            child_idx,
+            item_idx,
+        } = row
+        {
             let current = match child_idx {
                 Some(c) => self.constitution.sections[idx].children[c].items[item_idx].clone(),
                 None => self.constitution.sections[idx].items[item_idx].clone(),
@@ -210,11 +231,20 @@ impl App {
 
     pub(crate) fn commit_item_edit(&mut self) {
         use raios_surface_tui::app::state::OutlineRow;
-        let Some(target) = self.constitution.tabs.get(self.constitution.active_tab).cloned() else {
+        let Some(target) = self
+            .constitution
+            .tabs
+            .get(self.constitution.active_tab)
+            .cloned()
+        else {
             self.constitution.item_editing = false;
             return;
         };
-        let row = self.constitution.rows.get(self.constitution.outline_cursor).copied();
+        let row = self
+            .constitution
+            .rows
+            .get(self.constitution.outline_cursor)
+            .copied();
         let content = load_file_content(target.path());
         let new_text = self.constitution.item_input.clone();
         self.constitution.item_editing = false;
@@ -227,8 +257,13 @@ impl App {
             // Blindly reusing it here would overwrite the section/child heading instead of
             // the item text, so the item's real line is resolved by walking the raw content
             // with the same body-parsing rules `constitution::parse_body` uses.
-            Some(OutlineRow::Item { idx, child_idx, item_idx }) => {
-                let Some(line) = self.resolve_item_source_line(&content, idx, child_idx, item_idx) else {
+            Some(OutlineRow::Item {
+                idx,
+                child_idx,
+                item_idx,
+            }) => {
+                let Some(line) = self.resolve_item_source_line(&content, idx, child_idx, item_idx)
+                else {
                     return;
                 };
                 let mut lines: Vec<String> = content.lines().map(str::to_owned).collect();
@@ -248,7 +283,9 @@ impl App {
             // Cursor is on a section/child header row (via `n`): insert a brand-new line
             // directly under the header rather than overwriting the header itself.
             Some(OutlineRow::Section { .. }) | Some(OutlineRow::Child { .. }) => {
-                let Some(header_line) = self.outline_cursor_line() else { return };
+                let Some(header_line) = self.outline_cursor_line() else {
+                    return;
+                };
                 let mut lines: Vec<String> = content.lines().map(str::to_owned).collect();
                 let insert_at = (header_line + 1).min(lines.len());
                 lines.insert(insert_at, new_text);
@@ -261,11 +298,29 @@ impl App {
 
     pub(crate) fn delete_item_at_cursor(&mut self) {
         use raios_surface_tui::app::state::OutlineRow;
-        let Some(&row) = self.constitution.rows.get(self.constitution.outline_cursor) else { return };
-        let OutlineRow::Item { idx, child_idx, item_idx } = row else { return };
-        let Some(target) = self.constitution.tabs.get(self.constitution.active_tab).cloned() else { return };
+        let Some(&row) = self.constitution.rows.get(self.constitution.outline_cursor) else {
+            return;
+        };
+        let OutlineRow::Item {
+            idx,
+            child_idx,
+            item_idx,
+        } = row
+        else {
+            return;
+        };
+        let Some(target) = self
+            .constitution
+            .tabs
+            .get(self.constitution.active_tab)
+            .cloned()
+        else {
+            return;
+        };
         let content = load_file_content(target.path());
-        let Some(line) = self.resolve_item_source_line(&content, idx, child_idx, item_idx) else { return };
+        let Some(line) = self.resolve_item_source_line(&content, idx, child_idx, item_idx) else {
+            return;
+        };
         let mut lines: Vec<String> = content.lines().map(str::to_owned).collect();
         if line < lines.len() {
             lines.remove(line);
@@ -305,7 +360,10 @@ impl App {
                 // Skip this child header's entire body — it doesn't belong to the parent
                 // section's own `items` list (mirrors parse_body's recursive child call).
                 i += 1;
-                while i < lines.len() && !lines[i].starts_with("### ") && !lines[i].starts_with("## ") {
+                while i < lines.len()
+                    && !lines[i].starts_with("### ")
+                    && !lines[i].starts_with("## ")
+                {
                     i += 1;
                 }
                 continue;
@@ -335,8 +393,10 @@ impl App {
         let tx = self.tx.clone();
         let proj_path = project.local_path.clone();
         thread::spawn(move || {
-            tx.send(BgMsg::ProjectOpened(raios_surface_tui::app::load_project_detail_data(&proj_path)))
-                .ok();
+            tx.send(BgMsg::ProjectOpened(
+                raios_surface_tui::app::load_project_detail_data(&proj_path),
+            ))
+            .ok();
         });
     }
 
@@ -483,7 +543,10 @@ impl App {
 
     pub(crate) fn handle_handover_approval(&mut self, approved: bool) {
         if let Some(ref tx) = self.tx_daemon {
-            let msg = format!("{{\"command\":\"HumanApproval\",\"approved\":{}}}", approved);
+            let msg = format!(
+                "{{\"command\":\"HumanApproval\",\"approved\":{}}}",
+                approved
+            );
             let _ = tx.send(msg);
         }
         self.system.handover_modal = None;
@@ -491,7 +554,8 @@ impl App {
 
     pub(crate) fn launch_agent_for_active(&mut self, agent: &str) {
         if let Some(ref proj) = self.projects.active.clone() {
-            let msg = raios_surface_tui::app::events::helpers::launch_agent(agent, &proj.local_path);
+            let msg =
+                raios_surface_tui::app::events::helpers::launch_agent(agent, &proj.local_path);
             self.system.sync_status = Some(msg);
         }
         self.ui.show_launcher = false;
@@ -506,10 +570,8 @@ impl App {
                 let tx = self.tx.clone();
                 thread::spawn(move || {
                     thread::sleep(std::time::Duration::from_secs(3));
-                    tx.send(BgMsg::SyncDone(
-                        "Auto-Fix Complete: Issues resolved".into(),
-                    ))
-                    .ok();
+                    tx.send(BgMsg::SyncDone("Auto-Fix Complete: Issues resolved".into()))
+                        .ok();
                 });
             }
         }
@@ -539,12 +601,10 @@ impl App {
         };
 
         if let Some(path) = project_path {
-            self.add_activity(
-                "Agent",
-                &format!("Launching {} for project", agent),
-                "Info",
-            );
-            self.system.sync_status = Some(raios_surface_tui::app::events::helpers::launch_agent(agent, &path));
+            self.add_activity("Agent", &format!("Launching {} for project", agent), "Info");
+            self.system.sync_status = Some(raios_surface_tui::app::events::helpers::launch_agent(
+                agent, &path,
+            ));
         }
     }
 
@@ -590,16 +650,17 @@ impl App {
             if self.system.pending_change_cursor >= self.system.pending_file_changes.len()
                 && !self.system.pending_file_changes.is_empty()
             {
-                self.system.pending_change_cursor =
-                    self.system.pending_file_changes.len() - 1;
+                self.system.pending_change_cursor = self.system.pending_file_changes.len() - 1;
             }
         }
         if self.system.pending_file_changes.is_empty() {
             self.state = AppState::Dashboard;
         } else {
             let next = &self.system.pending_file_changes[self.system.pending_change_cursor];
-            self.projects.git_diff_lines =
-                raios_surface_tui::app::editor::simple_diff(&next.original_content, &next.new_content);
+            self.projects.git_diff_lines = raios_surface_tui::app::editor::simple_diff(
+                &next.original_content,
+                &next.new_content,
+            );
         }
     }
 
@@ -610,7 +671,9 @@ impl App {
                 &format!("Launching {} from MemPalace", agent),
                 "Info",
             );
-            self.system.sync_status = Some(raios_surface_tui::app::events::helpers::launch_agent(agent, &proj.path));
+            self.system.sync_status = Some(raios_surface_tui::app::events::helpers::launch_agent(
+                agent, &proj.path,
+            ));
         }
     }
 
@@ -640,8 +703,7 @@ impl App {
                     .ok();
                 });
             } else {
-                self.system.sync_status =
-                    Some("Nothing to commit (working tree clean)".into());
+                self.system.sync_status = Some("Nothing to commit (working tree clean)".into());
             }
         }
     }
@@ -684,4 +746,3 @@ fn list_marker_prefix(line: &str) -> &str {
     }
     ""
 }
-

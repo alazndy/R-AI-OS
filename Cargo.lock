@@ -2445,6 +2445,7 @@ dependencies = [
  "dirs 5.0.1",
  "notify",
  "notify-rust",
+ "raios-contracts",
  "raios-core",
  "raios-runtime",
  "raios-surface-mcp",
@@ -2469,6 +2470,7 @@ version = "3.6.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "raios-contracts",
  "raios-core",
  "raios-runtime",
  "rusqlite",

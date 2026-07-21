@@ -170,10 +170,7 @@ impl GraphStore {
                         .and_then(|id| cp_statuses.get(id))
                         .map(|status| control_status_to_node_status(status))
                         .unwrap_or_else(|| legacy_status_to_node_status(&legacy_status));
-                    let deps = graph_deps
-                        .get(&node_id)
-                        .cloned()
-                        .unwrap_or(legacy_deps);
+                    let deps = graph_deps.get(&node_id).cloned().unwrap_or(legacy_deps);
                     Ok(GraphNode {
                         id: node_id,
                         graph_id: row.get(1)?,
@@ -231,7 +228,12 @@ impl GraphStore {
                 params![graph_id, node_id, job_id],
             );
             if let Some((task_id, agent_run_id)) = ids {
-                let _ = raios_core::db::mark_control_task_running(&conn, &task_id, &agent_run_id, job_id);
+                let _ = raios_core::db::mark_control_task_running(
+                    &conn,
+                    &task_id,
+                    &agent_run_id,
+                    job_id,
+                );
             }
             self.sync_graph_status(graph_id, &conn);
             self.refresh_legacy_cache(graph_id, &conn);
@@ -247,7 +249,12 @@ impl GraphStore {
                 params![graph_id, node_id, result, job_id],
             );
             if let Some((task_id, agent_run_id)) = ids {
-                let _ = raios_core::db::mark_control_task_completed(&conn, &task_id, &agent_run_id, result);
+                let _ = raios_core::db::mark_control_task_completed(
+                    &conn,
+                    &task_id,
+                    &agent_run_id,
+                    result,
+                );
             }
             self.sync_graph_status(graph_id, &conn);
             self.refresh_legacy_cache(graph_id, &conn);
@@ -263,7 +270,8 @@ impl GraphStore {
                 params![graph_id, node_id, error],
             );
             if let Some((task_id, agent_run_id)) = ids {
-                let _ = raios_core::db::mark_control_task_failed(&conn, &task_id, &agent_run_id, error);
+                let _ =
+                    raios_core::db::mark_control_task_failed(&conn, &task_id, &agent_run_id, error);
             }
             self.sync_graph_status(graph_id, &conn);
             self.refresh_legacy_cache(graph_id, &conn);
@@ -280,7 +288,12 @@ impl GraphStore {
             "SELECT task_id, agent_run_id FROM cp_task_graph_nodes
              WHERE graph_id=?1 AND node_id=?2",
             params![graph_id, node_id],
-            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
         )
         .ok()
         .and_then(|(task_id, agent_run_id)| task_id.zip(agent_run_id))
@@ -334,12 +347,18 @@ impl GraphStore {
         }
 
         let total = statuses.len();
-        let completed = statuses.values().filter(|status| *status == "completed").count();
+        let completed = statuses
+            .values()
+            .filter(|status| *status == "completed")
+            .count();
         let failed = statuses
             .values()
             .filter(|status| matches!(status.as_str(), "failed" | "cancelled"))
             .count();
-        let running = statuses.values().filter(|status| *status == "running").count();
+        let running = statuses
+            .values()
+            .filter(|status| *status == "running")
+            .count();
 
         if failed > 0 {
             "failed".to_string()
@@ -372,12 +391,11 @@ impl GraphStore {
     }
 
     fn control_task_ids_for_graph(&self, conn: &Connection, graph_id: &str) -> Vec<String> {
-        let mut stmt = match conn.prepare(
-            "SELECT task_id FROM cp_task_graph_nodes WHERE graph_id=?1",
-        ) {
-            Ok(stmt) => stmt,
-            Err(_) => return vec![],
-        };
+        let mut stmt =
+            match conn.prepare("SELECT task_id FROM cp_task_graph_nodes WHERE graph_id=?1") {
+                Ok(stmt) => stmt,
+                Err(_) => return vec![],
+            };
 
         stmt.query_map(params![graph_id], |row| row.get::<_, String>(0))
             .ok()
@@ -404,7 +422,10 @@ impl GraphStore {
                 completed_at=excluded.completed_at",
             params![id, goal, agent, status, created_at, completed_at],
         );
-        let _ = conn.execute("DELETE FROM task_graph_nodes WHERE graph_id=?1", params![graph_id]);
+        let _ = conn.execute(
+            "DELETE FROM task_graph_nodes WHERE graph_id=?1",
+            params![graph_id],
+        );
         for node in nodes {
             let deps_json = serde_json::to_string(&node.deps).unwrap_or_else(|_| "[]".into());
             let legacy_status = match node.status {

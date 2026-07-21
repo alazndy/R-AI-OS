@@ -69,7 +69,10 @@ pub(crate) fn initial_state_request(stream: &mut TcpStream) {
     let _ = stream.write_all(b"{\"command\":\"GetState\"}\n");
 }
 
-pub(crate) fn log_entry(sender: &str, content: impl Into<String>) -> raios_surface_tui::app::state::LogEntry {
+pub(crate) fn log_entry(
+    sender: &str,
+    content: impl Into<String>,
+) -> raios_surface_tui::app::state::LogEntry {
     raios_surface_tui::app::state::LogEntry {
         timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
         sender: sender.into(),

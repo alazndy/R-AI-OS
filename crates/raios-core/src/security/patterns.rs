@@ -460,7 +460,9 @@ mod tests_scan_file {
         writeln!(f, "subprocess.Popen([binary, *candidate[1:]])").unwrap();
         let issues = scan_file(f.path());
         assert!(
-            issues.iter().all(|i| !i.title.contains("Command injection")),
+            issues
+                .iter()
+                .all(|i| !i.title.contains("Command injection")),
             "list-form subprocess.Popen (no shell=True) should not be flagged: {issues:?}"
         );
     }

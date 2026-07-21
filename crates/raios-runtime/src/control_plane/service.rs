@@ -1,8 +1,9 @@
 use chrono::Utc;
 use raios_contracts::{
-    ActiveRunDto, AuditSummaryDto, BlockedTaskDto, Command, ExploreSnapshot, GovernSnapshot,
-    LogEntryDto, NowSnapshot, PolicySummaryDto, Problem, ProjectDto, ScheduledJobDto,
-    ScoredApprovalDto, SnapshotEnvelope, ToolTraceDto, UnifiedTaskDto, WorkSnapshot,
+    ActiveRunDto, AuditSummaryDto, BlockedTaskDto, Command, ExploreSnapshot,
+    FactoryOverviewSnapshot, FactoryProductSummaryDto, GovernSnapshot, LogEntryDto, NowSnapshot,
+    PolicySummaryDto, Problem, ProjectDto, ScheduledJobDto, ScoredApprovalDto, SnapshotEnvelope,
+    ToolTraceDto, UnifiedTaskDto, WorkSnapshot,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -38,8 +39,12 @@ impl ControlActor {
         Self::local_session()
     }
 
-    fn subject(&self) -> &str {
+    pub(crate) fn subject(&self) -> &str {
         &self.subject
+    }
+
+    pub(crate) fn may_mutate_control_plane(&self) -> bool {
+        self.may_mutate_control_plane
     }
 }
 
@@ -175,12 +180,42 @@ pub fn load_work_snapshot(conn: &Connection) -> Result<WorkSnapshot, String> {
     let now_snap = load_now_snapshot(conn)?;
     let active_runs = now_snap.active_runs;
     let recent_artifacts = Vec::new();
+    let factory_row = raios_core::db::load_factory_overview(conn)
+        .map_err(|e| format!("Failed loading Product Factory overview: {e}"))?;
+    let factory_enabled = raios_core::config::Config::load()
+        .map(|config| config.factory.enabled)
+        .unwrap_or(false);
+    let factory = FactoryOverviewSnapshot {
+        enabled: factory_enabled,
+        product_count: factory_row.product_count,
+        active_cycle_count: factory_row.active_cycle_count,
+        pending_change_request_count: factory_row.pending_change_request_count,
+        open_support_items: factory_row.open_support_item_count,
+        blocking_quality_profiles: factory_row.blocking_quality_profile_count,
+        release_drafts: factory_row.release_draft_count,
+        completed_verify_stages: factory_row.completed_verify_stage_count,
+        approved_closed_testing_releases: factory_row.approved_closed_testing_release_count,
+        latest_product: factory_row
+            .latest_product
+            .map(|product| FactoryProductSummaryDto {
+                id: product.id,
+                title: product.title,
+                status: product.status,
+                mode: product.mode,
+                project_path: product.project_path,
+                stack: product.stack,
+                scaffold_state: product.scaffold_state,
+                quality_blockers: product.quality_blockers,
+                release_blockers: product.release_blockers,
+            }),
+    };
 
     Ok(WorkSnapshot {
         projects,
         tasks,
         active_runs,
         recent_artifacts,
+        factory,
     })
 }
 
@@ -601,6 +636,58 @@ mod tests {
         assert!(snap.sequence >= 1);
         assert!(!snap.timestamp.is_empty());
         assert_eq!(snap.now.active_runs.len(), 0);
+        assert_eq!(snap.work.factory.product_count, 0);
+        assert!(!snap.work.factory.enabled);
+    }
+
+    #[test]
+    fn work_snapshot_projects_read_only_factory_overview() {
+        let conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO cp_workspaces (id, name, owner_subject) VALUES ('workspace-1', 'Workspace', 'local_control_owner')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cp_factory_products (id, workspace_id, owner_subject, title, status) VALUES ('product-1', 'workspace-1', 'local_control_owner', 'Pilot', 'active')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cp_plans (id, workspace_id, product_id, title, status) VALUES ('plan-1', 'workspace-1', 'product-1', 'Pilot plan', 'planned')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cp_factory_cycles (id, product_id, plan_id, status, current_stage) VALUES ('cycle-1', 'product-1', 'plan-1', 'active', 'discover')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cp_factory_change_requests (id, product_id, requested_by, status, summary) VALUES ('change-1', 'product-1', 'local_control_owner', 'awaiting_approval', 'Change')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cp_factory_support_items (id, product_id, source_kind, status) VALUES ('support-1', 'product-1', 'manual', 'triaged')",
+            [],
+        )
+        .unwrap();
+
+        let snapshot = load_work_snapshot(&conn).unwrap();
+        assert_eq!(snapshot.factory.product_count, 1);
+        assert_eq!(snapshot.factory.active_cycle_count, 1);
+        assert_eq!(snapshot.factory.pending_change_request_count, 1);
+        assert_eq!(snapshot.factory.open_support_items, 1);
+        assert_eq!(
+            snapshot
+                .factory
+                .latest_product
+                .as_ref()
+                .map(|product| product.title.as_str()),
+            Some("Pilot")
+        );
     }
 
     #[test]

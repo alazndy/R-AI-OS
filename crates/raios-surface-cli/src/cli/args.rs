@@ -393,6 +393,16 @@ pub enum Commands {
         #[command(subcommand)]
         action: TraceAction,
     },
+    /// Read or safely execute local Product Factory lifecycle commands
+    Factory {
+        #[command(subcommand)]
+        action: FactoryAction,
+    },
+    /// Search historical agent transcripts through the read-only ANKA cache
+    Anka {
+        #[command(subcommand)]
+        action: AnkaAction,
+    },
     /// Manage the MCP/WS tool-call security policy (raios-policy.toml)
     Policy {
         #[command(subcommand)]

@@ -1,5 +1,5 @@
-use std::path::Path;
 use raios_core::security::license::{scan_licenses, LicenseReport};
+use std::path::Path;
 
 pub fn cmd_license(project: Option<String>, dev_ops: &Path, json_out: bool) {
     let path = raios_surface_cli::cli::resolve_project_path(project, dev_ops);
@@ -36,7 +36,11 @@ fn print_license_report(report: &LicenseReport) {
     if report.copyleft_count > 0 || report.unknown_count > 0 {
         println!("\n  Issues:");
         for dep in report.deps.iter().filter(|d| d.is_copyleft || d.is_unknown) {
-            let tag = if dep.is_copyleft { "COPYLEFT" } else { "UNKNOWN " };
+            let tag = if dep.is_copyleft {
+                "COPYLEFT"
+            } else {
+                "UNKNOWN "
+            };
             println!(
                 "    [{}] {} {} — {}",
                 tag, dep.name, dep.version, dep.license
@@ -143,7 +147,11 @@ pub fn cmd_rate_status(json: bool) {
                 } else {
                     println!("  Rules:");
                     for r in &cfg.rules {
-                        let label = if r.tool == "*" { "(all tools)" } else { &r.tool };
+                        let label = if r.tool == "*" {
+                            "(all tools)"
+                        } else {
+                            &r.tool
+                        };
                         println!(
                             "    {label:<30}  max {} calls/{}s",
                             r.max_calls, cfg.window_secs

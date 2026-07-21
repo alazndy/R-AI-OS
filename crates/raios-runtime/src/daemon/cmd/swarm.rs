@@ -57,19 +57,21 @@ pub async fn handle_approve_swarm_task<W: AsyncWriteExt + Unpin>(
     if let Some(id) = v["task_id"].as_str() {
         if let Some(task) = swarm_store.get(id) {
             let msg = format!("swarm merge: {}", task.task_description);
-            let r =
-                match crate::swarm::merge::merge_branch(&task.project_path, &task.branch_name, &msg)
-                {
-                    Ok(_) => {
-                        let _ = crate::swarm::worktree::remove_worktree(
-                            &task.project_path,
-                            &task.worktree_path,
-                        );
-                        swarm_store.set_status(id, crate::swarm::SwarmStatus::Merged);
-                        serde_json::json!({ "event": "SwarmTaskMerged", "task_id": id })
-                    }
-                    Err(e) => serde_json::json!({ "event": "SwarmError", "error": e.to_string() }),
-                };
+            let r = match crate::swarm::merge::merge_branch(
+                &task.project_path,
+                &task.branch_name,
+                &msg,
+            ) {
+                Ok(_) => {
+                    let _ = crate::swarm::worktree::remove_worktree(
+                        &task.project_path,
+                        &task.worktree_path,
+                    );
+                    swarm_store.set_status(id, crate::swarm::SwarmStatus::Merged);
+                    serde_json::json!({ "event": "SwarmTaskMerged", "task_id": id })
+                }
+                Err(e) => serde_json::json!({ "event": "SwarmError", "error": e.to_string() }),
+            };
             let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
         }
     }
@@ -82,12 +84,9 @@ pub async fn handle_reject_swarm_task<W: AsyncWriteExt + Unpin>(
 ) {
     if let Some(id) = v["task_id"].as_str() {
         if let Some(task) = swarm_store.get(id) {
-            let _ = crate::swarm::worktree::remove_worktree(
-                &task.project_path,
-                &task.worktree_path,
-            );
             let _ =
-                crate::swarm::merge::delete_branch(&task.project_path, &task.branch_name);
+                crate::swarm::worktree::remove_worktree(&task.project_path, &task.worktree_path);
+            let _ = crate::swarm::merge::delete_branch(&task.project_path, &task.branch_name);
             swarm_store.set_status(id, crate::swarm::SwarmStatus::Rejected);
             let r = serde_json::json!({ "event": "SwarmTaskRejected", "task_id": id });
             let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;

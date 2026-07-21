@@ -24,7 +24,10 @@ pub fn find_latest_conversation(
     // Prioritize the CCR JSONL over the primary dir — it is the authoritative transcript
     // for the current session and is always more recent than any leftover project JSONL.
     if let Ok(job_dir) = std::env::var("CLAUDE_JOB_DIR") {
-        let job_id = Path::new(&job_dir).file_name()?.to_string_lossy().into_owned();
+        let job_id = Path::new(&job_dir)
+            .file_name()?
+            .to_string_lossy()
+            .into_owned();
         let ccr_dir = Path::new(&home).join(".claude/projects/-home-alaz");
         if ccr_dir != claude_dir {
             // Search for the exact JSONL belonging to this job.
@@ -202,7 +205,9 @@ fn read_opencode_transcript(path: &Path, since_secs: u64) -> String {
         .filter_map(|line| {
             let obj = serde_json::from_str::<serde_json::Value>(line).ok()?;
             let input = obj["input"].as_str()?;
-            if input.trim().is_empty() { return None; }
+            if input.trim().is_empty() {
+                return None;
+            }
             Some(format!("User: {}", truncate(input, 600)))
         })
         .collect();
@@ -217,10 +222,7 @@ pub fn collect_transcript(agent: &str, project_path: &str, session_started: Syst
         "claude" => find_latest_conversation(project_path, Some(session_started))
             .map(|p| extract_transcript(&p))
             .unwrap_or_default(),
-        "codex" => read_codex_transcript(
-            &PathBuf::from(&home).join(".codex/history.jsonl"),
-            since,
-        ),
+        "codex" => read_codex_transcript(&PathBuf::from(&home).join(".codex/history.jsonl"), since),
         "agy" | "antigravity" => read_agy_transcript(
             &PathBuf::from(&home).join(".gemini/antigravity-cli/history.jsonl"),
             project_path,

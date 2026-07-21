@@ -29,7 +29,10 @@ pub fn fold_events(events: &[SessionEvent]) -> Vec<CanvasNode> {
                 } else {
                     let chars: Vec<char> = ev.data.chars().collect();
                     if chars.len() > DETAIL_MAX {
-                        Some(format!("{}…", chars[..DETAIL_MAX].iter().collect::<String>()))
+                        Some(format!(
+                            "{}…",
+                            chars[..DETAIL_MAX].iter().collect::<String>()
+                        ))
                     } else {
                         Some(ev.data.clone())
                     }

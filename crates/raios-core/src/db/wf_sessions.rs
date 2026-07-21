@@ -50,12 +50,7 @@ pub fn cp_session_start(
 }
 
 /// Close a wrapper session opened with cp_session_start.
-pub fn cp_session_end(
-    conn: &Connection,
-    task_id: &str,
-    run_id: &str,
-    success: bool,
-) -> Result<()> {
+pub fn cp_session_end(conn: &Connection, task_id: &str, run_id: &str, success: bool) -> Result<()> {
     cp_session_end_with_summary(conn, task_id, run_id, success, None)
 }
 
@@ -69,7 +64,11 @@ pub fn cp_session_end_with_summary(
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let run_status = if success { "succeeded" } else { "failed" };
     let task_status = if success { "completed" } else { "failed" };
-    let exit_reason = if success { "clean_exit" } else { "nonzero_exit" };
+    let exit_reason = if success {
+        "clean_exit"
+    } else {
+        "nonzero_exit"
+    };
 
     conn.execute(
         "UPDATE cp_agent_runs

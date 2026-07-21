@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::dto::{
     ActiveRunDto, ArtifactDto, AuditSummaryDto, BlockedTaskDto, LogEntryDto, PolicySummaryDto,
-    ProjectDto, ProjectHealthDto, ScoredApprovalDto, ScheduledJobDto, SearchResultDto,
+    ProjectDto, ProjectHealthDto, ScheduledJobDto, ScoredApprovalDto, SearchResultDto,
     SystemAlertDto, ToolTraceDto, UnifiedTaskDto,
 };
+use crate::factory::FactoryOverviewSnapshot;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct NowSnapshot {
@@ -20,6 +21,9 @@ pub struct WorkSnapshot {
     pub tasks: Vec<UnifiedTaskDto>,
     pub active_runs: Vec<ActiveRunDto>,
     pub recent_artifacts: Vec<ArtifactDto>,
+    /// Additive Product Factory projection. Older daemons omit this field.
+    #[serde(default)]
+    pub factory: FactoryOverviewSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

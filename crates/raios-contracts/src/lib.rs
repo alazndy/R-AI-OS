@@ -1,13 +1,19 @@
+pub mod anka;
 pub mod command;
 pub mod dto;
 pub mod event;
+pub mod factory;
 pub mod problem;
 pub mod query;
 pub mod snapshot;
 
+pub use anka::{AnkaHitDto, AnkaIndexStatusDto, AnkaSearchRequestDto};
 pub use command::Command;
 pub use dto::*;
 pub use event::Event;
+pub use factory::{
+    FactoryCommand, FactoryEvent, FactoryMode, FactoryOverviewSnapshot, FactoryProductSummaryDto, FactoryQuery,
+};
 pub use problem::Problem;
 pub use query::Query;
 pub use snapshot::{ExploreSnapshot, GovernSnapshot, NowSnapshot, SnapshotEnvelope, WorkSnapshot};

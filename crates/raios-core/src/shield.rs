@@ -131,7 +131,9 @@ mod tests {
         let shield = AgentShield::init();
         let findings = shield.preflight_report(tmp.path());
 
-        assert!(findings.iter().any(|f| f.label == ".env present" && !f.blocking));
+        assert!(findings
+            .iter()
+            .any(|f| f.label == ".env present" && !f.blocking));
     }
 
     #[test]
@@ -139,6 +141,8 @@ mod tests {
         let shield = AgentShield::init();
         let findings = shield.preflight_report(Path::new("/tmp/raios-missing-preflight-path"));
 
-        assert!(findings.iter().any(|f| f.label == "Project path" && f.blocking));
+        assert!(findings
+            .iter()
+            .any(|f| f.label == "Project path" && f.blocking));
     }
 }

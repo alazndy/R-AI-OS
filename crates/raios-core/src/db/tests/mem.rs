@@ -27,8 +27,15 @@ fn mem_schema_has_layer_nodes_lineage() {
 #[test]
 fn mem_node_add_and_lineage_round_trip() {
     let conn = in_memory();
-    let node_id =
-        mem_node_add(&conn, "-home-alaz-p", "l0_raw", "claude", "User: raw line", None).unwrap();
+    let node_id = mem_node_add(
+        &conn,
+        "-home-alaz-p",
+        "l0_raw",
+        "claude",
+        "User: raw line",
+        None,
+    )
+    .unwrap();
     assert!(!node_id.is_empty());
 
     mem_lineage_add(&conn, "item", "item-1", "node", &node_id, "derived_from").unwrap();
@@ -37,7 +44,10 @@ fn mem_node_add_and_lineage_round_trip() {
 
     let parents = mem_lineage_parents(&conn, "item", "item-1").unwrap();
     assert_eq!(parents.len(), 1);
-    assert_eq!(parents[0], ("node".to_string(), node_id, "derived_from".to_string()));
+    assert_eq!(
+        parents[0],
+        ("node".to_string(), node_id, "derived_from".to_string())
+    );
 }
 
 #[test]
@@ -124,7 +134,7 @@ fn mem_upsert_identical_or_empty_body_creates_no_revision() {
     };
     mem_upsert(&conn, up("same")).unwrap();
     mem_upsert(&conn, up("same")).unwrap(); // identical → no revision
-    mem_upsert(&conn, up("")).unwrap();     // empty → keep body, no revision
+    mem_upsert(&conn, up("")).unwrap(); // empty → keep body, no revision
 
     let item = mem_get(&conn, key, "s").unwrap().unwrap();
     assert_eq!(item.body, "same");
@@ -135,15 +145,37 @@ fn mem_upsert_identical_or_empty_body_creates_no_revision() {
 fn mem_node_add_dedupes_l0_raw_content_within_project() {
     let conn = in_memory();
     let key = "-home-alaz-p";
-    let id1 = mem_node_add(&conn, key, "l0_raw", "claude", "User: don't use npm here", None).unwrap();
-    let id2 = mem_node_add(&conn, key, "l0_raw", "claude", "User: don't use npm here", None).unwrap();
+    let id1 = mem_node_add(
+        &conn,
+        key,
+        "l0_raw",
+        "claude",
+        "User: don't use npm here",
+        None,
+    )
+    .unwrap();
+    let id2 = mem_node_add(
+        &conn,
+        key,
+        "l0_raw",
+        "claude",
+        "User: don't use npm here",
+        None,
+    )
+    .unwrap();
 
-    assert_eq!(id1, id2, "repeated l0_raw content must return the SAME node id, not a new one");
+    assert_eq!(
+        id1, id2,
+        "repeated l0_raw content must return the SAME node id, not a new one"
+    );
 
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM mem_nodes", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 1, "repeated l0_raw content must not insert a duplicate row");
+    assert_eq!(
+        count, 1,
+        "repeated l0_raw content must not insert a duplicate row"
+    );
 }
 
 #[test]
@@ -153,12 +185,18 @@ fn mem_node_add_still_inserts_fresh_revision_nodes_each_time() {
     let id1 = mem_node_add(&conn, key, "revision", "2026-07-08", "same old body", None).unwrap();
     let id2 = mem_node_add(&conn, key, "revision", "2026-07-08", "same old body", None).unwrap();
 
-    assert_ne!(id1, id2, "revision nodes must always be inserted fresh, even with identical content");
+    assert_ne!(
+        id1, id2,
+        "revision nodes must always be inserted fresh, even with identical content"
+    );
 
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM mem_nodes", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 2, "two distinct revision snapshots must both be present");
+    assert_eq!(
+        count, 2,
+        "two distinct revision snapshots must both be present"
+    );
 }
 
 #[test]
@@ -206,7 +244,10 @@ fn mem_upsert_rolls_back_revision_archiving_when_final_insert_fails() {
             last_used_at: None,
         },
     );
-    assert!(result.is_err(), "invalid item_type must fail the final insert/update");
+    assert!(
+        result.is_err(),
+        "invalid item_type must fail the final insert/update"
+    );
 
     // Body must be untouched.
     let item = mem_get(&conn, key, "rule-y").unwrap().unwrap();
@@ -220,21 +261,44 @@ fn mem_upsert_rolls_back_revision_archiving_when_final_insert_fails() {
         hist
     );
     let node_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM mem_nodes WHERE kind = 'revision'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM mem_nodes WHERE kind = 'revision'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
-    assert_eq!(node_count, 0, "orphaned revision node must not survive a rolled-back mem_upsert");
+    assert_eq!(
+        node_count, 0,
+        "orphaned revision node must not survive a rolled-back mem_upsert"
+    );
 }
 
 #[test]
 fn mem_export_groups_by_layer_persona_first() {
     let conn = in_memory();
     let key = "-home-alaz-p";
-    for (slug, layer, t) in [("persona", 3, "user"), ("scene-20260709", 2, "project"), ("feedback-abc", 1, "feedback")] {
-        mem_upsert(&conn, MemUpsert {
-            project_key: key, item_type: t, slug, title: slug,
-            description: "d", body: "b", session_id: None, layer,
-            provenance: None, confidence: None, last_used_at: None,
-        }).unwrap();
+    for (slug, layer, t) in [
+        ("persona", 3, "user"),
+        ("scene-20260709", 2, "project"),
+        ("feedback-abc", 1, "feedback"),
+    ] {
+        mem_upsert(
+            &conn,
+            MemUpsert {
+                project_key: key,
+                item_type: t,
+                slug,
+                title: slug,
+                description: "d",
+                body: "b",
+                session_id: None,
+                layer,
+                provenance: None,
+                confidence: None,
+                last_used_at: None,
+            },
+        )
+        .unwrap();
     }
     let dir = std::env::temp_dir().join(format!("raios-mem-test-{}", std::process::id()));
     let n = mem_export(&conn, key, &dir).unwrap();
@@ -279,17 +343,21 @@ fn mem_provenance_and_decay() {
     assert_eq!(item.confidence, 1.0);
 
     // Calculate effective confidence at a date 30 days after last_used_at (30-day half-life for project items)
-    let at_30_days = chrono::NaiveDateTime::parse_from_str("2026-07-01 12:00:00", "%Y-%m-%d %H:%M:%S")
-        .unwrap()
-        .and_local_timezone(chrono::Local)
-        .unwrap();
+    let at_30_days =
+        chrono::NaiveDateTime::parse_from_str("2026-07-01 12:00:00", "%Y-%m-%d %H:%M:%S")
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap();
     let eff = item.effective_confidence_at(at_30_days);
     // 1 half-life = 0.5
-    assert!((eff - 0.5).abs() < 0.01, "expected ~0.5 effective confidence after 1 half-life, got {}", eff);
+    assert!(
+        (eff - 0.5).abs() < 0.01,
+        "expected ~0.5 effective confidence after 1 half-life, got {}",
+        eff
+    );
 
     // Test mem_on_used
     mem_on_used(&conn, key, "decay-test").unwrap();
     let updated_item = mem_get(&conn, key, "decay-test").unwrap().unwrap();
     assert!(updated_item.last_used_at.as_deref().unwrap() > "2026-06-01 12:00:00");
 }
-

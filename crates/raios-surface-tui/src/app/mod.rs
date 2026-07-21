@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use raios_core::config::Config;
-use raios_runtime::filebrowser::{load_file_content, load_recent_projects, FileEntry};
-#[allow(unused_imports)]
-use raios_core::safe_io;
 #[allow(unused_imports)]
 use notify::{Config as WatchConfig, RecursiveMode, Watcher};
+use raios_core::config::Config;
+#[allow(unused_imports)]
+use raios_core::safe_io;
+use raios_runtime::filebrowser::{load_file_content, load_recent_projects, FileEntry};
 
 pub mod state;
 pub use state::*;
@@ -18,8 +18,8 @@ pub use editor::*;
 pub mod ipc;
 pub use ipc::*;
 
-pub mod ipc_support;
 pub mod ipc_events;
+pub mod ipc_support;
 
 pub mod client;
 pub mod control_navigation;
@@ -62,6 +62,10 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     PaletteItem {
         cmd: "/refresh",
         desc: "Refresh the typed control-plane system snapshot",
+    },
+    PaletteItem {
+        cmd: "/factory",
+        desc: "Factory: workspace/product/intake/answer/charter (local when enabled)",
     },
     PaletteItem {
         cmd: "/discover",
@@ -260,9 +264,7 @@ impl App {
         // Boot results (minimal check for starting)
         let master = config.master_md_path.clone();
         thread::spawn(move || {
-            let checks: Vec<(String, PathBuf)> = vec![
-                ("MASTER.md".into(), master),
-            ];
+            let checks: Vec<(String, PathBuf)> = vec![("MASTER.md".into(), master)];
             for (i, (name, path)) in checks.iter().enumerate() {
                 let pass = path.exists();
                 let done = i == checks.len() - 1;
@@ -289,8 +291,12 @@ impl App {
                 for event in runtime_rx {
                     let msg = match event {
                         raios_runtime::workers::RuntimeEvent::Projects(p) => BgMsg::Projects(p),
-                        raios_runtime::workers::RuntimeEvent::HealthReport(h) => BgMsg::HealthReport(h),
-                        raios_runtime::workers::RuntimeEvent::FileChanged(f) => BgMsg::FileChanged(f),
+                        raios_runtime::workers::RuntimeEvent::HealthReport(h) => {
+                            BgMsg::HealthReport(h)
+                        }
+                        raios_runtime::workers::RuntimeEvent::FileChanged(f) => {
+                            BgMsg::FileChanged(f)
+                        }
                         raios_runtime::workers::RuntimeEvent::SentinelUpdate {
                             project,
                             status,
@@ -352,7 +358,9 @@ impl App {
         thread::spawn(move || {
             let addr = format!("{}:42071", probe_host);
             let pass = std::net::TcpStream::connect_timeout(
-                &addr.parse().unwrap_or_else(|_| "127.0.0.1:42071".parse().unwrap()),
+                &addr
+                    .parse()
+                    .unwrap_or_else(|_| "127.0.0.1:42071".parse().unwrap()),
                 std::time::Duration::from_secs(5),
             )
             .is_ok();
@@ -460,8 +468,10 @@ impl App {
         thread::spawn(move || {
             tx.send(BgMsg::RecentProjects(load_recent_projects(&dev_ops)))
                 .ok();
-            tx.send(BgMsg::MemPalaceBuilt(raios_core::mempalace::build(&dev_ops)))
-                .ok();
+            tx.send(BgMsg::MemPalaceBuilt(raios_core::mempalace::build(
+                &dev_ops,
+            )))
+            .ok();
         });
     }
 
@@ -480,8 +490,12 @@ impl App {
             path: self.config.master_md_path.clone(),
         }];
         if let Some(ref proj) = self.projects.active {
-            for (kind, path) in raios_runtime::constitution::discover_project_constitution_files(&proj.local_path) {
-                tabs.push(raios_surface_tui::app::state::ConstitutionTarget::ProjectFile { path, kind });
+            for (kind, path) in
+                raios_runtime::constitution::discover_project_constitution_files(&proj.local_path)
+            {
+                tabs.push(
+                    raios_surface_tui::app::state::ConstitutionTarget::ProjectFile { path, kind },
+                );
             }
         }
         self.constitution.tabs = tabs;
@@ -490,16 +504,23 @@ impl App {
     }
 
     pub fn load_constitution_tab(&mut self, idx: usize) {
-        let Some(target) = self.constitution.tabs.get(idx) else { return };
+        let Some(target) = self.constitution.tabs.get(idx) else {
+            return;
+        };
         let content = raios_runtime::filebrowser::load_file_content(target.path());
         self.constitution.sections = raios_runtime::constitution::parse_sections(&content);
-        self.constitution.rows = raios_surface_tui::app::state::flatten_sections(&self.constitution.sections);
+        self.constitution.rows =
+            raios_surface_tui::app::state::flatten_sections(&self.constitution.sections);
         self.constitution.outline_cursor = 0;
         self.constitution.active_tab = idx;
     }
 
     pub fn sorted_project_indices(&self) -> Vec<usize> {
-        raios_surface_tui::app::sort_project_indices(&self.projects.list, &self.health.report, &self.projects.sort)
+        raios_surface_tui::app::sort_project_indices(
+            &self.projects.list,
+            &self.health.report,
+            &self.projects.sort,
+        )
     }
 
     pub fn project_at_cursor(&self) -> Option<&raios_core::entities::EntityProject> {
@@ -581,7 +602,9 @@ impl App {
         }
     }
 
-    pub(crate) fn get_selected_mempalace_project(&self) -> Option<raios_core::mempalace::MemProject> {
+    pub(crate) fn get_selected_mempalace_project(
+        &self,
+    ) -> Option<raios_core::mempalace::MemProject> {
         let pi = self.mempalace.proj_cursor?;
         self.mempalace
             .rooms

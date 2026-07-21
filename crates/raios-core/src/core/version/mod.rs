@@ -103,8 +103,8 @@ pub fn changelog(dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::semver::*;
+    use super::*;
 
     use std::fs;
 

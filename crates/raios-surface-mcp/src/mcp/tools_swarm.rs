@@ -12,8 +12,9 @@ impl McpServer {
             .ok_or("missing project_path")?;
         let description = args["description"].as_str().ok_or("missing description")?;
         let agent = args["agent"].as_str().unwrap_or("claude");
-        let store =
-            raios_runtime::swarm::store::SwarmStore::new(raios_runtime::swarm::store::SwarmStore::default_path());
+        let store = raios_runtime::swarm::store::SwarmStore::new(
+            raios_runtime::swarm::store::SwarmStore::default_path(),
+        );
         match store.create(
             project_name,
             std::path::Path::new(project_path),
@@ -28,8 +29,9 @@ impl McpServer {
     }
 
     pub(super) fn tool_list_swarm_tasks(&self) -> Result<Value, String> {
-        let store =
-            raios_runtime::swarm::store::SwarmStore::new(raios_runtime::swarm::store::SwarmStore::default_path());
+        let store = raios_runtime::swarm::store::SwarmStore::new(
+            raios_runtime::swarm::store::SwarmStore::default_path(),
+        );
         let tasks = store.list_active();
         let text = if tasks.is_empty() {
             "No active swarm tasks.".to_string()
@@ -53,13 +55,17 @@ impl McpServer {
 
     pub(super) fn tool_approve_swarm_task(&self, args: &Value) -> Result<Value, String> {
         let task_id = args["task_id"].as_str().ok_or("missing task_id")?;
-        let store =
-            raios_runtime::swarm::store::SwarmStore::new(raios_runtime::swarm::store::SwarmStore::default_path());
+        let store = raios_runtime::swarm::store::SwarmStore::new(
+            raios_runtime::swarm::store::SwarmStore::default_path(),
+        );
         match store.get(task_id) {
             Some(task) => {
                 let msg = format!("swarm merge: {}", task.task_description);
-                match raios_runtime::swarm::merge::merge_branch(&task.project_path, &task.branch_name, &msg)
-                {
+                match raios_runtime::swarm::merge::merge_branch(
+                    &task.project_path,
+                    &task.branch_name,
+                    &msg,
+                ) {
                     Ok(_) => {
                         let _ = raios_runtime::swarm::worktree::remove_worktree(
                             &task.project_path,

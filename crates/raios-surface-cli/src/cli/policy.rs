@@ -15,7 +15,8 @@ fn cmd_simulate(tool: String, args: Option<String>, json: bool) {
     let decision = umai.check(&tool, args.as_deref());
     let rule_source = umai.rule_source(&tool);
     let caps = raios_core::security::capabilities::resolve(&tool, umai.tool_capabilities(&tool));
-    let is_path_resolving = raios_core::security::capabilities::PATH_RESOLVING_TOOLS.contains(&tool.as_str());
+    let is_path_resolving =
+        raios_core::security::capabilities::PATH_RESOLVING_TOOLS.contains(&tool.as_str());
 
     let (decision_label, reason): (&str, Option<String>) = match &decision {
         raios_core::security::UmaiDecision::Allow => ("allow", None),
@@ -52,7 +53,11 @@ fn cmd_simulate(tool: String, args: Option<String>, json: bool) {
         _ => ("✗", "\x1b[31m"),
     };
     println!();
-    println!("  {color}{icon} {}\x1b[0m  →  {}", tool, decision_label.to_uppercase());
+    println!(
+        "  {color}{icon} {}\x1b[0m  →  {}",
+        tool,
+        decision_label.to_uppercase()
+    );
     if let Some(r) = &reason {
         println!("    reason: {r}");
     }
@@ -76,7 +81,10 @@ fn cmd_caps(tool: Option<String>, json: bool) {
     let umai = raios_core::security::Umai::from_default_policy();
     let tools: Vec<String> = match &tool {
         Some(t) => vec![t.clone()],
-        None => raios_core::security::capabilities::ALL_TOOLS.iter().map(|s| s.to_string()).collect(),
+        None => raios_core::security::capabilities::ALL_TOOLS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
     };
 
     if json {
@@ -102,7 +110,11 @@ fn cmd_caps(tool: Option<String>, json: bool) {
     println!();
     for t in &tools {
         let override_caps = umai.tool_capabilities(t);
-        let source = if override_caps.is_some() { "toml" } else { "default" };
+        let source = if override_caps.is_some() {
+            "toml"
+        } else {
+            "default"
+        };
         let caps = raios_core::security::capabilities::resolve(t, override_caps);
         println!(
             "  {:<32} fs_read={:<6} fs_write={:<6} network={:<20} exec={:<5} [{source}]",
@@ -182,7 +194,9 @@ fn print_suggestions_human(s: &raios_core::security::PolicySuggestions, min_coun
         }
     }
     if !s.needs_review.is_empty() {
-        println!("\n  \x1b[33mNeeds human review\x1b[0m (frequently hits confirm — not auto-suggested):");
+        println!(
+            "\n  \x1b[33mNeeds human review\x1b[0m (frequently hits confirm — not auto-suggested):"
+        );
         for n in &s.needs_review {
             println!(
                 "    {}   \x1b[90m({}/{} confirm decisions)\x1b[0m",
@@ -223,12 +237,21 @@ fn apply_suggestions(s: &raios_core::security::PolicySuggestions, json: bool) {
         Ok(()) => {
             let count = s.allow.len() + s.deny.len();
             if json {
-                println!("{{\"applied\":true,\"rules\":{count},\"path\":\"{}\"}}", path.display());
+                println!(
+                    "{{\"applied\":true,\"rules\":{count},\"path\":\"{}\"}}",
+                    path.display()
+                );
             } else {
-                println!("  \x1b[32m✓\x1b[0m  Applied {count} rule(s) to {}", path.display());
+                println!(
+                    "  \x1b[32m✓\x1b[0m  Applied {count} rule(s) to {}",
+                    path.display()
+                );
             }
         }
-        Err(e) => eprintln!("  \x1b[31m✗\x1b[0m  Failed to write {}: {e}", path.display()),
+        Err(e) => eprintln!(
+            "  \x1b[31m✗\x1b[0m  Failed to write {}: {e}",
+            path.display()
+        ),
     }
 }
 
@@ -238,7 +261,10 @@ fn cmd_show(json: bool) {
             if json {
                 println!("{}", serde_json::to_string_pretty(&cfg).unwrap_or_default());
             } else {
-                println!("\n  Default action: {}\n", cfg.tools.default_action.as_str());
+                println!(
+                    "\n  Default action: {}\n",
+                    cfg.tools.default_action.as_str()
+                );
                 for r in &cfg.tools.rules {
                     println!("  {:<32} {}", r.name, r.action.as_str());
                 }

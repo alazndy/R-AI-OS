@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
+use raios_core::requirements::Requirement;
 use raios_runtime::discovery::{AgentInfo, SkillInfo};
 use raios_runtime::filebrowser::{AgentRuleGroup, FileEntry, RecentProject};
 use raios_runtime::indexer::{ProjectIndex, SearchResult};
-use raios_core::requirements::Requirement;
 
 // ─── Extension State ──────────────────────────────────────────────────────────
 
@@ -282,7 +282,9 @@ pub struct PortfolioStats {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConstitutionTarget {
-    Global { path: PathBuf },
+    Global {
+        path: PathBuf,
+    },
     ProjectFile {
         path: PathBuf,
         kind: raios_runtime::constitution::ProjectFileKind,
@@ -307,8 +309,13 @@ impl ConstitutionTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutlineRow {
-    Section { idx: usize },
-    Child { idx: usize, child_idx: usize },
+    Section {
+        idx: usize,
+    },
+    Child {
+        idx: usize,
+        child_idx: usize,
+    },
     Item {
         idx: usize,
         child_idx: Option<usize>,
@@ -323,7 +330,11 @@ pub fn flatten_sections(
     for (idx, sec) in sections.iter().enumerate() {
         rows.push(OutlineRow::Section { idx });
         for item_idx in 0..sec.items.len() {
-            rows.push(OutlineRow::Item { idx, child_idx: None, item_idx });
+            rows.push(OutlineRow::Item {
+                idx,
+                child_idx: None,
+                item_idx,
+            });
         }
         for (child_idx, child) in sec.children.iter().enumerate() {
             rows.push(OutlineRow::Child { idx, child_idx });

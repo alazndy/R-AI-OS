@@ -1,17 +1,17 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use raios_core::config::Config;
+use raios_core::requirements::check_requirements;
 use raios_runtime::filebrowser::{
     discover_all_agent_rules, get_agent_config_files, get_master_rule_files, get_mempalace_files,
     get_policy_files, load_recent_projects,
 };
-use raios_core::requirements::check_requirements;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use raios_surface_tui::app::{state::*, App};
 use raios_runtime::compliance;
 use raios_runtime::filebrowser::load_file_content;
+use raios_surface_tui::app::{state::*, App};
 
 impl App {
     pub fn handle_bg_msg(&mut self, msg: BgMsg) {
@@ -195,21 +195,31 @@ impl App {
                 message,
             } => self.handle_git_action_done(project, action, ok, message),
             BgMsg::FileChanged(path) => self.handle_file_changed(path),
-            BgMsg::AgentStarted { agent_id, name, project_path } => {
-                self.system.active_agents.push(raios_runtime::daemon::proxy::AgentProcess {
-                    id: uuid::Uuid::parse_str(&agent_id).unwrap_or_default(),
-                    name: name.clone(),
-                    status: "Running".into(),
-                    started_at: std::time::SystemTime::now(),
-                    logs: vec![],
-                });
+            BgMsg::AgentStarted {
+                agent_id,
+                name,
+                project_path,
+            } => {
+                self.system
+                    .active_agents
+                    .push(raios_runtime::daemon::proxy::AgentProcess {
+                        id: uuid::Uuid::parse_str(&agent_id).unwrap_or_default(),
+                        name: name.clone(),
+                        status: "Running".into(),
+                        started_at: std::time::SystemTime::now(),
+                        logs: vec![],
+                    });
                 self.add_activity(
                     "Agent",
                     &format!("{} started in {}", name, project_path),
                     "Info",
                 );
             }
-            BgMsg::AgentStopped { agent_id, name, final_status } => {
+            BgMsg::AgentStopped {
+                agent_id,
+                name,
+                final_status,
+            } => {
                 if let Ok(id) = uuid::Uuid::parse_str(&agent_id) {
                     if let Some(agent) = self.system.active_agents.iter_mut().find(|a| a.id == id) {
                         agent.status = final_status.clone();
@@ -277,7 +287,8 @@ impl App {
 
         self.setup.requirements = check_requirements();
         self.setup.fields = vec![
-            SetupField::new("Dev Ops Path", "Root workspace").with_detected(detected.dev_ops.clone()),
+            SetupField::new("Dev Ops Path", "Root workspace")
+                .with_detected(detected.dev_ops.clone()),
             SetupField::new("MASTER.md Path", "Agent constitution")
                 .with_detected(detected.master_md.clone()),
             SetupField::new("Skills Path", ".agents/skills").with_detected(detected.skills.clone()),
@@ -297,7 +308,10 @@ impl App {
 
     fn handle_transition_to_dashboard(&mut self) {
         self.state = AppState::Dashboard;
-        if let Err(problem) = self.client.send_query(raios_contracts::Query::GetSystemSnapshot) {
+        if let Err(problem) = self
+            .client
+            .send_query(raios_contracts::Query::GetSystemSnapshot)
+        {
             self.store.last_error = Some(problem.message);
         }
         self.system.graphify_script =
@@ -305,19 +319,30 @@ impl App {
         let tx = self.tx.clone();
         let cfg = self.config.clone();
         thread::spawn(move || {
-            tx.send(BgMsg::RecentProjects(load_recent_projects(&cfg.dev_ops_path)))
+            tx.send(BgMsg::RecentProjects(load_recent_projects(
+                &cfg.dev_ops_path,
+            )))
+            .ok();
+            tx.send(BgMsg::Agents(raios_runtime::discovery::discover_agents()))
                 .ok();
-            tx.send(BgMsg::Agents(raios_runtime::discovery::discover_agents())).ok();
-            tx.send(BgMsg::Skills(raios_runtime::discovery::discover_skills(&cfg.skills_path)))
-                .ok();
-            tx.send(BgMsg::MemPalaceFiles(get_mempalace_files(&cfg.dev_ops_path)))
-                .ok();
-            tx.send(BgMsg::MasterFiles(get_master_rule_files(&cfg.master_md_path)))
-                .ok();
+            tx.send(BgMsg::Skills(raios_runtime::discovery::discover_skills(
+                &cfg.skills_path,
+            )))
+            .ok();
+            tx.send(BgMsg::MemPalaceFiles(get_mempalace_files(
+                &cfg.dev_ops_path,
+            )))
+            .ok();
+            tx.send(BgMsg::MasterFiles(get_master_rule_files(
+                &cfg.master_md_path,
+            )))
+            .ok();
             tx.send(BgMsg::AgentFiles(get_agent_config_files())).ok();
             tx.send(BgMsg::PolicyFiles(get_policy_files())).ok();
-            tx.send(BgMsg::AgentRuleGroups(discover_all_agent_rules(&cfg.dev_ops_path)))
-                .ok();
+            tx.send(BgMsg::AgentRuleGroups(discover_all_agent_rules(
+                &cfg.dev_ops_path,
+            )))
+            .ok();
             let discovered = raios_core::entities::discover_entities(&cfg.dev_ops_path);
             let count = discovered.len();
             tx.send(BgMsg::Projects(discovered)).ok();
@@ -327,8 +352,10 @@ impl App {
                 content: format!("Discovery: Found {} projects in total", count),
             }))
             .ok();
-            tx.send(BgMsg::MemPalaceBuilt(raios_core::mempalace::build(&cfg.dev_ops_path)))
-                .ok();
+            tx.send(BgMsg::MemPalaceBuilt(raios_core::mempalace::build(
+                &cfg.dev_ops_path,
+            )))
+            .ok();
             if let Ok(tasks) = raios_runtime::tasks::load_tasks(&cfg.dev_ops_path) {
                 tx.send(BgMsg::Tasks(tasks)).ok();
             }
@@ -394,15 +421,20 @@ impl App {
         let tx = self.tx.clone();
         let cfg = self.config.clone();
         thread::spawn(move || {
-            tx.send(BgMsg::RecentProjects(load_recent_projects(&cfg.dev_ops_path)))
-                .ok();
-            tx.send(BgMsg::Agents(raios_runtime::discovery::discover_agents())).ok();
-            tx.send(BgMsg::MemPalaceFiles(raios_runtime::filebrowser::get_mempalace_files(
+            tx.send(BgMsg::RecentProjects(load_recent_projects(
                 &cfg.dev_ops_path,
             )))
             .ok();
-            tx.send(BgMsg::MemPalaceBuilt(raios_core::mempalace::build(&cfg.dev_ops_path)))
+            tx.send(BgMsg::Agents(raios_runtime::discovery::discover_agents()))
                 .ok();
+            tx.send(BgMsg::MemPalaceFiles(
+                raios_runtime::filebrowser::get_mempalace_files(&cfg.dev_ops_path),
+            ))
+            .ok();
+            tx.send(BgMsg::MemPalaceBuilt(raios_core::mempalace::build(
+                &cfg.dev_ops_path,
+            )))
+            .ok();
         });
     }
 
@@ -411,9 +443,12 @@ impl App {
         approval: raios_runtime::daemon::state::FileChangeApproval,
     ) {
         self.system.pending_file_changes.push(approval.clone());
-        self.system.pending_change_cursor = self.system.pending_file_changes.len().saturating_sub(1);
-        self.projects.git_diff_lines =
-            raios_surface_tui::app::editor::simple_diff(&approval.original_content, &approval.new_content);
+        self.system.pending_change_cursor =
+            self.system.pending_file_changes.len().saturating_sub(1);
+        self.projects.git_diff_lines = raios_surface_tui::app::editor::simple_diff(
+            &approval.original_content,
+            &approval.new_content,
+        );
         self.state = AppState::GitDiffView;
         self.add_activity(
             "Agent",

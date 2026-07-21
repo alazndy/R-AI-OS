@@ -52,12 +52,9 @@ fn golden_render_work_route() {
         .unwrap();
 
     let rendered = get_rendered_text(&terminal);
-    assert!(
-        rendered.contains("Projects")
-            || rendered.contains("Tasks")
-            || rendered.contains("Artifacts"),
-        "Work route output missing expected titles"
-    );
+    assert!(rendered.contains("Projects") || rendered.contains("Tasks"));
+    assert!(rendered.contains("Product Factory"));
+    assert!(rendered.contains("Enable in config"));
 }
 
 #[test]

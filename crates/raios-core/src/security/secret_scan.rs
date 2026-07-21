@@ -16,6 +16,11 @@ static SECRET_PATTERNS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::
         (r"sk-[A-Za-z0-9]{20,}", "OpenAI-style API key"),
         (r"gh[pousr]_[A-Za-z0-9]{36,}", "GitHub token"),
         (r"github_pat_[A-Za-z0-9_]{20,}", "GitHub fine-grained PAT"),
+        (r"(?i)bearer\s+[A-Za-z0-9._-]{20,}", "bearer token"),
+        (
+            r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
+            "JSON web token",
+        ),
         (
             r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----",
             "private key block",
@@ -45,6 +50,16 @@ pub fn looks_like_secret(text: &str) -> Option<&'static str> {
         .map(|(_, label)| *label)
 }
 
+/// Replaces every recognized credential-shaped value before it can be written
+/// to an ANKA transcript cache. This is intentionally conservative: it is a
+/// safety net, not a claim of complete secret detection.
+pub fn redact_secrets(text: &str) -> String {
+    SECRET_PATTERNS.iter().fold(text.to_string(), |redacted, (re, label)| {
+        re.replace_all(&redacted, format!("[REDACTED:{label}]").as_str())
+            .into_owned()
+    })
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -61,7 +76,10 @@ mod tests {
 
     #[test]
     fn detects_aws_key() {
-        assert_eq!(looks_like_secret("AKIAABCDEFGHIJKLMNOP"), Some("AWS access key"));
+        assert_eq!(
+            looks_like_secret("AKIAABCDEFGHIJKLMNOP"),
+            Some("AWS access key")
+        );
     }
 
     #[test]
@@ -82,6 +100,24 @@ mod tests {
 
     #[test]
     fn clean_text_passes() {
-        assert_eq!(looks_like_secret("skeleton ready, implement auth handlers"), None);
+        assert_eq!(
+            looks_like_secret("skeleton ready, implement auth handlers"),
+            None
+        );
+    }
+
+    #[test]
+    fn redacts_recognized_secrets_without_dropping_context() {
+        let text = "deploy with token=abcdefghijklmno and keep the release notes";
+        let redacted = redact_secrets(text);
+        assert!(!redacted.contains("abcdefghijklmno"));
+        assert!(redacted.contains("[REDACTED:key/secret/password/token assignment]"));
+        assert!(redacted.contains("keep the release notes"));
+    }
+
+    #[test]
+    fn redacts_bearer_and_json_web_tokens() {
+        let text = "Bearer abcdefghijklmnopqrstuvwxyz.abcdefghijklmno.abcdefghijklmnop";
+        assert!(redact_secrets(text).contains("REDACTED"));
     }
 }

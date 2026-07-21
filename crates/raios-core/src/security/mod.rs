@@ -24,18 +24,22 @@ pub use umai::{Umai, UmaiDecision};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub use capabilities::{
+    check_fs_capability, check_network_capability, default_for as default_capabilities_for,
+};
 pub use egress::EgressFilter;
 pub use file_perms::harden_file_perms;
 pub use hooks::{run_hook, HookOutcome, HookPayload};
 pub use license::{scan_licenses, LicenseDep, LicenseReport};
 pub use patterns::{scan_file, WATCHED_EXTS};
-pub use capabilities::{check_fs_capability, check_network_capability, default_for as default_capabilities_for};
 pub use policy::{HubPolicy, PolicyAction, PolicyConfig, ToolCapabilities};
-pub use policy_suggest::{render_rules_toml, suggest_policy_rules, PolicySuggestion, PolicySuggestions, ReviewNote};
+pub use policy_suggest::{
+    render_rules_toml, suggest_policy_rules, PolicySuggestion, PolicySuggestions, ReviewNote,
+};
 pub use rate_limiter::{RateLimitConfig, RateLimiter, ToolRateStatus};
 pub use sandbox::{is_path_safe, validate_path};
 pub use scanner::{scan_project, scan_project_fast};
-pub use secret_scan::looks_like_secret;
+pub use secret_scan::{looks_like_secret, redact_secrets};
 pub use verify_chain::{record_audit_event, record_tool_decision, verify_chain};
 
 // ─── Types ───────────────────────────────────────────────────────────────────

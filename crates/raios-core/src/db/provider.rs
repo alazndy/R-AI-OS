@@ -114,7 +114,10 @@ impl ProviderFailureKind {
             || lower.contains("context length")
         {
             Self::Quota
-        } else if lower.contains("timeout") || lower.contains("timed out") || lower.contains("deadline") {
+        } else if lower.contains("timeout")
+            || lower.contains("timed out")
+            || lower.contains("deadline")
+        {
             Self::Timeout
         } else if lower.contains("sandbox")
             || lower.contains("permission denied")
@@ -126,7 +129,10 @@ impl ProviderFailureKind {
             || lower.contains("invalid argument")
         {
             Self::ToolError
-        } else if lower.contains("rejected") || lower.contains("declined") || lower.contains("human") {
+        } else if lower.contains("rejected")
+            || lower.contains("declined")
+            || lower.contains("human")
+        {
             Self::HumanRejection
         } else if lower.contains("unavailable")
             || lower.contains("503")
@@ -140,7 +146,10 @@ impl ProviderFailureKind {
     }
 }
 
-pub fn cp_upsert_provider_capabilities(conn: &Connection, caps: &ProviderCapabilities) -> Result<()> {
+pub fn cp_upsert_provider_capabilities(
+    conn: &Connection,
+    caps: &ProviderCapabilities,
+) -> Result<()> {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute(
         "INSERT INTO cp_provider_capabilities
@@ -303,4 +312,3 @@ pub fn cp_route_to_capable_provider(
     }
     Ok(None)
 }
-

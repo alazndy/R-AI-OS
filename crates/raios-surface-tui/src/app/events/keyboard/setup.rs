@@ -1,8 +1,8 @@
-use raios_surface_tui::app::state::{AppState, BgMsg};
-use raios_surface_tui::app::App;
-use raios_core::config::Config;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
+use raios_core::config::Config;
+use raios_surface_tui::app::state::{AppState, BgMsg};
+use raios_surface_tui::app::App;
 use std::path::PathBuf;
 
 impl App {
@@ -42,7 +42,11 @@ impl App {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 // AgentWrapper has 2 choices (0 = All, 1 = Skip), cap at 1
-                let max = if self.wizard.step == WizardStep::AgentWrapper { 1 } else { usize::MAX };
+                let max = if self.wizard.step == WizardStep::AgentWrapper {
+                    1
+                } else {
+                    usize::MAX
+                };
                 if self.wizard.field_cursor < max {
                     self.wizard.field_cursor += 1;
                 }
@@ -75,6 +79,7 @@ impl App {
                                 github_user: String::new(),
                                 agent_wrapper_enabled: self.wizard.agent_wrapper_choice == 0,
                                 daemon: Default::default(),
+                                factory: Default::default(),
                             };
                             let _ = cfg.save();
                             self.config = cfg;
@@ -101,12 +106,8 @@ impl App {
             // [Tab] — skip/unskip agent steps
             KeyCode::Tab => match self.wizard.step {
                 WizardStep::Claude => self.wizard.skip_claude = !self.wizard.skip_claude,
-                WizardStep::Codex => {
-                    self.wizard.skip_antigravity = !self.wizard.skip_antigravity
-                }
-                WizardStep::OpenCode => {
-                    self.wizard.skip_opencode = !self.wizard.skip_opencode
-                }
+                WizardStep::Codex => self.wizard.skip_antigravity = !self.wizard.skip_antigravity,
+                WizardStep::OpenCode => self.wizard.skip_opencode = !self.wizard.skip_opencode,
                 _ => {
                     self.wizard_advance_step();
                 }

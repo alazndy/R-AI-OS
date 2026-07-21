@@ -66,8 +66,6 @@ pub fn discover_skills(skills_path: &Path) -> Vec<SkillInfo> {
         scan_dir_for_skills(entries, "Local", &mut skills);
     }
 
-
-
     skills
 }
 

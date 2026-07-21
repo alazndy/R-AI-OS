@@ -1,9 +1,9 @@
+use crate::agent_runner::ext_command_from_task_description;
+use crate::daemon::state::DaemonState;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
-use crate::daemon::state::DaemonState;
-use crate::agent_runner::ext_command_from_task_description;
 
 pub async fn start_scheduler_worker(
     _state: Arc<RwLock<DaemonState>>,
@@ -61,7 +61,8 @@ pub async fn start_scheduler_worker(
                         }
                         None => crate::agent_runner::spawn_agent_detached(&agent, &prompt, None),
                     }
-                }).await;
+                })
+                .await;
 
                 let conn = match raios_core::db::open_db() {
                     Ok(c) => c,
@@ -73,7 +74,8 @@ pub async fn start_scheduler_worker(
 
                 match spawn_result {
                     Ok(Ok(pid)) => {
-                        let _ = raios_core::db::cp_scheduled_job_mark_fired(&conn, &job_id, interval);
+                        let _ =
+                            raios_core::db::cp_scheduled_job_mark_fired(&conn, &job_id, interval);
                         let evt = serde_json::json!({
                             "event": "ScheduledJobFired",
                             "id": job_id,
@@ -82,7 +84,10 @@ pub async fn start_scheduler_worker(
                             "pid": pid
                         });
                         let _ = tx_clone.send(evt.to_string());
-                        println!("[Scheduler] Fired '{}' → {} (pid {pid})", job.title, job.agent);
+                        println!(
+                            "[Scheduler] Fired '{}' → {} (pid {pid})",
+                            job.title, job.agent
+                        );
                     }
                     Ok(Err(e)) => {
                         let _ = raios_core::db::cp_scheduled_job_revert_firing(&conn, &job_id);

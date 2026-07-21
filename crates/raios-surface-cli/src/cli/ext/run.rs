@@ -1,7 +1,7 @@
+use super::ExtensionManifest;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use super::ExtensionManifest;
 
 pub(super) fn resolve_python(ext_path: &Path, manifest: &ExtensionManifest) -> PathBuf {
     let rel = manifest
@@ -92,8 +92,7 @@ pub(super) fn service_status(ext_path: &Path, manifest: &ExtensionManifest) {
     let vault = std::env::var("OBSIDIAN_VAULT_PATH")
         .or_else(|_| {
             let env_path = ext_path.join(".env");
-            read_env_key(&env_path, "OBSIDIAN_VAULT_PATH")
-                .ok_or(std::env::VarError::NotPresent)
+            read_env_key(&env_path, "OBSIDIAN_VAULT_PATH").ok_or(std::env::VarError::NotPresent)
         })
         .unwrap_or_default();
 
@@ -113,7 +112,10 @@ pub(super) fn service_status(ext_path: &Path, manifest: &ExtensionManifest) {
                 .collect();
             reports.sort();
             if let Some(latest) = reports.last() {
-                println!("  Last report:  {}", latest.trim_end_matches("-atc-radar.md"));
+                println!(
+                    "  Last report:  {}",
+                    latest.trim_end_matches("-atc-radar.md")
+                );
             } else {
                 println!("  Last report:  none found in vault");
             }

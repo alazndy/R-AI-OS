@@ -200,15 +200,26 @@ fn table_columns(conn: &Connection, table: &str) -> Vec<String> {
 fn task_graph_nodes_has_control_plane_link_columns() {
     let conn = in_memory();
     let cols = table_columns(&conn, "task_graph_nodes");
-    assert!(cols.contains(&"cp_task_id".to_string()), "columns: {cols:?}");
-    assert!(cols.contains(&"cp_agent_run_id".to_string()), "columns: {cols:?}");
+    assert!(
+        cols.contains(&"cp_task_id".to_string()),
+        "columns: {cols:?}"
+    );
+    assert!(
+        cols.contains(&"cp_agent_run_id".to_string()),
+        "columns: {cols:?}"
+    );
 }
 
 #[test]
 fn swarm_tasks_has_control_plane_link_columns() {
     let conn = in_memory();
     let cols = table_columns(&conn, "swarm_tasks");
-    for expected in ["cp_task_id", "cp_agent_run_id", "cp_artifact_id", "cp_approval_id"] {
+    for expected in [
+        "cp_task_id",
+        "cp_agent_run_id",
+        "cp_artifact_id",
+        "cp_approval_id",
+    ] {
         assert!(cols.contains(&expected.to_string()), "columns: {cols:?}");
     }
 }
@@ -250,7 +261,10 @@ fn control_plane_tables_exist() {
 fn approvals_have_an_owner_and_owner_status_index() {
     let conn = in_memory();
     let cols = table_columns(&conn, "cp_approvals");
-    assert!(cols.contains(&"owner_subject".to_string()), "columns: {cols:?}");
+    assert!(
+        cols.contains(&"owner_subject".to_string()),
+        "columns: {cols:?}"
+    );
 
     let mut stmt = conn.prepare("PRAGMA index_list(cp_approvals)").unwrap();
     let indexes: Vec<String> = stmt

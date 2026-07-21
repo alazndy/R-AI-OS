@@ -33,7 +33,9 @@ fn resolve_report(msg: Option<String>, report_path: Option<PathBuf>) -> HandoffR
             std::process::exit(1);
         }
         (None, None) => {
-            eprintln!("Handoff failed: either --msg <text> or --report <path-to-json> is required.");
+            eprintln!(
+                "Handoff failed: either --msg <text> or --report <path-to-json> is required."
+            );
             std::process::exit(1);
         }
         (Some(msg), None) => HandoffReport {
@@ -83,7 +85,8 @@ pub(super) fn cmd_handoff(
         std::process::exit(1);
     }
 
-    let from_agent = std::env::var("RAIOS_AGENT_IDENTITY").unwrap_or_else(|_| "claude_kaira".into());
+    let from_agent =
+        std::env::var("RAIOS_AGENT_IDENTITY").unwrap_or_else(|_| "claude_kaira".into());
     let to_agent = to.as_str();
     let status_str = status.as_str();
     let project_path_str = project_path.to_string_lossy();

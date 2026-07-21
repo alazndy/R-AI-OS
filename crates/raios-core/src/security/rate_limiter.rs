@@ -270,7 +270,7 @@ mod tests {
         assert!(rl.check("git_commit").is_ok());
         assert!(rl.check("git_commit").is_ok());
         assert!(rl.check("git_commit").is_err()); // limited to 2
-        // other tools still get default 100
+                                                  // other tools still get default 100
         assert!(rl.check("list_projects").is_ok());
     }
 

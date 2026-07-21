@@ -357,7 +357,11 @@ mod tests {
             .into_iter()
             .filter(|r| std::path::Path::new(&r.path).starts_with(scope))
             .collect();
-        filtered.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        filtered.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         filtered
     }
 
@@ -369,7 +373,8 @@ mod tests {
             make_result("/home/alaz/dev/core/R-AI-OS/README.md", 0.7),
         ];
         // No trailing slash — exactly how a real caller (cwd from std::env::current_dir()) would pass it.
-        let filtered = filter_by_scope(results, std::path::Path::new("/home/alaz/dev/core/R-AI-OS"));
+        let filtered =
+            filter_by_scope(results, std::path::Path::new("/home/alaz/dev/core/R-AI-OS"));
         assert_eq!(filtered.len(), 2);
         assert!(filtered
             .iter()
@@ -387,7 +392,8 @@ mod tests {
             "/home/alaz/dev/core/R-AI-OS-caution-area-fixes/foo.rs",
             0.9,
         )];
-        let filtered = filter_by_scope(results, std::path::Path::new("/home/alaz/dev/core/R-AI-OS"));
+        let filtered =
+            filter_by_scope(results, std::path::Path::new("/home/alaz/dev/core/R-AI-OS"));
         assert!(filtered.is_empty());
     }
 }

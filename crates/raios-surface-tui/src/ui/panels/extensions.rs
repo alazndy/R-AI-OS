@@ -1,12 +1,15 @@
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    Frame,
 };
 
-use raios_surface_tui::app::{App, state::{ExtFocus, ExtensionInfo}};
+use raios_surface_tui::app::{
+    state::{ExtFocus, ExtensionInfo},
+    App,
+};
 
 const ACCENT: Color = Color::Rgb(30, 140, 255);
 const DIM: Color = Color::DarkGray;
@@ -51,7 +54,10 @@ fn render_ext_list(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(i, ext)| {
             let selected = i == app.ext.ext_cursor;
             let style = if selected {
-                Style::new().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD)
+                Style::new()
+                    .fg(Color::Black)
+                    .bg(ACCENT)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::new().fg(Color::White)
             };
@@ -142,22 +148,26 @@ fn render_commands_panel(frame: &mut Frame, area: Rect, ext: &ExtensionInfo, app
         .map(|(i, cmd)| {
             let selected = focused && i == app.ext.cmd_cursor;
             let name_style = if selected {
-                Style::new().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD)
+                Style::new()
+                    .fg(Color::Black)
+                    .bg(ACCENT)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
             };
             let desc_style = Style::new().fg(DIM);
             ListItem::new(vec![
                 Line::from(Span::styled(format!(" ▶ {} ", cmd.name), name_style)),
-                Line::from(Span::styled(
-                    format!("   {}", cmd.description),
-                    desc_style,
-                )),
+                Line::from(Span::styled(format!("   {}", cmd.description), desc_style)),
             ])
         })
         .collect();
 
-    let hint = if focused { "Enter: run  Tab: config" } else { "Tab: focus" };
+    let hint = if focused {
+        "Enter: run  Tab: config"
+    } else {
+        "Tab: focus"
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" Commands  [{}] ", hint))
@@ -237,7 +247,7 @@ fn render_config_panel(frame: &mut Frame, area: Rect, ext: &ExtensionInfo, app: 
     }
 
     let scroll = if focused && app.ext.cfg_cursor > 4 {
-        (app.ext.cfg_cursor.saturating_sub(4)) as u16 
+        (app.ext.cfg_cursor.saturating_sub(4)) as u16
     } else {
         0
     };

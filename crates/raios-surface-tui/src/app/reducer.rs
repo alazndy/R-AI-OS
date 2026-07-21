@@ -74,7 +74,9 @@ pub fn reduce_event(store: &mut Store, event: Event) {
             store.add_log(format!("Approval requested: {} -> {}", title, target));
         }
         Event::ApprovalResolved {
-            approval_id, status, ..
+            approval_id,
+            status,
+            ..
         } => {
             store.add_log(format!("Approval {} resolved: {}", approval_id, status));
         }
@@ -97,8 +99,8 @@ pub fn reduce_event(store: &mut Store, event: Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raios_contracts::SnapshotEnvelope;
     use crate::app::route::Route;
+    use raios_contracts::SnapshotEnvelope;
 
     #[test]
     fn reduce_route_switch() {

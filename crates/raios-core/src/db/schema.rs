@@ -30,9 +30,7 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
          ALTER TABLE swarm_tasks ADD COLUMN cp_artifact_id TEXT;
          ALTER TABLE swarm_tasks ADD COLUMN cp_approval_id TEXT;",
     );
-    let _ = conn.execute_batch(
-        "ALTER TABLE mem_items ADD COLUMN layer INTEGER NOT NULL DEFAULT 2",
-    );
+    let _ = conn.execute_batch("ALTER TABLE mem_items ADD COLUMN layer INTEGER NOT NULL DEFAULT 2");
     let _ = conn.execute_batch(
         "ALTER TABLE mem_items ADD COLUMN provenance TEXT NOT NULL DEFAULT 'observed';
          ALTER TABLE mem_items ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0;
@@ -51,6 +49,30 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_cp_approvals_owner_status
              ON cp_approvals(owner_subject, status)",
+    );
+    // Factory Phase 3 keeps short, user-authored discovery content in the
+    // durable control plane until the artifact store is introduced.
+    let _ = conn.execute_batch(
+        "ALTER TABLE cp_factory_intake_items ADD COLUMN question_key TEXT NOT NULL DEFAULT '';
+         ALTER TABLE cp_factory_intake_items ADD COLUMN response_text TEXT NOT NULL DEFAULT '';
+         ALTER TABLE cp_factory_intake_items ADD COLUMN responded_at TEXT;
+         ALTER TABLE cp_factory_charter_revisions ADD COLUMN content_text TEXT NOT NULL DEFAULT '';",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE cp_factory_requirement_revisions ADD COLUMN content_text TEXT NOT NULL DEFAULT '';",
+    );
+    let _ = conn.execute_batch("ALTER TABLE cp_factory_stage_runs ADD COLUMN task_graph_id TEXT;");
+    let _ = conn.execute_batch(
+        "ALTER TABLE cp_factory_support_items ADD COLUMN resolution_ref TEXT NOT NULL DEFAULT '';",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE cp_factory_evidence_links ADD COLUMN staleness_state TEXT NOT NULL DEFAULT 'current';",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE cp_factory_products ADD COLUMN factory_mode TEXT NOT NULL DEFAULT 'governed';",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE cp_factory_products ADD COLUMN project_path TEXT NOT NULL DEFAULT '';",
     );
 
     conn.execute_batch(
@@ -502,6 +524,312 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_mem_lineage_child  ON mem_lineage(child_kind, child_id);
         CREATE INDEX IF NOT EXISTS idx_mem_lineage_parent ON mem_lineage(parent_kind, parent_id);
+        ",
+    )?;
+
+    // Product Factory skeleton. These tables establish canonical ownership and
+    // revision boundaries only. No migration copies, index rebuilds, or product
+    // lifecycle mutations run from this schema phase.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS cp_workspaces (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            owner_subject TEXT NOT NULL,
+            storage_root TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_cp_workspaces_owner ON cp_workspaces(owner_subject);
+
+        CREATE TABLE IF NOT EXISTS cp_plans (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES cp_workspaces(id) ON DELETE CASCADE,
+            product_id TEXT,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'planned',
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_cp_plans_workspace ON cp_plans(workspace_id);
+        CREATE INDEX IF NOT EXISTS idx_cp_plans_product ON cp_plans(product_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_products (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES cp_workspaces(id) ON DELETE CASCADE,
+            owner_subject TEXT NOT NULL,
+            title TEXT NOT NULL,
+            factory_mode TEXT NOT NULL DEFAULT 'governed' CHECK(factory_mode IN ('quick', 'governed')),
+            project_path TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'draft',
+            current_charter_revision_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_products_workspace ON cp_factory_products(workspace_id);
+        CREATE INDEX IF NOT EXISTS idx_factory_products_owner ON cp_factory_products(owner_subject);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_intake_sessions (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'open',
+            started_by TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            closed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_intake_product ON cp_factory_intake_sessions(product_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_intake_items (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES cp_factory_intake_sessions(id) ON DELETE CASCADE,
+            item_kind TEXT NOT NULL,
+            question_key TEXT NOT NULL DEFAULT '',
+            prompt_ref TEXT,
+            response_ref TEXT,
+            response_text TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            responded_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_intake_items_session ON cp_factory_intake_items(session_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_charter_revisions (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'proposed',
+            content_ref TEXT NOT NULL,
+            content_text TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            UNIQUE(product_id, revision)
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_charter_product ON cp_factory_charter_revisions(product_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_requirements (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            stable_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'proposed',
+            current_revision INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            UNIQUE(product_id, stable_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_requirements_product ON cp_factory_requirements(product_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_requirement_revisions (
+            id TEXT PRIMARY KEY,
+            requirement_id TEXT NOT NULL REFERENCES cp_factory_requirements(id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL,
+            content_ref TEXT NOT NULL,
+            content_text TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'proposed',
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            UNIQUE(requirement_id, revision)
+        );
+
+        CREATE TABLE IF NOT EXISTS cp_factory_requirement_links (
+            id TEXT PRIMARY KEY,
+            requirement_id TEXT NOT NULL REFERENCES cp_factory_requirements(id) ON DELETE CASCADE,
+            target_kind TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            relation_kind TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            UNIQUE(requirement_id, target_kind, target_id, relation_kind)
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_requirement_links_target ON cp_factory_requirement_links(target_kind, target_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_decisions (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'proposed',
+            rationale_ref TEXT,
+            supersedes_id TEXT REFERENCES cp_factory_decisions(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_decisions_product ON cp_factory_decisions(product_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_cycles (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            plan_id TEXT NOT NULL REFERENCES cp_plans(id) ON DELETE RESTRICT,
+            status TEXT NOT NULL DEFAULT 'planned',
+            current_stage TEXT NOT NULL DEFAULT 'discover',
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            completed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_cycles_product ON cp_factory_cycles(product_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_stage_runs (
+            id TEXT PRIMARY KEY,
+            cycle_id TEXT NOT NULL REFERENCES cp_factory_cycles(id) ON DELETE CASCADE,
+            stage TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            task_graph_id TEXT REFERENCES task_graphs(id) ON DELETE SET NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            UNIQUE(cycle_id, stage)
+        );
+
+        CREATE TABLE IF NOT EXISTS cp_factory_change_requests (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            requested_by TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'proposed',
+            summary TEXT NOT NULL,
+            source_revision_ref TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            resolved_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_changes_product ON cp_factory_change_requests(product_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_impact_assessments (
+            id TEXT PRIMARY KEY,
+            change_request_id TEXT NOT NULL REFERENCES cp_factory_change_requests(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            affected_count INTEGER NOT NULL DEFAULT 0,
+            evidence_ref TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            accepted_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_impacts_change ON cp_factory_impact_assessments(change_request_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_impact_targets (
+            id TEXT PRIMARY KEY,
+            assessment_id TEXT NOT NULL REFERENCES cp_factory_impact_assessments(id) ON DELETE CASCADE,
+            target_kind TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            relation_kind TEXT NOT NULL,
+            staleness_state TEXT NOT NULL DEFAULT 'current',
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            UNIQUE(assessment_id, target_kind, target_id, relation_kind)
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_impact_targets_assessment ON cp_factory_impact_targets(assessment_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_evidence_links (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            subject_kind TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            artifact_id TEXT REFERENCES cp_artifacts(id) ON DELETE SET NULL,
+            content_ref TEXT,
+            storage_class TEXT NOT NULL,
+            staleness_state TEXT NOT NULL DEFAULT 'current',
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_evidence_subject ON cp_factory_evidence_links(subject_kind, subject_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_evidence_dependencies (
+            id TEXT PRIMARY KEY,
+            evidence_id TEXT NOT NULL REFERENCES cp_factory_evidence_links(id) ON DELETE CASCADE,
+            target_kind TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            relation_kind TEXT NOT NULL DEFAULT 'verifies',
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            UNIQUE(evidence_id, target_kind, target_id, relation_kind)
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_evidence_dependencies_target
+            ON cp_factory_evidence_dependencies(target_kind, target_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_quality_profiles (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            required INTEGER NOT NULL DEFAULT 1,
+            definition_ref TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+        );
+
+        CREATE TABLE IF NOT EXISTS cp_factory_quality_checks (
+            id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL REFERENCES cp_factory_quality_profiles(id) ON DELETE CASCADE,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            evidence_ref TEXT,
+            checked_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_quality_checks_product ON cp_factory_quality_checks(product_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_releases (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'draft',
+            build_ref TEXT NOT NULL,
+            approval_id TEXT REFERENCES cp_approvals(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            released_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_releases_product ON cp_factory_releases(product_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_release_channels (
+            id TEXT PRIMARY KEY,
+            release_id TEXT NOT NULL REFERENCES cp_factory_releases(id) ON DELETE CASCADE,
+            channel_kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            external_ref TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            UNIQUE(release_id, channel_kind)
+        );
+
+        CREATE TABLE IF NOT EXISTS cp_factory_support_items (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            source_kind TEXT NOT NULL,
+            external_ref TEXT,
+            status TEXT NOT NULL DEFAULT 'new',
+            summary_ref TEXT,
+            resolution_ref TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            resolved_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_support_product ON cp_factory_support_items(product_id);
+
+        CREATE TABLE IF NOT EXISTS cp_factory_support_links (
+            id TEXT PRIMARY KEY,
+            support_item_id TEXT NOT NULL REFERENCES cp_factory_support_items(id) ON DELETE CASCADE,
+            target_kind TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            relation_kind TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            UNIQUE(support_item_id, target_kind, target_id, relation_kind)
+        );
+
+        CREATE TABLE IF NOT EXISTS cp_factory_automation_policies (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            maintenance_mode TEXT NOT NULL DEFAULT 'observe',
+            policy_ref TEXT,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+        );
+
+        CREATE TABLE IF NOT EXISTS cp_factory_integrations (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES cp_workspaces(id) ON DELETE CASCADE,
+            integration_kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'disabled',
+            secret_lease_ref TEXT,
+            configuration_ref TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            UNIQUE(workspace_id, integration_kind)
+        );
+
+        CREATE TABLE IF NOT EXISTS cp_factory_events (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL REFERENCES cp_factory_products(id) ON DELETE CASCADE,
+            event_kind TEXT NOT NULL,
+            subject_kind TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            actor_subject TEXT NOT NULL,
+            metadata_ref TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_events_product_created ON cp_factory_events(product_id, created_at DESC);
         ",
     )?;
 

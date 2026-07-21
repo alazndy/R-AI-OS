@@ -117,6 +117,18 @@ fn node_takes_priority_over_flutter() {
 }
 
 #[test]
+fn react_native_takes_priority_over_generic_node() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("package.json"),
+        r#"{"dependencies":{"expo":"~57.0.0","react-native":"0.86.0"}}"#,
+    )
+    .unwrap();
+    assert_eq!(detect_type(tmp.path()), ProjectType::ReactNative);
+    assert_eq!(build(tmp.path()).project_type, "React Native");
+}
+
+#[test]
 fn parse_flutter_build_success() {
     let output = "Running Gradle task 'assembleRelease'...\nBuilt build/app/outputs/apk/release/app-release.apk (7.4MB)";
     let (ok, errors) = flutter::parse_flutter_build_output(output);

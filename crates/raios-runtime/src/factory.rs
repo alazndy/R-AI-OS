@@ -258,7 +258,8 @@ impl Factory {
         let _ = self.tx.send(msg.to_string());
         if let Ok(conn) = raios_core::db::open_db() {
             let short_id = &id.to_string()[..8];
-            let _ = raios_core::db::cp_log_append(&conn, "RUN", &format!("✗ [{}] {}", short_id, error));
+            let _ =
+                raios_core::db::cp_log_append(&conn, "RUN", &format!("✗ [{}] {}", short_id, error));
         }
     }
 
@@ -413,10 +414,16 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let completed = loop {
             let inbox = factory.list_inbox(10);
-            if let Some(job) = inbox.iter().find(|j| j.id == id && j.status == JobStatus::Completed) {
+            if let Some(job) = inbox
+                .iter()
+                .find(|j| j.id == id && j.status == JobStatus::Completed)
+            {
                 break job.clone();
             }
-            assert!(std::time::Instant::now() < deadline, "job {id} did not complete in time");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "job {id} did not complete in time"
+            );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         };
         assert_eq!(completed.result.as_deref(), Some("result text"));

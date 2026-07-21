@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 raios-core = { path = "../raios-core" }
+raios-contracts = { path = "../raios-contracts" }
 raios-runtime = { path = "../raios-runtime" }
 raios-surface-tui = { path = "../raios-surface-tui" }
 raios-surface-mcp = { path = "../raios-surface-mcp" }

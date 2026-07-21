@@ -1,6 +1,6 @@
+use crossterm::event::{KeyCode, KeyEvent};
 use raios_surface_tui::app::state::AppState;
 use raios_surface_tui::app::App;
-use crossterm::event::{KeyCode, KeyEvent};
 
 impl App {
     pub(crate) fn handle_health_view_key(&mut self, key: KeyEvent) {

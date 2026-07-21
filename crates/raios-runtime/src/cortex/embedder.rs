@@ -44,7 +44,11 @@ mod real {
 
             let load_1m = std::fs::read_to_string("/proc/loadavg")
                 .ok()
-                .and_then(|s| s.split_whitespace().next().and_then(|val| val.parse::<f32>().ok()))
+                .and_then(|s| {
+                    s.split_whitespace()
+                        .next()
+                        .and_then(|val| val.parse::<f32>().ok())
+                })
                 .unwrap_or(0.0);
 
             // Determine chunk size and sleep interval dynamically
@@ -63,7 +67,7 @@ mod real {
                     .model
                     .embed(chunk_vec, Some(chunk_size))
                     .context("embedding inference failed")?;
-                
+
                 for v in raw {
                     results.push(norm(v));
                 }

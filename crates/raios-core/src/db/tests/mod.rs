@@ -3,6 +3,7 @@ pub use rusqlite::{params, Connection};
 
 mod agent_stats;
 mod control_plane;
+mod factory;
 mod handoff;
 mod integration;
 mod mem;

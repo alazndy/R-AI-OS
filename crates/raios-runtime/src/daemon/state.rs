@@ -1,7 +1,7 @@
-use raios_core::entities::EntityProject;
 use crate::health::ProjectHealth;
 use crate::indexer::ProjectIndex;
 use crate::sentinel::SentinelState;
+use raios_core::entities::EntityProject;
 use serde_json::json;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -75,8 +75,12 @@ impl DaemonState {
     /// Reload pending file-change approvals from canonical DB state.
     /// Safe to call repeatedly; replaces the in-memory list atomically.
     pub fn refresh_pending_from_db(&mut self) {
-        let Ok(conn) = raios_core::db::open_db() else { return };
-        let Ok(rows) = raios_core::db::cp_load_pending_file_change_approvals(&conn) else { return };
+        let Ok(conn) = raios_core::db::open_db() else {
+            return;
+        };
+        let Ok(rows) = raios_core::db::cp_load_pending_file_change_approvals(&conn) else {
+            return;
+        };
         self.pending_file_changes = rows
             .into_iter()
             .map(|d| FileChangeApproval {

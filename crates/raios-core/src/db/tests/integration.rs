@@ -9,27 +9,47 @@ fn cp_flow_file_approval_lifecycle() {
         create_file_change_workflow(&conn, "/proj/src/main.rs", "old", "new", "claude").unwrap();
 
     let task_status: String = conn
-        .query_row("SELECT status FROM cp_tasks WHERE id=?1", params![ids.task_id], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM cp_tasks WHERE id=?1",
+            params![ids.task_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(task_status, "awaiting_approval");
 
     let run_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM cp_agent_runs WHERE task_id=?1", params![ids.task_id], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM cp_agent_runs WHERE task_id=?1",
+            params![ids.task_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(run_count, 1);
 
     let artifact_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM cp_artifacts WHERE task_id=?1", params![ids.task_id], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM cp_artifacts WHERE task_id=?1",
+            params![ids.task_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(artifact_count, 1);
 
     let approval_status: String = conn
-        .query_row("SELECT status FROM cp_approvals WHERE id=?1", params![ids.approval_id], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM cp_approvals WHERE id=?1",
+            params![ids.approval_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(approval_status, "pending");
 
     let contract_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM cp_run_contracts WHERE task_id=?1", params![ids.task_id], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM cp_run_contracts WHERE task_id=?1",
+            params![ids.task_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(contract_count, 1);
 
@@ -64,13 +84,21 @@ fn cp_flow_swarm_lifecycle() {
     let ids = create_swarm_workflow(&conn, "/proj", "add dark mode", "claude").unwrap();
 
     let task_status: String = conn
-        .query_row("SELECT status FROM cp_tasks WHERE id=?1", params![ids.task_id], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM cp_tasks WHERE id=?1",
+            params![ids.task_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(task_status, "queued");
 
     mark_swarm_workflow_running(&conn, &ids.task_id, &ids.agent_run_id).unwrap();
     let task_status_2: String = conn
-        .query_row("SELECT status FROM cp_tasks WHERE id=?1", params![ids.task_id], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM cp_tasks WHERE id=?1",
+            params![ids.task_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(task_status_2, "running");
 
@@ -88,7 +116,11 @@ fn cp_flow_swarm_lifecycle() {
     .unwrap();
 
     let exit_reason: String = conn
-        .query_row("SELECT exit_reason FROM cp_agent_runs WHERE id=?1", params![ids.agent_run_id], |r| r.get(0))
+        .query_row(
+            "SELECT exit_reason FROM cp_agent_runs WHERE id=?1",
+            params![ids.agent_run_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(exit_reason, "timeout");
 
@@ -111,12 +143,24 @@ fn cp_flow_task_graph_lifecycle() {
     .unwrap();
 
     let ids_a = create_task_graph_node_workflow(
-        &conn, &graph_id, "a", "build", "cargo build", "claude", true,
+        &conn,
+        &graph_id,
+        "a",
+        "build",
+        "cargo build",
+        "claude",
+        true,
     )
     .unwrap();
 
     let ids_b = create_task_graph_node_workflow(
-        &conn, &graph_id, "b", "test", "cargo test", "claude", false,
+        &conn,
+        &graph_id,
+        "b",
+        "test",
+        "cargo test",
+        "claude",
+        false,
     )
     .unwrap();
 
@@ -236,7 +280,11 @@ fn cp_flow_unified_inbox() {
     assert_eq!(snapshot.pending_approvals[0].approval_type, "file_write");
     assert_eq!(snapshot.blocked_tasks.len(), 0);
 
-    let origins: Vec<&str> = snapshot.active_tasks.iter().map(|t| t.origin.as_str()).collect();
+    let origins: Vec<&str> = snapshot
+        .active_tasks
+        .iter()
+        .map(|t| t.origin.as_str())
+        .collect();
     assert!(origins.contains(&"swarm"));
     assert!(origins.contains(&"file_approval"));
     assert!(origins.contains(&"personal"));
@@ -293,7 +341,10 @@ fn cp_pending_file_change_approvals_disappears_after_resolve() {
     let ids =
         create_file_change_workflow(&conn, "/proj/src/main.rs", "v1", "v2", "claude").unwrap();
 
-    assert_eq!(cp_load_pending_file_change_approvals(&conn).unwrap().len(), 1);
+    assert_eq!(
+        cp_load_pending_file_change_approvals(&conn).unwrap().len(),
+        1
+    );
 
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute(
@@ -302,7 +353,10 @@ fn cp_pending_file_change_approvals_disappears_after_resolve() {
     )
     .unwrap();
 
-    assert_eq!(cp_load_pending_file_change_approvals(&conn).unwrap().len(), 0);
+    assert_eq!(
+        cp_load_pending_file_change_approvals(&conn).unwrap().len(),
+        0
+    );
 }
 
 #[test]

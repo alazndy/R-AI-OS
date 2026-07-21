@@ -1,7 +1,7 @@
+use super::FileEntry;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-use super::FileEntry;
 
 #[derive(Debug, Clone)]
 pub struct AgentRuleGroup {

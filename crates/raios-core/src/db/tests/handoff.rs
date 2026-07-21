@@ -29,7 +29,10 @@ fn handoff_workflow_round_trip_consumed() {
     assert_eq!(pending.from_agent, "claude_kaira");
     assert_eq!(pending.to_agent, "opencode_kaira");
     assert_eq!(pending.status, "success");
-    assert_eq!(pending.context_summary, "skeleton ready, implement auth handlers");
+    assert_eq!(
+        pending.context_summary,
+        "skeleton ready, implement auth handlers"
+    );
     assert_eq!(
         pending.diff_stat.as_deref(),
         Some(" src/db.rs | 12 ++++++++----")
@@ -75,8 +78,7 @@ fn handoff_workflow_not_visible_to_other_agent() {
     )
     .unwrap();
 
-    let for_wrong_agent =
-        cp_take_pending_handoff(&conn, None, "antigravity_kaira").unwrap();
+    let for_wrong_agent = cp_take_pending_handoff(&conn, None, "antigravity_kaira").unwrap();
     assert!(for_wrong_agent.is_none());
 
     let for_right_agent = cp_take_pending_handoff(&conn, None, "opencode_kaira")
@@ -198,7 +200,10 @@ fn handoff_report_round_trips_through_inbox_query() {
     let report = HandoffReport {
         findings: "auth handlers wired, budget gate untested".into(),
         evidence: vec!["cargo test wf_handoff::tests -- --nocapture passed".into()],
-        edge_cases_considered: vec!["empty msg".into(), "concurrent handoff to same agent".into()],
+        edge_cases_considered: vec![
+            "empty msg".into(),
+            "concurrent handoff to same agent".into(),
+        ],
         open_questions: vec!["should budget gate reject or warn on soft cap?".into()],
         confidence: 0.8,
         what_i_did_not_check: vec!["MCP surface wiring".into()],
@@ -307,8 +312,14 @@ fn verify_gate_blocks_handoff_success_until_completed() {
             report: None,
         },
     );
-    assert!(res.is_err(), "handoff SUCCESS must be blocked by unpassed verify gate");
-    assert!(res.unwrap_err().to_string().contains("verify_gate node 'v1' has not passed yet"));
+    assert!(
+        res.is_err(),
+        "handoff SUCCESS must be blocked by unpassed verify gate"
+    );
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("verify_gate node 'v1' has not passed yet"));
 
     // Handoff with status = BLOCKER is NOT blocked by verify gate
     let res_blocker = create_handoff_workflow(
@@ -323,10 +334,19 @@ fn verify_gate_blocks_handoff_success_until_completed() {
             report: None,
         },
     );
-    assert!(res_blocker.is_ok(), "non-SUCCESS handoffs are not blocked by verify gate");
+    assert!(
+        res_blocker.is_ok(),
+        "non-SUCCESS handoffs are not blocked by verify gate"
+    );
 
     // Complete the verify_gate task
-    mark_control_task_completed(&conn, &node_ids.task_id, &node_ids.agent_run_id, "test passed").unwrap();
+    mark_control_task_completed(
+        &conn,
+        &node_ids.task_id,
+        &node_ids.agent_run_id,
+        "test passed",
+    )
+    .unwrap();
 
     // Handoff SUCCESS now succeeds
     let res_after = create_handoff_workflow(
@@ -341,5 +361,8 @@ fn verify_gate_blocks_handoff_success_until_completed() {
             report: None,
         },
     );
-    assert!(res_after.is_ok(), "handoff SUCCESS must pass once verify gate is completed");
+    assert!(
+        res_after.is_ok(),
+        "handoff SUCCESS must pass once verify gate is completed"
+    );
 }

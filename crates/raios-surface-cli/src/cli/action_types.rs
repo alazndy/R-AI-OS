@@ -1,4 +1,17 @@
 use clap::Subcommand;
+use std::path::PathBuf;
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum FactoryAction {
+    /// Read the canonical Product Factory snapshot without changing state
+    Overview,
+    /// Execute one safe, typed FactoryCommand envelope from a local JSON file
+    Execute {
+        /// Path to a bounded local JSON FactoryCommand envelope
+        #[arg(long)]
+        file: PathBuf,
+    },
+}
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum HubAction {
@@ -192,6 +205,36 @@ pub enum TraceAction {
         limit: usize,
     },
     /// Delete a trace by id
+    Forget { id: String },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum AnkaAction {
+    /// Show the ANKA transcript-recall cache boundary and index state
+    Status,
+    /// Build or refresh the rebuildable transcript index
+    Index {
+        /// Restrict indexing to one harness: claude|codex|opencode|antigravity
+        #[arg(long)]
+        harness: Option<String>,
+    },
+    /// Search read-only historical transcript evidence
+    Search {
+        query: String,
+        #[arg(short, long)]
+        project: Option<String>,
+        #[arg(long)]
+        harness: Option<String>,
+        #[arg(short = 'n', long, default_value_t = 8)]
+        limit: usize,
+    },
+    /// Find historical transcript evidence associated with a file path
+    Blame {
+        path: String,
+        #[arg(short = 'n', long, default_value_t = 8)]
+        limit: usize,
+    },
+    /// Tombstone one ANKA cache record without modifying the source transcript
     Forget { id: String },
 }
 

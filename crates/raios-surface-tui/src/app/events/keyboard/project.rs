@@ -1,7 +1,7 @@
+use crossterm::event::{KeyCode, KeyEvent};
+use raios_runtime::filebrowser::FileEntry;
 use raios_surface_tui::app::state::AppState;
 use raios_surface_tui::app::App;
-use raios_runtime::filebrowser::FileEntry;
-use crossterm::event::{KeyCode, KeyEvent};
 
 impl App {
     pub(crate) fn handle_project_detail_key(&mut self, key: KeyEvent) {
@@ -102,8 +102,10 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') if self.system.pending_change_cursor > 0 => {
                 self.system.pending_change_cursor -= 1;
                 let next = &self.system.pending_file_changes[self.system.pending_change_cursor];
-                self.projects.git_diff_lines =
-                    raios_surface_tui::app::editor::simple_diff(&next.original_content, &next.new_content);
+                self.projects.git_diff_lines = raios_surface_tui::app::editor::simple_diff(
+                    &next.original_content,
+                    &next.new_content,
+                );
             }
             KeyCode::Right | KeyCode::Char('l')
                 if self.system.pending_change_cursor + 1
@@ -111,8 +113,10 @@ impl App {
             {
                 self.system.pending_change_cursor += 1;
                 let next = &self.system.pending_file_changes[self.system.pending_change_cursor];
-                self.projects.git_diff_lines =
-                    raios_surface_tui::app::editor::simple_diff(&next.original_content, &next.new_content);
+                self.projects.git_diff_lines = raios_surface_tui::app::editor::simple_diff(
+                    &next.original_content,
+                    &next.new_content,
+                );
             }
             _ => {}
         }

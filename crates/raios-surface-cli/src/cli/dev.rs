@@ -1,7 +1,9 @@
 use std::path::Path;
 
 pub(super) fn cmd_doctor(agent: String, tier: Option<String>, json: bool) {
-    let requested_tier = tier.as_deref().and_then(|t| t.parse::<raios_runtime::system_scan::DoctorTier>().ok());
+    let requested_tier = tier
+        .as_deref()
+        .and_then(|t| t.parse::<raios_runtime::system_scan::DoctorTier>().ok());
     let res = raios_runtime::system_scan::run_doctor_check(&agent, requested_tier);
 
     if let Ok(conn) = raios_core::db::open_db() {

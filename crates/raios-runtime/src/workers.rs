@@ -79,12 +79,12 @@ fn spawn_git_worker(tx: Sender<RuntimeEvent>, dev_ops: PathBuf) {
         loop {
             let mut projects = raios_core::entities::load_entities(&dev_ops);
             let mut changed = false;
- 
+
             for proj in &mut projects {
                 if !proj.local_path.join(".git").exists() {
                     continue;
                 }
- 
+
                 let dirty = crate::filebrowser::git_is_dirty(&proj.local_path);
                 let new_status = match dirty {
                     Some(true) => "dirty".to_string(),
@@ -96,12 +96,12 @@ fn spawn_git_worker(tx: Sender<RuntimeEvent>, dev_ops: PathBuf) {
                     changed = true;
                 }
             }
- 
+
             if changed {
                 let _ = raios_core::entities::save_entities(&dev_ops, projects.clone());
                 tx.send(RuntimeEvent::Projects(projects)).ok();
             }
- 
+
             thread::sleep(GIT_INTERVAL);
         }
     });

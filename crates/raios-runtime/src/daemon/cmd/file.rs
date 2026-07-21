@@ -61,7 +61,12 @@ pub async fn handle_request_file_change<W: AsyncWriteExt + Unpin>(
     let mut s = state.write().await;
     s.refresh_pending_from_db();
     sessions.record_event(session_id, "file_change_request", &format!("path={}", path));
-    if let Some(approval) = s.pending_file_changes.iter().find(|a| a.path == path).cloned() {
+    if let Some(approval) = s
+        .pending_file_changes
+        .iter()
+        .find(|a| a.path == path)
+        .cloned()
+    {
         let event = serde_json::json!({
             "event": "FileChangeRequested",
             "approval": approval
@@ -235,22 +240,20 @@ pub async fn handle_approve_diff<W: AsyncWriteExt + Unpin>(
                 };
                 let canonical_target = match file_path.canonicalize() {
                     Ok(p) => p,
-                    Err(_) => {
-                        match file_path.parent().and_then(|p| p.canonicalize().ok()) {
-                            Some(parent) if parent.starts_with(&allowed_base) => {
-                                file_path.to_path_buf()
-                            }
-                            _ => {
-                                let r = serde_json::json!({
-                                    "event": "DiffError",
-                                    "id": diff_id,
-                                    "error": "file path is outside workspace"
-                                });
-                                let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
-                                return super::CmdResult::Disconnect;
-                            }
+                    Err(_) => match file_path.parent().and_then(|p| p.canonicalize().ok()) {
+                        Some(parent) if parent.starts_with(&allowed_base) => {
+                            file_path.to_path_buf()
                         }
-                    }
+                        _ => {
+                            let r = serde_json::json!({
+                                "event": "DiffError",
+                                "id": diff_id,
+                                "error": "file path is outside workspace"
+                            });
+                            let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
+                            return super::CmdResult::Disconnect;
+                        }
+                    },
                 };
                 if !canonical_target.starts_with(&allowed_base) {
                     let r = serde_json::json!({

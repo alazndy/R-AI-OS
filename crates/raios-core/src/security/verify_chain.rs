@@ -207,10 +207,24 @@ mod tests {
     #[test]
     fn tool_decision_writes_normalized_envelope_and_chains() {
         let conn = in_memory_db();
-        record_tool_decision(&conn, "run_build", "deadbeef", "rule", "tool_allow", "claude_kaira")
-            .unwrap();
-        record_tool_decision(&conn, "git_commit", "cafebabe", "default", "tool_confirm", "codex_kaira")
-            .unwrap();
+        record_tool_decision(
+            &conn,
+            "run_build",
+            "deadbeef",
+            "rule",
+            "tool_allow",
+            "claude_kaira",
+        )
+        .unwrap();
+        record_tool_decision(
+            &conn,
+            "git_commit",
+            "cafebabe",
+            "default",
+            "tool_confirm",
+            "codex_kaira",
+        )
+        .unwrap();
 
         // Chain integrity holds across mixed record_audit_event / record_tool_decision writers.
         assert_eq!(verify_chain(&conn).unwrap(), 2);

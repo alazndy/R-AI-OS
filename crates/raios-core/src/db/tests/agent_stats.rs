@@ -43,7 +43,11 @@ fn still_open_runs_are_excluded_from_success_rate_denominator() {
     assert_eq!(stats.succeeded, 1);
     assert_eq!(stats.failed, 1);
     assert_eq!(stats.still_open, 3);
-    assert_eq!(stats.success_rate, Some(0.5), "rate must be 1/(1+1), not 1/5");
+    assert_eq!(
+        stats.success_rate,
+        Some(0.5),
+        "rate must be 1/(1+1), not 1/5"
+    );
 }
 
 #[test]

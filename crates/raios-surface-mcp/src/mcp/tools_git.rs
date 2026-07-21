@@ -74,7 +74,9 @@ impl McpServer {
     pub(super) fn tool_session_note(&self, args: &Value) -> Result<Value, String> {
         let note = args["note"].as_str().ok_or("missing note")?;
         let note_truncated = &note[..note.len().min(500)];
-        let store = raios_runtime::session::SessionStore::new(raios_runtime::session::SessionStore::default_path());
+        let store = raios_runtime::session::SessionStore::new(
+            raios_runtime::session::SessionStore::default_path(),
+        );
         let session_id = args["session_id"]
             .as_str()
             .map(|s| s.to_string())

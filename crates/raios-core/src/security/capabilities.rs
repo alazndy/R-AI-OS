@@ -24,9 +24,18 @@ use super::sandbox::SandboxGuard;
 /// Kept in sync with the `resolve_git_path(args)` call sites in
 /// `src/mcp/tools_dev.rs`, `tools_git.rs`, and `tools_workspace.rs`.
 pub const PATH_RESOLVING_TOOLS: &[&str] = &[
-    "git_status", "git_log", "git_diff", "git_commit",
-    "disk_usage", "version_info", "version_bump", "env_status", "deps_status",
-    "run_build", "run_tests", "project_info",
+    "git_status",
+    "git_log",
+    "git_diff",
+    "git_commit",
+    "disk_usage",
+    "version_info",
+    "version_bump",
+    "env_status",
+    "deps_status",
+    "run_build",
+    "run_tests",
+    "project_info",
 ];
 
 /// Every built-in MCP tool name, for `raios policy caps` to enumerate.
@@ -37,13 +46,39 @@ pub const PATH_RESOLVING_TOOLS: &[&str] = &[
 /// stay self-contained rather than depend on code outside the `mcp` module.
 /// Keep this in sync by hand if a tool is added or removed there.
 pub const ALL_TOOLS: &[&str] = &[
-    "update_state", "handover", "add_task", "get_health", "get_inbox", "list_projects",
-    "get_stats", "semantic_search", "project_info", "portfolio_status",
-    "disk_usage", "list_ports", "usage_status", "version_info", "version_bump", "env_status",
-    "deps_status", "run_build", "run_tests", "git_status", "git_log", "git_diff",
-    "git_commit", "ask_architect", "get_validation_errors", "session_note",
-    "create_swarm_task", "list_swarm_tasks", "approve_swarm_task",
-    "route_capability", "list_evolution_candidates", "promote_evolution_candidate",
+    "update_state",
+    "handover",
+    "add_task",
+    "get_health",
+    "get_inbox",
+    "list_projects",
+    "get_stats",
+    "semantic_search",
+    "anka_recall",
+    "project_info",
+    "portfolio_status",
+    "disk_usage",
+    "list_ports",
+    "usage_status",
+    "version_info",
+    "version_bump",
+    "env_status",
+    "deps_status",
+    "run_build",
+    "run_tests",
+    "git_status",
+    "git_log",
+    "git_diff",
+    "git_commit",
+    "ask_architect",
+    "get_validation_errors",
+    "session_note",
+    "create_swarm_task",
+    "list_swarm_tasks",
+    "approve_swarm_task",
+    "route_capability",
+    "list_evolution_candidates",
+    "promote_evolution_candidate",
     "get_agent_stats",
 ];
 
@@ -53,8 +88,8 @@ pub const ALL_TOOLS: &[&str] = &[
 pub fn default_for(tool: &str) -> ToolCapabilities {
     match tool {
         // Read-only inspection of a caller-supplied project path.
-        "git_status" | "git_log" | "git_diff" | "project_info" | "disk_usage"
-        | "version_info" | "env_status" | "deps_status" => ToolCapabilities {
+        "git_status" | "git_log" | "git_diff" | "project_info" | "disk_usage" | "version_info"
+        | "env_status" | "deps_status" => ToolCapabilities {
             fs_read: vec!["*".into()],
             ..Default::default()
         },
@@ -73,9 +108,17 @@ pub fn default_for(tool: &str) -> ToolCapabilities {
             ..Default::default()
         },
         // Talk to the local aiosd daemon over TCP (127.0.0.1:42069).
-        "semantic_search" | "get_inbox" | "route_capability"
-        | "list_evolution_candidates" | "promote_evolution_candidate" => ToolCapabilities {
+        "semantic_search"
+        | "get_inbox"
+        | "route_capability"
+        | "list_evolution_candidates"
+        | "promote_evolution_candidate" => ToolCapabilities {
             network: vec!["127.0.0.1".into(), "localhost".into()],
+            ..Default::default()
+        },
+        // ANKA reads its fixed owner-only local cache; it accepts no caller-supplied filesystem path.
+        "anka_recall" => ToolCapabilities {
+            fs_read: vec!["<anka-cache>".into()],
             ..Default::default()
         },
         // Everything else (get_stats, list_ports, usage_status, list_projects,
@@ -125,11 +168,18 @@ pub fn check_fs_capability(
 /// declare network domains must have at least one of them permitted by the
 /// current egress policy — defense in depth: capability states intent,
 /// egress (once the operator enables it) is the actual gate.
-pub fn check_network_capability(caps: &ToolCapabilities, egress: &EgressFilter) -> Result<(), String> {
+pub fn check_network_capability(
+    caps: &ToolCapabilities,
+    egress: &EgressFilter,
+) -> Result<(), String> {
     if caps.network.is_empty() {
         return Ok(());
     }
-    if caps.network.iter().any(|domain| egress.check(domain).is_ok()) {
+    if caps
+        .network
+        .iter()
+        .any(|domain| egress.check(domain).is_ok())
+    {
         Ok(())
     } else {
         Err(format!(
@@ -176,7 +226,10 @@ mod tests {
 
     #[test]
     fn resolve_prefers_toml_override_over_default() {
-        let override_caps = ToolCapabilities { exec: true, ..Default::default() };
+        let override_caps = ToolCapabilities {
+            exec: true,
+            ..Default::default()
+        };
         let resolved = resolve("get_stats", Some(override_caps.clone()));
         assert_eq!(resolved, override_caps);
     }
@@ -192,19 +245,27 @@ mod tests {
         let caps = ToolCapabilities::default();
         let result = check_fs_capability(&caps, tmp.path(), tmp.path(), &[]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("no declared filesystem capability"));
+        assert!(result
+            .unwrap_err()
+            .contains("no declared filesystem capability"));
     }
 
     #[test]
     fn fs_capability_allows_declared_tool_outside_blocked_paths() {
         let tmp = TempDir::new().unwrap();
-        let caps = ToolCapabilities { fs_read: vec!["*".into()], ..Default::default() };
+        let caps = ToolCapabilities {
+            fs_read: vec!["*".into()],
+            ..Default::default()
+        };
         assert!(check_fs_capability(&caps, tmp.path(), tmp.path(), &[]).is_ok());
     }
 
     #[test]
     fn fs_capability_still_blocks_explicit_blocked_path() {
-        let caps = ToolCapabilities { fs_write: vec!["*".into()], ..Default::default() };
+        let caps = ToolCapabilities {
+            fs_write: vec!["*".into()],
+            ..Default::default()
+        };
         let sensitive = std::path::Path::new("/home/user/.ssh");
         let blocked = vec!["/home/user/.ssh".to_string()];
         let result = check_fs_capability(&caps, sensitive, sensitive, &blocked);
@@ -218,7 +279,10 @@ mod tests {
     fn fs_capability_confines_target_to_distinct_workspace_root() {
         let workspace = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
-        let caps = ToolCapabilities { fs_read: vec!["*".into()], ..Default::default() };
+        let caps = ToolCapabilities {
+            fs_read: vec!["*".into()],
+            ..Default::default()
+        };
         let result = check_fs_capability(&caps, workspace.path(), outside.path(), &[]);
         assert!(result.is_err());
     }
@@ -228,7 +292,10 @@ mod tests {
         let workspace = TempDir::new().unwrap();
         let inside = workspace.path().join("project-a");
         std::fs::create_dir_all(&inside).unwrap();
-        let caps = ToolCapabilities { fs_read: vec!["*".into()], ..Default::default() };
+        let caps = ToolCapabilities {
+            fs_read: vec!["*".into()],
+            ..Default::default()
+        };
         assert!(check_fs_capability(&caps, workspace.path(), &inside, &[]).is_ok());
     }
 
@@ -246,7 +313,10 @@ mod tests {
 
         let traversal_target = sub.join("..").join(".secrets").join("key");
         let blocked = vec![secret.to_string_lossy().to_string()];
-        let caps = ToolCapabilities { fs_read: vec!["*".into()], ..Default::default() };
+        let caps = ToolCapabilities {
+            fs_read: vec!["*".into()],
+            ..Default::default()
+        };
 
         let result = check_fs_capability(&caps, workspace.path(), &traversal_target, &blocked);
         assert!(result.is_err());
@@ -262,14 +332,20 @@ mod tests {
     #[test]
     fn network_capability_allows_when_egress_disabled() {
         // Matches EgressFilter's own documented decision order: not enabled -> allow all.
-        let caps = ToolCapabilities { network: vec!["127.0.0.1".into()], ..Default::default() };
+        let caps = ToolCapabilities {
+            network: vec!["127.0.0.1".into()],
+            ..Default::default()
+        };
         let egress = EgressFilter::disabled();
         assert!(check_network_capability(&caps, &egress).is_ok());
     }
 
     #[test]
     fn network_capability_denied_when_egress_enabled_without_matching_allow() {
-        let caps = ToolCapabilities { network: vec!["127.0.0.1".into()], ..Default::default() };
+        let caps = ToolCapabilities {
+            network: vec!["127.0.0.1".into()],
+            ..Default::default()
+        };
         let egress = EgressFilter {
             enabled: true,
             deny_all: false,
@@ -282,7 +358,10 @@ mod tests {
 
     #[test]
     fn network_capability_allowed_when_egress_enabled_with_matching_allow() {
-        let caps = ToolCapabilities { network: vec!["127.0.0.1".into()], ..Default::default() };
+        let caps = ToolCapabilities {
+            network: vec!["127.0.0.1".into()],
+            ..Default::default()
+        };
         let egress = EgressFilter {
             enabled: true,
             deny_all: false,

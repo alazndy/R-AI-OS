@@ -65,8 +65,7 @@ pub fn cp_scheduler_list_ready(conn: &Connection) -> Result<Vec<SchedulerTask>> 
         if needs_tools {
             if let Some(provider) = task.assignee_id.as_deref() {
                 let capable =
-                    cp_check_provider_supports(conn, provider, true, false, false)
-                        .unwrap_or(true);
+                    cp_check_provider_supports(conn, provider, true, false, false).unwrap_or(true);
                 if !capable {
                     // Soft-defer: leave task in 'ready' but skip this scheduling cycle
                     continue;
@@ -80,7 +79,10 @@ pub fn cp_scheduler_list_ready(conn: &Connection) -> Result<Vec<SchedulerTask>> 
 }
 
 /// Returns `(graph_id, node_id)` for a task that belongs to a task graph node.
-pub fn cp_task_graph_node_ids(conn: &Connection, task_id: &str) -> Result<Option<(String, String)>> {
+pub fn cp_task_graph_node_ids(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<Option<(String, String)>> {
     conn.query_row(
         "SELECT graph_id, node_id FROM cp_task_graph_nodes WHERE task_id = ?1",
         params![task_id],
@@ -280,9 +282,8 @@ pub fn cp_daemon_snapshot(conn: &Connection) -> Result<DaemonSnapshot> {
 
     // Collect providers with a non-Allow budget gate
     let mut budget_deferrals = Vec::new();
-    let mut prov_stmt = conn.prepare(
-        "SELECT DISTINCT provider FROM cp_budget_ledger WHERE provider IS NOT NULL",
-    )?;
+    let mut prov_stmt =
+        conn.prepare("SELECT DISTINCT provider FROM cp_budget_ledger WHERE provider IS NOT NULL")?;
     let providers: Vec<String> = prov_stmt
         .query_map([], |r| r.get(0))?
         .filter_map(|r| r.ok())
@@ -317,9 +318,8 @@ pub struct DriftReport {
 /// Check for drift between cp_tasks (canonical) and task_graph_nodes (cache) for a given graph.
 pub fn cp_detect_graph_cache_drift(conn: &Connection, graph_id: &str) -> Result<DriftReport> {
     // canonical task ids for this graph
-    let mut canonical_stmt = conn.prepare(
-        "SELECT task_id FROM cp_task_graph_nodes WHERE graph_id = ?1",
-    )?;
+    let mut canonical_stmt =
+        conn.prepare("SELECT task_id FROM cp_task_graph_nodes WHERE graph_id = ?1")?;
     let canonical_ids: std::collections::HashSet<String> = canonical_stmt
         .query_map(params![graph_id], |r| r.get(0))?
         .filter_map(|r| r.ok())
@@ -334,16 +334,13 @@ pub fn cp_detect_graph_cache_drift(conn: &Connection, graph_id: &str) -> Result<
         .filter_map(|r| r.ok())
         .collect();
 
-    let missing_from_cache: Vec<String> = canonical_ids
-        .difference(&cache_ids)
-        .cloned()
-        .collect();
-    let stale_in_cache: Vec<String> = cache_ids
-        .difference(&canonical_ids)
-        .cloned()
-        .collect();
+    let missing_from_cache: Vec<String> = canonical_ids.difference(&cache_ids).cloned().collect();
+    let stale_in_cache: Vec<String> = cache_ids.difference(&canonical_ids).cloned().collect();
 
-    Ok(DriftReport { missing_from_cache, stale_in_cache })
+    Ok(DriftReport {
+        missing_from_cache,
+        stale_in_cache,
+    })
 }
 
 /// Rebuild the legacy task_graph_nodes cache for all graphs from canonical cp_* state.
@@ -396,4 +393,3 @@ pub fn cp_rebuild_task_graph_cache(conn: &Connection) -> Result<usize> {
 
     Ok(rebuilt)
 }
-

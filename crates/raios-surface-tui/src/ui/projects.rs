@@ -94,7 +94,10 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
                 Text::from(vault_tag),
                 Text::from(Span::styled(item.status.clone(), Style::new().fg(sc))),
                 Text::from(item.category.clone()),
-                Text::from(Span::styled(item.compliance_grade.clone(), Style::new().fg(gc).bold())),
+                Text::from(Span::styled(
+                    item.compliance_grade.clone(),
+                    Style::new().fg(gc).bold(),
+                )),
                 Text::from(dirty),
                 Text::from(ci),
             ])
@@ -288,7 +291,10 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     let rf_span = health
         .map(|h| {
             let label = if h.refactor_high_count > 0 {
-                format!("{} (WARNING: {} HIGH)", h.refactor_grade, h.refactor_high_count)
+                format!(
+                    "{} (WARNING: {} HIGH)",
+                    h.refactor_grade, h.refactor_high_count
+                )
             } else {
                 format!("{} ✓", h.refactor_grade)
             };

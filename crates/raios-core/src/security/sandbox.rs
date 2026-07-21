@@ -150,9 +150,10 @@ impl SandboxGuard {
             }
         }
 
-        let canonical_workspace = self.workspace.canonicalize().map_err(|e| {
-            anyhow!("Workspace path {:?} not accessible: {}", self.workspace, e)
-        })?;
+        let canonical_workspace = self
+            .workspace
+            .canonicalize()
+            .map_err(|e| anyhow!("Workspace path {:?} not accessible: {}", self.workspace, e))?;
 
         if path_starts_with(&canonical_target, &canonical_workspace) {
             Ok(canonical_target)

@@ -7,7 +7,10 @@ pub async fn handle_submit_job<W: AsyncWriteExt + Unpin>(
     factory: &Arc<Factory>,
     writer: &mut W,
 ) {
-    let description = v["description"].as_str().unwrap_or("unnamed task").to_string();
+    let description = v["description"]
+        .as_str()
+        .unwrap_or("unnamed task")
+        .to_string();
     let agent_name = v["agent"].as_str().unwrap_or("unknown").to_string();
     let project = v["project"].as_str().map(|s| s.to_string());
     let webhook_url = v["webhook_url"].as_str().map(|s| s.to_string());
@@ -77,10 +80,7 @@ pub async fn handle_list_inbox<W: AsyncWriteExt + Unpin>(
     let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;
 }
 
-pub async fn handle_list_running<W: AsyncWriteExt + Unpin>(
-    factory: &Arc<Factory>,
-    writer: &mut W,
-) {
+pub async fn handle_list_running<W: AsyncWriteExt + Unpin>(factory: &Arc<Factory>, writer: &mut W) {
     let jobs = factory.list_running();
     let r = serde_json::json!({ "event": "RunningList", "jobs": jobs });
     let _ = writer.write_all(format!("{}\n", r).as_bytes()).await;

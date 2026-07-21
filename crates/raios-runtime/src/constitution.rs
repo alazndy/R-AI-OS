@@ -102,7 +102,11 @@ fn strip_list_marker(line: &str) -> String {
 }
 
 pub fn is_include_only(content: &str) -> bool {
-    let meaningful: Vec<&str> = content.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let meaningful: Vec<&str> = content
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     !meaningful.is_empty() && meaningful.iter().all(|l| l.starts_with('@'))
 }
 
@@ -124,13 +128,17 @@ impl ProjectFileKind {
 }
 
 pub fn discover_project_constitution_files(project_root: &Path) -> Vec<(ProjectFileKind, PathBuf)> {
-    [ProjectFileKind::ClaudeMd, ProjectFileKind::AgentsMd, ProjectFileKind::GeminiMd]
-        .into_iter()
-        .filter_map(|kind| {
-            let p = project_root.join(kind.filename());
-            p.exists().then_some((kind, p))
-        })
-        .collect()
+    [
+        ProjectFileKind::ClaudeMd,
+        ProjectFileKind::AgentsMd,
+        ProjectFileKind::GeminiMd,
+    ]
+    .into_iter()
+    .filter_map(|kind| {
+        let p = project_root.join(kind.filename());
+        p.exists().then_some((kind, p))
+    })
+    .collect()
 }
 
 #[cfg(test)]
@@ -151,11 +159,18 @@ Every task follows this loop.\n\
         let sections = parse_sections(content);
         assert_eq!(sections.len(), 2);
         assert_eq!(sections[0].title, "1. Identity");
-        assert_eq!(sections[0].items, vec!["System Name: k-ai-ra", "Role: Partner"]);
+        assert_eq!(
+            sections[0].items,
+            vec!["System Name: k-ai-ra", "Role: Partner"]
+        );
         assert_eq!(sections[1].title, "2. Standard");
         assert_eq!(
             sections[1].items,
-            vec!["Every task follows this loop.", "Requirement", "Investigation"]
+            vec![
+                "Every task follows this loop.",
+                "Requirement",
+                "Investigation"
+            ]
         );
     }
 
@@ -174,7 +189,10 @@ Turkish in chat.\n";
         assert_eq!(sections[0].title, "4. Engineering Standards");
         assert!(sections[0].items.is_empty());
         assert_eq!(sections[0].children.len(), 1);
-        assert_eq!(sections[0].children[0].title, "AgentShield: Absolute OWASP Rules");
+        assert_eq!(
+            sections[0].children[0].title,
+            "AgentShield: Absolute OWASP Rules"
+        );
         assert_eq!(
             sections[0].children[0].items,
             vec![
@@ -209,17 +227,26 @@ Turkish in chat.\n";
         assert!(engineering.items.is_empty());
         assert_eq!(engineering.children.len(), 3);
 
-        assert_eq!(engineering.children[0].title, "Skeleton-First Architecture (Mandatory)");
+        assert_eq!(
+            engineering.children[0].title,
+            "Skeleton-First Architecture (Mandatory)"
+        );
         assert_eq!(engineering.children[0].items, vec!["No Blind Coding rule"]);
 
-        assert_eq!(engineering.children[1].title, "AgentShield: Absolute OWASP Rules");
+        assert_eq!(
+            engineering.children[1].title,
+            "AgentShield: Absolute OWASP Rules"
+        );
         assert_eq!(
             engineering.children[1].items,
             vec!["Broken Access Control", "Cryptographic Failures"]
         );
 
         assert_eq!(engineering.children[2].title, "Anti-Laziness");
-        assert_eq!(engineering.children[2].items, vec!["Never write lazy shortcuts"]);
+        assert_eq!(
+            engineering.children[2].items,
+            vec!["Never write lazy shortcuts"]
+        );
 
         let communication = &sections[1];
         assert_eq!(communication.title, "5. Communication");
@@ -253,10 +280,8 @@ Turkish in chat.\n";
 
     #[test]
     fn discover_project_files_finds_existing_ones_only() {
-        let dir = std::env::temp_dir().join(format!(
-            "raios-constitution-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("raios-constitution-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("CLAUDE.md"), "@/home/alaz/AGENT_CONSTITUTION.md\n").unwrap();
         // AGENTS.md and GEMINI.md deliberately absent

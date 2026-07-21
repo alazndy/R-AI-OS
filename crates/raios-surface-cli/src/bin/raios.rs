@@ -10,9 +10,9 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
+use raios_surface_cli::cli::{self, Cli};
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui;
-use raios_surface_cli::cli::{self, Cli};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -53,7 +53,10 @@ fn run_tui(remote: Option<String>) -> Result<()> {
     result
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, remote: Option<String>) -> Result<()> {
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    remote: Option<String>,
+) -> Result<()> {
     let mut app = match remote {
         Some(host) => App::new_remote(host),
         None => App::new(),

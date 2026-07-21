@@ -50,7 +50,9 @@ pub(super) async fn auth_middleware(
 
     let effective_ip = effective_peer_ip(peer, &headers, trusted_proxy_enabled());
     if effective_ip != peer.ip() {
-        eprintln!("[HTTP Auth] Trusted proxy at {peer}: treating request as coming from {effective_ip}");
+        eprintln!(
+            "[HTTP Auth] Trusted proxy at {peer}: treating request as coming from {effective_ip}"
+        );
     }
     let is_localhost = effective_ip.is_loopback();
 
@@ -189,13 +191,7 @@ mod tests {
 #[cfg(all(test, unix))]
 mod middleware_integration_tests {
     use super::*;
-    use axum::{
-        body::Body,
-        http::Request,
-        middleware,
-        routing::get,
-        Router,
-    };
+    use axum::{body::Body, http::Request, middleware, routing::get, Router};
     use std::sync::Mutex;
     use tower::ServiceExt;
 
@@ -313,7 +309,8 @@ mod middleware_integration_tests {
     }
 
     fn with_host(mut req: Request<Body>, host: &str) -> Request<Body> {
-        req.headers_mut().insert(header::HOST, host.parse().unwrap());
+        req.headers_mut()
+            .insert(header::HOST, host.parse().unwrap());
         req
     }
 
@@ -413,6 +410,10 @@ mod middleware_integration_tests {
         req.extensions_mut()
             .insert(ConnectInfo(peer("203.0.113.9")));
         let res = router.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK, "no bearer, no host — should still pass");
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "no bearer, no host — should still pass"
+        );
     }
 }

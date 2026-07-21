@@ -1,6 +1,12 @@
 use std::path::Path;
 
-pub(super) fn cmd_locate(pattern: &str, scope: &Path, ignore_case: bool, reindex: bool, json: bool) {
+pub(super) fn cmd_locate(
+    pattern: &str,
+    scope: &Path,
+    ignore_case: bool,
+    reindex: bool,
+    json: bool,
+) {
     let matches = match raios_runtime::search::trigram::locate(
         scope,
         &raios_runtime::cortex::store::default_db_path(),

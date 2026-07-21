@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use super::ExtSchedule;
+use std::path::{Path, PathBuf};
 
 fn cron_to_interval_secs(cron: &str) -> u64 {
     let fields: Vec<&str> = cron.split_whitespace().collect();
@@ -92,7 +92,15 @@ pub(super) fn register_extension_schedules(
                task_description=excluded.task_description,
                interval_secs=excluded.interval_secs,
                next_run_at=excluded.next_run_at",
-            rusqlite::params![id, title, ext_name, task_desc, interval as i64, next_run, now],
+            rusqlite::params![
+                id,
+                title,
+                ext_name,
+                task_desc,
+                interval as i64,
+                next_run,
+                now
+            ],
         );
         match result {
             Ok(_) => println!("    ✓ Schedule registered: {} ({}s)", sched.name, interval),

@@ -216,4 +216,3 @@ pub fn mark_swarm_workflow_rejected(
     )?;
     Ok(())
 }
-

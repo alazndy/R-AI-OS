@@ -143,7 +143,9 @@ fn cp_provider_capabilities_upsert_and_get() {
         supports_exact_quota_visibility: false,
     };
     cp_upsert_provider_capabilities(&conn, &caps).unwrap();
-    let got = cp_get_provider_capabilities(&conn, "claude").unwrap().unwrap();
+    let got = cp_get_provider_capabilities(&conn, "claude")
+        .unwrap()
+        .unwrap();
     assert!(got.supports_tool_calling);
     assert!(got.supports_patch_diff);
     assert!(!got.supports_exact_quota_visibility);
@@ -171,19 +173,45 @@ fn cp_provider_capabilities_seed_no_overwrite() {
     )
     .unwrap();
     cp_seed_provider_capabilities(&conn).unwrap();
-    let got = cp_get_provider_capabilities(&conn, "claude").unwrap().unwrap();
-    assert!(!got.supports_tool_calling, "seed should not overwrite existing rows");
+    let got = cp_get_provider_capabilities(&conn, "claude")
+        .unwrap()
+        .unwrap();
+    assert!(
+        !got.supports_tool_calling,
+        "seed should not overwrite existing rows"
+    );
 }
 
 #[test]
 fn cp_failure_kind_classify() {
-    assert_eq!(ProviderFailureKind::classify("401 unauthorized"), ProviderFailureKind::Auth);
-    assert_eq!(ProviderFailureKind::classify("rate limit exceeded 429"), ProviderFailureKind::Quota);
-    assert_eq!(ProviderFailureKind::classify("connection timed out"), ProviderFailureKind::Timeout);
-    assert_eq!(ProviderFailureKind::classify("sandbox permission denied"), ProviderFailureKind::Sandbox);
-    assert_eq!(ProviderFailureKind::classify("invalid tool call argument"), ProviderFailureKind::ToolError);
-    assert_eq!(ProviderFailureKind::classify("service unavailable 503"), ProviderFailureKind::ProviderUnavailable);
-    assert!(matches!(ProviderFailureKind::classify("some weird error"), ProviderFailureKind::Unknown(_)));
+    assert_eq!(
+        ProviderFailureKind::classify("401 unauthorized"),
+        ProviderFailureKind::Auth
+    );
+    assert_eq!(
+        ProviderFailureKind::classify("rate limit exceeded 429"),
+        ProviderFailureKind::Quota
+    );
+    assert_eq!(
+        ProviderFailureKind::classify("connection timed out"),
+        ProviderFailureKind::Timeout
+    );
+    assert_eq!(
+        ProviderFailureKind::classify("sandbox permission denied"),
+        ProviderFailureKind::Sandbox
+    );
+    assert_eq!(
+        ProviderFailureKind::classify("invalid tool call argument"),
+        ProviderFailureKind::ToolError
+    );
+    assert_eq!(
+        ProviderFailureKind::classify("service unavailable 503"),
+        ProviderFailureKind::ProviderUnavailable
+    );
+    assert!(matches!(
+        ProviderFailureKind::classify("some weird error"),
+        ProviderFailureKind::Unknown(_)
+    ));
 }
 
 #[test]

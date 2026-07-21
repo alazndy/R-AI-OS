@@ -77,7 +77,15 @@ pub fn insert_verify_gate_node(
     agent_name: &str,
     ready: bool,
 ) -> Result<raios_core::control_plane::FileChangeWorkflowIds> {
-    let ids = create_task_graph_node_workflow(conn, graph_id, node_id, description, shell_cmd, agent_name, ready)?;
+    let ids = create_task_graph_node_workflow(
+        conn,
+        graph_id,
+        node_id,
+        description,
+        shell_cmd,
+        agent_name,
+        ready,
+    )?;
     conn.execute(
         "UPDATE cp_task_graph_nodes SET node_kind = 'verify_gate' WHERE graph_id = ?1 AND node_id = ?2",
         params![graph_id, node_id],
@@ -137,12 +145,11 @@ pub fn load_graph_control_task_statuses(
     graph_id: &str,
 ) -> std::collections::HashMap<String, String> {
     let task_ids = {
-        let mut stmt = match conn.prepare(
-            "SELECT task_id FROM cp_task_graph_nodes WHERE graph_id = ?1",
-        ) {
-            Ok(stmt) => stmt,
-            Err(_) => return std::collections::HashMap::new(),
-        };
+        let mut stmt =
+            match conn.prepare("SELECT task_id FROM cp_task_graph_nodes WHERE graph_id = ?1") {
+                Ok(stmt) => stmt,
+                Err(_) => return std::collections::HashMap::new(),
+            };
 
         stmt.query_map(params![graph_id], |row| row.get::<_, String>(0))
             .ok()
@@ -180,7 +187,10 @@ pub fn load_graph_node_dependencies(
     };
 
     for (node_id, dep_id) in rows.flatten() {
-        deps_by_node.entry(node_id).or_insert_with(Vec::new).push(dep_id);
+        deps_by_node
+            .entry(node_id)
+            .or_insert_with(Vec::new)
+            .push(dep_id);
     }
 
     deps_by_node
@@ -308,4 +318,3 @@ pub fn mark_control_task_failed(
     )?;
     Ok(())
 }
-

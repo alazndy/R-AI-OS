@@ -57,10 +57,7 @@ pub fn detect_tailscale_ip() -> Option<std::net::IpAddr> {
         .args(["ip", "--1"])
         .output()
         .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse()
-        .ok()
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
 /// Start the Axum HTTP & WebSocket API Server.

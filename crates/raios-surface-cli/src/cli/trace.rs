@@ -152,10 +152,7 @@ pub(super) fn cmd_trace(action: TraceAction, json: bool) {
             },
         ) {
             Ok(rows) => {
-                let facts = rows
-                    .iter()
-                    .flat_map(trace_to_kg_facts)
-                    .collect::<Vec<_>>();
+                let facts = rows.iter().flat_map(trace_to_kg_facts).collect::<Vec<_>>();
                 if json {
                     println!(
                         "{}",

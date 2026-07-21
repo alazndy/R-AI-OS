@@ -52,8 +52,15 @@ pub fn parse_diff_stat(stat: &str) -> FileImpact {
     let files_changed = capture_number(stat, r"(\d+)\s+files?\s+changed");
     let insertions = capture_number(stat, r"(\d+)\s+insertions?\(\+\)").unwrap_or(0);
     let deletions = capture_number(stat, r"(\d+)\s+deletions?\(-\)").unwrap_or(0);
-    let lines_changed = if insertions + deletions > 0 { Some(insertions + deletions) } else { None };
-    FileImpact { files_changed, lines_changed }
+    let lines_changed = if insertions + deletions > 0 {
+        Some(insertions + deletions)
+    } else {
+        None
+    };
+    FileImpact {
+        files_changed,
+        lines_changed,
+    }
 }
 
 fn capture_number(text: &str, pattern: &str) -> Option<u32> {
@@ -69,8 +76,15 @@ fn file_write_impact(original_content: Option<&str>, new_content: &str) -> FileI
     let old_lines = original_content.map(|c| c.lines().count()).unwrap_or(0);
     let new_lines = new_content.lines().count();
     let delta = old_lines.abs_diff(new_lines) as u32;
-    let lines_changed = if delta == 0 && Some(new_content) != original_content { 1 } else { delta };
-    FileImpact { files_changed: Some(1), lines_changed: Some(lines_changed) }
+    let lines_changed = if delta == 0 && Some(new_content) != original_content {
+        1
+    } else {
+        delta
+    };
+    FileImpact {
+        files_changed: Some(1),
+        lines_changed: Some(lines_changed),
+    }
 }
 
 /// Base risk by approval type, then adjusted by file impact and the
@@ -189,8 +203,11 @@ pub fn cp_query_pending_approvals_scored(conn: &Connection) -> Result<Vec<Scored
             None => None,
         };
 
-        let (risk_score, risk_label, suggested_action) =
-            score_approval(&raw.approval.approval_type, file_impact.as_ref(), agent_success_rate);
+        let (risk_score, risk_label, suggested_action) = score_approval(
+            &raw.approval.approval_type,
+            file_impact.as_ref(),
+            agent_success_rate,
+        );
 
         out.push(ScoredApproval {
             approval: raw.approval,
@@ -225,7 +242,9 @@ mod tests {
 
     #[test]
     fn parse_diff_stat_reads_files_insertions_deletions() {
-        let fi = parse_diff_stat(" src/db.rs | 12 ++++++++----\n 1 file changed, 8 insertions(+), 4 deletions(-)");
+        let fi = parse_diff_stat(
+            " src/db.rs | 12 ++++++++----\n 1 file changed, 8 insertions(+), 4 deletions(-)",
+        );
         assert_eq!(fi.files_changed, Some(1));
         assert_eq!(fi.lines_changed, Some(12));
     }
@@ -254,7 +273,11 @@ mod tests {
     #[test]
     fn file_write_impact_same_line_count_edit_still_registers() {
         let fi = file_write_impact(Some("a\nb\nc"), "a\nX\nc");
-        assert_eq!(fi.lines_changed, Some(1), "same line count but content changed must not report 0");
+        assert_eq!(
+            fi.lines_changed,
+            Some(1),
+            "same line count but content changed must not report 0"
+        );
     }
 
     #[test]
@@ -272,8 +295,14 @@ mod tests {
 
     #[test]
     fn score_approval_scales_with_file_impact() {
-        let small = FileImpact { files_changed: Some(1), lines_changed: Some(5) };
-        let large = FileImpact { files_changed: Some(15), lines_changed: Some(400) };
+        let small = FileImpact {
+            files_changed: Some(1),
+            lines_changed: Some(5),
+        };
+        let large = FileImpact {
+            files_changed: Some(15),
+            lines_changed: Some(400),
+        };
         let (small_score, ..) = score_approval("file_write", Some(&small), None);
         let (large_score, ..) = score_approval("file_write", Some(&large), None);
         assert!(large_score > small_score);
@@ -301,7 +330,10 @@ mod tests {
 
     #[test]
     fn score_approval_never_exceeds_bounds() {
-        let extreme = FileImpact { files_changed: Some(u32::MAX), lines_changed: Some(u32::MAX) };
+        let extreme = FileImpact {
+            files_changed: Some(u32::MAX),
+            lines_changed: Some(u32::MAX),
+        };
         let (score, ..) = score_approval("network_exception", Some(&extreme), Some(0.0));
         assert_eq!(score, 100);
     }

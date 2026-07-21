@@ -26,7 +26,10 @@ pub(super) fn cmd_agent_stats(agent: Option<String>, json: bool) {
     };
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&stats).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&stats).unwrap_or_default()
+        );
         return;
     }
 
@@ -40,19 +43,29 @@ pub(super) fn cmd_agent_stats(agent: Option<String>, json: bool) {
 
     println!();
     for s in &stats {
-        let rate = s.success_rate.map(|r| format!("{:.0}%", r * 100.0)).unwrap_or_else(|| "n/a".into());
+        let rate = s
+            .success_rate
+            .map(|r| format!("{:.0}%", r * 100.0))
+            .unwrap_or_else(|| "n/a".into());
         let dur = s
             .avg_duration_secs
             .map(|d| format!("{:.0}s avg", d))
             .unwrap_or_else(|| "n/a".into());
-        let open_note = if s.still_open > 0 { format!("  ({} still open)", s.still_open) } else { String::new() };
+        let open_note = if s.still_open > 0 {
+            format!("  ({} still open)", s.still_open)
+        } else {
+            String::new()
+        };
         println!(
             "  {:<20} runs={:<4} success={:<5} {dur}{open_note}",
             s.agent_name, s.total_runs, rate
         );
         if !s.top_exit_reasons.is_empty() {
-            let breakdown: Vec<String> =
-                s.top_exit_reasons.iter().map(|(r, c)| format!("{r}={c}")).collect();
+            let breakdown: Vec<String> = s
+                .top_exit_reasons
+                .iter()
+                .map(|(r, c)| format!("{r}={c}"))
+                .collect();
             println!("      exit_reasons: {}", breakdown.join(", "));
         }
     }

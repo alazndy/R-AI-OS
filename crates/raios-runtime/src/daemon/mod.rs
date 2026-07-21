@@ -1,12 +1,12 @@
 pub mod cmd;
 pub mod cortex;
-pub mod handlers;
 pub mod git;
+pub mod handlers;
 pub mod health;
 pub mod lifecycle;
 pub mod proxy;
+pub mod scheduler;
 pub mod sentinel;
 pub mod server;
 pub mod state;
 pub mod validation;
-pub mod scheduler;

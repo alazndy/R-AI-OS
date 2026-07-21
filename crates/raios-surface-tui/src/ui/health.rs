@@ -129,7 +129,11 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
                 .unwrap_or_else(|| "—".into());
 
             let sec_text = match h.security_score {
-                Some(s) => format!("SECURITY {} {}", s, h.security_grade.as_deref().unwrap_or("-")),
+                Some(s) => format!(
+                    "SECURITY {} {}",
+                    s,
+                    h.security_grade.as_deref().unwrap_or("-")
+                ),
                 None => "—".into(),
             };
 

@@ -50,9 +50,20 @@ pub fn render_explore_route(f: &mut Frame, area: Rect, store: &Store) {
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("[{}] ", t.status), Style::default().fg(status_color)),
-                    Span::styled(&t.tool_name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" ({}ms)", t.duration_ms), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("[{}] ", t.status),
+                        Style::default().fg(status_color),
+                    ),
+                    Span::styled(
+                        &t.tool_name,
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" ({}ms)", t.duration_ms),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]))
                 .style(Style::default().bg(bg))
             })
@@ -90,7 +101,10 @@ pub fn render_explore_route(f: &mut Frame, area: Rect, store: &Store) {
                     Color::Reset
                 };
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("[{}] ", l.category), Style::default().fg(Color::Blue)),
+                    Span::styled(
+                        format!("[{}] ", l.category),
+                        Style::default().fg(Color::Blue),
+                    ),
                     Span::styled(&l.message, Style::default().fg(Color::Gray)),
                 ]))
                 .style(Style::default().bg(bg))

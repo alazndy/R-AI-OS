@@ -1,6 +1,6 @@
-use raios_core::config::Config;
-use crate::cortex::Cortex;
 use crate::cortex::store::VectorResult;
+use crate::cortex::Cortex;
+use raios_core::config::Config;
 use std::path::PathBuf;
 
 pub enum CortexRequest {
@@ -55,12 +55,20 @@ struct CortexWorkerState {
 impl CortexWorkerState {
     fn handle(&mut self, req: CortexRequest) {
         match req {
-            CortexRequest::Search { query, top_k, scope, reply } => {
+            CortexRequest::Search {
+                query,
+                top_k,
+                scope,
+                reply,
+            } => {
                 if self.tracker.on_search() {
                     self.cortex.rebuild_index();
                 }
                 let hits = match scope {
-                    Some(dir) => self.cortex.search_scoped(&query, top_k, &dir).unwrap_or_default(),
+                    Some(dir) => self
+                        .cortex
+                        .search_scoped(&query, top_k, &dir)
+                        .unwrap_or_default(),
                     None => self.cortex.search(&query, top_k).unwrap_or_default(),
                 };
                 let _ = reply.send(hits);
@@ -99,9 +107,13 @@ pub fn spawn_cortex_worker(eager_indexing: bool) -> tokio::sync::mpsc::Sender<Co
 
         // Initial full index on startup
         if eager_indexing {
-            let config = Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
+            let config =
+                Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
             println!("[Cortex Worker] Starting initial indexing...");
-            let count = state.cortex.index_workspace(&config.dev_ops_path).unwrap_or(0);
+            let count = state
+                .cortex
+                .index_workspace(&config.dev_ops_path)
+                .unwrap_or(0);
             println!(
                 "[Cortex Worker] Initial indexing complete. {} files indexed.",
                 count
@@ -137,12 +149,12 @@ mod tests {
         let mut tracker = DirtyTracker::default();
         tracker.on_index_file(true);
         assert!(tracker.dirty);
-        
+
         let rebuilt1 = tracker.on_search();
         assert!(rebuilt1);
         assert_eq!(tracker.rebuilds, 1);
         assert!(!tracker.dirty);
-        
+
         let rebuilt2 = tracker.on_search();
         assert!(!rebuilt2);
         assert_eq!(tracker.rebuilds, 1);
@@ -161,10 +173,10 @@ mod tests {
         let mut tracker = DirtyTracker::default();
         tracker.on_index_file(true);
         assert!(tracker.dirty);
-        
+
         tracker.on_reindex();
         assert!(!tracker.dirty);
-        
+
         let rebuilt = tracker.on_search();
         assert!(!rebuilt);
         assert_eq!(tracker.rebuilds, 0);

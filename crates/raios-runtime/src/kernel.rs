@@ -15,8 +15,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, RwLock};
 
-use raios_core::config::Config;
 use crate::daemon::state::DaemonState;
+use raios_core::config::Config;
 
 pub const DAEMON_PORT: u16 = 42069;
 pub const MCP_TCP_PORT: u16 = 42070;

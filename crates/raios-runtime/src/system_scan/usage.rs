@@ -68,9 +68,9 @@ pub(super) fn scan_opencode_usage() -> UsageSnapshot {
 
     if installed {
         usage.source = UsageSource::Inferred;
-        usage.notes.push(
-            "OpenCode kurulu; local config üzerinden kullanım takibi yapılıyor.".into(),
-        );
+        usage
+            .notes
+            .push("OpenCode kurulu; local config üzerinden kullanım takibi yapılıyor.".into());
     }
 
     usage
@@ -442,17 +442,18 @@ mod tests {
         assert_eq!(usage.source, UsageSource::LocalLog);
         assert_eq!(usage.confidence, UsageConfidence::Estimated);
         assert_eq!(usage.plan.as_deref(), Some("pro"));
-        assert!(usage.notes.iter().any(|n| n.contains("cached from statusLine")));
+        assert!(usage
+            .notes
+            .iter()
+            .any(|n| n.contains("cached from statusLine")));
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn apply_usage_cache_ignores_stale_cache() {
-        let dir = std::env::temp_dir().join(format!(
-            "raios-usage-test-stale-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("raios-usage-test-stale-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let old = (chrono::Utc::now() - chrono::Duration::hours(30)).to_rfc3339();
         let cache_path = write_temp_cache(

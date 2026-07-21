@@ -1,9 +1,9 @@
+use super::FileEntry;
 use std::cmp::Reverse;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
-use super::FileEntry;
 
 pub fn get_master_rule_files(master_md: &Path) -> Vec<FileEntry> {
     let h = super::home();
@@ -30,9 +30,7 @@ pub fn get_agent_config_files() -> Vec<FileEntry> {
 /// Policy files — includes MASTER.md whose path comes from config.
 pub fn get_policy_files() -> Vec<FileEntry> {
     let h = super::home();
-    vec![
-        FileEntry::new("Claude settings.json", h.join(".claude/settings.json")).readonly(),
-    ]
+    vec![FileEntry::new("Claude settings.json", h.join(".claude/settings.json")).readonly()]
 }
 
 /// MemPalace files — dev_ops_path comes from config.
@@ -47,11 +45,35 @@ pub fn get_mempalace_files(dev_ops: &Path) -> Vec<FileEntry> {
 
 pub fn discover_memory_files(base: &Path, limit: usize) -> Vec<FileEntry> {
     let skip_dirs: &[&str] = &[
-        "node_modules", "target", "dist", "build", ".next", "__pycache__",
-        "vendor", ".turbo", "out", "coverage", "cache", "tmp", "temp",
-        "logs", "log", "runs", "test", "tests", "__tests__", "e2e",
-        "fixtures", "examples", "samples", "gradle", ".gradle",
-        "cmake-build-debug", "cmake-build-release", ".idea", ".vscode",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        ".next",
+        "__pycache__",
+        "vendor",
+        ".turbo",
+        "out",
+        "coverage",
+        "cache",
+        "tmp",
+        "temp",
+        "logs",
+        "log",
+        "runs",
+        "test",
+        "tests",
+        "__tests__",
+        "e2e",
+        "fixtures",
+        "examples",
+        "samples",
+        "gradle",
+        ".gradle",
+        "cmake-build-debug",
+        "cmake-build-release",
+        ".idea",
+        ".vscode",
     ];
 
     let walker = WalkDir::new(base)
@@ -195,11 +217,8 @@ mod constitution_save_tests {
     use super::*;
 
     fn temp_file(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "raios-save-test-{}-{}",
-            std::process::id(),
-            name
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("raios-save-test-{}-{}", std::process::id(), name));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("CONSTITUTION.md")
     }
@@ -252,7 +271,12 @@ mod constitution_save_tests {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy().contains(".bak."))
             .collect();
-        assert_eq!(backups.len(), 5, "expected exactly 5 backups, found {}", backups.len());
+        assert_eq!(
+            backups.len(),
+            5,
+            "expected exactly 5 backups, found {}",
+            backups.len()
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 }

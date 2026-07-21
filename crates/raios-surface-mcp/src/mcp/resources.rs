@@ -20,11 +20,12 @@ impl McpServer {
 
         match uri {
             "raios://memory" => {
-                let path = raios_runtime::filebrowser::discover_memory_files(&self.config.dev_ops_path, 1)
-                    .into_iter()
-                    .next()
-                    .map(|e| e.path)
-                    .unwrap_or_else(|| self.config.dev_ops_path.join("memory.md"));
+                let path =
+                    raios_runtime::filebrowser::discover_memory_files(&self.config.dev_ops_path, 1)
+                        .into_iter()
+                        .next()
+                        .map(|e| e.path)
+                        .unwrap_or_else(|| self.config.dev_ops_path.join("memory.md"));
                 let content = if path.exists() {
                     std::fs::read_to_string(&path)
                         .unwrap_or_else(|e| format!("# Error reading file\n{}", e))
@@ -60,8 +61,9 @@ impl McpServer {
                 )
             }
             "raios://session/current" => {
-                let store =
-                    raios_runtime::session::SessionStore::new(raios_runtime::session::SessionStore::default_path());
+                let store = raios_runtime::session::SessionStore::new(
+                    raios_runtime::session::SessionStore::default_path(),
+                );
                 match store.current_open() {
                     Some(sess) => {
                         let events = store.events(&sess.id);
@@ -76,8 +78,9 @@ impl McpServer {
                 }
             }
             "raios://session/recent" => {
-                let store =
-                    raios_runtime::session::SessionStore::new(raios_runtime::session::SessionStore::default_path());
+                let store = raios_runtime::session::SessionStore::new(
+                    raios_runtime::session::SessionStore::default_path(),
+                );
                 let sessions = store.recent(10);
                 let payload = json!({ "sessions": sessions });
                 Ok(

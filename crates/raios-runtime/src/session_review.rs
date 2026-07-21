@@ -44,11 +44,13 @@ pub fn build_review(
     let mut risks = Vec::new();
     if let Some(stat) = &changed {
         let impact = raios_core::db::parse_diff_stat(stat);
-        let large_change = impact.lines_changed.unwrap_or(0) >= 25 || impact.files_changed.unwrap_or(0) >= 3;
+        let large_change =
+            impact.lines_changed.unwrap_or(0) >= 25 || impact.files_changed.unwrap_or(0) >= 3;
         if large_change && !tests_run_during_session {
             risks.push("large change with no test run detected".to_string());
         }
-        if stat.contains("raios-policy.toml") || stat.contains(".env") || stat.contains("security/") {
+        if stat.contains("raios-policy.toml") || stat.contains(".env") || stat.contains("security/")
+        {
             risks.push("security-sensitive files touched".to_string());
         }
     }
@@ -153,7 +155,10 @@ mod tests {
         init_git_repo(&tmp);
         std::fs::write(
             tmp.path().join("file.txt"),
-            (0..40).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n"),
+            (0..40)
+                .map(|i| format!("line{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
         )
         .unwrap();
 

@@ -83,7 +83,8 @@ async fn execute_graph_async(store: Arc<GraphStore>, factory: Arc<Factory>, grap
 
         let _ = store.ready_nodes(&graph_id);
 
-        let ready_tasks: Vec<(String, String, String)> = if let Ok(conn) = raios_core::db::open_db() {
+        let ready_tasks: Vec<(String, String, String)> = if let Ok(conn) = raios_core::db::open_db()
+        {
             raios_core::db::cp_scheduler_list_ready(&conn)
                 .unwrap_or_default()
                 .into_iter()

@@ -76,12 +76,17 @@ pub fn cp_agent_stats(conn: &Connection) -> Result<Vec<AgentStats>> {
 /// runs at all (distinct from "has runs but all zero" — callers can tell
 /// "never ran" from "ran and stats are just empty").
 pub fn cp_agent_stats_for(conn: &Connection, agent_name: &str) -> Result<Option<AgentStats>> {
-    Ok(cp_agent_stats(conn)?.into_iter().find(|s| s.agent_name == agent_name))
+    Ok(cp_agent_stats(conn)?
+        .into_iter()
+        .find(|s| s.agent_name == agent_name))
 }
 
 fn summarize(agent_name: String, runs: Vec<RunRow>) -> AgentStats {
     let total_runs = runs.len() as i64;
-    let succeeded = runs.iter().filter(|r| r.status == "succeeded" || r.status == "completed").count() as i64;
+    let succeeded = runs
+        .iter()
+        .filter(|r| r.status == "succeeded" || r.status == "completed")
+        .count() as i64;
     let failed = runs.iter().filter(|r| r.status == "failed").count() as i64;
     let still_open = total_runs - succeeded - failed;
     let terminal = succeeded + failed;

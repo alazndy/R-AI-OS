@@ -53,9 +53,8 @@ impl App {
                         mouse.column >= self.width.saturating_mul(40) / 100,
                     ),
                     Route::Explore => {
-                        let traces_end = content_top
-                            + 3
-                            + launcher_top.saturating_sub(content_top + 3) / 2;
+                        let traces_end =
+                            content_top + 3 + launcher_top.saturating_sub(content_top + 3) / 2;
                         if mouse.row < traces_end {
                             (mouse.row.saturating_sub(content_top + 4) as usize, false)
                         } else {

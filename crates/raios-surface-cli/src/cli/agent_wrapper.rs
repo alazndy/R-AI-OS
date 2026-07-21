@@ -26,10 +26,19 @@ pub fn cmd_agent_wrapper(action: AgentWrapperAction, json: bool) {
                         })
                     })
                     .collect();
-                println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&items).unwrap_or_default()
+                );
             } else {
                 for r in &results {
-                    let icon = if r.skipped { "○" } else if r.ok { "✓" } else { "✗" };
+                    let icon = if r.skipped {
+                        "○"
+                    } else if r.ok {
+                        "✓"
+                    } else {
+                        "✗"
+                    };
                     println!("  {} {}", icon, r.desc);
                 }
             }
@@ -52,10 +61,19 @@ pub fn cmd_agent_wrapper(action: AgentWrapperAction, json: bool) {
                         })
                     })
                     .collect();
-                println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&items).unwrap_or_default()
+                );
             } else {
                 for r in &results {
-                    let icon = if r.skipped { "○" } else if r.ok { "✓" } else { "✗" };
+                    let icon = if r.skipped {
+                        "○"
+                    } else if r.ok {
+                        "✓"
+                    } else {
+                        "✗"
+                    };
                     println!("  {} {}", icon, r.desc);
                 }
             }
@@ -74,7 +92,10 @@ pub fn cmd_agent_wrapper(action: AgentWrapperAction, json: bool) {
                         })
                     })
                     .collect();
-                println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&items).unwrap_or_default()
+                );
                 return;
             }
 
@@ -91,7 +112,11 @@ pub fn cmd_agent_wrapper(action: AgentWrapperAction, json: bool) {
             println!("  {}", "─".repeat(38));
             for s in &statuses {
                 let wrapped = if s.installed { "✓ yes" } else { "✗ no" };
-                let found = if s.real_found { "✓ yes" } else { "— not found" };
+                let found = if s.real_found {
+                    "✓ yes"
+                } else {
+                    "— not found"
+                };
                 println!("  {:<12} {:<12} {}", s.agent, wrapped, found);
             }
             println!();

@@ -38,9 +38,17 @@ pub fn cp_upsert_budget_ledger(
           remaining_value, confidence, source, observed_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         params![
-            id, scope_kind, scope_id, provider, metric,
-            limit_value, used_value, remaining_value,
-            confidence, source, now
+            id,
+            scope_kind,
+            scope_id,
+            provider,
+            metric,
+            limit_value,
+            used_value,
+            remaining_value,
+            confidence,
+            source,
+            now
         ],
     )?;
     Ok(())
@@ -72,7 +80,9 @@ pub fn cp_check_provider_budget_gate(conn: &Connection, provider: &str) -> Resul
                 scope: format!("provider:{}", provider),
             })
         }
-        Some((Some(remaining), Some(limit_val), _)) if limit_val > 0.0 && remaining / limit_val < 0.1 => {
+        Some((Some(remaining), Some(limit_val), _))
+            if limit_val > 0.0 && remaining / limit_val < 0.1 =>
+        {
             Ok(BudgetGate::SoftDefer)
         }
         _ => Ok(BudgetGate::Allow),

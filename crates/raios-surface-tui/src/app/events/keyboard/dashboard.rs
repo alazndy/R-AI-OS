@@ -1,8 +1,8 @@
-use raios_surface_tui::app::state::AppState;
-use raios_surface_tui::app::{filtered_palette, App, MENU_ITEMS};
-use raios_runtime::filebrowser::FileEntry;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
+use raios_runtime::filebrowser::FileEntry;
+use raios_surface_tui::app::state::AppState;
+use raios_surface_tui::app::{filtered_palette, App, MENU_ITEMS};
 
 impl App {
     pub(crate) fn handle_command_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -575,8 +575,12 @@ impl App {
         match key.code {
             KeyCode::Char('1') => reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Now)),
             KeyCode::Char('2') => reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Work)),
-            KeyCode::Char('3') => reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Explore)),
-            KeyCode::Char('4') => reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Govern)),
+            KeyCode::Char('3') => {
+                reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Explore))
+            }
+            KeyCode::Char('4') => {
+                reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Govern))
+            }
             KeyCode::Tab => reduce_intent(&mut self.store, Intent::NextRoute),
             KeyCode::BackTab => reduce_intent(&mut self.store, Intent::PrevRoute),
             KeyCode::Up | KeyCode::Char('k') => self.move_control_cursor(false),

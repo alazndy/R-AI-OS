@@ -102,7 +102,10 @@ pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> Doct
     };
 
     if !binary_found && !config_dir_found {
-        notes.push(format!("Binary '{}' not found on PATH and config dir missing", binary_name));
+        notes.push(format!(
+            "Binary '{}' not found on PATH and config dir missing",
+            binary_name
+        ));
         return DoctorResult {
             agent: canonical_agent.to_string(),
             tier_reached: DoctorTier::Offline,
@@ -111,7 +114,10 @@ pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> Doct
         };
     }
 
-    notes.push(format!("Offline check passed: binary '{}' detected", binary_name));
+    notes.push(format!(
+        "Offline check passed: binary '{}' detected",
+        binary_name
+    ));
 
     if target_tier == DoctorTier::Offline {
         return DoctorResult {
@@ -135,7 +141,9 @@ pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> Doct
 
             if creds_path.exists() {
                 if check_file_stale(&creds_path, 24) {
-                    notes.push("Credentials file found but older than 24h: stale, re-check needed".into());
+                    notes.push(
+                        "Credentials file found but older than 24h: stale, re-check needed".into(),
+                    );
                 } else {
                     notes.push("Fresh credentials file found (.credentials.json)".into());
                 }
@@ -157,7 +165,9 @@ pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> Doct
 
             if auth_path.exists() {
                 if check_file_stale(&auth_path, 24) {
-                    notes.push("Codex auth file found but older than 24h: stale, re-check needed".into());
+                    notes.push(
+                        "Codex auth file found but older than 24h: stale, re-check needed".into(),
+                    );
                 } else {
                     notes.push("Fresh auth file found (auth.json)".into());
                 }
@@ -169,7 +179,9 @@ pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> Doct
             let token_path = home.join(".gemini/antigravity-cli/antigravity-oauth-token");
             if token_path.exists() {
                 if check_file_stale(&token_path, 24) {
-                    notes.push("Antigravity token file older than 24h: stale, re-check needed".into());
+                    notes.push(
+                        "Antigravity token file older than 24h: stale, re-check needed".into(),
+                    );
                 } else {
                     notes.push("Fresh Antigravity OAuth token file found".into());
                 }
@@ -212,7 +224,10 @@ pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> Doct
         }
         Ok(out) => {
             let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            notes.push(format!("Full roundtrip --version returned non-zero: {}", err));
+            notes.push(format!(
+                "Full roundtrip --version returned non-zero: {}",
+                err
+            ));
         }
         Err(e) => {
             notes.push(format!("Full roundtrip execution failed to spawn: {}", e));
@@ -259,7 +274,10 @@ mod tests {
         let res = DoctorResult {
             agent: "claude".into(),
             tier_reached: DoctorTier::Auth,
-            notes: vec!["Offline check passed".into(), "Stale auth check flagged".into()],
+            notes: vec![
+                "Offline check passed".into(),
+                "Stale auth check flagged".into(),
+            ],
             checked_at: "2026-07-15 12:00:00".into(),
         };
 

@@ -253,8 +253,9 @@ fn compact_rule_part(value: &str, max_chars: usize) -> String {
 
 // ─── Approval streak policy promotion ─────────────────────────────────────────
 
-static APPROVAL_STREAKS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<(String, String), usize>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+static APPROVAL_STREAKS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<(String, String), usize>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 /// Record an approval or denial decision for a tool call in a project.
 /// Returns true if N consecutive approvals were reached and a policy promotion candidate was inserted.
@@ -420,7 +421,11 @@ mod tests {
         drop(conn);
 
         let store = CandidateStore::new(&db_path);
-        store.insert("When trace recall fails, inspect token fallback", "trace:test", 0.7);
+        store.insert(
+            "When trace recall fails, inspect token fallback",
+            "trace:test",
+            0.7,
+        );
         let candidates = store.list_pending(10);
 
         assert_eq!(candidates.len(), 1);
@@ -466,6 +471,10 @@ mod tests {
             record_approval_decision(&store, tool2, project, true, 5);
         }
         let candidates_after = store.list_pending(10);
-        assert_eq!(candidates_after.len(), 1, "existing candidate preserved, tool2 not added");
+        assert_eq!(
+            candidates_after.len(),
+            1,
+            "existing candidate preserved, tool2 not added"
+        );
     }
 }

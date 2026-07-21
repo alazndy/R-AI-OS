@@ -84,4 +84,3 @@ pub fn project_id_for_path(conn: &Connection, path: &str) -> Option<i64> {
     )
     .ok()
 }
-

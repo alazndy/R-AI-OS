@@ -135,12 +135,24 @@ pub struct WizardAction {
 
 impl WizardAction {
     pub(super) fn ok(desc: impl Into<String>) -> Self {
-        Self { desc: desc.into(), ok: true, skipped: false }
+        Self {
+            desc: desc.into(),
+            ok: true,
+            skipped: false,
+        }
     }
     pub(super) fn fail(desc: impl Into<String>) -> Self {
-        Self { desc: desc.into(), ok: false, skipped: false }
+        Self {
+            desc: desc.into(),
+            ok: false,
+            skipped: false,
+        }
     }
     pub(super) fn skip(desc: impl Into<String>) -> Self {
-        Self { desc: desc.into(), ok: true, skipped: true }
+        Self {
+            desc: desc.into(),
+            ok: true,
+            skipped: true,
+        }
     }
 }

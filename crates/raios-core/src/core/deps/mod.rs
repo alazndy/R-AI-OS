@@ -22,6 +22,7 @@ pub fn check(dir: &Path) -> DepsReport {
     match detect_type(dir) {
         ProjectType::Rust => rust::check_rust(dir),
         ProjectType::Node => node::check_node(dir),
+        ProjectType::ReactNative => node::check_node(dir),
         ProjectType::Python => python::check_python(dir),
         ProjectType::Go => go::check_go(dir),
         ProjectType::Flutter => flutter::check_flutter(dir),

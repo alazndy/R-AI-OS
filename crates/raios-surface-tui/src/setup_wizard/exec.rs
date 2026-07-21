@@ -1,10 +1,10 @@
-use std::path::Path;
-use super::types::WizardAction;
 use super::templates::{
     claude_md_template, codex_md_template, master_template, HOOKS_README,
     SKILL_CONTINUOUS_LEARNING, SKILL_GRAPHIFY, SKILL_KI_SNAPSHOT, SKILL_PROMPT_MASTER,
     SKILL_SEARCH_FIRST, SKILL_VERIFY,
 };
+use super::types::WizardAction;
+use std::path::Path;
 
 /// Create the full Dev_Ops workspace directory structure.
 pub fn exec_workspace(dev_ops: &Path, github_user: &str) -> Vec<WizardAction> {
@@ -196,7 +196,9 @@ pub fn exec_codex(master_path: &Path) -> Vec<WizardAction> {
     } else {
         let content = codex_md_template(master_path);
         match std::fs::write(&agents_md, content) {
-            Ok(_) => log.push(WizardAction::ok("created: ~/.codex/AGENTS.md (Codex Kaira)")),
+            Ok(_) => log.push(WizardAction::ok(
+                "created: ~/.codex/AGENTS.md (Codex Kaira)",
+            )),
             Err(e) => log.push(WizardAction::fail(format!("AGENTS.md: {}", e))),
         }
     }
@@ -218,10 +220,20 @@ pub fn exec_opencode() -> Vec<WizardAction> {
         .unwrap_or(false);
 
     if already_registered {
-        log.push(WizardAction::skip("already registered: raios MCP in opencode"));
+        log.push(WizardAction::skip(
+            "already registered: raios MCP in opencode",
+        ));
     } else {
         let status = std::process::Command::new("opencode")
-            .args(["mcp", "add", "raios", "--command", "raios", "--args", "mcp-server"])
+            .args([
+                "mcp",
+                "add",
+                "raios",
+                "--command",
+                "raios",
+                "--args",
+                "mcp-server",
+            ])
             .status();
         match status {
             Ok(s) if s.success() => log.push(WizardAction::ok("registered: raios MCP in opencode")),
@@ -291,7 +303,11 @@ pub fn exec_agent_wrapper(choice: usize) -> Vec<WizardAction> {
     }
     raios_runtime::agent_wrapper::install(raios_runtime::agent_wrapper::ALL_AGENTS)
         .into_iter()
-        .map(|r| WizardAction { desc: r.desc, ok: r.ok, skipped: r.skipped })
+        .map(|r| WizardAction {
+            desc: r.desc,
+            ok: r.ok,
+            skipped: r.skipped,
+        })
         .collect()
 }
 
@@ -314,6 +330,7 @@ pub fn exec_initialize(
         github_user: String::new(),
         agent_wrapper_enabled,
         daemon: Default::default(),
+        factory: Default::default(),
     };
 
     match config.save() {

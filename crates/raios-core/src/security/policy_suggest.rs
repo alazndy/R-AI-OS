@@ -64,10 +64,15 @@ pub fn suggest_policy_rules(
         .collect::<std::result::Result<_, _>>()?;
     drop(stmt);
 
-    let mut stats: std::collections::BTreeMap<String, ToolStats> = std::collections::BTreeMap::new();
+    let mut stats: std::collections::BTreeMap<String, ToolStats> =
+        std::collections::BTreeMap::new();
     for (event_type, data) in &rows {
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) else { continue };
-        let Some(tool) = parsed["tool"].as_str() else { continue };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) else {
+            continue;
+        };
+        let Some(tool) = parsed["tool"].as_str() else {
+            continue;
+        };
         if parsed["matched_rule"].as_str() != Some("default") {
             continue; // an explicit rule already governs this tool
         }
@@ -92,11 +97,25 @@ pub fn suggest_policy_rules(
             }
         }
         if s.confirm >= s.allow && s.confirm >= s.deny {
-            out.needs_review.push(ReviewNote { tool, confirm_count: s.confirm, total });
+            out.needs_review.push(ReviewNote {
+                tool,
+                confirm_count: s.confirm,
+                total,
+            });
         } else if s.allow >= s.deny {
-            out.allow.push(PolicySuggestion { tool, action: PolicyAction::Allow, count: s.allow, total });
+            out.allow.push(PolicySuggestion {
+                tool,
+                action: PolicyAction::Allow,
+                count: s.allow,
+                total,
+            });
         } else {
-            out.deny.push(PolicySuggestion { tool, action: PolicyAction::Deny, count: s.deny, total });
+            out.deny.push(PolicySuggestion {
+                tool,
+                action: PolicyAction::Deny,
+                count: s.deny,
+                total,
+            });
         }
     }
 
@@ -149,8 +168,15 @@ mod tests {
     fn empty_policy() -> PolicyConfig {
         PolicyConfig {
             server: None,
-            filesystem: FilesystemPolicy { enforce_sandbox: false, allowed_paths: vec![], blocked_paths: vec![] },
-            tools: ToolsPolicy { default_action: PolicyAction::Confirm, rules: vec![] },
+            filesystem: FilesystemPolicy {
+                enforce_sandbox: false,
+                allowed_paths: vec![],
+                blocked_paths: vec![],
+            },
+            tools: ToolsPolicy {
+                default_action: PolicyAction::Confirm,
+                rules: vec![],
+            },
             preflight: None,
             egress: None,
             rate_limits: None,
@@ -163,12 +189,26 @@ mod tests {
     fn suggests_allow_after_repeated_default_allows() {
         let conn = in_memory_db();
         for _ in 0..25 {
-            record_tool_decision(&conn, "list_projects", "h", "default", "tool_allow", "claude_kaira").unwrap();
+            record_tool_decision(
+                &conn,
+                "list_projects",
+                "h",
+                "default",
+                "tool_allow",
+                "claude_kaira",
+            )
+            .unwrap();
         }
         let out = suggest_policy_rules(&conn, None, 20).unwrap();
-        assert_eq!(out.allow, vec![PolicySuggestion {
-            tool: "list_projects".into(), action: PolicyAction::Allow, count: 25, total: 25,
-        }]);
+        assert_eq!(
+            out.allow,
+            vec![PolicySuggestion {
+                tool: "list_projects".into(),
+                action: PolicyAction::Allow,
+                count: 25,
+                total: 25,
+            }]
+        );
         assert!(out.deny.is_empty());
         assert!(out.needs_review.is_empty());
     }
@@ -177,7 +217,15 @@ mod tests {
     fn suggests_deny_after_repeated_default_denies() {
         let conn = in_memory_db();
         for _ in 0..20 {
-            record_tool_decision(&conn, "dangerous_tool", "h", "default", "tool_deny", "claude_kaira").unwrap();
+            record_tool_decision(
+                &conn,
+                "dangerous_tool",
+                "h",
+                "default",
+                "tool_deny",
+                "claude_kaira",
+            )
+            .unwrap();
         }
         let out = suggest_policy_rules(&conn, None, 20).unwrap();
         assert_eq!(out.deny.len(), 1);
@@ -189,10 +237,21 @@ mod tests {
     fn confirm_heavy_tool_is_a_review_note_not_an_allow_suggestion() {
         let conn = in_memory_db();
         for _ in 0..30 {
-            record_tool_decision(&conn, "run_build", "h", "default", "tool_confirm", "claude_kaira").unwrap();
+            record_tool_decision(
+                &conn,
+                "run_build",
+                "h",
+                "default",
+                "tool_confirm",
+                "claude_kaira",
+            )
+            .unwrap();
         }
         let out = suggest_policy_rules(&conn, None, 20).unwrap();
-        assert!(out.allow.is_empty(), "confirm-heavy tools must never be auto-suggested as allow");
+        assert!(
+            out.allow.is_empty(),
+            "confirm-heavy tools must never be auto-suggested as allow"
+        );
         assert!(out.deny.is_empty());
         assert_eq!(out.needs_review.len(), 1);
         assert_eq!(out.needs_review[0].tool, "run_build");
@@ -203,7 +262,15 @@ mod tests {
     fn below_min_count_is_not_suggested() {
         let conn = in_memory_db();
         for _ in 0..5 {
-            record_tool_decision(&conn, "rarely_used", "h", "default", "tool_allow", "claude_kaira").unwrap();
+            record_tool_decision(
+                &conn,
+                "rarely_used",
+                "h",
+                "default",
+                "tool_allow",
+                "claude_kaira",
+            )
+            .unwrap();
         }
         let out = suggest_policy_rules(&conn, None, 20).unwrap();
         assert!(out.allow.is_empty());
@@ -213,12 +280,27 @@ mod tests {
     fn tool_with_existing_explicit_rule_is_skipped() {
         let conn = in_memory_db();
         for _ in 0..25 {
-            record_tool_decision(&conn, "already_ruled", "h", "default", "tool_allow", "claude_kaira").unwrap();
+            record_tool_decision(
+                &conn,
+                "already_ruled",
+                "h",
+                "default",
+                "tool_allow",
+                "claude_kaira",
+            )
+            .unwrap();
         }
         let mut cfg = empty_policy();
-        cfg.tools.rules.push(ToolRule { name: "already_ruled".into(), action: PolicyAction::Deny, capabilities: None });
+        cfg.tools.rules.push(ToolRule {
+            name: "already_ruled".into(),
+            action: PolicyAction::Deny,
+            capabilities: None,
+        });
         let out = suggest_policy_rules(&conn, Some(&cfg), 20).unwrap();
-        assert!(out.allow.is_empty(), "a tool with an explicit rule already has a human-authored answer");
+        assert!(
+            out.allow.is_empty(),
+            "a tool with an explicit rule already has a human-authored answer"
+        );
     }
 
     #[test]
@@ -228,7 +310,15 @@ mod tests {
         // of whether the caller happens to pass the config back in.
         let conn = in_memory_db();
         for _ in 0..25 {
-            record_tool_decision(&conn, "explicit_tool", "h", "rule", "tool_allow", "claude_kaira").unwrap();
+            record_tool_decision(
+                &conn,
+                "explicit_tool",
+                "h",
+                "rule",
+                "tool_allow",
+                "claude_kaira",
+            )
+            .unwrap();
         }
         let out = suggest_policy_rules(&conn, None, 20).unwrap();
         assert!(out.allow.is_empty());
@@ -237,8 +327,18 @@ mod tests {
     #[test]
     fn render_produces_idempotent_appendable_toml() {
         let suggestions = vec![
-            PolicySuggestion { tool: "list_projects".into(), action: PolicyAction::Allow, count: 25, total: 25 },
-            PolicySuggestion { tool: "dangerous_tool".into(), action: PolicyAction::Deny, count: 20, total: 20 },
+            PolicySuggestion {
+                tool: "list_projects".into(),
+                action: PolicyAction::Allow,
+                count: 25,
+                total: 25,
+            },
+            PolicySuggestion {
+                tool: "dangerous_tool".into(),
+                action: PolicyAction::Deny,
+                count: 20,
+                total: 20,
+            },
         ];
         let rendered = render_rules_toml(&suggestions);
 

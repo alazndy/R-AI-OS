@@ -153,4 +153,3 @@ pub fn query_stats(conn: &Connection) -> Result<PortfolioStats> {
         grade_d,
     })
 }
-

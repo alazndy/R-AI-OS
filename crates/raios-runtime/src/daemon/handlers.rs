@@ -1,7 +1,7 @@
 use super::state::DaemonState;
 use crate::proxy_store::CapabilityProxy;
-use raios_core::security::{Umai, UmaiDecision};
 use crate::session::SessionStore;
+use raios_core::security::{Umai, UmaiDecision};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -10,8 +10,15 @@ use tokio::sync::{broadcast, RwLock};
 /// Records one daemon WS command decision into the tamper-evident audit ledger.
 /// Mirrors `McpServer::record_tool_audit` (src/mcp/tools.rs) so both dispatch
 /// paths feed the same `raios policy suggest` learning pipeline.
-fn record_ws_tool_audit(umai: &Umai, cmd_name: &str, raw_payload: Option<&str>, decision: &UmaiDecision) {
-    let Ok(conn) = raios_core::db::open_db() else { return };
+fn record_ws_tool_audit(
+    umai: &Umai,
+    cmd_name: &str,
+    raw_payload: Option<&str>,
+    decision: &UmaiDecision,
+) {
+    let Ok(conn) = raios_core::db::open_db() else {
+        return;
+    };
     let event_type = match decision {
         UmaiDecision::Allow => "tool_allow",
         UmaiDecision::Deny(_) => "tool_deny",
@@ -87,9 +94,10 @@ pub struct ClientHandle {
 /// without standing up a full ClientHandle (socket, DB-backed stores, etc).
 fn check_auth_line(line: &str, server_token: &str) -> bool {
     match line.trim().strip_prefix("AUTH ") {
-        Some(provided) => {
-            raios_core::security::constant_time_compare(provided.as_bytes(), server_token.as_bytes())
-        }
+        Some(provided) => raios_core::security::constant_time_compare(
+            provided.as_bytes(),
+            server_token.as_bytes(),
+        ),
         None => false,
     }
 }
@@ -119,7 +127,10 @@ pub async fn handle_client_connection(h: ClientHandle) {
     // Authentication challenge
     if let Ok(n) = reader.read_line(&mut line).await {
         if n == 0 || !check_auth_line(&line, &server_token) {
-            println!("[Daemon] Auth failed for client {}. Dropping connection.", addr);
+            println!(
+                "[Daemon] Auth failed for client {}. Dropping connection.",
+                addr
+            );
             let _ = writer
                 .write_all(b"{\"event\":\"Error\",\"message\":\"Authentication failed\"}\n")
                 .await;
@@ -134,7 +145,9 @@ pub async fn handle_client_connection(h: ClientHandle) {
     // Auto-start session
     let session_id = sessions_for_client.start("daemon-client", None);
     let session_msg = serde_json::json!({ "event": "SessionStarted", "session_id": session_id });
-    let _ = writer.write_all(format!("{}\n", session_msg).as_bytes()).await;
+    let _ = writer
+        .write_all(format!("{}\n", session_msg).as_bytes())
+        .await;
 
     // Replay last 200 log entries so TUI has history on connect
     if let Ok(conn) = raios_core::db::open_db() {
@@ -148,7 +161,11 @@ pub async fn handle_client_connection(h: ClientHandle) {
                         "content": content
                     }
                 });
-                if writer.write_all(format!("{}\n", replay).as_bytes()).await.is_err() {
+                if writer
+                    .write_all(format!("{}\n", replay).as_bytes())
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -208,6 +225,50 @@ pub async fn handle_client_connection(h: ClientHandle) {
                                     problem,
                                 };
                                 let _ = writer.write_all(format!("{}\n", serde_json::to_string(&err_evt).unwrap()).as_bytes()).await;
+                            }
+                        }
+                    }
+                    line.clear();
+                    continue;
+                }
+
+                if let Ok(cmd) = serde_json::from_str::<raios_contracts::FactoryCommand>(&line) {
+                    if let Ok(mut conn) = raios_core::db::open_db() {
+                        let actor = if addr.ip().is_loopback() {
+                            crate::control_plane::service::ControlActor::local_session()
+                        } else {
+                            crate::control_plane::service::ControlActor::remote_session("remote_tcp_session")
+                        };
+                        let factory_enabled = raios_core::config::Config::load()
+                            .map(|config| config.factory.enabled)
+                            .unwrap_or(false);
+                        match crate::product_factory::dispatch_factory_command(
+                            &mut conn,
+                            &actor,
+                            factory_enabled,
+                            &cmd,
+                        ) {
+                            Ok(result) => {
+                                let ack = raios_contracts::Event::CommandSucceeded {
+                                    idempotency_key: cmd.idempotency_key().to_owned(),
+                                    result: Some(result),
+                                };
+                                if let Ok(serialized) = serde_json::to_string(&ack) {
+                                    let _ = writer.write_all(format!("{serialized}\n").as_bytes()).await;
+                                }
+                                if let Ok(snapshot) = crate::control_plane::service::load_system_snapshot(&conn) {
+                                    let event = raios_contracts::Event::SnapshotUpdated(Box::new(snapshot));
+                                    let _ = writer.write_all(format!("{}\n", serde_json::to_string(&event).unwrap()).as_bytes()).await;
+                                }
+                            }
+                            Err(problem) => {
+                                let event = raios_contracts::Event::CommandFailed {
+                                    idempotency_key: cmd.idempotency_key().to_owned(),
+                                    problem,
+                                };
+                                if let Ok(serialized) = serde_json::to_string(&event) {
+                                    let _ = writer.write_all(format!("{serialized}\n").as_bytes()).await;
+                                }
                             }
                         }
                     }
@@ -686,7 +747,10 @@ mod auth_handshake_tests {
     #[test]
     fn missing_auth_prefix_is_rejected() {
         assert!(!check_auth_line("secret123\n", "secret123"));
-        assert!(!check_auth_line("{\"command\":\"ListProjects\"}\n", "secret123"));
+        assert!(!check_auth_line(
+            "{\"command\":\"ListProjects\"}\n",
+            "secret123"
+        ));
     }
 
     #[test]
@@ -757,17 +821,26 @@ mod auth_handshake_tests {
         let handle = test_client_handle(socket, peer_addr, "correct-token".into(), &tmp);
         let server_task = tokio::spawn(handle_client_connection(handle));
 
-        client.write_all(b"AUTH definitely-wrong-token\n").await.unwrap();
+        client
+            .write_all(b"AUTH definitely-wrong-token\n")
+            .await
+            .unwrap();
 
         let mut buf = [0u8; 512];
         let n = client.read(&mut buf).await.unwrap();
         let resp = String::from_utf8_lossy(&buf[..n]);
         assert!(resp.contains("\"event\":\"Error\""), "response was: {resp}");
-        assert!(resp.contains("Authentication failed"), "response was: {resp}");
+        assert!(
+            resp.contains("Authentication failed"),
+            "response was: {resp}"
+        );
 
         // Server must close right after rejecting — a further read returns 0 (EOF).
         let n2 = client.read(&mut buf).await.unwrap();
-        assert_eq!(n2, 0, "server should have closed the connection after auth failure");
+        assert_eq!(
+            n2, 0,
+            "server should have closed the connection after auth failure"
+        );
 
         server_task.await.unwrap();
     }

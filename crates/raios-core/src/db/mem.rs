@@ -68,22 +68,26 @@ impl MemItemRow {
     /// - reference: 60 days
     /// - default: 30 days
     pub fn effective_confidence_at(&self, at: chrono::DateTime<chrono::Local>) -> f64 {
-        let reference_str = self
-            .last_used_at
-            .as_deref()
-            .unwrap_or(&self.updated_at);
+        let reference_str = self.last_used_at.as_deref().unwrap_or(&self.updated_at);
 
         let parsed_time = chrono::NaiveDateTime::parse_from_str(reference_str, "%Y-%m-%d %H:%M:%S")
             .or_else(|_| chrono::NaiveDateTime::parse_from_str(reference_str, "%Y-%m-%dT%H:%M:%SZ"))
-            .or_else(|_| chrono::NaiveDateTime::parse_from_str(&self.created_at, "%Y-%m-%d %H:%M:%S"))
-            .or_else(|_| chrono::NaiveDateTime::parse_from_str(&self.created_at, "%Y-%m-%dT%H:%M:%SZ"))
+            .or_else(|_| {
+                chrono::NaiveDateTime::parse_from_str(&self.created_at, "%Y-%m-%d %H:%M:%S")
+            })
+            .or_else(|_| {
+                chrono::NaiveDateTime::parse_from_str(&self.created_at, "%Y-%m-%dT%H:%M:%SZ")
+            })
             .ok();
 
         let Some(ref_dt) = parsed_time else {
             return self.confidence;
         };
 
-        let ref_local = ref_dt.and_local_timezone(chrono::Local).latest().unwrap_or(at);
+        let ref_local = ref_dt
+            .and_local_timezone(chrono::Local)
+            .latest()
+            .unwrap_or(at);
         let elapsed_secs = at.timestamp() - ref_local.timestamp();
 
         if elapsed_secs <= 0 {
@@ -171,9 +175,7 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
     }
 
     let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Local::now()
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let last_used_str = last_used_at.unwrap_or(&now);
 
     tx.execute(
@@ -277,9 +279,7 @@ pub fn mem_get(conn: &Connection, project_key: &str, slug: &str) -> Result<Optio
 
 /// Mark a mem_item as used: updates `last_used_at` to current time and boosts `confidence` towards 1.0.
 pub fn mem_on_used(conn: &Connection, project_key: &str, slug: &str) -> Result<bool> {
-    let now = chrono::Local::now()
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let n = conn.execute(
         "UPDATE mem_items
          SET last_used_at = ?1,
@@ -301,7 +301,11 @@ pub fn mem_delete(conn: &Connection, project_key: &str, slug: &str) -> Result<bo
 /// Write all DB mem_items for a project to `~/.claude/projects/<key>/memory/`
 /// as individual markdown files and rebuild MEMORY.md index.
 /// Returns the number of files written.
-pub fn mem_export(conn: &Connection, project_key: &str, memory_dir: &std::path::Path) -> Result<usize> {
+pub fn mem_export(
+    conn: &Connection,
+    project_key: &str,
+    memory_dir: &std::path::Path,
+) -> Result<usize> {
     let items = mem_list(conn, project_key)?;
     if items.is_empty() {
         return Ok(0);
@@ -321,7 +325,11 @@ pub fn mem_export(conn: &Connection, project_key: &str, memory_dir: &std::path::
     let index_path = memory_dir.join("MEMORY.md");
     let existing = std::fs::read_to_string(&index_path).unwrap_or_default();
     let header = if existing.starts_with("# Memory Index") {
-        existing.lines().next().unwrap_or("# Memory Index").to_string()
+        existing
+            .lines()
+            .next()
+            .unwrap_or("# Memory Index")
+            .to_string()
     } else {
         format!(
             "# Memory Index — {}",

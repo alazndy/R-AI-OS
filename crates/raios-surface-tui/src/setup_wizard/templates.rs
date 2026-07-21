@@ -1,7 +1,11 @@
 use std::path::Path;
 
 pub(super) fn master_template(github_user: &str) -> String {
-    let user = if github_user.is_empty() { "User" } else { github_user };
+    let user = if github_user.is_empty() {
+        "User"
+    } else {
+        github_user
+    };
     format!(
         r#"# AGENT CONSTITUTION (v5.0 — Unified)
 # K-AI-RA — Single source of truth for all AI agents (Claude, Codex, OpenCode)

@@ -30,7 +30,9 @@ pub fn load_entities(dev_ops: &Path) -> Vec<EntityProject> {
     let projects = match raios_core::db::load_all_projects(&conn) {
         Ok(rows) => rows
             .into_iter()
-            .filter(|r| Path::new(&r.path).exists() && r.status != "waiting" && r.status != "beklemede")
+            .filter(|r| {
+                Path::new(&r.path).exists() && r.status != "waiting" && r.status != "beklemede"
+            })
             .map(row_to_entity)
             .collect(),
         Err(_) => vec![],
@@ -75,8 +77,7 @@ pub fn discover_entities(dev_ops: &Path) -> Vec<EntityProject> {
 
     // Fresh scan — collect only what exists on disk right now
     let rooms = raios_core::mempalace::build(dev_ops);
-    let mut fresh_paths: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut fresh_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for room in &rooms {
         for proj in &room.projects {
@@ -144,12 +145,7 @@ fn dedup_nested(mut projects: Vec<EntityProject>) -> Vec<EntityProject> {
     // Resolve canonical paths; drop entries we cannot canonicalize
     let mut canonical: Vec<(PathBuf, EntityProject)> = projects
         .drain(..)
-        .filter_map(|p| {
-            p.local_path
-                .canonicalize()
-                .ok()
-                .map(|canon| (canon, p))
-        })
+        .filter_map(|p| p.local_path.canonicalize().ok().map(|canon| (canon, p)))
         .collect();
 
     // Sort shallowest path first so parents are accepted before children
@@ -160,7 +156,9 @@ fn dedup_nested(mut projects: Vec<EntityProject>) -> Vec<EntityProject> {
 
     for (canon, proj) in canonical {
         // Skip if this path is nested inside an already-accepted project
-        let is_nested = seen_paths.iter().any(|accepted| canon.starts_with(accepted));
+        let is_nested = seen_paths
+            .iter()
+            .any(|accepted| canon.starts_with(accepted));
         if !is_nested {
             seen_paths.push(canon);
             result.push(proj);

@@ -81,10 +81,23 @@ struct A2aError {
 
 impl A2aResponse {
     fn ok(id: Value, result: Value) -> Self {
-        Self { jsonrpc: "2.0", id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
     fn err(id: Value, code: i32, message: impl Into<String>) -> Self {
-        Self { jsonrpc: "2.0", id, result: None, error: Some(A2aError { code, message: message.into() }) }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(A2aError {
+                code,
+                message: message.into(),
+            }),
+        }
     }
 }
 
@@ -159,7 +172,9 @@ fn extract_message_text(params: &Value) -> Option<String> {
 }
 
 fn a2a_tasks_get(params: &Value) -> Result<Value, String> {
-    let task_id = params["id"].as_str().ok_or("invalid_params:missing task 'id'")?;
+    let task_id = params["id"]
+        .as_str()
+        .ok_or("invalid_params:missing task 'id'")?;
     let conn = raios_core::db::open_db().map_err(|e| e.to_string())?;
     let tasks = raios_core::db::cp_query_active_tasks(&conn).map_err(|e| e.to_string())?;
     tasks
@@ -187,7 +202,10 @@ mod tests {
             "to": "claude_kaira",
             "message": { "parts": [{ "type": "text", "text": "skeleton ready" }] }
         });
-        assert_eq!(extract_message_text(&params).as_deref(), Some("skeleton ready"));
+        assert_eq!(
+            extract_message_text(&params).as_deref(),
+            Some("skeleton ready")
+        );
     }
 
     #[test]

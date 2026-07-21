@@ -1,3 +1,4 @@
+use super::{ACCENT, MASTER_PREVIEW};
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -7,7 +8,6 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
-use super::{ACCENT, MASTER_PREVIEW};
 
 pub fn render_welcome(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
@@ -80,7 +80,11 @@ pub fn render_welcome(frame: &mut Frame, area: Rect, app: &App) {
             ("gh (GitHub)", s.gh_installed, s.gh_version.as_str()),
             ("Claude Code", s.claude_installed, s.claude_version.as_str()),
             ("Codex", s.codex_installed, s.codex_version.as_str()),
-            ("OpenCode", s.opencode_installed, s.opencode_version.as_str()),
+            (
+                "OpenCode",
+                s.opencode_installed,
+                s.opencode_version.as_str(),
+            ),
             ("AGY (Antigravity)", s.agy_installed, s.agy_version.as_str()),
         ] {
             let (icon, col) = if ok {

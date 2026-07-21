@@ -258,10 +258,7 @@ pub fn cp_load_pending_file_change_approvals(
                     agent_run_id,
                     artifact_id,
                     path: meta["path"].as_str().unwrap_or("").to_string(),
-                    original_content: meta["original_content"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string(),
+                    original_content: meta["original_content"].as_str().unwrap_or("").to_string(),
                     new_content: meta["new_content"].as_str().unwrap_or("").to_string(),
                     agent_name: meta["agent_name"]
                         .as_str()
@@ -275,4 +272,3 @@ pub fn cp_load_pending_file_change_approvals(
 
     Ok(rows)
 }
-

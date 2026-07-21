@@ -66,18 +66,42 @@ pub enum Command {
 impl Command {
     pub fn idempotency_key(&self) -> &str {
         match self {
-            Command::ApproveHandoff { idempotency_key, .. } => idempotency_key,
-            Command::RejectHandoff { idempotency_key, .. } => idempotency_key,
-            Command::ApproveFileChange { idempotency_key, .. } => idempotency_key,
-            Command::RejectFileChange { idempotency_key, .. } => idempotency_key,
-            Command::LaunchAgent { idempotency_key, .. } => idempotency_key,
-            Command::CancelAgentRun { idempotency_key, .. } => idempotency_key,
-            Command::CreateTask { idempotency_key, .. } => idempotency_key,
-            Command::UpdateTaskStatus { idempotency_key, .. } => idempotency_key,
-            Command::TriggerCronJob { idempotency_key, .. } => idempotency_key,
-            Command::ToggleCronJob { idempotency_key, .. } => idempotency_key,
-            Command::ExecuteSearch { idempotency_key, .. } => idempotency_key,
-            Command::UpdatePolicyRule { idempotency_key, .. } => idempotency_key,
+            Command::ApproveHandoff {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::RejectHandoff {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::ApproveFileChange {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::RejectFileChange {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::LaunchAgent {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::CancelAgentRun {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::CreateTask {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::UpdateTaskStatus {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::TriggerCronJob {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::ToggleCronJob {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::ExecuteSearch {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::UpdatePolicyRule {
+                idempotency_key, ..
+            } => idempotency_key,
         }
     }
 }

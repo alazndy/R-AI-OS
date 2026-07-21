@@ -152,8 +152,11 @@ fn legacy_graph_cache_is_rebuilt_from_canonical_state() {
         .unwrap();
     assert_eq!(legacy_status, "running");
 
-    conn.execute("DELETE FROM task_graph_nodes WHERE graph_id=?1", params![gid])
-        .unwrap();
+    conn.execute(
+        "DELETE FROM task_graph_nodes WHERE graph_id=?1",
+        params![gid],
+    )
+    .unwrap();
     store.refresh_legacy_cache(&gid, &conn);
 
     let rebuilt_status: String = conn

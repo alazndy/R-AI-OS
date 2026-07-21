@@ -25,15 +25,27 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
         Line::from(vec![
             Span::styled("Filesystem Jail: ", Style::default().fg(Color::Gray)),
             Span::styled(
-                if pol.enforce_sandbox { "ENFORCED" } else { "DISABLED" },
-                Style::default().fg(if pol.enforce_sandbox { Color::Green } else { Color::Red }),
+                if pol.enforce_sandbox {
+                    "ENFORCED"
+                } else {
+                    "DISABLED"
+                },
+                Style::default().fg(if pol.enforce_sandbox {
+                    Color::Green
+                } else {
+                    Color::Red
+                }),
             ),
         ]),
         Line::from(vec![
             Span::styled("Egress SSRF Filter: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 if pol.egress_enabled { "ACTIVE" } else { "OFF" },
-                Style::default().fg(if pol.egress_enabled { Color::Green } else { Color::Yellow }),
+                Style::default().fg(if pol.egress_enabled {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
             ),
         ]),
         Line::from(vec![
@@ -42,7 +54,10 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
         ]),
         Line::from(vec![
             Span::styled("Total Defined Rules: ", Style::default().fg(Color::Gray)),
-            Span::styled(pol.total_rules.to_string(), Style::default().fg(Color::White)),
+            Span::styled(
+                pol.total_rules.to_string(),
+                Style::default().fg(Color::White),
+            ),
         ]),
     ];
 
@@ -63,18 +78,35 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
     let audit_lines = vec![
         Line::from(vec![
             Span::styled("Total Audit Events: ", Style::default().fg(Color::Gray)),
-            Span::styled(aud.total_records.to_string(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                aud.total_records.to_string(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Allowed: ", Style::default().fg(Color::Gray)),
-            Span::styled(aud.allowed_records.to_string(), Style::default().fg(Color::Green)),
+            Span::styled(
+                aud.allowed_records.to_string(),
+                Style::default().fg(Color::Green),
+            ),
             Span::styled("  Denied: ", Style::default().fg(Color::Gray)),
-            Span::styled(aud.denied_records.to_string(), Style::default().fg(Color::Red)),
+            Span::styled(
+                aud.denied_records.to_string(),
+                Style::default().fg(Color::Red),
+            ),
             Span::styled("  Confirmed: ", Style::default().fg(Color::Gray)),
-            Span::styled(aud.confirmed_records.to_string(), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                aud.confirmed_records.to_string(),
+                Style::default().fg(Color::Yellow),
+            ),
         ]),
         Line::from(""),
-        Line::from(Span::styled("Tamper-evident Ledger: VERIFIED", Style::default().fg(Color::Green))),
+        Line::from(Span::styled(
+            "Tamper-evident Ledger: VERIFIED",
+            Style::default().fg(Color::Green),
+        )),
     ];
 
     let audit_block = Block::default()
@@ -112,9 +144,20 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("[{}] ", j.status), Style::default().fg(status_color)),
-                    Span::styled(&j.name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" ({})", j.schedule), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("[{}] ", j.status),
+                        Style::default().fg(status_color),
+                    ),
+                    Span::styled(
+                        &j.name,
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" ({})", j.schedule),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]))
                 .style(Style::default().bg(bg))
             })

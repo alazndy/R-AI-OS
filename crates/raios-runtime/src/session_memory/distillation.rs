@@ -49,7 +49,12 @@ pub(super) fn upsert_scene_block(
     for (slug, _, _) in fact_slugs {
         if let Ok(Some(fact)) = raios_core::db::mem_get(conn, project_key, slug) {
             let _ = raios_core::db::mem_lineage_add(
-                conn, "item", &scene.id, "item", &fact.id, "derived_from",
+                conn,
+                "item",
+                &scene.id,
+                "item",
+                &fact.id,
+                "derived_from",
             );
         }
     }
@@ -115,7 +120,12 @@ pub fn rebuild_persona(conn: &rusqlite::Connection, project_key: &str) -> Option
     let persona = raios_core::db::mem_get(conn, project_key, "persona").ok()??;
     for i in user.iter().chain(feedback.iter()) {
         let _ = raios_core::db::mem_lineage_add(
-            conn, "item", &persona.id, "item", &i.id, "derived_from",
+            conn,
+            "item",
+            &persona.id,
+            "item",
+            &i.id,
+            "derived_from",
         );
     }
     Some(())
@@ -123,8 +133,8 @@ pub fn rebuild_persona(conn: &rusqlite::Connection, project_key: &str) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::fact_slug;
+    use super::*;
 
     #[test]
     fn scene_block_upsert_links_facts() {
@@ -134,28 +144,58 @@ mod tests {
         let key = "-home-alaz-p";
 
         // seed two L1 facts
-        for (t, txt) in [("feedback", "don't use npm"), ("project", "we decided sqlite")] {
+        for (t, txt) in [
+            ("feedback", "don't use npm"),
+            ("project", "we decided sqlite"),
+        ] {
             let slug = fact_slug(t, txt);
-            raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
-                project_key: key, item_type: t, slug: &slug, title: txt,
-                description: txt, body: txt, session_id: None, layer: 1, provenance: None, confidence: None, last_used_at: None,
-            }).unwrap();
+            raios_core::db::mem_upsert(
+                &conn,
+                raios_core::db::MemUpsert {
+                    project_key: key,
+                    item_type: t,
+                    slug: &slug,
+                    title: txt,
+                    description: txt,
+                    body: txt,
+                    session_id: None,
+                    layer: 1,
+                    provenance: None,
+                    confidence: None,
+                    last_used_at: None,
+                },
+            )
+            .unwrap();
         }
         let slugs: Vec<(String, &'static str, String)> = vec![
-            (fact_slug("feedback", "don't use npm"), "feedback", "don't use npm".into()),
-            (fact_slug("project", "we decided sqlite"), "project", "we decided sqlite".into()),
+            (
+                fact_slug("feedback", "don't use npm"),
+                "feedback",
+                "don't use npm".into(),
+            ),
+            (
+                fact_slug("project", "we decided sqlite"),
+                "project",
+                "we decided sqlite".into(),
+            ),
         ];
 
         let scene_slug = upsert_scene_block(&conn, key, &slugs).unwrap();
-        let scene = raios_core::db::mem_get(&conn, key, &scene_slug).unwrap().unwrap();
+        let scene = raios_core::db::mem_get(&conn, key, &scene_slug)
+            .unwrap()
+            .unwrap();
         assert_eq!(scene.layer, 2);
         assert!(scene.body.contains("don't use npm"));
-        assert!(scene.body.contains(&fact_slug("project", "we decided sqlite")));
+        assert!(scene
+            .body
+            .contains(&fact_slug("project", "we decided sqlite")));
 
         // lineage: scene → 2 fact parents
         let parents = raios_core::db::mem_lineage_parents(&conn, "item", &scene.id).unwrap();
         assert_eq!(parents.len(), 2);
-        assert!(parents.iter().all(|(k, _, r)| k == "item" && r == "derived_from"));
+        assert!(parents
+            .iter()
+            .all(|(k, _, r)| k == "item" && r == "derived_from"));
     }
 
     #[test]
@@ -168,39 +208,81 @@ mod tests {
         // seed first L1 fact and upsert the scene with only that fact
         let (t1, txt1) = ("feedback", "don't use npm");
         let slug1 = fact_slug(t1, txt1);
-        raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
-            project_key: key, item_type: t1, slug: &slug1, title: txt1,
-            description: txt1, body: txt1, session_id: None, layer: 1, provenance: None, confidence: None, last_used_at: None,
-        }).unwrap();
+        raios_core::db::mem_upsert(
+            &conn,
+            raios_core::db::MemUpsert {
+                project_key: key,
+                item_type: t1,
+                slug: &slug1,
+                title: txt1,
+                description: txt1,
+                body: txt1,
+                session_id: None,
+                layer: 1,
+                provenance: None,
+                confidence: None,
+                last_used_at: None,
+            },
+        )
+        .unwrap();
         let fact1_tuple: (String, &'static str, String) = (slug1.clone(), t1, txt1.into());
 
-        let scene_slug_1 = upsert_scene_block(&conn, key, std::slice::from_ref(&fact1_tuple)).unwrap();
+        let scene_slug_1 =
+            upsert_scene_block(&conn, key, std::slice::from_ref(&fact1_tuple)).unwrap();
 
         // seed a second, different L1 fact and upsert the scene again with only that fact
         let (t2, txt2) = ("project", "we decided sqlite");
         let slug2 = fact_slug(t2, txt2);
-        raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
-            project_key: key, item_type: t2, slug: &slug2, title: txt2,
-            description: txt2, body: txt2, session_id: None, layer: 1, provenance: None, confidence: None, last_used_at: None,
-        }).unwrap();
+        raios_core::db::mem_upsert(
+            &conn,
+            raios_core::db::MemUpsert {
+                project_key: key,
+                item_type: t2,
+                slug: &slug2,
+                title: txt2,
+                description: txt2,
+                body: txt2,
+                session_id: None,
+                layer: 1,
+                provenance: None,
+                confidence: None,
+                last_used_at: None,
+            },
+        )
+        .unwrap();
         let fact2_tuple: (String, &'static str, String) = (slug2.clone(), t2, txt2.into());
 
-        let scene_slug_2 = upsert_scene_block(&conn, key, std::slice::from_ref(&fact2_tuple)).unwrap();
+        let scene_slug_2 =
+            upsert_scene_block(&conn, key, std::slice::from_ref(&fact2_tuple)).unwrap();
 
         // same day → same scene slug
         assert_eq!(scene_slug_1, scene_slug_2);
 
         // both facts' text must be present in the merged body (accumulation, not overwrite)
-        let scene = raios_core::db::mem_get(&conn, key, &scene_slug_2).unwrap().unwrap();
+        let scene = raios_core::db::mem_get(&conn, key, &scene_slug_2)
+            .unwrap()
+            .unwrap();
         assert!(scene.body.contains(txt1));
         assert!(scene.body.contains(txt2));
 
         // calling a third time with the SAME first fact again must not duplicate its line
-        let scene_slug_3 = upsert_scene_block(&conn, key, std::slice::from_ref(&fact1_tuple)).unwrap();
+        let scene_slug_3 =
+            upsert_scene_block(&conn, key, std::slice::from_ref(&fact1_tuple)).unwrap();
         assert_eq!(scene_slug_3, scene_slug_1);
-        let scene = raios_core::db::mem_get(&conn, key, &scene_slug_3).unwrap().unwrap();
-        let fact_lines: Vec<&str> = scene.body.lines().filter(|l| !l.trim().is_empty()).collect();
-        assert_eq!(fact_lines.len(), 2, "expected exactly 2 deduped fact lines, got: {:?}", fact_lines);
+        let scene = raios_core::db::mem_get(&conn, key, &scene_slug_3)
+            .unwrap()
+            .unwrap();
+        let fact_lines: Vec<&str> = scene
+            .body
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        assert_eq!(
+            fact_lines.len(),
+            2,
+            "expected exactly 2 deduped fact lines, got: {:?}",
+            fact_lines
+        );
 
         // lineage: even after re-passing fact1 a second time, there must still be exactly
         // 2 "derived_from" fact parents, not 3 — lineage_add is idempotent per Task 2.
@@ -234,14 +316,29 @@ mod tests {
             ("project", "we decided sqlite"), // must NOT appear in persona
         ] {
             let slug = fact_slug(t, txt);
-            raios_core::db::mem_upsert(&conn, raios_core::db::MemUpsert {
-                project_key: key, item_type: t, slug: &slug, title: txt,
-                description: txt, body: txt, session_id: None, layer: 1, provenance: None, confidence: None, last_used_at: None,
-            }).unwrap();
+            raios_core::db::mem_upsert(
+                &conn,
+                raios_core::db::MemUpsert {
+                    project_key: key,
+                    item_type: t,
+                    slug: &slug,
+                    title: txt,
+                    description: txt,
+                    body: txt,
+                    session_id: None,
+                    layer: 1,
+                    provenance: None,
+                    confidence: None,
+                    last_used_at: None,
+                },
+            )
+            .unwrap();
         }
 
         rebuild_persona(&conn, key).unwrap();
-        let p = raios_core::db::mem_get(&conn, key, "persona").unwrap().unwrap();
+        let p = raios_core::db::mem_get(&conn, key, "persona")
+            .unwrap()
+            .unwrap();
         assert_eq!(p.layer, 3);
         assert!(p.body.contains("## Background"));
         assert!(p.body.contains("gömülü sistem"));

@@ -11,7 +11,10 @@ pub fn connect_daemon(tx: Sender<BgMsg>) -> Option<Sender<String>> {
 
 /// Connect to daemon at an explicit address.
 /// Pass `Some("100.x.x.x")` for remote Tailscale Hub access.
-pub fn connect_daemon_addr(tx: Sender<BgMsg>, remote_host: Option<String>) -> Option<Sender<String>> {
+pub fn connect_daemon_addr(
+    tx: Sender<BgMsg>,
+    remote_host: Option<String>,
+) -> Option<Sender<String>> {
     let (daemon_addr, is_remote) =
         raios_surface_tui::app::ipc_support::resolve_daemon_addr(remote_host.as_deref());
 
@@ -27,7 +30,10 @@ pub fn connect_daemon_addr(tx: Sender<BgMsg>, remote_host: Option<String>) -> Op
         loop {
             match std::net::TcpStream::connect(&daemon_addr) {
                 Ok(mut stream) => {
-                    raios_surface_tui::app::ipc_support::write_auth_handshake(&mut stream, is_remote);
+                    raios_surface_tui::app::ipc_support::write_auth_handshake(
+                        &mut stream,
+                        is_remote,
+                    );
 
                     let stream_clone = match stream.try_clone() {
                         Ok(s) => s,
@@ -37,10 +43,12 @@ pub fn connect_daemon_addr(tx: Sender<BgMsg>, remote_host: Option<String>) -> Op
                     raios_surface_tui::app::ipc_support::initial_state_request(&mut stream);
 
                     // Notify TUI that daemon is now connected
-                    tx.send(BgMsg::NewLog(raios_surface_tui::app::ipc_support::log_entry(
-                        "IPC",
-                        format!("Connected to aiosd @ {daemon_addr}"),
-                    )))
+                    tx.send(BgMsg::NewLog(
+                        raios_surface_tui::app::ipc_support::log_entry(
+                            "IPC",
+                            format!("Connected to aiosd @ {daemon_addr}"),
+                        ),
+                    ))
                     .ok();
 
                     // Reader thread
@@ -66,10 +74,12 @@ pub fn connect_daemon_addr(tx: Sender<BgMsg>, remote_host: Option<String>) -> Op
                     // Stream dropped — wait for reader to finish then retry
                     let _ = reader_handle.join();
 
-                    tx.send(BgMsg::NewLog(raios_surface_tui::app::ipc_support::log_entry(
-                        "IPC",
-                        "Daemon connection lost — retrying...",
-                    )))
+                    tx.send(BgMsg::NewLog(
+                        raios_surface_tui::app::ipc_support::log_entry(
+                            "IPC",
+                            "Daemon connection lost — retrying...",
+                        ),
+                    ))
                     .ok();
 
                     attempts = 0; // reset on reconnect

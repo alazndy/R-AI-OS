@@ -1,5 +1,5 @@
-use raios_contracts::{Command, Query};
 use crate::app::route::Route;
+use raios_contracts::{Command, Query};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Intent {

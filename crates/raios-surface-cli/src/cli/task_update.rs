@@ -19,7 +19,9 @@ pub(super) fn cmd_task_update(id: &str, status: &str, json: bool) {
             match res {
                 Ok(rows) if rows > 0 => {
                     if json {
-                        println!("{{\"status\":\"ok\",\"id\":\"{id}\",\"new_status\":\"{status}\"}}");
+                        println!(
+                            "{{\"status\":\"ok\",\"id\":\"{id}\",\"new_status\":\"{status}\"}}"
+                        );
                     } else {
                         println!("Task {id} → {status}");
                     }

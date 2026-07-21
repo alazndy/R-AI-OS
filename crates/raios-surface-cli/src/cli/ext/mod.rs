@@ -176,7 +176,10 @@ pub fn cmd_ext(name: &str, ext_args: &[String], dev_ops_path: &Path, json: bool)
     match cmd_def {
         None => {
             println!();
-            println!("  {} v{}", manifest.extension.name, manifest.extension.version);
+            println!(
+                "  {} v{}",
+                manifest.extension.name, manifest.extension.version
+            );
             println!("  {}", manifest.extension.description);
             println!();
             println!("  Commands:");

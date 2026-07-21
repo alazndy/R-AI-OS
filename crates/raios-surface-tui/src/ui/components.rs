@@ -346,10 +346,7 @@ pub fn render_handover_modal(frame: &mut Frame, app: &App) {
                 " Target Agent: ",
                 Style::default().fg(Color::Rgb(170, 170, 170)),
             ),
-            Span::styled(
-                target.clone(),
-                Style::default().fg(GREEN).bold(),
-            ),
+            Span::styled(target.clone(), Style::default().fg(GREEN).bold()),
         ]));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -380,14 +377,8 @@ pub fn render_handover_modal(frame: &mut Frame, app: &App) {
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled(
-                " [Y] Approve",
-                Style::default().fg(GREEN).bold(),
-            ),
-            Span::styled(
-                "    [N] Reject",
-                Style::default().fg(RED).bold(),
-            ),
+            Span::styled(" [Y] Approve", Style::default().fg(GREEN).bold()),
+            Span::styled("    [N] Reject", Style::default().fg(RED).bold()),
         ]));
 
         let p = Paragraph::new(lines)
@@ -432,7 +423,10 @@ pub fn render_constitution_save_modal(frame: &mut Frame, app: &App) {
             } else {
                 DIM
             };
-            lines.push(Line::from(Span::styled(diff_line.clone(), Style::default().fg(color))));
+            lines.push(Line::from(Span::styled(
+                diff_line.clone(),
+                Style::default().fg(color),
+            )));
         }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
