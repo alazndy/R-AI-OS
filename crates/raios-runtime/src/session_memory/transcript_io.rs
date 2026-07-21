@@ -235,3 +235,83 @@ pub fn collect_transcript(agent: &str, project_path: &str, session_started: Syst
         _ => String::new(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_reader_is_time_scoped_but_not_project_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"ts\":100,\"text\":\"old decision\"}\n",
+                "not json\n",
+                "{\"ts\":200,\"text\":\"we decided to use SQLite\"}\n",
+                "{\"ts\":201,\"text\":\"prompt from another project\"}\n",
+                "{\"ts\":201,\"text\":\"   \"}\n"
+            ),
+        )
+        .unwrap();
+
+        let transcript = read_codex_transcript(&path, 200);
+        assert!(transcript.contains("we decided to use SQLite"));
+        assert!(transcript.contains("prompt from another project"));
+        assert!(!transcript.contains("old decision"));
+    }
+
+    #[test]
+    fn agy_reader_scopes_entries_to_the_active_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"timestamp\":200000,\"workspace\":\"/project-a\",\"display\":\"keep this\"}\n",
+                "{\"timestamp\":201000,\"workspace\":\"/project-b\",\"display\":\"exclude this\"}\n",
+                "{\"timestamp\":199000,\"workspace\":\"/project-a\",\"display\":\"too old\"}\n"
+            ),
+        )
+        .unwrap();
+
+        let transcript = read_agy_transcript(&path, "/project-a", 200);
+        assert_eq!(transcript, "User: keep this");
+    }
+
+    #[test]
+    fn opencode_reader_has_no_project_scope_in_prompt_history_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prompt-history.jsonl");
+        std::fs::write(
+            &path,
+            "{\"input\":\"prompt from another project\"}\n{\"input\":\"current prompt\"}\n",
+        )
+        .unwrap();
+
+        let transcript = read_opencode_transcript(&path, 0);
+        assert!(transcript.contains("prompt from another project"));
+        assert!(transcript.contains("current prompt"));
+    }
+
+    #[test]
+    fn claude_reader_extracts_text_and_ignores_non_text_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conversation.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"use pnpm\"},{\"type\":\"image\"}]}}\n",
+                "{\"type\":\"assistant\",\"message\":{\"content\":\"acknowledged\"}}\n",
+                "{\"type\":\"tool_result\",\"message\":{\"content\":\"ignore\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            extract_transcript(&path),
+            "User: use pnpm\n\nAssistant: acknowledged"
+        );
+    }
+}
