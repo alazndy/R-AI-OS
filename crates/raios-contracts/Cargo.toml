@@ -2,6 +2,7 @@
 name = "raios-contracts"
 version = "3.7.0"
 edition = "2021"
+license = "AGPL-3.0-only"
 description = "Serialization-only DTOs, Queries, Commands, Events, Problems, and Snapshots for R-AI-OS Control Plane"
 
 [dependencies]

@@ -2,6 +2,7 @@
 name = "raios-surface-mcp"
 version = "3.7.0"
 edition = "2021"
+license = "AGPL-3.0-only"
 
 [dependencies]
 raios-core = { path = "../raios-core" }
