@@ -1,6 +1,29 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+/// How strongly a transcript source proves that its content belongs to the
+/// project currently being synchronized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptScope {
+    ProjectBound,
+    WorkspaceBound,
+    Unscoped,
+}
+
+impl TranscriptScope {
+    pub fn permits_automatic_memory_import(self) -> bool {
+        matches!(self, Self::ProjectBound | Self::WorkspaceBound)
+    }
+}
+
+/// Raw text plus the provenance boundary required before derived facts can be
+/// written to project memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedTranscript {
+    pub text: String,
+    pub scope: TranscriptScope,
+}
+
 /// Convert an absolute project path to Claude's directory naming convention.
 /// `/home/alaz/dev/core/R-AI-OS` → `-home-alaz-dev-core-R-AI-OS`
 pub(super) fn claude_project_dir_name(project_path: &str) -> String {
@@ -171,10 +194,8 @@ fn read_agy_transcript(path: &Path, workspace: &str, since_secs: u64) -> String 
         if obj["timestamp"].as_u64().unwrap_or(0) / 1000 < since_secs {
             continue;
         }
-        if let Some(ws) = obj["workspace"].as_str() {
-            if !workspace.is_empty() && ws != workspace {
-                continue;
-            }
+        if !workspace.is_empty() && obj["workspace"].as_str() != Some(workspace) {
+            continue;
         }
         if let Some(display) = obj["display"].as_str() {
             if !display.trim().is_empty() {
@@ -215,24 +236,53 @@ fn read_opencode_transcript(path: &Path, since_secs: u64) -> String {
     parts.join("\n\n")
 }
 
-pub fn collect_transcript(agent: &str, project_path: &str, session_started: SystemTime) -> String {
+pub fn collect_scoped_transcript(
+    agent: &str,
+    project_path: &str,
+    session_started: SystemTime,
+) -> ScopedTranscript {
     let home = std::env::var("HOME").unwrap_or_default();
     let since = started_secs(session_started);
-    match agent.to_lowercase().as_str() {
-        "claude" => find_latest_conversation(project_path, Some(session_started))
-            .map(|p| extract_transcript(&p))
-            .unwrap_or_default(),
-        "codex" => read_codex_transcript(&PathBuf::from(&home).join(".codex/history.jsonl"), since),
-        "agy" | "antigravity" => read_agy_transcript(
-            &PathBuf::from(&home).join(".gemini/antigravity-cli/history.jsonl"),
-            project_path,
-            since,
+    let (text, scope) = match agent.to_lowercase().as_str() {
+        "claude" => (
+            find_latest_conversation(project_path, Some(session_started))
+                .map(|p| extract_transcript(&p))
+                .unwrap_or_default(),
+            TranscriptScope::ProjectBound,
         ),
-        "opencode" => read_opencode_transcript(
-            &PathBuf::from(&home).join(".local/state/opencode/prompt-history.jsonl"),
-            since,
+        "codex" => (
+            read_codex_transcript(&PathBuf::from(&home).join(".codex/history.jsonl"), since),
+            TranscriptScope::Unscoped,
         ),
-        _ => String::new(),
+        "agy" | "antigravity" => (
+            read_agy_transcript(
+                &PathBuf::from(&home).join(".gemini/antigravity-cli/history.jsonl"),
+                project_path,
+                since,
+            ),
+            TranscriptScope::WorkspaceBound,
+        ),
+        "opencode" => (
+            read_opencode_transcript(
+                &PathBuf::from(&home).join(".local/state/opencode/prompt-history.jsonl"),
+                since,
+            ),
+            TranscriptScope::Unscoped,
+        ),
+        _ => (String::new(), TranscriptScope::Unscoped),
+    };
+    ScopedTranscript { text, scope }
+}
+
+/// Return only transcript content that has a project or workspace provenance
+/// boundary. Unscoped global histories must never become automatic project
+/// memory.
+pub fn collect_transcript(agent: &str, project_path: &str, session_started: SystemTime) -> String {
+    let transcript = collect_scoped_transcript(agent, project_path, session_started);
+    if transcript.scope.permits_automatic_memory_import() {
+        transcript.text
+    } else {
+        String::new()
     }
 }
 
@@ -271,6 +321,7 @@ mod tests {
             concat!(
                 "{\"timestamp\":200000,\"workspace\":\"/project-a\",\"display\":\"keep this\"}\n",
                 "{\"timestamp\":201000,\"workspace\":\"/project-b\",\"display\":\"exclude this\"}\n",
+                "{\"timestamp\":201000,\"display\":\"missing workspace\"}\n",
                 "{\"timestamp\":199000,\"workspace\":\"/project-a\",\"display\":\"too old\"}\n"
             ),
         )
@@ -278,6 +329,13 @@ mod tests {
 
         let transcript = read_agy_transcript(&path, "/project-a", 200);
         assert_eq!(transcript, "User: keep this");
+    }
+
+    #[test]
+    fn only_project_or_workspace_scopes_permit_automatic_memory_import() {
+        assert!(TranscriptScope::ProjectBound.permits_automatic_memory_import());
+        assert!(TranscriptScope::WorkspaceBound.permits_automatic_memory_import());
+        assert!(!TranscriptScope::Unscoped.permits_automatic_memory_import());
     }
 
     #[test]

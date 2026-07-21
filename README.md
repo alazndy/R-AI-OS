@@ -405,6 +405,15 @@ aiosd
 
 Tune background load in `~/.config/raios/config.toml` when needed, especially on Windows:
 
+### Agent Wrapper memory isolation
+
+Wrapper memory imports only transcripts that prove their project or workspace
+scope. Claude project transcripts and AGY records carrying the active workspace
+are eligible. Codex and OpenCode history formats are currently global and do
+not carry enough project identity, so R-AI-OS skips their automatic memory
+import rather than risk cross-project fact contamination. Their agent sessions,
+handoffs, and post-run reviews continue to work normally.
+
 ```toml
 [daemon]
 startup_bm25_indexing = true

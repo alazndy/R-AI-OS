@@ -4,8 +4,8 @@ mod transcript_io;
 use distillation::{rebuild_persona, upsert_scene_block};
 pub use heuristics::decision_lines_from_transcript;
 use heuristics::{fact_slug, first_n_words, heuristic_extract_facts};
-pub use transcript_io::{collect_transcript, extract_transcript};
 use transcript_io::{claude_project_dir_name, find_latest_conversation};
+pub use transcript_io::{collect_scoped_transcript, collect_transcript, extract_transcript};
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -183,7 +183,7 @@ pub fn cmd_memory_gen(project: Option<&str>, json: bool) {
 // ─── Auto-sync: raios-native heuristic memory extraction ─────────────────────
 
 /// Agent-agnostic memory sync: heuristic extraction → raios DB → markdown export.
-/// Works for claude, codex, opencode, and agy. No LLM dependency.
+/// Only sources that prove project or workspace scope are imported automatically.
 /// `verbose = false` during periodic background syncs (TUI is live); `true` at session end.
 pub fn auto_sync_agent_memory(
     agent: &str,
@@ -191,7 +191,16 @@ pub fn auto_sync_agent_memory(
     session_started: SystemTime,
     verbose: bool,
 ) {
-    let transcript = collect_transcript(agent, project_path, session_started);
+    let scoped_transcript = collect_scoped_transcript(agent, project_path, session_started);
+    if !scoped_transcript.scope.permits_automatic_memory_import() {
+        if verbose {
+            eprintln!(
+                "  memory sync skipped [{agent}]: transcript source has no project/workspace scope"
+            );
+        }
+        return;
+    }
+    let transcript = scoped_transcript.text;
     if transcript.is_empty() {
         return;
     }
