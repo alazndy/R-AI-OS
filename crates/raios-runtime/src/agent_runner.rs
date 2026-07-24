@@ -999,7 +999,9 @@ mod tests {
             let mut stream = TcpStream::connect(addr).unwrap();
             let payload = serde_json::json!({"run_id": run_id, "note": note}).to_string();
             stream.write_all(payload.as_bytes()).unwrap();
-            stream.shutdown(std::net::Shutdown::Write).unwrap();
+            if let Err(error) = stream.shutdown(std::net::Shutdown::Write) {
+                assert_eq!(error.kind(), std::io::ErrorKind::NotConnected);
+            }
             let mut response = String::new();
             stream.read_to_string(&mut response).unwrap();
             serde_json::from_str(&response).unwrap()

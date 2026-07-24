@@ -135,6 +135,11 @@ pub(super) fn cmd_wrapper_note(note: &str, json: bool) -> Result<(), String> {
         stream
             .write_all(payload.as_bytes())
             .map_err(|e| format!("cannot send wrapper note: {e}"))?;
+        if let Err(error) = stream.shutdown(std::net::Shutdown::Write) {
+            if error.kind() != std::io::ErrorKind::NotConnected {
+                return Err(format!("cannot finish wrapper note: {error}"));
+            }
+        }
         let mut response = String::new();
         stream
             .read_to_string(&mut response)
