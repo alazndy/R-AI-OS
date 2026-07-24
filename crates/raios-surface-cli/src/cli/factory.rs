@@ -116,6 +116,7 @@ fn cli_may_execute(command: &FactoryCommand) -> bool {
         FactoryCommand::CreateWorkspace { .. }
             | FactoryCommand::CreateProductDraft { .. }
             | FactoryCommand::SetProductMode { .. }
+            | FactoryCommand::AttachExistingProject { .. }
             | FactoryCommand::StartIntake { .. }
             | FactoryCommand::RecordIntakeAnswer { .. }
             | FactoryCommand::CreateCharterDraft { .. }

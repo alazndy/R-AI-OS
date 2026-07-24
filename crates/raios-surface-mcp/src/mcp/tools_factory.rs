@@ -67,6 +67,7 @@ fn agent_may_execute(command: &FactoryCommand) -> bool {
         FactoryCommand::CreateWorkspace { .. }
             | FactoryCommand::CreateProductDraft { .. }
             | FactoryCommand::SetProductMode { .. }
+            | FactoryCommand::AttachExistingProject { .. }
             | FactoryCommand::StartIntake { .. }
             | FactoryCommand::RecordIntakeAnswer { .. }
             | FactoryCommand::CreateCharterDraft { .. }
@@ -99,6 +100,7 @@ fn command_kind(command: &FactoryCommand) -> &'static str {
         FactoryCommand::CreateWorkspace { .. } => "create_workspace",
         FactoryCommand::CreateProductDraft { .. } => "create_product_draft",
         FactoryCommand::SetProductMode { .. } => "set_product_mode",
+        FactoryCommand::AttachExistingProject { .. } => "attach_existing_project",
         FactoryCommand::ScaffoldProject { .. } => "scaffold_project",
         FactoryCommand::StartIntake { .. } => "start_intake",
         FactoryCommand::RecordIntakeAnswer { .. } => "record_intake_answer",

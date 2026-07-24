@@ -145,10 +145,12 @@ pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
             } else {
                 &product.scaffold_state
             };
+            let source_label = product.source_remote.as_deref().unwrap_or("untracked");
+            let revision_label = product.source_revision.as_deref().unwrap_or("untracked");
             format!(
-                "Product: {} [{}] | Mode: {} | Stack: {} | Scaffold: {}\nPath: {}\nQuality blocks: {} | Release blocks: {}",
+                "Product: {} [{}] | Mode: {} | Stack: {} | Workspace: {}\nPath: {}\nSource: {} @ {}\nQuality blocks: {} | Release blocks: {}",
                 product.title, product.status, mode_label, stack_label, scaffold_label,
-                path_label, product.quality_blockers, product.release_blockers
+                path_label, source_label, revision_label, product.quality_blockers, product.release_blockers
             )
         }
         None => "No product chartered yet".to_string(),

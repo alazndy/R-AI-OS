@@ -2,6 +2,7 @@
 
 ## v3.7.1 — 2026-07-24
 
+- **Factory existing-repository onboarding:** Factory can now attach an existing absolute local Git worktree without scaffolding, canonicalizing the path and verifying the repository root, `origin` remote, and full `HEAD` SHA before persisting owner-bound provenance. The typed CLI, MCP, and TUI surfaces share the canonical idempotent/audited dispatcher; HTTP(S) remotes with embedded credentials are rejected.
 - **Release integrity:** the public release now ships pinned, cross-platform archives for `raios` and `aiosd`, SHA-256 checksums, GitHub build provenance attestations, and AGPL licensing material for the extension package.
 - **Release gates:** CI now enforces Rust formatting, zero-warning clippy, a 40% line-coverage floor, Rust/Node dependency audits, VSIX packaging with a license, and staged installer smoke tests on Linux, macOS, and Windows.
 - **Daemon safety coverage:** lifecycle status decisions are extracted into a pure, boundary-tested function; the compliance scanner now has regression tests for secret detection, language rules, package-manager policy, and score formatting.

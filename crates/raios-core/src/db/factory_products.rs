@@ -62,6 +62,31 @@ pub fn save_factory_product_project_path(
     Ok(tx.execute("UPDATE cp_factory_products SET project_path=?1, updated_at=datetime('now','utc') WHERE id=?2 AND owner_subject=?3", params![project_path, product_id, owner_subject])? == 1)
 }
 
+/// Persist a verified local Git worktree binding. Source metadata is captured
+/// by the runtime before this transaction begins; this repository boundary
+/// remains responsible only for owner-bound persistence.
+pub fn attach_factory_product_existing_project(
+    tx: &Transaction<'_>,
+    owner_subject: &str,
+    product_id: &str,
+    project_path: &str,
+    source_remote: &str,
+    source_revision: &str,
+) -> Result<bool> {
+    Ok(tx.execute(
+        "UPDATE cp_factory_products
+         SET project_path=?1, source_remote=?2, source_revision=?3, updated_at=datetime('now','utc')
+         WHERE id=?4 AND owner_subject=?5",
+        params![
+            project_path,
+            source_remote,
+            source_revision,
+            product_id,
+            owner_subject
+        ],
+    )? == 1)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FactoryPlanCreated {
     pub id: String,
@@ -76,6 +101,8 @@ pub struct FactoryProductOverviewRow {
     pub status: String,
     pub mode: String,
     pub project_path: Option<String>,
+    pub source_remote: Option<String>,
+    pub source_revision: Option<String>,
     pub stack: Option<String>,
     pub scaffold_state: String,
     pub quality_blockers: u32,
@@ -249,7 +276,7 @@ pub fn load_factory_overview(conn: &Connection) -> Result<FactoryOverviewRow> {
     )?;
     let latest_product = conn
         .query_row(
-            "SELECT id, title, status, factory_mode, project_path FROM cp_factory_products ORDER BY updated_at DESC, id DESC LIMIT 1",
+            "SELECT id, title, status, factory_mode, project_path, source_remote, source_revision FROM cp_factory_products ORDER BY updated_at DESC, id DESC LIMIT 1",
             [],
             |row| {
                 let id: String = row.get(0)?;
@@ -257,8 +284,18 @@ pub fn load_factory_overview(conn: &Connection) -> Result<FactoryOverviewRow> {
                 let status: String = row.get(2)?;
                 let mode: String = row.get(3)?;
                 let project_path_str: String = row.get(4)?;
+                let source_remote_str: String = row.get(5)?;
+                let source_revision_str: String = row.get(6)?;
                 let project_path = if project_path_str.trim().is_empty() { None } else { Some(project_path_str.clone()) };
-                let scaffold_state = if project_path.is_some() { "scaffolded".to_string() } else { "unscaffolded".to_string() };
+                let source_remote = if source_remote_str.trim().is_empty() { None } else { Some(source_remote_str) };
+                let source_revision = if source_revision_str.trim().is_empty() { None } else { Some(source_revision_str) };
+                let scaffold_state = if source_remote.is_some() && source_revision.is_some() {
+                    "attached".to_string()
+                } else if project_path.is_some() {
+                    "scaffolded".to_string()
+                } else {
+                    "unscaffolded".to_string()
+                };
 
                 let stack = project_path.as_ref().and_then(|p| {
                     let path = std::path::Path::new(p);
@@ -289,6 +326,8 @@ pub fn load_factory_overview(conn: &Connection) -> Result<FactoryOverviewRow> {
                     status,
                     mode,
                     project_path,
+                    source_remote,
+                    source_revision,
                     stack,
                     scaffold_state,
                     quality_blockers,

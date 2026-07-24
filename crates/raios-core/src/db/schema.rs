@@ -74,6 +74,12 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "ALTER TABLE cp_factory_products ADD COLUMN project_path TEXT NOT NULL DEFAULT '';",
     );
+    let _ = conn.execute_batch(
+        "ALTER TABLE cp_factory_products ADD COLUMN source_remote TEXT NOT NULL DEFAULT '';",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE cp_factory_products ADD COLUMN source_revision TEXT NOT NULL DEFAULT '';",
+    );
 
     conn.execute_batch(
         "
@@ -576,6 +582,8 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             title TEXT NOT NULL,
             factory_mode TEXT NOT NULL DEFAULT 'governed' CHECK(factory_mode IN ('quick', 'governed')),
             project_path TEXT NOT NULL DEFAULT '',
+            source_remote TEXT NOT NULL DEFAULT '',
+            source_revision TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'draft',
             current_charter_revision_id TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
