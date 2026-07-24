@@ -366,12 +366,38 @@ mod tests {
         which::which("git").is_ok()
     }
 
+    fn fixture_repo() -> tempfile::TempDir {
+        let repo = tempfile::tempdir().expect("temporary repository");
+        let init = Command::new("git")
+            .args(["init", "--initial-branch=master"])
+            .current_dir(repo.path())
+            .status()
+            .expect("git init should run");
+        assert!(init.success());
+
+        for args in [
+            ["config", "user.email", "test@example.invalid"].as_slice(),
+            ["config", "user.name", "R-AI-OS test"].as_slice(),
+            ["commit", "--allow-empty", "-m", "initial"].as_slice(),
+        ] {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .status()
+                .expect("git fixture command should run");
+            assert!(status.success());
+        }
+
+        repo
+    }
+
     #[test]
     fn status_returns_branch() {
         if !git_available() {
             return;
         }
-        let s = status(&raios_root());
+        let repo = fixture_repo();
+        let s = status(repo.path());
         assert!(s.branch.is_some(), "should detect branch in a git repo");
     }
 
@@ -391,7 +417,8 @@ mod tests {
         if !git_available() {
             return;
         }
-        let bs = branches(&raios_root());
+        let repo = fixture_repo();
+        let bs = branches(repo.path());
         assert!(!bs.is_empty());
         let has_main = bs.iter().any(|b| b.name == "master" || b.name == "main");
         assert!(has_main);
