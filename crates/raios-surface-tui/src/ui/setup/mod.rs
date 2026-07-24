@@ -3,7 +3,7 @@ use raios_surface_tui::setup_wizard::WizardStep;
 use raios_surface_tui::ui::*;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style, Stylize},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Gauge, Paragraph},
     Frame,

@@ -135,8 +135,16 @@ pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
         Some(product) => {
             let path_label = product.project_path.as_deref().unwrap_or("unassigned");
             let stack_label = product.stack.as_deref().unwrap_or("unknown");
-            let mode_label = if product.mode.is_empty() { "governed" } else { &product.mode };
-            let scaffold_label = if product.scaffold_state.is_empty() { "unscaffolded" } else { &product.scaffold_state };
+            let mode_label = if product.mode.is_empty() {
+                "governed"
+            } else {
+                &product.mode
+            };
+            let scaffold_label = if product.scaffold_state.is_empty() {
+                "unscaffolded"
+            } else {
+                &product.scaffold_state
+            };
             format!(
                 "Product: {} [{}] | Mode: {} | Stack: {} | Scaffold: {}\nPath: {}\nQuality blocks: {} | Release blocks: {}",
                 product.title, product.status, mode_label, stack_label, scaffold_label,

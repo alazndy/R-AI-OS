@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.7.1 — 2026-07-24
+
+- **Release integrity:** the public release now ships pinned, cross-platform archives for `raios` and `aiosd`, SHA-256 checksums, GitHub build provenance attestations, and AGPL licensing material for the extension package.
+- **Release gates:** CI now enforces Rust formatting, zero-warning clippy, a 40% line-coverage floor, Rust/Node dependency audits, VSIX packaging with a license, and staged installer smoke tests on Linux, macOS, and Windows.
+- **Daemon safety coverage:** lifecycle status decisions are extracted into a pure, boundary-tested function; the compliance scanner now has regression tests for secret detection, language rules, package-manager policy, and score formatting.
+
 ## v3.7.0 — 2026-07-21
 ### Added
 - **Product Factory (Phases 0-10)**: a full owner-bound, audit-logged product lifecycle layer — disabled-by-default typed config, workspace/product/intake/Charter drafting, Charter-backed requirement drafts, change-control and planning with approval-gated lifecycle cycles, evidence-gated stage completion, verified-release readiness, cycle pause/resume/cancel, dependency-aware evidence staleness, and a content-addressed (SHA-256) artifact store kept outside SQLite. Exposed via a bounded local TUI transport (`/factory workspace|product|intake|answer|charter`), new `raios factory overview` / `raios factory execute` CLI commands, and a policy-scoped MCP surface (`factory_overview` read-only, `factory_execute` blocking all human-only approval/cancellation/release actions).

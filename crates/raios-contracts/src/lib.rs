@@ -12,7 +12,8 @@ pub use command::Command;
 pub use dto::*;
 pub use event::Event;
 pub use factory::{
-    FactoryCommand, FactoryEvent, FactoryMode, FactoryOverviewSnapshot, FactoryProductSummaryDto, FactoryQuery,
+    FactoryCommand, FactoryEvent, FactoryMode, FactoryOverviewSnapshot, FactoryProductSummaryDto,
+    FactoryQuery,
 };
 pub use problem::Problem;
 pub use query::Query;

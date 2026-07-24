@@ -87,7 +87,11 @@ fn print_db_budget(budget: &raios_runtime::system_scan::DbBudgetReport) {
     if !budget.largest_storage_consumers.is_empty() {
         println!("  Largest storage consumers:");
         for consumer in &budget.largest_storage_consumers {
-            println!("     - {:<30} {}", consumer.name, human_bytes(consumer.bytes));
+            println!(
+                "     - {:<30} {}",
+                consumer.name,
+                human_bytes(consumer.bytes)
+            );
         }
     }
 

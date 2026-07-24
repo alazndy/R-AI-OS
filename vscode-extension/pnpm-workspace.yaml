@@ -1,0 +1,9 @@
+allowBuilds:
+  '@vscode/vsce-sign': false
+  keytar: false
+ignoredBuiltDependencies:
+  # VS Code Marketplace handles extension signing. These optional native helpers
+  # are not needed to compile or package the extension and must not run scripts
+  # implicitly in local or CI installs.
+  - '@vscode/vsce-sign'
+  - keytar

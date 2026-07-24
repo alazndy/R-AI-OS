@@ -54,10 +54,12 @@ pub fn looks_like_secret(text: &str) -> Option<&'static str> {
 /// to an ANKA transcript cache. This is intentionally conservative: it is a
 /// safety net, not a claim of complete secret detection.
 pub fn redact_secrets(text: &str) -> String {
-    SECRET_PATTERNS.iter().fold(text.to_string(), |redacted, (re, label)| {
-        re.replace_all(&redacted, format!("[REDACTED:{label}]").as_str())
-            .into_owned()
-    })
+    SECRET_PATTERNS
+        .iter()
+        .fold(text.to_string(), |redacted, (re, label)| {
+            re.replace_all(&redacted, format!("[REDACTED:{label}]").as_str())
+                .into_owned()
+        })
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

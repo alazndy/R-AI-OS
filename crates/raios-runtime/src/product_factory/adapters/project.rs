@@ -53,7 +53,8 @@ impl LocalProjectDetector {
                     cargo_toolchain: which::which("cargo").is_ok(),
                     edition,
                     is_workspace,
-                    has_clippy: which::which("cargo-clippy").is_ok() || which::which("cargo").is_ok(),
+                    has_clippy: which::which("cargo-clippy").is_ok()
+                        || which::which("cargo").is_ok(),
                     targets,
                 }),
             });

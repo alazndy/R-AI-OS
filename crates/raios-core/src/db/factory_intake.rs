@@ -66,8 +66,16 @@ pub fn start_factory_intake(
     }))
 }
 
-fn ensure_discovery_intake_prompts(tx: &Transaction<'_>, session_id: &str, product_id: &str) -> Result<()> {
-    let mode: String = tx.query_row("SELECT factory_mode FROM cp_factory_products WHERE id = ?1", [product_id], |row| row.get(0))?;
+fn ensure_discovery_intake_prompts(
+    tx: &Transaction<'_>,
+    session_id: &str,
+    product_id: &str,
+) -> Result<()> {
+    let mode: String = tx.query_row(
+        "SELECT factory_mode FROM cp_factory_products WHERE id = ?1",
+        [product_id],
+        |row| row.get(0),
+    )?;
     for prompt in prompts_for_mode(&mode) {
         tx.execute(
             "INSERT INTO cp_factory_intake_items
@@ -102,7 +110,11 @@ pub fn missing_required_intake_prompt_keys(
             |row| row.get::<_, String>(0),
         )
         .optional()?;
-    let mode: String = tx.query_row("SELECT factory_mode FROM cp_factory_products WHERE id = ?1", [product_id], |row| row.get(0))?;
+    let mode: String = tx.query_row(
+        "SELECT factory_mode FROM cp_factory_products WHERE id = ?1",
+        [product_id],
+        |row| row.get(0),
+    )?;
     let prompts = prompts_for_mode(&mode);
     let Some(session_id) = session_id else {
         return Ok(prompts
@@ -113,10 +125,7 @@ pub fn missing_required_intake_prompt_keys(
     };
 
     let mut missing = Vec::new();
-    for prompt in prompts
-        .iter()
-        .filter(|prompt| prompt.required)
-    {
+    for prompt in prompts.iter().filter(|prompt| prompt.required) {
         let answered: bool = tx.query_row(
             "SELECT EXISTS(
                  SELECT 1 FROM cp_factory_intake_items
@@ -145,7 +154,11 @@ pub fn load_required_intake_answers(
         |row| row.get(0),
     )?;
     let mut answers = BTreeMap::new();
-    let mode: String = tx.query_row("SELECT factory_mode FROM cp_factory_products WHERE id = ?1", [product_id], |row| row.get(0))?;
+    let mode: String = tx.query_row(
+        "SELECT factory_mode FROM cp_factory_products WHERE id = ?1",
+        [product_id],
+        |row| row.get(0),
+    )?;
     for prompt in prompts_for_mode(&mode)
         .iter()
         .filter(|prompt| prompt.required)

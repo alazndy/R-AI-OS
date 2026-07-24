@@ -1050,16 +1050,12 @@ mod tests {
                 raios_core::db::cp_session_start(&conn, "codex_kaira", Some(project_b)).unwrap();
             drop(conn);
 
-            let ipc_a = start_wrapper_note_ipc(
-                run_a.clone(),
-                "/tmp/raios-wrapper-note-test-a".to_string(),
-            )
-            .unwrap();
-            let ipc_b = start_wrapper_note_ipc(
-                run_b.clone(),
-                "/tmp/raios-wrapper-note-test-b".to_string(),
-            )
-            .unwrap();
+            let ipc_a =
+                start_wrapper_note_ipc(run_a.clone(), "/tmp/raios-wrapper-note-test-a".to_string())
+                    .unwrap();
+            let ipc_b =
+                start_wrapper_note_ipc(run_b.clone(), "/tmp/raios-wrapper-note-test-b".to_string())
+                    .unwrap();
 
             // Legitimate note into each project's own socket succeeds.
             let resp_a = send_note(ipc_a.addr, &run_a, "note for A");
@@ -1072,9 +1068,15 @@ mod tests {
             // be rejected by the socket itself, never reach the DB as a
             // write into the wrong project.
             let cross_into_a = send_note(ipc_a.addr, &run_b, "cross leak into A");
-            assert_eq!(cross_into_a["recorded"], false, "cross_into_a = {cross_into_a}");
+            assert_eq!(
+                cross_into_a["recorded"], false,
+                "cross_into_a = {cross_into_a}"
+            );
             let cross_into_b = send_note(ipc_b.addr, &run_a, "cross leak into B");
-            assert_eq!(cross_into_b["recorded"], false, "cross_into_b = {cross_into_b}");
+            assert_eq!(
+                cross_into_b["recorded"], false,
+                "cross_into_b = {cross_into_b}"
+            );
 
             stop(ipc_a);
             stop(ipc_b);

@@ -7,20 +7,60 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-echo "[install] building release binaries..."
-cargo build --release
+INSTALL_ROOT_OVERRIDE=""
+RESTART_SERVICES=1
 
-DEFAULT_BIN_DIR="$(dirname "$(command -v cargo)")"
-ACTIVE_RAIOS="$(command -v raios 2>/dev/null || true)"
-if [ -n "$ACTIVE_RAIOS" ]; then
-  BIN_DIR="$(dirname "$ACTIVE_RAIOS")"
+usage() {
+  cat <<'EOF'
+Usage: ./install.sh [--root <directory>] [--no-restart]
+
+  --root <directory>  Install binaries under <directory>/bin instead of the active Cargo/PATH root.
+  --no-restart        Do not restart user services; intended for CI and staged installs.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --root)
+      [ "$#" -ge 2 ] || { echo "[install] --root requires a directory" >&2; exit 2; }
+      INSTALL_ROOT_OVERRIDE="$2"
+      shift 2
+      ;;
+    --no-restart)
+      RESTART_SERVICES=0
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "[install] unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+echo "[install] building release binaries..."
+cargo build --release --workspace --locked
+
+if [ -n "$INSTALL_ROOT_OVERRIDE" ]; then
+  INSTALL_ROOT="$INSTALL_ROOT_OVERRIDE"
+  BIN_DIR="$INSTALL_ROOT/bin"
 else
-  BIN_DIR="$DEFAULT_BIN_DIR"
+  DEFAULT_BIN_DIR="$(dirname "$(command -v cargo)")"
+  ACTIVE_RAIOS="$(command -v raios 2>/dev/null || true)"
+  if [ -n "$ACTIVE_RAIOS" ]; then
+    BIN_DIR="$(dirname "$ACTIVE_RAIOS")"
+  else
+    BIN_DIR="$DEFAULT_BIN_DIR"
+  fi
+  INSTALL_ROOT="$(dirname "$BIN_DIR")"
 fi
-INSTALL_ROOT="$(dirname "$BIN_DIR")"
 
 echo "[install] installing raios + aiosd into ${BIN_DIR} (replacing any existing install)..."
-cargo install --path crates/raios-surface-cli --force --root "$INSTALL_ROOT"
+cargo install --path crates/raios-surface-cli --locked --force --root "$INSTALL_ROOT"
 
 echo "[install] checking for stray raios/aiosd binaries outside ${BIN_DIR}..."
 IFS=':' read -ra PATH_DIRS <<< "$PATH"
@@ -33,7 +73,7 @@ for dir in "${PATH_DIRS[@]}"; do
   done
 done
 
-if command -v systemctl >/dev/null 2>&1; then
+if [ "$RESTART_SERVICES" -eq 1 ] && command -v systemctl >/dev/null 2>&1; then
   # aiosd.service's ExecStart is a path baked in once by `raios hub install`
   # (resolved via `which aiosd` at whatever moment that ran). This script's
   # own BIN_DIR is resolved independently via `command -v raios`, at install
@@ -66,6 +106,6 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 echo "[install] done — active binaries:"
-command -v raios
-command -v aiosd
-raios --version 2>/dev/null || true
+printf '%s\n' "$BIN_DIR/raios"
+printf '%s\n' "$BIN_DIR/aiosd"
+"$BIN_DIR/raios" --version

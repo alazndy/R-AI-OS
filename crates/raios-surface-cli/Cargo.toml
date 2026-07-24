@@ -1,6 +1,6 @@
 [package]
 name = "raios-surface-cli"
-version = "3.7.0"
+version = "3.7.1"
 edition = "2021"
 license = "AGPL-3.0-only"
 
@@ -18,7 +18,7 @@ anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tokio = { version = "1", features = ["full"] }
 crossterm = "0.28"
-ratatui = "0.29"
+ratatui = "0.30"
 dirs = "5"
 rusqlite = { version = "0.31", features = ["bundled"] }
 sha2 = "0.10"

@@ -402,10 +402,15 @@ fn factory_command_from_input(input: &str) -> Result<FactoryCommand, String> {
                 "governed" => raios_contracts::FactoryMode::Governed,
                 _ => return Err(factory_usage()),
             };
-            Ok(FactoryCommand::SetProductMode { product_id: fields[0].into(), mode, idempotency_key })
+            Ok(FactoryCommand::SetProductMode {
+                product_id: fields[0].into(),
+                mode,
+                idempotency_key,
+            })
         }
         "scaffold" if !payload.is_empty() => Ok(FactoryCommand::ScaffoldProject {
-            product_id: payload.into(), idempotency_key,
+            product_id: payload.into(),
+            idempotency_key,
         }),
         "intake" if !payload.is_empty() => Ok(FactoryCommand::StartIntake {
             product_id: payload.into(),
@@ -644,7 +649,10 @@ mod tests {
         assert!(factory_command_from_input("charter product-1").is_err());
         assert!(matches!(
             factory_command_from_input("mode product-1 | quick"),
-            Ok(FactoryCommand::SetProductMode { mode: raios_contracts::FactoryMode::Quick, .. })
+            Ok(FactoryCommand::SetProductMode {
+                mode: raios_contracts::FactoryMode::Quick,
+                ..
+            })
         ));
         assert!(matches!(
             factory_command_from_input("generate product-1").unwrap(),

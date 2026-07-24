@@ -76,28 +76,7 @@ pub async fn start_lifecycle_worker(
             let age_secs = now_secs.saturating_sub(last_ts);
             let path_str = proj.local_path.to_string_lossy().to_string();
 
-            let new_status = if age_secs < standby_secs {
-                // Recent activity → active
-                if matches!(current, "beklemede" | "archived") {
-                    Some("active")
-                } else {
-                    None // already active, no change
-                }
-            } else if age_secs < archive_secs {
-                // Stale but not dead → beklemede
-                if current != "beklemede" {
-                    Some("beklemede")
-                } else {
-                    None
-                }
-            } else {
-                // Long inactive → archived
-                if current != "archived" {
-                    Some("archived")
-                } else {
-                    None
-                }
-            };
+            let new_status = next_lifecycle_status(current, age_secs, standby_secs, archive_secs);
 
             if let Some(status) = new_status {
                 if let Err(e) = raios_core::db::update_project_status(&conn, &path_str, status) {
@@ -142,6 +121,31 @@ pub async fn start_lifecycle_worker(
     }
 }
 
+fn next_lifecycle_status(
+    current: &str,
+    age_secs: u64,
+    standby_secs: u64,
+    archive_secs: u64,
+) -> Option<&'static str> {
+    if age_secs < standby_secs {
+        if matches!(current, "beklemede" | "archived") {
+            Some("active")
+        } else {
+            None
+        }
+    } else if age_secs < archive_secs {
+        if current != "beklemede" {
+            Some("beklemede")
+        } else {
+            None
+        }
+    } else if current != "archived" {
+        Some("archived")
+    } else {
+        None
+    }
+}
+
 fn last_commit_timestamp(repo: &std::path::Path) -> Option<u64> {
     let out = Command::new("git")
         .current_dir(repo)
@@ -151,4 +155,63 @@ fn last_commit_timestamp(repo: &std::path::Path) -> Option<u64> {
 
     let ts_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
     ts_str.parse::<u64>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DAY: u64 = 86_400;
+
+    #[test]
+    fn recent_activity_reactivates_only_inactive_automatic_statuses() {
+        assert_eq!(
+            next_lifecycle_status("active", DAY, 14 * DAY, 90 * DAY),
+            None
+        );
+        assert_eq!(
+            next_lifecycle_status("beklemede", DAY, 14 * DAY, 90 * DAY),
+            Some("active")
+        );
+        assert_eq!(
+            next_lifecycle_status("archived", DAY, 14 * DAY, 90 * DAY),
+            Some("active")
+        );
+    }
+
+    #[test]
+    fn stale_activity_moves_to_beklemede_once() {
+        assert_eq!(
+            next_lifecycle_status("active", 20 * DAY, 14 * DAY, 90 * DAY),
+            Some("beklemede")
+        );
+        assert_eq!(
+            next_lifecycle_status("beklemede", 20 * DAY, 14 * DAY, 90 * DAY),
+            None
+        );
+    }
+
+    #[test]
+    fn archive_threshold_moves_to_archived_once() {
+        assert_eq!(
+            next_lifecycle_status("active", 100 * DAY, 14 * DAY, 90 * DAY),
+            Some("archived")
+        );
+        assert_eq!(
+            next_lifecycle_status("archived", 100 * DAY, 14 * DAY, 90 * DAY),
+            None
+        );
+    }
+
+    #[test]
+    fn exact_thresholds_use_the_stale_branch() {
+        assert_eq!(
+            next_lifecycle_status("active", 14 * DAY, 14 * DAY, 90 * DAY),
+            Some("beklemede")
+        );
+        assert_eq!(
+            next_lifecycle_status("active", 90 * DAY, 14 * DAY, 90 * DAY),
+            Some("archived")
+        );
+    }
 }

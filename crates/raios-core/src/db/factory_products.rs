@@ -21,7 +21,10 @@ pub struct FactoryProductCreated {
 }
 
 pub fn set_factory_product_mode(
-    tx: &Transaction<'_>, owner_subject: &str, product_id: &str, mode: &str,
+    tx: &Transaction<'_>,
+    owner_subject: &str,
+    product_id: &str,
+    mode: &str,
 ) -> Result<bool> {
     let changed = tx.execute(
         "UPDATE cp_factory_products SET factory_mode = ?1, updated_at = datetime('now','utc')
@@ -33,12 +36,16 @@ pub fn set_factory_product_mode(
 
 pub fn load_factory_product_mode(tx: &Transaction<'_>, product_id: &str) -> Result<String> {
     tx.query_row(
-        "SELECT factory_mode FROM cp_factory_products WHERE id = ?1", [product_id], |row| row.get(0),
+        "SELECT factory_mode FROM cp_factory_products WHERE id = ?1",
+        [product_id],
+        |row| row.get(0),
     )
 }
 
 pub fn load_factory_product_scaffold_context(
-    tx: &Transaction<'_>, owner_subject: &str, product_id: &str,
+    tx: &Transaction<'_>,
+    owner_subject: &str,
+    product_id: &str,
 ) -> Result<Option<(String, String, String, String)>> {
     tx.query_row(
         "SELECT product.title, product.project_path, COALESCE((SELECT item.response_text FROM cp_factory_intake_items item JOIN cp_factory_intake_sessions session ON session.id=item.session_id WHERE session.product_id=product.id AND item.question_key='first_platform' ORDER BY session.created_at DESC LIMIT 1), ''), product.factory_mode FROM cp_factory_products product WHERE product.id=?1 AND product.owner_subject=?2",
@@ -46,7 +53,12 @@ pub fn load_factory_product_scaffold_context(
     ).optional()
 }
 
-pub fn save_factory_product_project_path(tx: &Transaction<'_>, owner_subject: &str, product_id: &str, project_path: &str) -> Result<bool> {
+pub fn save_factory_product_project_path(
+    tx: &Transaction<'_>,
+    owner_subject: &str,
+    product_id: &str,
+    project_path: &str,
+) -> Result<bool> {
     Ok(tx.execute("UPDATE cp_factory_products SET project_path=?1, updated_at=datetime('now','utc') WHERE id=?2 AND owner_subject=?3", params![project_path, product_id, owner_subject])? == 1)
 }
 

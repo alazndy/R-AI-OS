@@ -2,7 +2,7 @@ use raios_runtime::sentinel::SentinelState;
 use raios_surface_tui::app::App;
 use ratatui::{
     layout::Rect,
-    style::{Color, Style, Stylize},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem},
     Frame,
