@@ -131,15 +131,10 @@ pub(super) fn cmd_wrapper_note(note: &str, json: bool) -> Result<(), String> {
     if let Ok(addr) = std::env::var("RAIOS_WRAPPER_NOTE_SOCKET") {
         let mut stream = TcpStream::connect(&addr)
             .map_err(|e| format!("cannot reach wrapper note channel: {e}"))?;
-        let payload = serde_json::json!({"run_id": run_id, "note": note}).to_string();
+        let payload = format!("{}\n", serde_json::json!({"run_id": run_id, "note": note}));
         stream
             .write_all(payload.as_bytes())
             .map_err(|e| format!("cannot send wrapper note: {e}"))?;
-        if let Err(error) = stream.shutdown(std::net::Shutdown::Write) {
-            if error.kind() != std::io::ErrorKind::NotConnected {
-                return Err(format!("cannot finish wrapper note: {error}"));
-            }
-        }
         let mut response = String::new();
         stream
             .read_to_string(&mut response)
