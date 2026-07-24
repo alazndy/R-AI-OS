@@ -412,6 +412,14 @@ fn factory_command_from_input(input: &str) -> Result<FactoryCommand, String> {
             product_id: payload.into(),
             idempotency_key,
         }),
+        "attach" => {
+            let fields = split_factory_fields(payload, 2)?;
+            Ok(FactoryCommand::AttachExistingProject {
+                product_id: fields[0].into(),
+                project_path: fields[1].into(),
+                idempotency_key,
+            })
+        }
         "intake" if !payload.is_empty() => Ok(FactoryCommand::StartIntake {
             product_id: payload.into(),
             idempotency_key,
@@ -626,7 +634,7 @@ fn split_factory_fields(input: &str, expected: usize) -> Result<Vec<&str>, Strin
 }
 
 fn factory_usage() -> String {
-    "Usage: /factory workspace <name> | product <workspace_id> | <title> | mode <product_id> | quick|governed | scaffold <product_id> | intake <product_id> | answer <session_id> | <question_key> | <response> | charter <product_id> | <content> | generate <product_id> | requirement <product_id> | <stable_key> | <content> | change <product_id> | <summary> | assess <change_request_id> | plan <product_id> | <title> | approve-plan <plan_id> | cycle <plan_id> | pause-cycle <cycle_id> | resume-cycle <cycle_id> | cancel-cycle <cycle_id> | stage-graph <cycle_id> | <stage> | activate-stage <cycle_id> | <stage> | stage-evidence <cycle_id> | <stage> | <content_ref> | link-evidence <evidence_id> | <requirement_id> | complete-stage <cycle_id> | <stage> | readiness <product_id> | quality <product_id> | <name> | required|optional | rn-quality <product_id> | check <profile_id> | passed|failed | <evidence_ref> | release <product_id> | <build_ref> | approve-release <release_id> | support <product_id> | <source_kind> | <summary> | triage <support_item_id> | resolve-support <support_item_id> | <resolution_ref> | link-support <support_item_id> | <change_request_id>".into()
+    "Usage: /factory workspace <name> | product <workspace_id> | <title> | mode <product_id> | quick|governed | scaffold <product_id> | attach <product_id> | <absolute_project_path> | intake <product_id> | answer <session_id> | <question_key> | <response> | charter <product_id> | <content> | generate <product_id> | requirement <product_id> | <stable_key> | <content> | change <product_id> | <summary> | assess <change_request_id> | plan <product_id> | <title> | approve-plan <plan_id> | cycle <plan_id> | pause-cycle <cycle_id> | resume-cycle <cycle_id> | cancel-cycle <cycle_id> | stage-graph <cycle_id> | <stage> | activate-stage <cycle_id> | <stage> | stage-evidence <cycle_id> | <stage> | <content_ref> | link-evidence <evidence_id> | <requirement_id> | complete-stage <cycle_id> | <stage> | readiness <product_id> | <product_id> | quality <product_id> | <name> | required|optional | rn-quality <product_id> | check <profile_id> | passed|failed | <evidence_ref> | release <product_id> | <build_ref> | approve-release <release_id> | support <product_id> | <source_kind> | <summary> | triage <support_item_id> | resolve-support <support_item_id> | <resolution_ref> | link-support <support_item_id> | <change_request_id>".into()
 }
 
 #[cfg(test)]
@@ -653,6 +661,11 @@ mod tests {
                 mode: raios_contracts::FactoryMode::Quick,
                 ..
             })
+        ));
+        assert!(matches!(
+            factory_command_from_input("attach product-1 | /tmp/attached-project"),
+            Ok(FactoryCommand::AttachExistingProject { product_id, project_path, .. })
+                if product_id == "product-1" && project_path == "/tmp/attached-project"
         ));
         assert!(matches!(
             factory_command_from_input("generate product-1").unwrap(),

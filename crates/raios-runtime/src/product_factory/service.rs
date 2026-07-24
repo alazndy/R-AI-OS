@@ -4,6 +4,8 @@ use raios_core::product_factory::{
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
+use std::path::Path;
+use std::process::Command;
 
 use crate::control_plane::service::{init_idempotency_table, ControlActor};
 
@@ -195,6 +197,32 @@ pub fn dispatch_factory_command_with_config(
                 .map_err(|error| Problem::internal(error.to_string()))?;
                 serde_json::json!({"product_id": product_id, "project_path": project_path, "category": category, "created": true})
             }
+        }
+        FactoryCommand::AttachExistingProject {
+            product_id,
+            project_path,
+            ..
+        } => {
+            let source = inspect_existing_git_project(project_path)?;
+            let attached = raios_core::db::attach_factory_product_existing_project(
+                &tx,
+                actor.subject(),
+                product_id,
+                &source.project_path,
+                &source.remote,
+                &source.revision,
+            )
+            .map_err(|error| Problem::internal(error.to_string()))?;
+            if !attached {
+                return Err(Problem::forbidden("Product is not owned by this principal"));
+            }
+            serde_json::json!({
+                "product_id": product_id,
+                "project_path": source.project_path,
+                "source_remote": source.remote,
+                "source_revision": source.revision,
+                "attached": true
+            })
         }
         FactoryCommand::StartIntake { product_id, .. } => {
             let session = raios_core::db::start_factory_intake(&tx, actor.subject(), product_id)
@@ -696,6 +724,7 @@ fn factory_command_name(command: &FactoryCommand) -> &'static str {
         FactoryCommand::CreateProductDraft { .. } => "factory_create_product_draft",
         FactoryCommand::SetProductMode { .. } => "factory_set_product_mode",
         FactoryCommand::ScaffoldProject { .. } => "factory_scaffold_project",
+        FactoryCommand::AttachExistingProject { .. } => "factory_attach_existing_project",
         FactoryCommand::StartIntake { .. } => "factory_start_intake",
         FactoryCommand::RecordIntakeAnswer { .. } => "factory_record_intake_answer",
         FactoryCommand::CreateCharterDraft { .. } => "factory_create_charter_draft",
@@ -761,6 +790,15 @@ fn validate_command(command: &FactoryCommand) -> Result<(), Problem> {
             product_id,
             idempotency_key,
         } => valid_identifier(product_id) && valid_idempotency_key(idempotency_key),
+        FactoryCommand::AttachExistingProject {
+            product_id,
+            project_path,
+            idempotency_key,
+        } => {
+            valid_identifier(product_id)
+                && valid_absolute_project_path(project_path)
+                && valid_idempotency_key(idempotency_key)
+        }
         FactoryCommand::StartIntake {
             product_id,
             idempotency_key,
@@ -1009,6 +1047,90 @@ fn valid_identifier(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_absolute_project_path(value: &str) -> bool {
+    valid_text(value, 4_096) && Path::new(value).is_absolute()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExistingGitProject {
+    project_path: String,
+    remote: String,
+    revision: String,
+}
+
+/// Inspect an existing Git worktree without mutating it. The command accepts
+/// only repository roots (not arbitrary subdirectories), captures a stable
+/// origin and HEAD SHA, and never persists a credential-bearing HTTP remote.
+fn inspect_existing_git_project(project_path: &str) -> Result<ExistingGitProject, Problem> {
+    let canonical_path = std::fs::canonicalize(project_path)
+        .map_err(|_| Problem::invalid_input("Project path does not exist or is not accessible"))?;
+    if !canonical_path.is_dir() || !canonical_path.join(".git").exists() {
+        return Err(Problem::invalid_input(
+            "Project path must be the root of an existing Git worktree",
+        ));
+    }
+
+    let canonical = canonical_path.to_string_lossy().to_string();
+    let inside_worktree = git_output(&canonical, &["rev-parse", "--is-inside-work-tree"])?;
+    if inside_worktree != "true" {
+        return Err(Problem::invalid_input(
+            "Project path must be the root of an existing Git worktree",
+        ));
+    }
+    let top_level = git_output(&canonical, &["rev-parse", "--show-toplevel"])?;
+    if top_level != canonical {
+        return Err(Problem::invalid_input(
+            "Project path must be the root of an existing Git worktree",
+        ));
+    }
+    let remote = git_output(&canonical, &["config", "--get", "remote.origin.url"])?;
+    if remote.is_empty() || remote.len() > 2_000 || remote_has_embedded_http_credentials(&remote) {
+        return Err(Problem::invalid_input(
+            "Project origin remote is missing or contains embedded credentials",
+        ));
+    }
+    let revision = git_output(&canonical, &["rev-parse", "HEAD"])?;
+    if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(Problem::invalid_input(
+            "Project HEAD must resolve to a full Git commit SHA",
+        ));
+    }
+
+    Ok(ExistingGitProject {
+        project_path: canonical,
+        remote,
+        revision,
+    })
+}
+
+fn git_output(project_path: &str, args: &[&str]) -> Result<String, Problem> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_path)
+        .args(args)
+        .output()
+        .map_err(|_| Problem::invalid_input("Git is required to attach an existing project"))?;
+    if !output.status.success() {
+        return Err(Problem::invalid_input(
+            "Project path is not a valid Git worktree with the required metadata",
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map(|value| value.trim().to_string())
+        .map_err(|_| Problem::invalid_input("Git metadata must be valid UTF-8"))
+}
+
+fn remote_has_embedded_http_credentials(remote: &str) -> bool {
+    ["http://", "https://"]
+        .iter()
+        .filter_map(|scheme| remote.strip_prefix(scheme))
+        .any(|rest| {
+            rest.split('/')
+                .next()
+                .is_some_and(|authority| authority.contains('@'))
+        })
 }
 
 fn is_factory_stage(value: &str) -> bool {
@@ -1419,5 +1541,99 @@ mod tests {
         .unwrap();
         assert_eq!(second["created"], false);
         assert_eq!(second["project_path"], project_path);
+    }
+
+    #[test]
+    fn existing_git_project_attachment_is_verified_owner_bound_and_idempotent() {
+        let repository = tempfile::tempdir().unwrap();
+        let repo_path = repository.path().to_string_lossy().to_string();
+        run_git(&repo_path, &["init", "--quiet"]);
+        run_git(
+            &repo_path,
+            &["config", "user.email", "factory@example.test"],
+        );
+        run_git(&repo_path, &["config", "user.name", "Factory Test"]);
+        std::fs::write(repository.path().join("README.md"), "# Attached project\n").unwrap();
+        run_git(&repo_path, &["add", "README.md"]);
+        run_git(&repo_path, &["commit", "--quiet", "-m", "initial"]);
+        run_git(
+            &repo_path,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/example/attached-project.git",
+            ],
+        );
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let actor = ControlActor::local_session();
+        let workspace = dispatch_factory_command(
+            &mut conn,
+            &actor,
+            true,
+            &FactoryCommand::CreateWorkspace {
+                name: "Attached repositories".into(),
+                idempotency_key: "attach-workspace-0001".into(),
+            },
+        )
+        .unwrap();
+        let product = dispatch_factory_command(
+            &mut conn,
+            &actor,
+            true,
+            &FactoryCommand::CreateProductDraft {
+                workspace_id: workspace["workspace_id"].as_str().unwrap().into(),
+                title: "Attached project".into(),
+                idempotency_key: "attach-product-0001".into(),
+            },
+        )
+        .unwrap();
+        let product_id = product["product_id"].as_str().unwrap().to_string();
+        let command = FactoryCommand::AttachExistingProject {
+            product_id: product_id.clone(),
+            project_path: repo_path.clone(),
+            idempotency_key: "attach-project-0001".into(),
+        };
+
+        let first = dispatch_factory_command(&mut conn, &actor, true, &command).unwrap();
+        let second = dispatch_factory_command(&mut conn, &actor, true, &command).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first["attached"], true);
+        assert_eq!(
+            first["source_remote"],
+            "https://github.com/example/attached-project.git"
+        );
+        assert_eq!(first["source_revision"].as_str().unwrap().len(), 40);
+        assert_eq!(
+            conn.query_row(
+                "SELECT source_remote FROM cp_factory_products WHERE id=?1",
+                [&product_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "https://github.com/example/attached-project.git"
+        );
+    }
+
+    #[test]
+    fn credential_bearing_http_remotes_are_rejected() {
+        assert!(remote_has_embedded_http_credentials(
+            "https://token@github.com/example/private.git"
+        ));
+        assert!(!remote_has_embedded_http_credentials(
+            "git@github.com:example/private.git"
+        ));
+    }
+
+    fn run_git(project_path: &str, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(project_path)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 }

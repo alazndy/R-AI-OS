@@ -203,6 +203,8 @@ pub fn load_work_snapshot(conn: &Connection) -> Result<WorkSnapshot, String> {
                 status: product.status,
                 mode: product.mode,
                 project_path: product.project_path,
+                source_remote: product.source_remote,
+                source_revision: product.source_revision,
                 stack: product.stack,
                 scaffold_state: product.scaffold_state,
                 quality_blockers: product.quality_blockers,

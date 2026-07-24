@@ -42,6 +42,13 @@ pub enum FactoryCommand {
         product_id: String,
         idempotency_key: String,
     },
+    /// Bind an already-existing local Git worktree to a Factory product.
+    /// The runtime canonicalizes and verifies the path before persisting it.
+    AttachExistingProject {
+        product_id: String,
+        project_path: String,
+        idempotency_key: String,
+    },
     StartIntake {
         product_id: String,
         idempotency_key: String,
@@ -210,6 +217,9 @@ impl FactoryCommand {
                 idempotency_key, ..
             }
             | Self::ScaffoldProject {
+                idempotency_key, ..
+            }
+            | Self::AttachExistingProject {
                 idempotency_key, ..
             }
             | Self::StartIntake {
@@ -383,6 +393,10 @@ pub struct FactoryProductSummaryDto {
     pub mode: String,
     #[serde(default)]
     pub project_path: Option<String>,
+    #[serde(default)]
+    pub source_remote: Option<String>,
+    #[serde(default)]
+    pub source_revision: Option<String>,
     #[serde(default)]
     pub stack: Option<String>,
     #[serde(default)]

@@ -490,6 +490,8 @@ raios bootstrap
 | `raios evolve from-traces` | Generate pending instinct candidates from successful trace fixes |
 | `raios factory overview [--json]` | Read the canonical Product Factory snapshot without changing state |
 | `raios factory execute --file <command.json> [--json]` | Dispatch one bounded local typed `FactoryCommand`; human-only approval, cancellation, stage activation/completion, requirement application, and release approval commands are rejected |
+
+Existing Git repositories can be attached through `FactoryCommand::AttachExistingProject`. The command accepts only an absolute repository root, verifies the Git worktree, `origin` remote, and `HEAD` SHA before persisting the owner-bound product source. HTTP(S) remotes containing embedded credentials are rejected.
 | `raios bootstrap` | Replicate AI factory on a new machine |
 
 ### Security
