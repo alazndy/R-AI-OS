@@ -1080,7 +1080,13 @@ fn inspect_existing_git_project(project_path: &str) -> Result<ExistingGitProject
         ));
     }
     let top_level = git_output(&canonical, &["rev-parse", "--show-toplevel"])?;
-    if top_level != canonical {
+    // Git and std::fs can render the same Windows path differently (for
+    // example `D:/repo` versus `\\\\?\\D:\\repo`). Compare canonical path
+    // identities rather than their display strings.
+    let canonical_top_level = std::fs::canonicalize(&top_level).map_err(|_| {
+        Problem::invalid_input("Project path must be the root of an existing Git worktree")
+    })?;
+    if canonical_top_level != canonical_path {
         return Err(Problem::invalid_input(
             "Project path must be the root of an existing Git worktree",
         ));
