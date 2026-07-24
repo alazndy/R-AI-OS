@@ -244,3 +244,122 @@ fn check_package_json(content: &str, v: &mut Vec<Violation>) {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn report(path: &str, content: &str) -> ComplianceReport {
+        check_file(&PathBuf::from(path), content)
+    }
+
+    #[test]
+    fn detects_hardcoded_secret_assignments_but_not_comments_or_discussion() {
+        let detected = report("config.rs", "let api_key = \"sk-abc123\";");
+        assert_eq!(detected.violations.len(), 1);
+        assert_eq!(detected.violations[0].rule, "Possible hardcoded secret/key");
+        assert_eq!(detected.score, 75);
+
+        assert!(report("config.rs", "// api_key = \"sk-example\"")
+            .violations
+            .is_empty());
+        assert!(report("notes.md", "discuss api_key rotation \"policy\"")
+            .violations
+            .is_empty());
+    }
+
+    #[test]
+    fn rust_rules_distinguish_production_and_test_lines() {
+        let production = report("lib.rs", "let value = fallible().unwrap();");
+        assert_eq!(production.violations[0].rule, "Prefer ? over .unwrap()");
+
+        assert!(
+            report("lib.rs", "#[test] fn case() { fallible().unwrap(); }")
+                .violations
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn rust_rules_report_independent_panic_and_todo_violations() {
+        let rules: Vec<&str> = report("lib.rs", "panic!(\"boom\"); // TODO: fix")
+            .violations
+            .iter()
+            .map(|violation| violation.rule)
+            .collect();
+        assert!(rules.contains(&"Avoid panic! — return Result instead"));
+        assert!(rules.contains(&"Unresolved TODO/FIXME/HACK"));
+    }
+
+    #[test]
+    fn typescript_rules_cover_any_console_and_important() {
+        let rules: Vec<&str> = report(
+            "app.ts",
+            "const value: any = console.log(x); /* !important */",
+        )
+        .violations
+        .iter()
+        .map(|violation| violation.rule)
+        .collect();
+        assert!(rules.contains(&"Avoid `any` — use unknown + type guard"));
+        assert!(rules.contains(&"Remove console.log from production"));
+        assert!(rules.contains(&"Avoid !important — fix specificity"));
+    }
+
+    #[test]
+    fn python_bare_except_is_flagged_but_typed_except_is_not() {
+        assert_eq!(
+            report("app.py", "except:").violations[0].rule,
+            "Bare except: — specify exception type"
+        );
+        assert!(report("app.py", "except ValueError:").violations.is_empty());
+    }
+
+    #[test]
+    fn package_json_rejects_npm_and_yarn_but_allows_pnpm() {
+        assert!(
+            report("package.json", "{\"scripts\":{\"setup\":\"npm install\"}}")
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "Use pnpm not npm (MASTER.md)")
+        );
+        assert!(
+            report("package.json", "{\"scripts\":{\"setup\":\"yarn install\"}}")
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "Use pnpm not yarn (MASTER.md)")
+        );
+        assert!(
+            report("package.json", "{\"scripts\":{\"setup\":\"pnpm install\"}}")
+                .violations
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn score_saturates_and_summary_helpers_observe_thresholds() {
+        let mut report = report("lib.rs", &".unwrap();\n".repeat(40));
+        assert_eq!(report.score, 0);
+
+        report.score = 100;
+        assert_eq!((report.grade(), report.score_color()), ("A", 0));
+        report.score = 65;
+        assert_eq!((report.grade(), report.score_color()), ("D", 1));
+        report.score = 10;
+        assert_eq!((report.grade(), report.score_color()), ("F", 2));
+    }
+
+    #[test]
+    fn first_issue_formats_line_numbers_and_file_types_are_classified() {
+        assert_eq!(
+            report("lib.rs", "let value = fallible().unwrap();").first_issue(),
+            Some("Ln   1: Prefer ? over .unwrap()".to_string())
+        );
+        assert_eq!(
+            report("data.xyz", "value.unwrap()").file_type,
+            FileType::Other
+        );
+        assert_eq!(report("data.xyz", "value.unwrap()").language(), "");
+    }
+}

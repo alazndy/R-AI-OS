@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing signed tag to package and publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  package:
+    name: Package (${{ matrix.target_name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target_name: linux-x86_64
+            archive_extension: tar.gz
+          - os: macos-13
+            target_name: macos-x86_64
+            archive_extension: tar.gz
+          - os: windows-latest
+            target_name: windows-x86_64
+            archive_extension: zip
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - run: cargo build --release --workspace --locked
+      - name: Package Unix archive
+        if: matrix.archive_extension == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="raios-${{ matrix.target_name }}"
+          archive="$stage.tar.gz"
+          mkdir "$stage"
+          cp target/release/raios target/release/aiosd README.md CHANGELOG.md LICENSE "$stage/"
+          tar -czf "$archive" "$stage"
+          shasum -a 256 "$archive" > "$archive.sha256"
+      - name: Package Windows archive
+        if: matrix.archive_extension == 'zip'
+        shell: pwsh
+        run: |
+          $stage = "raios-${{ matrix.target_name }}"
+          $archive = "$stage.zip"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "target/release/raios.exe","target/release/aiosd.exe","README.md","CHANGELOG.md","LICENSE" -Destination $stage
+          Compress-Archive -Path $stage -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          "$hash  $archive" | Set-Content -NoNewline "$archive.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: raios-${{ matrix.target_name }}
+          path: |
+            raios-${{ matrix.target_name }}.${{ matrix.archive_extension }}
+            raios-${{ matrix.target_name }}.${{ matrix.archive_extension }}.sha256
+          if-no-files-found: error
+
+  extension:
+    name: Package VS Code extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.14.0
+      - name: Build extension package
+        working-directory: vscode-extension
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm run compile
+          pnpm run package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: raios-vscode-extension
+          path: vscode-extension/raios-*.vsix
+          if-no-files-found: error
+
+  publish:
+    name: Attest and publish release
+    needs: [package, extension]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Build consolidated checksums
+        run: |
+          set -euo pipefail
+          cat dist/*.sha256 > dist/SHA256SUMS
+          cd dist
+          sha256sum --check SHA256SUMS
+      - uses: actions/attest-build-provenance@db473fddc028af60658334401dc6fa3ffd8669fd # v2.3.0
+        with:
+          subject-path: dist/*
+      - uses: softprops/action-gh-release@6cbd405e2c4e67a21c47fa9e383d020e4e28b836 # v2.3.3
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true

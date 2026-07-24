@@ -109,20 +109,28 @@ pub fn dispatch_factory_command_with_config(
                 "title": product.title
             })
         }
-        FactoryCommand::SetProductMode { product_id, mode, .. } => {
+        FactoryCommand::SetProductMode {
+            product_id, mode, ..
+        } => {
             let mode = match mode {
                 raios_contracts::FactoryMode::Quick => "quick",
                 raios_contracts::FactoryMode::Governed => "governed",
             };
-            let updated = raios_core::db::set_factory_product_mode(&tx, actor.subject(), product_id, mode)
-                .map_err(|error| Problem::internal(error.to_string()))?;
+            let updated =
+                raios_core::db::set_factory_product_mode(&tx, actor.subject(), product_id, mode)
+                    .map_err(|error| Problem::internal(error.to_string()))?;
             if !updated {
                 return Err(Problem::forbidden("Product is not owned by this principal"));
             }
             serde_json::json!({"product_id": product_id, "mode": mode})
         }
         FactoryCommand::ScaffoldProject { product_id, .. } => {
-            let (title, existing_path, platform, mode) = raios_core::db::load_factory_product_scaffold_context(&tx, actor.subject(), product_id)
+            let (title, existing_path, platform, mode) =
+                raios_core::db::load_factory_product_scaffold_context(
+                    &tx,
+                    actor.subject(),
+                    product_id,
+                )
                 .map_err(|error| Problem::internal(error.to_string()))?
                 .ok_or_else(|| Problem::forbidden("Product is not owned by this principal"))?;
             if !existing_path.is_empty() {
@@ -132,13 +140,18 @@ pub fn dispatch_factory_command_with_config(
                 let config = match override_config {
                     Some(c) => c,
                     None => {
-                        loaded_cfg = raios_core::config::Config::load()
-                            .unwrap_or_else(|| raios_core::config::Config::from_detect_result(raios_core::config::Config::auto_detect()));
+                        loaded_cfg = raios_core::config::Config::load().unwrap_or_else(|| {
+                            raios_core::config::Config::from_detect_result(
+                                raios_core::config::Config::auto_detect(),
+                            )
+                        });
                         &loaded_cfg
                     }
                 };
                 if !config.dev_ops_path.is_dir() {
-                    return Err(Problem::internal("Factory workspace root is not configured"));
+                    return Err(Problem::internal(
+                        "Factory workspace root is not configured",
+                    ));
                 }
                 let category = factory_project_category(&platform);
                 let project_name = factory_project_slug(&title);
@@ -154,10 +167,18 @@ pub fn dispatch_factory_command_with_config(
                     )));
                 }
                 let scaffold = crate::new_project::create(&crate::new_project::NewProjectConfig {
-                    name: &project_name, category, dev_ops: &config.dev_ops_path, github: false, no_vault: true,
+                    name: &project_name,
+                    category,
+                    dev_ops: &config.dev_ops_path,
+                    github: false,
+                    no_vault: true,
                 });
-                if !scaffold.path.join("README.md").is_file() || !scaffold.path.join("memory.md").is_file() {
-                    return Err(Problem::internal("Factory project scaffold did not create required project files"));
+                if !scaffold.path.join("README.md").is_file()
+                    || !scaffold.path.join("memory.md").is_file()
+                {
+                    return Err(Problem::internal(
+                        "Factory project scaffold did not create required project files",
+                    ));
                 }
                 let project_path = scaffold.path.to_string_lossy().to_string();
                 let manifest_content = format!(
@@ -165,8 +186,13 @@ pub fn dispatch_factory_command_with_config(
                     project_name, category, product_id, mode, project_path
                 );
                 let _ = std::fs::write(scaffold.path.join(".raios.yaml"), manifest_content);
-                raios_core::db::save_factory_product_project_path(&tx, actor.subject(), product_id, &project_path)
-                    .map_err(|error| Problem::internal(error.to_string()))?;
+                raios_core::db::save_factory_product_project_path(
+                    &tx,
+                    actor.subject(),
+                    product_id,
+                    &project_path,
+                )
+                .map_err(|error| Problem::internal(error.to_string()))?;
                 serde_json::json!({"product_id": product_id, "project_path": project_path, "category": category, "created": true})
             }
         }
@@ -726,12 +752,15 @@ fn validate_command(command: &FactoryCommand) -> Result<(), Problem> {
                 && valid_text(title, 160)
                 && valid_idempotency_key(idempotency_key)
         }
-        FactoryCommand::SetProductMode { product_id, idempotency_key, .. } => {
-            valid_identifier(product_id) && valid_idempotency_key(idempotency_key)
-        }
-        FactoryCommand::ScaffoldProject { product_id, idempotency_key } => {
-            valid_identifier(product_id) && valid_idempotency_key(idempotency_key)
-        }
+        FactoryCommand::SetProductMode {
+            product_id,
+            idempotency_key,
+            ..
+        } => valid_identifier(product_id) && valid_idempotency_key(idempotency_key),
+        FactoryCommand::ScaffoldProject {
+            product_id,
+            idempotency_key,
+        } => valid_identifier(product_id) && valid_idempotency_key(idempotency_key),
         FactoryCommand::StartIntake {
             product_id,
             idempotency_key,
@@ -992,17 +1021,42 @@ fn valid_idempotency_key(value: &str) -> bool {
 
 fn factory_project_category(platform: &str) -> &'static str {
     let platform = platform.to_ascii_lowercase();
-    if platform.contains("flutter") || platform.contains("react native") || platform.contains("android") || platform.contains("ios") { "mobile" }
-    else if platform.contains("react") || platform.contains("next") || platform.contains("web") { "web" }
-    else if platform.contains("esp") || platform.contains("iot") || platform.contains("embedded") { "embedded" }
-    else if platform.contains("ai") || platform.contains("model") || platform.contains("data") { "ai" }
-    else { "tools" }
+    if platform.contains("flutter")
+        || platform.contains("react native")
+        || platform.contains("android")
+        || platform.contains("ios")
+    {
+        "mobile"
+    } else if platform.contains("react") || platform.contains("next") || platform.contains("web") {
+        "web"
+    } else if platform.contains("esp") || platform.contains("iot") || platform.contains("embedded")
+    {
+        "embedded"
+    } else if platform.contains("ai") || platform.contains("model") || platform.contains("data") {
+        "ai"
+    } else {
+        "tools"
+    }
 }
 
 fn factory_project_slug(title: &str) -> String {
-    let slug: String = title.to_ascii_lowercase().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect();
+    let slug: String = title
+        .to_ascii_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
     let slug = slug.trim_matches('-');
-    if slug.is_empty() { "factory-project".into() } else { slug.into() }
+    if slug.is_empty() {
+        "factory-project".into()
+    } else {
+        slug.into()
+    }
 }
 
 #[cfg(test)]
@@ -1014,31 +1068,77 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap();
         let actor = ControlActor::local_session();
-        let workspace = dispatch_factory_command(&mut conn, &actor, true, &FactoryCommand::CreateWorkspace {
-            name: "Quick pilots".into(), idempotency_key: "quick-workspace-0001".into(),
-        }).unwrap();
-        let product = dispatch_factory_command(&mut conn, &actor, true, &FactoryCommand::CreateProductDraft {
-            workspace_id: workspace["workspace_id"].as_str().unwrap().into(),
-            title: "Quick pilot".into(), idempotency_key: "quick-product-0001".into(),
-        }).unwrap();
+        let workspace = dispatch_factory_command(
+            &mut conn,
+            &actor,
+            true,
+            &FactoryCommand::CreateWorkspace {
+                name: "Quick pilots".into(),
+                idempotency_key: "quick-workspace-0001".into(),
+            },
+        )
+        .unwrap();
+        let product = dispatch_factory_command(
+            &mut conn,
+            &actor,
+            true,
+            &FactoryCommand::CreateProductDraft {
+                workspace_id: workspace["workspace_id"].as_str().unwrap().into(),
+                title: "Quick pilot".into(),
+                idempotency_key: "quick-product-0001".into(),
+            },
+        )
+        .unwrap();
         let product_id = product["product_id"].as_str().unwrap().to_owned();
-        dispatch_factory_command(&mut conn, &actor, true, &FactoryCommand::SetProductMode {
-            product_id: product_id.clone(), mode: raios_contracts::FactoryMode::Quick,
-            idempotency_key: "quick-mode-0001".into(),
-        }).unwrap();
-        let intake = dispatch_factory_command(&mut conn, &actor, true, &FactoryCommand::StartIntake {
-            product_id: product_id.clone(), idempotency_key: "quick-intake-0001".into(),
-        }).unwrap();
+        dispatch_factory_command(
+            &mut conn,
+            &actor,
+            true,
+            &FactoryCommand::SetProductMode {
+                product_id: product_id.clone(),
+                mode: raios_contracts::FactoryMode::Quick,
+                idempotency_key: "quick-mode-0001".into(),
+            },
+        )
+        .unwrap();
+        let intake = dispatch_factory_command(
+            &mut conn,
+            &actor,
+            true,
+            &FactoryCommand::StartIntake {
+                product_id: product_id.clone(),
+                idempotency_key: "quick-intake-0001".into(),
+            },
+        )
+        .unwrap();
         let session_id = intake["session_id"].as_str().unwrap().to_owned();
-        for (index, key) in ["problem_statement", "core_outcome", "success_metric"].iter().enumerate() {
-            dispatch_factory_command(&mut conn, &actor, true, &FactoryCommand::RecordIntakeAnswer {
-                session_id: session_id.clone(), question_key: (*key).into(), response: format!("Answer {index}"),
-                idempotency_key: format!("quick-answer-{index:04}"),
-            }).unwrap();
+        for (index, key) in ["problem_statement", "core_outcome", "success_metric"]
+            .iter()
+            .enumerate()
+        {
+            dispatch_factory_command(
+                &mut conn,
+                &actor,
+                true,
+                &FactoryCommand::RecordIntakeAnswer {
+                    session_id: session_id.clone(),
+                    question_key: (*key).into(),
+                    response: format!("Answer {index}"),
+                    idempotency_key: format!("quick-answer-{index:04}"),
+                },
+            )
+            .unwrap();
         }
-        let charter = dispatch_factory_command(&mut conn, &actor, true, &FactoryCommand::GenerateCharterDraft {
-            product_id, idempotency_key: "quick-charter-0001".into(),
-        }).unwrap();
+        let charter = dispatch_factory_command(
+            &mut conn,
+            &actor,
+            true,
+            &FactoryCommand::GenerateCharterDraft {
+                product_id,
+                idempotency_key: "quick-charter-0001".into(),
+            },
+        )
+        .unwrap();
         assert!(charter["charter_revision_id"].is_string());
     }
 

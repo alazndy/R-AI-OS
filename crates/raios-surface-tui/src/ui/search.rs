@@ -2,7 +2,7 @@ use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap},
     Frame,

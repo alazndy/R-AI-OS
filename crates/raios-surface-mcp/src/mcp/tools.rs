@@ -10,8 +10,15 @@ impl McpServer {
     /// cannot itself become a secret-leak vector. `rule_source` distinguishes
     /// an explicit `[[tools.rules]]` match from a fallback to `default_action`,
     /// which `raios policy suggest` (Phase 1) uses to propose new rules.
-    fn record_tool_audit(&self, name: &str, raw_args: &str, decision: &raios_core::security::UmaiDecision) {
-        let Ok(conn) = raios_core::db::open_db() else { return };
+    fn record_tool_audit(
+        &self,
+        name: &str,
+        raw_args: &str,
+        decision: &raios_core::security::UmaiDecision,
+    ) {
+        let Ok(conn) = raios_core::db::open_db() else {
+            return;
+        };
         let event_type = match decision {
             raios_core::security::UmaiDecision::Allow => "tool_allow",
             raios_core::security::UmaiDecision::Deny(_) => "tool_deny",
@@ -33,7 +40,8 @@ impl McpServer {
     /// for one tool call. See `security::capabilities` module docs for the
     /// exact scope of what is and isn't checked here.
     fn enforce_capability(&self, name: &str, args: &Value) -> Result<(), String> {
-        let caps = raios_core::security::capabilities::resolve(name, self.umai.tool_capabilities(name));
+        let caps =
+            raios_core::security::capabilities::resolve(name, self.umai.tool_capabilities(name));
 
         if raios_core::security::capabilities::PATH_RESOLVING_TOOLS.contains(&name) {
             // Only enforce once the tool would actually resolve a path — if

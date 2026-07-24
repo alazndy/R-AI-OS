@@ -1,8 +1,8 @@
 use crate::instinct::InstinctEngine;
 use raios_core::shield::AgentShield;
-use std::io::{self, BufRead};
 #[cfg(unix)]
-use std::io::{Read, Write};
+use std::io::Write;
+use std::io::{self, BufRead, BufReader};
 #[cfg(unix)]
 use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
@@ -69,8 +69,12 @@ fn start_wrapper_note_ipc(run_id: String, project_path: String) -> std::io::Resu
         while !worker_stop.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let mut payload = String::new();
-                    let _ = Read::take(&mut stream, 2048).read_to_string(&mut payload);
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                    let payload = {
+                        let mut payload = String::new();
+                        let _ = BufReader::new(&mut stream).read_line(&mut payload);
+                        payload
+                    };
                     let response = match serde_json::from_str::<serde_json::Value>(&payload) {
                         Ok(value) if value["run_id"].as_str() == Some(run_id.as_str()) => {
                             match value["note"].as_str() {
@@ -987,6 +991,7 @@ mod tests {
     mod wrapper_note_ipc {
         use super::*;
         use rusqlite::params;
+        use std::io::Read;
         use std::net::TcpStream;
         use std::sync::Mutex;
 
@@ -997,9 +1002,8 @@ mod tests {
 
         fn send_note(addr: SocketAddr, run_id: &str, note: &str) -> serde_json::Value {
             let mut stream = TcpStream::connect(addr).unwrap();
-            let payload = serde_json::json!({"run_id": run_id, "note": note}).to_string();
+            let payload = format!("{}\n", serde_json::json!({"run_id": run_id, "note": note}));
             stream.write_all(payload.as_bytes()).unwrap();
-            stream.shutdown(std::net::Shutdown::Write).unwrap();
             let mut response = String::new();
             stream.read_to_string(&mut response).unwrap();
             serde_json::from_str(&response).unwrap()
@@ -1050,16 +1054,12 @@ mod tests {
                 raios_core::db::cp_session_start(&conn, "codex_kaira", Some(project_b)).unwrap();
             drop(conn);
 
-            let ipc_a = start_wrapper_note_ipc(
-                run_a.clone(),
-                "/tmp/raios-wrapper-note-test-a".to_string(),
-            )
-            .unwrap();
-            let ipc_b = start_wrapper_note_ipc(
-                run_b.clone(),
-                "/tmp/raios-wrapper-note-test-b".to_string(),
-            )
-            .unwrap();
+            let ipc_a =
+                start_wrapper_note_ipc(run_a.clone(), "/tmp/raios-wrapper-note-test-a".to_string())
+                    .unwrap();
+            let ipc_b =
+                start_wrapper_note_ipc(run_b.clone(), "/tmp/raios-wrapper-note-test-b".to_string())
+                    .unwrap();
 
             // Legitimate note into each project's own socket succeeds.
             let resp_a = send_note(ipc_a.addr, &run_a, "note for A");
@@ -1072,9 +1072,15 @@ mod tests {
             // be rejected by the socket itself, never reach the DB as a
             // write into the wrong project.
             let cross_into_a = send_note(ipc_a.addr, &run_b, "cross leak into A");
-            assert_eq!(cross_into_a["recorded"], false, "cross_into_a = {cross_into_a}");
+            assert_eq!(
+                cross_into_a["recorded"], false,
+                "cross_into_a = {cross_into_a}"
+            );
             let cross_into_b = send_note(ipc_b.addr, &run_a, "cross leak into B");
-            assert_eq!(cross_into_b["recorded"], false, "cross_into_b = {cross_into_b}");
+            assert_eq!(
+                cross_into_b["recorded"], false,
+                "cross_into_b = {cross_into_b}"
+            );
 
             stop(ipc_a);
             stop(ipc_b);

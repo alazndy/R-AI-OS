@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.7.0-blue?style=for-the-badge" alt="Version"></a>
+  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.7.1-blue?style=for-the-badge" alt="Version"></a>
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
@@ -332,9 +332,9 @@ Manual equivalent, if you need the individual steps:
 
 ```bash
 cd vscode-extension
-npm install        # pulls in typescript + @vscode/vsce devDependencies
-npm run compile
-npx vsce package
+ pnpm install        # pulls in typescript + @vscode/vsce devDependencies
+ pnpm run compile
+ pnpm run package
 code --uninstall-extension alazndy.raios   # drop the old version first
 code --install-extension raios-*.vsix
 ```
@@ -354,7 +354,7 @@ code --install-extension raios-*.vsix
 ```bash
 git clone https://github.com/alazndy/R-AI-OS.git
 cd R-AI-OS
-cargo install --path . --force
+./install.sh
 ```
 
 ### Windows 10/11 (portable local install)
@@ -392,8 +392,8 @@ Use the bundled `install.sh` instead of running the steps above by hand. It inst
 ```
 
 What it does:
-1. `cargo build --release`
-2. `cargo install --path crates/raios-surface-cli --force` — replaces the existing binaries in the active install directory
+1. `cargo build --release --workspace --locked`
+2. `cargo install --path crates/raios-surface-cli --locked --force` — replaces the existing binaries in the active install directory
 3. Restarts `aiosd.service` and `raios-tray.service` via `systemctl --user` (if present) so the new binary actually takes effect, not just the file on disk
 4. Warns if a stray `raios`/`aiosd` binary exists earlier on `$PATH` outside cargo's bin dir, which would silently shadow the freshly installed one
 

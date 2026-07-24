@@ -21,7 +21,7 @@ pub use sentinel::*;
 pub use setup::*;
 
 use ratatui::{
-    style::{Color, Style, Stylize},
+    style::{Color, Style},
     text::{Line, Span},
     Frame,
 };
