@@ -29,7 +29,9 @@ jobs:
           - os: ubuntu-latest
             target_name: linux-x86_64
             archive_extension: tar.gz
-          - os: macos-13
+          # `macos-15-intel` is GitHub's supported x86_64 macOS runner;
+          # `macos-latest` is ARM and `macos-13` is retired/deprecated.
+          - os: macos-15-intel
             target_name: macos-x86_64
             archive_extension: tar.gz
           - os: windows-latest
