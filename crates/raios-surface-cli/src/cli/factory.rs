@@ -1,4 +1,4 @@
-//! Local Product Factory CLI boundary.
+//! Local Ocak (Product Factory) CLI boundary.
 //!
 //! This surface accepts one serialized `FactoryCommand` from a bounded local
 //! file. It deliberately reuses the canonical runtime dispatcher so ownership,
@@ -32,7 +32,7 @@ pub(super) fn cmd_factory(action: FactoryAction, json: bool) {
             if json {
                 println!("{}", serde_json::json!({"ok": false, "error": error}));
             } else {
-                eprintln!("Factory command failed: {error}");
+                eprintln!("Ocak command failed: {error}");
             }
             std::process::exit(1);
         }
@@ -46,32 +46,32 @@ fn factory_overview() -> Result<serde_json::Value, String> {
 
 fn factory_overview_from_conn(conn: &Connection) -> Result<serde_json::Value, String> {
     let snapshot = raios_runtime::control_plane::service::load_work_snapshot(conn)
-        .map_err(|error| format!("Failed loading Product Factory overview: {error}"))?;
+        .map_err(|error| format!("Failed loading Ocak overview: {error}"))?;
     Ok(serde_json::json!(snapshot.factory))
 }
 
 fn read_factory_command(path: &Path) -> Result<FactoryCommand, String> {
     let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("Unable to inspect Factory command file: {error}"))?;
+        .map_err(|error| format!("Unable to inspect Ocak command file: {error}"))?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err("Factory command file must be a regular local file".into());
+        return Err("Ocak command file must be a regular local file".into());
     }
     if metadata.len() > MAX_COMMAND_FILE_BYTES {
         return Err(format!(
-            "Factory command file exceeds the {} byte limit",
+            "Ocak command file exceeds the {} byte limit",
             MAX_COMMAND_FILE_BYTES
         ));
     }
 
     let mut contents = Vec::with_capacity(metadata.len() as usize);
     File::open(path)
-        .map_err(|error| format!("Unable to read Factory command file: {error}"))?
+        .map_err(|error| format!("Unable to read Ocak command file: {error}"))?
         .take(MAX_COMMAND_FILE_BYTES + 1)
         .read_to_end(&mut contents)
-        .map_err(|error| format!("Unable to read Factory command file: {error}"))?;
+        .map_err(|error| format!("Unable to read Ocak command file: {error}"))?;
     if contents.len() as u64 > MAX_COMMAND_FILE_BYTES {
         return Err(format!(
-            "Factory command file exceeds the {} byte limit",
+            "Ocak command file exceeds the {} byte limit",
             MAX_COMMAND_FILE_BYTES
         ));
     }
@@ -83,7 +83,7 @@ fn read_factory_command(path: &Path) -> Result<FactoryCommand, String> {
 fn execute_factory_command(command: FactoryCommand) -> Result<serde_json::Value, String> {
     if !cli_may_execute(&command) {
         return Err(
-            "factory_approval_required: this command must be approved by the human owner in the Factory UI"
+            "factory_approval_required: this command must be approved by the human owner in the Ocak UI"
                 .into(),
         );
     }
@@ -109,7 +109,7 @@ fn dispatch_with_conn(
 
 /// Mirrors the MCP `factory_execute` allow-list. Approval, requirement-apply,
 /// cancellation, stage activation/completion, and release approval remain
-/// human-only operations in the Factory UI.
+/// human-only operations in the Ocak UI.
 fn cli_may_execute(command: &FactoryCommand) -> bool {
     matches!(
         command,

@@ -195,9 +195,9 @@ impl App {
             self.request_constitution_save(self.config.master_md_path.clone(), appended);
         } else if let Some(ref proj) = self.projects.active.clone() {
             let path = proj.local_path.join("CLAUDE.md");
-            let content = format!(
-                "@/home/alaz/AGENT_CONSTITUTION.md\n\n## Project-Specific Rules\n{}\n",
-                creator.notes_input
+            let content = raios_runtime::constitution::project_constitution_content(
+                &self.config.master_md_path,
+                &creator.notes_input,
             );
             self.request_constitution_save(path, content);
         }

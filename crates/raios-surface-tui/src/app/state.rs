@@ -556,3 +556,172 @@ pub struct EditorState {
     pub watched_mtime: Option<std::time::SystemTime>,
     pub changed_externally: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use raios_runtime::constitution::{ConstitutionSection, ProjectFileKind};
+    use std::path::Path;
+
+    fn section(
+        title: &str,
+        items: &[&str],
+        children: Vec<ConstitutionSection>,
+    ) -> ConstitutionSection {
+        ConstitutionSection {
+            level: 1,
+            title: title.into(),
+            line_start: 0,
+            line_end: 0,
+            items: items.iter().map(|s| s.to_string()).collect(),
+            children,
+        }
+    }
+
+    // ─── SortMode ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn sort_mode_next_cycles_through_every_variant_back_to_name() {
+        let mut mode = SortMode::Name;
+        let mut seen = vec![mode.clone()];
+        for _ in 0..4 {
+            mode = mode.next();
+            seen.push(mode.clone());
+        }
+        assert_eq!(
+            seen,
+            vec![
+                SortMode::Name,
+                SortMode::Grade,
+                SortMode::GitDirty,
+                SortMode::Category,
+                SortMode::Status,
+            ]
+        );
+        assert_eq!(mode.next(), SortMode::Name); // cycle closes
+    }
+
+    #[test]
+    fn sort_mode_label_is_non_empty_for_every_variant() {
+        for mode in [
+            SortMode::Name,
+            SortMode::Grade,
+            SortMode::GitDirty,
+            SortMode::Category,
+            SortMode::Status,
+        ] {
+            assert!(!mode.label().is_empty());
+        }
+    }
+
+    // ─── ConstitutionTarget ──────────────────────────────────────────────────
+
+    #[test]
+    fn constitution_target_global_reports_its_path_and_label() {
+        let target = ConstitutionTarget::Global {
+            path: PathBuf::from("/etc/AGENT_CONSTITUTION.md"),
+        };
+        assert_eq!(target.path(), Path::new("/etc/AGENT_CONSTITUTION.md"));
+        assert_eq!(target.label(), "Global Constitution");
+    }
+
+    #[test]
+    fn constitution_target_project_file_reports_its_path_and_kind_filename() {
+        let target = ConstitutionTarget::ProjectFile {
+            path: PathBuf::from("/proj/CLAUDE.md"),
+            kind: ProjectFileKind::ClaudeMd,
+        };
+        assert_eq!(target.path(), Path::new("/proj/CLAUDE.md"));
+        assert_eq!(
+            target.label(),
+            target.path().file_name().unwrap().to_str().unwrap()
+        );
+    }
+
+    // ─── flatten_sections ────────────────────────────────────────────────────
+
+    #[test]
+    fn flatten_sections_of_empty_input_is_empty() {
+        assert!(flatten_sections(&[]).is_empty());
+    }
+
+    #[test]
+    fn flatten_sections_orders_section_then_its_items_then_children_and_their_items() {
+        let sections = vec![section(
+            "Top",
+            &["item-a", "item-b"],
+            vec![section("Child", &["child-item"], vec![])],
+        )];
+
+        let rows = flatten_sections(&sections);
+
+        assert_eq!(
+            rows,
+            vec![
+                OutlineRow::Section { idx: 0 },
+                OutlineRow::Item {
+                    idx: 0,
+                    child_idx: None,
+                    item_idx: 0
+                },
+                OutlineRow::Item {
+                    idx: 0,
+                    child_idx: None,
+                    item_idx: 1
+                },
+                OutlineRow::Child {
+                    idx: 0,
+                    child_idx: 0
+                },
+                OutlineRow::Item {
+                    idx: 0,
+                    child_idx: Some(0),
+                    item_idx: 0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn flatten_sections_handles_multiple_top_level_sections() {
+        let sections = vec![section("A", &[], vec![]), section("B", &["x"], vec![])];
+        let rows = flatten_sections(&sections);
+        assert_eq!(
+            rows,
+            vec![
+                OutlineRow::Section { idx: 0 },
+                OutlineRow::Section { idx: 1 },
+                OutlineRow::Item {
+                    idx: 1,
+                    child_idx: None,
+                    item_idx: 0
+                },
+            ]
+        );
+    }
+
+    // ─── SetupField ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn setup_field_new_starts_undetected_and_empty() {
+        let field = SetupField::new("Dev Ops", "hint");
+        assert_eq!(field.label, "Dev Ops");
+        assert_eq!(field.value, "");
+        assert!(!field.auto_detected);
+    }
+
+    #[test]
+    fn setup_field_with_detected_some_marks_auto_detected() {
+        let field =
+            SetupField::new("Dev Ops", "hint").with_detected(Some(PathBuf::from("/home/user/dev")));
+        assert_eq!(field.value, "/home/user/dev");
+        assert!(field.auto_detected);
+    }
+
+    #[test]
+    fn setup_field_with_detected_none_leaves_it_untouched() {
+        let field = SetupField::new("Dev Ops", "hint").with_detected(None);
+        assert_eq!(field.value, "");
+        assert!(!field.auto_detected);
+    }
+}

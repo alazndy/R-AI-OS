@@ -14,10 +14,11 @@ impl Client {
         self.send_serialized(&cmd, "Command")
     }
 
-    /// Factory commands have their own transport contract so they cannot be
-    /// accidentally accepted by the broader control-plane dispatcher.
+    /// Ocak (Product Factory) commands have their own transport contract so
+    /// they cannot be accidentally accepted by the broader control-plane
+    /// dispatcher.
     pub fn send_factory_command(&self, cmd: FactoryCommand) -> Result<(), Problem> {
-        self.send_serialized(&cmd, "Factory command")
+        self.send_serialized(&cmd, "Ocak command")
     }
 
     fn send_serialized<T: serde::Serialize>(&self, value: &T, label: &str) -> Result<(), Problem> {

@@ -2,7 +2,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -345,23 +345,9 @@ pub fn cmd_status(json: bool) {
 
 // ─── install ──────────────────────────────────────────────────────────────────
 
-pub fn cmd_install(enable: bool, json: bool) {
-    #[cfg(windows)]
-    {
-        cmd_install_windows(enable, json);
-        return;
-    }
-
-    #[cfg(not(windows))]
-    {
-        let aiosd_bin =
-            which::which("aiosd").unwrap_or_else(|_| PathBuf::from("/home/alaz/.cargo/bin/aiosd"));
-
-        let user = std::env::var("USER").unwrap_or_else(|_| "alaz".into());
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home").join(&user));
-
-        let service = format!(
-            "[Unit]
+fn systemd_unit_content(aiosd_bin: &Path, log: &Path, home: &Path) -> String {
+    format!(
+        "[Unit]
 Description=R-AI-OS Hub (aiosd — Tri-Protocol Kernel)
 After=network.target
 
@@ -377,10 +363,28 @@ Environment=HOME={home}
 [Install]
 WantedBy=default.target
 ",
-            aiosd = aiosd_bin.display(),
-            log = log_path().display(),
-            home = home.display(),
-        );
+        aiosd = aiosd_bin.display(),
+        log = log.display(),
+        home = home.display(),
+    )
+}
+
+pub fn cmd_install(enable: bool, json: bool) {
+    #[cfg(windows)]
+    {
+        cmd_install_windows(enable, json);
+        return;
+    }
+
+    #[cfg(not(windows))]
+    {
+        let user = std::env::var("USER")
+            .or_else(|_| std::env::var("LOGNAME"))
+            .unwrap_or_else(|_| "user".into());
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home").join(&user));
+        let aiosd_bin = which::which("aiosd").unwrap_or_else(|_| home.join(".cargo/bin/aiosd"));
+
+        let service = systemd_unit_content(&aiosd_bin, &log_path(), &home);
 
         let service_dir = home.join(".config/systemd/user");
         let _ = fs::create_dir_all(&service_dir);
@@ -688,7 +692,23 @@ mod libc {
 
 #[cfg(test)]
 mod tests {
-    use super::mask_secret;
+    use super::{mask_secret, systemd_unit_content};
+    use std::path::Path;
+
+    #[test]
+    fn systemd_unit_content_uses_the_given_paths_not_a_hardcoded_user() {
+        let unit = systemd_unit_content(
+            Path::new("/home/someone-else/.cargo/bin/aiosd"),
+            Path::new("/home/someone-else/.local/share/raios/hub.log"),
+            Path::new("/home/someone-else"),
+        );
+        assert!(unit.contains("ExecStart=/home/someone-else/.cargo/bin/aiosd"));
+        assert!(
+            unit.contains("StandardOutput=append:/home/someone-else/.local/share/raios/hub.log")
+        );
+        assert!(unit.contains("Environment=HOME=/home/someone-else"));
+        assert!(!unit.contains("/home/alaz"));
+    }
 
     #[test]
     fn masks_long_secret_keeping_first_and_last_four() {

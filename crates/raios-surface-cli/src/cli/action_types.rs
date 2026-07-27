@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum FactoryAction {
-    /// Read the canonical Product Factory snapshot without changing state
+    /// Read the canonical Ocak (Product Factory) snapshot without changing state
     Overview,
     /// Execute one safe, typed FactoryCommand envelope from a local JSON file
     Execute {
@@ -314,6 +314,29 @@ impl HandoffStatus {
             HandoffStatus::Failed => "FAILED",
             HandoffStatus::Blocker => "BLOCKER",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handoff_target_as_str_matches_the_control_plane_agent_identities() {
+        assert_eq!(HandoffTarget::ClaudeKaira.as_str(), "claude_kaira");
+        assert_eq!(HandoffTarget::CodexKaira.as_str(), "codex_kaira");
+        assert_eq!(HandoffTarget::OpencodeKaira.as_str(), "opencode_kaira");
+        assert_eq!(
+            HandoffTarget::AntigravityKaira.as_str(),
+            "antigravity_kaira"
+        );
+    }
+
+    #[test]
+    fn handoff_status_as_str_is_upper_case_for_db_storage() {
+        assert_eq!(HandoffStatus::Success.as_str(), "SUCCESS");
+        assert_eq!(HandoffStatus::Failed.as_str(), "FAILED");
+        assert_eq!(HandoffStatus::Blocker.as_str(), "BLOCKER");
     }
 }
 
