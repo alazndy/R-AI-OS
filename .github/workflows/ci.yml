@@ -80,7 +80,7 @@ jobs:
       - name: Run instrumented tests
         run: cargo llvm-cov --no-report --lib --workspace --locked
       - name: Enforce line-coverage floor
-        run: cargo llvm-cov report --summary-only --fail-under-lines 40
+        run: cargo llvm-cov report --summary-only --fail-under-lines 42
       - name: Export lcov report
         run: cargo llvm-cov report --lcov --output-path lcov.info
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

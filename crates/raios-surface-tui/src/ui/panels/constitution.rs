@@ -150,7 +150,9 @@ fn render_creator(frame: &mut Frame, area: Rect, app: &App) {
                     Style::new().fg(AMBER),
                 )));
             } else {
-                lines.push(Line::from("@/home/alaz/AGENT_CONSTITUTION.md"));
+                lines.push(Line::from(raios_runtime::constitution::include_line(
+                    &app.config.master_md_path,
+                )));
             }
             lines.push(Line::from(""));
             lines.push(Line::from("## Project-Specific Rules"));

@@ -242,3 +242,47 @@ pub fn run_stdio() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rpc_response_ok_carries_result_and_no_error() {
+        let response = RpcResponse::ok(json!(1), json!({"pong": true}));
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(value["jsonrpc"], "2.0");
+        assert_eq!(value["id"], 1);
+        assert_eq!(value["result"], json!({"pong": true}));
+        assert!(value.get("error").is_none());
+    }
+
+    #[test]
+    fn rpc_response_err_carries_code_and_message_and_no_result() {
+        let response = RpcResponse::err(Value::Null, -32601, "method_not_found:frobnicate");
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(value["jsonrpc"], "2.0");
+        assert!(value["id"].is_null());
+        assert_eq!(value["error"]["code"], -32601);
+        assert_eq!(value["error"]["message"], "method_not_found:frobnicate");
+        assert!(value.get("result").is_none());
+    }
+
+    #[test]
+    fn static_tools_manifest_lists_every_dispatched_tool_at_least_once() {
+        let manifest = McpServer::static_tools_manifest();
+        let tools = manifest["tools"].as_array().expect("tools array");
+        assert!(!tools.is_empty());
+        let names: Vec<&str> = tools.iter().filter_map(|v| v.as_str()).collect();
+        // Regression guard: the Ocak/Product Factory tools must stay registered
+        // under their existing names even after the CLI-facing rename to `ocak`.
+        assert!(names.contains(&"factory_overview"));
+        assert!(names.contains(&"factory_execute"));
+        assert!(names.contains(&"semantic_search"));
+        // No duplicate tool names.
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "duplicate tool name in manifest");
+    }
+}

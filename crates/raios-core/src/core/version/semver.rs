@@ -60,6 +60,31 @@ fn read_cargo_version(dir: &Path) -> Option<String> {
             }
         }
     }
+    if content.contains("[workspace]") {
+        if let Some(v) = read_cargo_version(&dir.join("crates").join("raios-surface-cli")) {
+            return Some(v);
+        }
+        if let Some(v) = read_cargo_version(&dir.join("crates").join("raios-core")) {
+            return Some(v);
+        }
+        if let Ok(entries) = std::fs::read_dir(dir.join("crates")) {
+            for entry in entries.flatten() {
+                if let Some(v) = read_cargo_version(&entry.path()) {
+                    return Some(v);
+                }
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join("Cargo.toml").exists() {
+                    if let Some(v) = read_cargo_version(&path) {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+    }
     None
 }
 

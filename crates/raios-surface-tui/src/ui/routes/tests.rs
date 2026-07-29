@@ -53,7 +53,7 @@ fn golden_render_work_route() {
 
     let rendered = get_rendered_text(&terminal);
     assert!(rendered.contains("Projects") || rendered.contains("Tasks"));
-    assert!(rendered.contains("Product Factory"));
+    assert!(rendered.contains("Ocak"));
     assert!(rendered.contains("Enable in config"));
 }
 

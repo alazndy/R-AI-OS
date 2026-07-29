@@ -42,13 +42,13 @@ impl App {
                     self.store.last_error = Some(problem.message);
                 }
             }
-            "/factory" => match factory_command_from_input(arg) {
+            "/ocak" | "/factory" => match factory_command_from_input(arg) {
                 Ok(command) => {
                     if let Err(problem) = self.client.send_factory_command(command) {
                         self.store.last_error = Some(problem.message);
                     } else {
                         self.system.sync_status =
-                            Some("Factory command sent; waiting for audited result.".into());
+                            Some("Ocak command sent; waiting for audited result.".into());
                     }
                 }
                 Err(usage) => self.system.sync_status = Some(usage),
@@ -634,7 +634,7 @@ fn split_factory_fields(input: &str, expected: usize) -> Result<Vec<&str>, Strin
 }
 
 fn factory_usage() -> String {
-    "Usage: /factory workspace <name> | product <workspace_id> | <title> | mode <product_id> | quick|governed | scaffold <product_id> | attach <product_id> | <absolute_project_path> | intake <product_id> | answer <session_id> | <question_key> | <response> | charter <product_id> | <content> | generate <product_id> | requirement <product_id> | <stable_key> | <content> | change <product_id> | <summary> | assess <change_request_id> | plan <product_id> | <title> | approve-plan <plan_id> | cycle <plan_id> | pause-cycle <cycle_id> | resume-cycle <cycle_id> | cancel-cycle <cycle_id> | stage-graph <cycle_id> | <stage> | activate-stage <cycle_id> | <stage> | stage-evidence <cycle_id> | <stage> | <content_ref> | link-evidence <evidence_id> | <requirement_id> | complete-stage <cycle_id> | <stage> | readiness <product_id> | <product_id> | quality <product_id> | <name> | required|optional | rn-quality <product_id> | check <profile_id> | passed|failed | <evidence_ref> | release <product_id> | <build_ref> | approve-release <release_id> | support <product_id> | <source_kind> | <summary> | triage <support_item_id> | resolve-support <support_item_id> | <resolution_ref> | link-support <support_item_id> | <change_request_id>".into()
+    "Usage: /ocak workspace <name> | product <workspace_id> | <title> | mode <product_id> | quick|governed | scaffold <product_id> | attach <product_id> | <absolute_project_path> | intake <product_id> | answer <session_id> | <question_key> | <response> | charter <product_id> | <content> | generate <product_id> | requirement <product_id> | <stable_key> | <content> | change <product_id> | <summary> | assess <change_request_id> | plan <product_id> | <title> | approve-plan <plan_id> | cycle <plan_id> | pause-cycle <cycle_id> | resume-cycle <cycle_id> | cancel-cycle <cycle_id> | stage-graph <cycle_id> | <stage> | activate-stage <cycle_id> | <stage> | stage-evidence <cycle_id> | <stage> | <content_ref> | link-evidence <evidence_id> | <requirement_id> | complete-stage <cycle_id> | <stage> | readiness <product_id> | <product_id> | quality <product_id> | <name> | required|optional | rn-quality <product_id> | check <profile_id> | passed|failed | <evidence_ref> | release <product_id> | <build_ref> | approve-release <release_id> | support <product_id> | <source_kind> | <summary> | triage <support_item_id> | resolve-support <support_item_id> | <resolution_ref> | link-support <support_item_id> | <change_request_id>".into()
 }
 
 #[cfg(test)]
@@ -695,5 +695,193 @@ mod tests {
             factory_command_from_input("rn-quality product-1").unwrap(),
             FactoryCommand::EnsureReactNativeClosedTestingQualityProfile { product_id, .. } if product_id == "product-1"
         ));
+    }
+
+    #[test]
+    fn factory_parser_covers_the_remaining_single_field_variants() {
+        assert!(matches!(
+            factory_command_from_input("workspace Mobile products").unwrap(),
+            FactoryCommand::CreateWorkspace { name, .. } if name == "Mobile products"
+        ));
+        assert!(matches!(
+            factory_command_from_input("scaffold product-1").unwrap(),
+            FactoryCommand::ScaffoldProject { product_id, .. } if product_id == "product-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("intake product-1").unwrap(),
+            FactoryCommand::StartIntake { product_id, .. } if product_id == "product-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("assess change-1").unwrap(),
+            FactoryCommand::AssessChangeRequest { change_request_id, .. } if change_request_id == "change-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("approve-plan plan-1").unwrap(),
+            FactoryCommand::ApprovePlan { plan_id, .. } if plan_id == "plan-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("cycle plan-1").unwrap(),
+            FactoryCommand::MaterializePlannedCycle { plan_id, .. } if plan_id == "plan-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("resume-cycle cycle-1").unwrap(),
+            FactoryCommand::ResumeCycle { cycle_id, .. } if cycle_id == "cycle-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("cancel-cycle cycle-1").unwrap(),
+            FactoryCommand::CancelCycle { cycle_id, .. } if cycle_id == "cycle-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("approve-release release-1").unwrap(),
+            FactoryCommand::ApproveClosedTestingRelease { release_id, .. } if release_id == "release-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("support-report product-1").unwrap(),
+            FactoryCommand::InspectSupportOverview { product_id, .. } if product_id == "product-1"
+        ));
+        assert!(matches!(
+            factory_command_from_input("triage support-1").unwrap(),
+            FactoryCommand::TriageSupportItem { support_item_id, .. } if support_item_id == "support-1"
+        ));
+    }
+
+    #[test]
+    fn factory_parser_covers_the_remaining_multi_field_variants() {
+        assert!(matches!(
+            factory_command_from_input("requirement product-1 | stable-key | Requirement text").unwrap(),
+            FactoryCommand::CreateRequirementDraft { product_id, stable_key, content, .. }
+                if product_id == "product-1" && stable_key == "stable-key" && content == "Requirement text"
+        ));
+        assert!(matches!(
+            factory_command_from_input("plan product-1 | Q1 launch").unwrap(),
+            FactoryCommand::CreatePlanDraft { product_id, title, .. } if product_id == "product-1" && title == "Q1 launch"
+        ));
+        assert!(matches!(
+            factory_command_from_input("stage-graph cycle-1 | design").unwrap(),
+            FactoryCommand::MaterializeStageTaskGraph { cycle_id, stage, .. } if cycle_id == "cycle-1" && stage == "design"
+        ));
+        assert!(matches!(
+            factory_command_from_input("activate-stage cycle-1 | design").unwrap(),
+            FactoryCommand::ActivateApprovedStage { cycle_id, stage, .. } if cycle_id == "cycle-1" && stage == "design"
+        ));
+        assert!(matches!(
+            factory_command_from_input("stage-evidence cycle-1 | design | evidence-ref").unwrap(),
+            FactoryCommand::RecordStageEvidence { cycle_id, stage, content_ref, .. }
+                if cycle_id == "cycle-1" && stage == "design" && content_ref == "evidence-ref"
+        ));
+        assert!(matches!(
+            factory_command_from_input("complete-stage cycle-1 | design").unwrap(),
+            FactoryCommand::CompleteStage { cycle_id, stage, .. } if cycle_id == "cycle-1" && stage == "design"
+        ));
+        assert!(matches!(
+            factory_command_from_input("release product-1 | build-42").unwrap(),
+            FactoryCommand::CreateReleaseDraft { product_id, build_ref, .. } if product_id == "product-1" && build_ref == "build-42"
+        ));
+        assert!(matches!(
+            factory_command_from_input("support product-1 | bug_report | Crash on launch").unwrap(),
+            FactoryCommand::CreateSupportItem { product_id, source_kind, summary, .. }
+                if product_id == "product-1" && source_kind == "bug_report" && summary == "Crash on launch"
+        ));
+        assert!(matches!(
+            factory_command_from_input("resolve-support support-1 | resolution-ref").unwrap(),
+            FactoryCommand::ResolveSupportItem { support_item_id, resolution_ref, .. }
+                if support_item_id == "support-1" && resolution_ref == "resolution-ref"
+        ));
+    }
+
+    #[test]
+    fn factory_parser_quality_and_check_map_their_enum_like_third_field() {
+        assert!(matches!(
+            factory_command_from_input("quality product-1 | Beta cohort | required").unwrap(),
+            FactoryCommand::CreateQualityProfile { required: true, .. }
+        ));
+        assert!(matches!(
+            factory_command_from_input("quality product-1 | Beta cohort | optional").unwrap(),
+            FactoryCommand::CreateQualityProfile {
+                required: false,
+                ..
+            }
+        ));
+        assert!(factory_command_from_input("quality product-1 | Beta cohort | sometimes").is_err());
+
+        assert!(matches!(
+            factory_command_from_input("check profile-1 | passed | evidence-ref").unwrap(),
+            FactoryCommand::RecordQualityCheck { passed: true, .. }
+        ));
+        assert!(matches!(
+            factory_command_from_input("check profile-1 | failed | evidence-ref").unwrap(),
+            FactoryCommand::RecordQualityCheck { passed: false, .. }
+        ));
+        assert!(factory_command_from_input("check profile-1 | maybe | evidence-ref").is_err());
+
+        assert!(factory_command_from_input("mode product-1 | sideways").is_err());
+    }
+
+    #[test]
+    fn factory_parser_rejects_empty_payloads_and_unknown_actions() {
+        // Single-field variants require a non-empty payload.
+        assert!(factory_command_from_input("workspace").is_err());
+        assert!(factory_command_from_input("workspace   ").is_err());
+        assert!(factory_command_from_input("scaffold").is_err());
+        assert!(factory_command_from_input("readiness").is_err());
+        // Unknown action falls through to the usage string.
+        let err = factory_command_from_input("not-a-real-action foo").unwrap_err();
+        assert_eq!(err, factory_usage());
+        assert!(factory_command_from_input("").is_err());
+    }
+
+    #[test]
+    fn split_factory_fields_enforces_exact_arity_and_rejects_blank_fields() {
+        assert_eq!(
+            split_factory_fields("a | b | c", 3).unwrap(),
+            vec!["a", "b", "c"]
+        );
+        // Wrong number of fields.
+        assert!(split_factory_fields("a | b", 3).is_err());
+        assert!(split_factory_fields("a | b | c | d", 3).is_err());
+        // A blank field (extra/trailing pipe) is rejected even at the right count.
+        assert!(split_factory_fields("a | | c", 3).is_err());
+    }
+
+    #[test]
+    fn factory_usage_mentions_every_top_level_action_keyword() {
+        let usage = factory_usage();
+        for action in [
+            "workspace",
+            "product",
+            "mode",
+            "scaffold",
+            "attach",
+            "intake",
+            "answer",
+            "charter",
+            "generate",
+            "requirement",
+            "change",
+            "assess",
+            "plan",
+            "approve-plan",
+            "cycle",
+            "pause-cycle",
+            "resume-cycle",
+            "cancel-cycle",
+            "stage-graph",
+            "activate-stage",
+            "stage-evidence",
+            "link-evidence",
+            "complete-stage",
+            "readiness",
+            "quality",
+            "rn-quality",
+            "check",
+            "release",
+            "approve-release",
+            "support",
+            "triage",
+            "resolve-support",
+            "link-support",
+        ] {
+            assert!(usage.contains(action), "usage string missing '{action}'");
+        }
     }
 }

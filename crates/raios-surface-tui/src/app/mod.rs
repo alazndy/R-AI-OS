@@ -64,8 +64,8 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         desc: "Refresh the typed control-plane system snapshot",
     },
     PaletteItem {
-        cmd: "/factory",
-        desc: "Factory: workspace/product/intake/answer/charter (local when enabled)",
+        cmd: "/ocak",
+        desc: "Ocak: workspace/product/intake/answer/charter (local when enabled)",
     },
     PaletteItem {
         cmd: "/discover",

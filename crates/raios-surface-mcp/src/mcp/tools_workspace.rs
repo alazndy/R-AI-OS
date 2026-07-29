@@ -84,14 +84,21 @@ fn daemon_vector_search_opt(
 impl McpServer {
     pub(super) fn tool_ask_architect(&self, args: &Value) -> Result<Value, String> {
         let question = args["question"].as_str().ok_or("missing question")?;
-        let mut cortex = raios_runtime::cortex::Cortex::init().map_err(|e| e.to_string())?;
-        let _ = cortex.index_file(&self.config.master_md_path);
-        let memory_files =
-            raios_runtime::filebrowser::discover_memory_files(&self.config.dev_ops_path, 10);
-        for mem in memory_files {
-            let _ = cortex.index_file(&mem.path);
-        }
-        let hits = cortex.search(question, 5).map_err(|e| e.to_string())?;
+
+        let hits = match daemon_vector_search(question, 5, &self.config.dev_ops_path) {
+            Some(hits) => hits,
+            None => {
+                let memory_files =
+                    raios_runtime::filebrowser::discover_memory_files(&self.config.dev_ops_path, 1);
+                let mut cortex =
+                    raios_runtime::cortex::Cortex::init().map_err(|e| e.to_string())?;
+                for mem in memory_files {
+                    let _ = cortex.index_file(&mem.path);
+                }
+                cortex.search(question, 5).map_err(|e| e.to_string())?
+            }
+        };
+
         let results: Vec<Value> = hits
             .iter()
             .map(|r| json!({ "source": r.path, "rule_or_decision": r.text, "score": r.score }))
@@ -102,7 +109,7 @@ impl McpServer {
     }
 
     pub(super) fn tool_get_validation_errors(&self, args: &Value) -> Result<Value, String> {
-        use std::io::{Read, Write};
+        use std::io::{BufRead, BufReader, Write};
         let project_filter = args["project"].as_str().map(|s| s.to_lowercase());
         let mut stream = std::net::TcpStream::connect("127.0.0.1:42069")
             .map_err(|e| format!("Could not connect to daemon: {}", e))?;
@@ -115,11 +122,13 @@ impl McpServer {
             let _ = stream.write_all(format!("AUTH {}\n", token.trim()).as_bytes());
         }
         let _ = stream.write_all(b"{\"command\":\"GetState\"}\n");
-        let mut buffer = [0; 32768];
-        let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-        let response = String::from_utf8_lossy(&buffer[..n]);
-        for line in response.lines() {
-            if let Ok(v) = serde_json::from_str::<Value>(line) {
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        while reader.read_line(&mut line).is_ok() {
+            if line.is_empty() {
+                break;
+            }
+            if let Ok(v) = serde_json::from_str::<Value>(&line) {
                 if v["event"] == "StateSync" {
                     let errors =
                         extract_validation_errors_from_state_sync(&v, project_filter.as_deref())?;
@@ -128,6 +137,7 @@ impl McpServer {
                     );
                 }
             }
+            line.clear();
         }
         Err("Failed to retrieve validation errors from daemon".into())
     }

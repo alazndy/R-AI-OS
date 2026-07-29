@@ -160,4 +160,32 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn command_kind_gives_every_variant_a_distinct_non_empty_name() {
+        let commands = [
+            FactoryCommand::CreateWorkspace {
+                name: "n".into(),
+                idempotency_key: "k1".into(),
+            },
+            FactoryCommand::ApprovePlan {
+                plan_id: "p".into(),
+                idempotency_key: "k2".into(),
+            },
+            FactoryCommand::ApproveClosedTestingRelease {
+                release_id: "r".into(),
+                idempotency_key: "k3".into(),
+            },
+        ];
+        let kinds: Vec<&str> = commands.iter().map(command_kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "create_workspace",
+                "approve_plan",
+                "approve_closed_testing_release"
+            ]
+        );
+        assert!(kinds.iter().all(|k| !k.is_empty()));
+    }
 }

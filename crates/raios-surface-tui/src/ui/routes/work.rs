@@ -185,16 +185,16 @@ pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
             Span::styled(product_detail, Style::default().fg(Color::Cyan)),
         ]),
         Line::from(if factory.enabled {
-            "Local TUI: /factory (audited commands only)"
+            "Local TUI: /ocak (audited commands only)"
         } else {
-            "Enable in config before local Factory commands are accepted"
+            "Enable in config before local Ocak commands are accepted"
         }),
     ];
     let factory_panel = Paragraph::new(factory_text)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Product Factory ")
+                .title(" Ocak ")
                 .border_style(Style::default().fg(Color::Magenta)),
         )
         .wrap(Wrap { trim: true });

@@ -110,6 +110,23 @@ pub fn is_include_only(content: &str) -> bool {
     !meaningful.is_empty() && meaningful.iter().all(|l| l.starts_with('@'))
 }
 
+/// Builds the `@<path>` include line used to point a project's CLAUDE.md
+/// at the configured shared agent constitution.
+pub fn include_line(master_md_path: &std::path::Path) -> String {
+    format!("@{}", master_md_path.display())
+}
+
+/// Builds full project constitution file content: the include line for the
+/// configured `master_md_path`, followed by a "Project-Specific Rules"
+/// section with the given notes.
+pub fn project_constitution_content(master_md_path: &std::path::Path, notes: &str) -> String {
+    format!(
+        "{}\n\n## Project-Specific Rules\n{}\n",
+        include_line(master_md_path),
+        notes
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectFileKind {
     ClaudeMd,
@@ -144,6 +161,30 @@ pub fn discover_project_constitution_files(project_root: &Path) -> Vec<(ProjectF
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn include_line_reflects_the_configured_path_not_a_hardcoded_one() {
+        let line = include_line(Path::new("/home/someone-else/AGENT_CONSTITUTION.md"));
+        assert_eq!(line, "@/home/someone-else/AGENT_CONSTITUTION.md");
+        assert!(!line.contains("/home/alaz"));
+    }
+
+    #[test]
+    fn project_constitution_content_is_include_only_on_its_first_line_and_carries_notes() {
+        let content = project_constitution_content(
+            Path::new("/home/someone-else/AGENT_CONSTITUTION.md"),
+            "Notes go here.",
+        );
+        assert!(content.starts_with("@/home/someone-else/AGENT_CONSTITUTION.md\n"));
+        assert!(content.contains("## Project-Specific Rules"));
+        assert!(content.contains("Notes go here."));
+        assert!(!content.contains("/home/alaz"));
+        // The include line by itself (ignoring the notes section) must still
+        // satisfy is_include_only, matching what discover_project_constitution_files expects.
+        let include_only_prefix = content.lines().next().unwrap();
+        assert!(is_include_only(include_only_prefix));
+    }
 
     #[test]
     fn parses_top_level_sections_and_items() {

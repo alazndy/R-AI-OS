@@ -29,7 +29,7 @@
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
-  <a href="#-vs-code-extension"><img src="https://img.shields.io/badge/VS%20Code-v0.8.0-blueviolet?style=for-the-badge&logo=visualstudiocode" alt="VS Code"></a>
+  <a href="#-vs-code-extension"><img src="https://img.shields.io/badge/VS%20Code-v0.8.1-blueviolet?style=for-the-badge&logo=visualstudiocode" alt="VS Code"></a>
 </p>
 
 <p align="center">
@@ -278,7 +278,7 @@ lifecycle_interval_secs = 3600
 
 ---
 
-## 🖥️ VS Code Extension (v0.8.0)
+## 🖥️ VS Code Extension (v0.8.1)
 
 R-AI-OS ships a native VS Code extension that turns the IDE into a **Hybrid UI** — the control panel for your agent swarm directly in your sidebar.
 
@@ -488,8 +488,8 @@ raios bootstrap
 | `raios trace record/search/forget` | Store, recall, and delete local tool/session trace memory |
 | `raios trace kg-export [query]` | Export trace memory as MemPalace-compatible KG triple JSON |
 | `raios evolve from-traces` | Generate pending instinct candidates from successful trace fixes |
-| `raios factory overview [--json]` | Read the canonical Product Factory snapshot without changing state |
-| `raios factory execute --file <command.json> [--json]` | Dispatch one bounded local typed `FactoryCommand`; human-only approval, cancellation, stage activation/completion, requirement application, and release approval commands are rejected |
+| `raios ocak overview [--json]` (alias: `factory`) | Read the canonical Ocak (Product Factory) snapshot without changing state |
+| `raios ocak execute --file <command.json> [--json]` (alias: `factory`) | Dispatch one bounded local typed `FactoryCommand`; human-only approval, cancellation, stage activation/completion, requirement application, and release approval commands are rejected |
 
 Existing Git repositories can be attached through `FactoryCommand::AttachExistingProject`. The command accepts only an absolute repository root, verifies the Git worktree, `origin` remote, and `HEAD` SHA before persisting the owner-bound product source. HTTP(S) remotes containing embedded credentials are rejected.
 | `raios bootstrap` | Replicate AI factory on a new machine |
@@ -575,7 +575,7 @@ vscode-extension/
 
 - [x] **Phase 1–7:** Core TUI, workspace mapping, health dashboard, BM25 search
 - [x] **Phase 8:** Universal Kernel — Tri-protocol, Lock Manager, Radar Whispers, Factory Mode
-- [x] **Factory Phase 9:** Local impact approval, immutable requirement revisions, and approved-plan lifecycle-cycle materialization (no autonomous execution)
+- [x] **Ocak Phase 9 (Product Factory):** Local impact approval, immutable requirement revisions, and approved-plan lifecycle-cycle materialization (no autonomous execution)
 - [x] **Phase 9:** Refactor & Modularization — all large files split into focused modules
 - [x] **Phase 10:** Hardened Kernel Alpha — Sentry, Redaction Engine, Audit Ledger
 - [x] **Phase 10B:** Security Kernel (Phases 1–4) — Sandbox + Policy + Audit Chain + Egress
@@ -597,7 +597,7 @@ vscode-extension/
 - [x] **Phase 24:** Trigram Locate (renamed 2026-07-11 from `raios grep`) — `raios locate` + MCP `locate_search`: trigram-indexed, exhaustive exact/regex search at 0.015s warm with proven `grep -rn` parity; conservative literal extraction with full-scan fallback
 - [x] **Phase 25:** Resident Cortex — long-lived model+HNSW worker inside `aiosd` (mpsc/oneshot, lazy dirty rebuilds); `raios search` delegates via TCP with silent in-process fallback — semantic search ~1.0s warm (was ~4-6s)
 - [x] **Phase 26:** MCP Parity + Dart/Flutter — MCP `semantic_search` now delegates to the resident Cortex daemon too (was >60s in-process per call, now ~1s warm); Dart/Flutter ecosystem support; stale-worktree duplicate-match fix; `tool_pin` re-verified and re-pinned
-- [x] **Phase 27:** Product Factory — Local lifecycle control now has two explicit modes: `quick` requires only problem, core outcome, and success metric before a compact Charter; `governed` retains the full five-question intake and every lifecycle control. Neither mode bypasses human plan/release approval, stage approval, ownership checks, audit logging, or external-distribution protections. Agents can set the mode through the same typed, idempotent, audited local MCP/TUI Factory service; no public HTTP write route, automatic executor, external integration, or store action is enabled.
+- [x] **Phase 27:** Product Factory — Local lifecycle control now has two explicit modes: `quick` requires only problem, core outcome, and success metric before a compact Charter; `governed` retains the full five-question intake and every lifecycle control. Neither mode bypasses human plan/release approval, stage approval, ownership checks, audit logging, or external-distribution protections. Agents can set the mode through the same typed, idempotent, audited local MCP/TUI service, now exposed on the CLI as `raios ocak` (alias `factory`); no public HTTP write route, automatic executor, external integration, or store action is enabled.
 - [x] **Phase 28:** ANKA (Agent Narrative Knowledge Archive) — read-only, redacted, rebuildable transcript recall (`raios anka status/index/search/blame/forget`), MCP `anka_recall` exposed as untrusted historical evidence only.
 - [x] **Phase 29:** Repository productization pass — `LICENSE` (AGPL-3.0), `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, and GitHub issue templates added; scheduled-job retry-storm bug fixed (failed spawns now back off instead of retrying every scheduler tick).
 

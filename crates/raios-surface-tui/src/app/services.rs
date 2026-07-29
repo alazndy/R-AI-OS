@@ -725,4 +725,93 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         assert!(load_workspace_memory_preview(workspace.path(), outside.path()).is_none());
     }
+
+    // ─── daemon_*_command JSON builders ──────────────────────────────────────
+
+    #[test]
+    fn daemon_search_command_escapes_embedded_quotes() {
+        let cmd = daemon_search_command(r#"find "the bug""#);
+        assert_eq!(cmd, r#"{"command":"Search","query":"find \"the bug\""}"#);
+        let parsed: serde_json::Value = serde_json::from_str(&cmd).unwrap();
+        assert_eq!(parsed["query"], r#"find "the bug""#);
+    }
+
+    #[test]
+    fn daemon_get_logs_command_embeds_the_limit() {
+        assert_eq!(
+            daemon_get_logs_command(50),
+            r#"{"command":"GetLogs","limit":50}"#
+        );
+    }
+
+    #[test]
+    fn daemon_submit_raios_command_escapes_quotes_in_args() {
+        let cmd = daemon_submit_raios_command(r#"mem add --slug "x""#);
+        let parsed: serde_json::Value = serde_json::from_str(&cmd).unwrap();
+        assert_eq!(parsed["command"], "SubmitJob");
+        assert_eq!(parsed["agent"], "tui");
+        assert_eq!(parsed["shell_cmd"], r#"raios mem add --slug "x""#);
+    }
+
+    // ─── read_env_key / write_env_key ────────────────────────────────────────
+
+    #[test]
+    fn read_env_key_finds_value_and_strips_quotes_and_skips_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        std::fs::write(
+            &env_path,
+            "# comment, not a key\nFOO=bar\nQUOTED=\"quoted value\"\nSINGLE='single'\n",
+        )
+        .unwrap();
+
+        assert_eq!(read_env_key(&env_path, "FOO").as_deref(), Some("bar"));
+        assert_eq!(
+            read_env_key(&env_path, "QUOTED").as_deref(),
+            Some("quoted value")
+        );
+        assert_eq!(read_env_key(&env_path, "SINGLE").as_deref(), Some("single"));
+        assert_eq!(read_env_key(&env_path, "MISSING"), None);
+    }
+
+    #[test]
+    fn read_env_key_of_missing_file_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join("does-not-exist.env");
+        assert_eq!(read_env_key(&env_path, "FOO"), None);
+    }
+
+    #[test]
+    fn write_env_key_updates_an_existing_key_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        std::fs::write(&env_path, "FOO=old\nBAR=keep\n").unwrap();
+
+        write_env_key(&env_path, "FOO", "new").unwrap();
+
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(content.contains("FOO=new"));
+        assert!(content.contains("BAR=keep"));
+        assert!(!content.contains("FOO=old"));
+    }
+
+    #[test]
+    fn write_env_key_appends_a_new_key_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        std::fs::write(&env_path, "FOO=bar\n").unwrap();
+
+        write_env_key(&env_path, "NEWKEY", "newval").unwrap();
+
+        assert_eq!(read_env_key(&env_path, "FOO").as_deref(), Some("bar"));
+        assert_eq!(read_env_key(&env_path, "NEWKEY").as_deref(), Some("newval"));
+    }
+
+    #[test]
+    fn write_env_key_on_a_missing_file_creates_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join("fresh.env");
+        write_env_key(&env_path, "FOO", "bar").unwrap();
+        assert_eq!(read_env_key(&env_path, "FOO").as_deref(), Some("bar"));
+    }
 }

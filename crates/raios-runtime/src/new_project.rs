@@ -172,15 +172,23 @@ List the key languages, frameworks, and tools used.
 
         let gh_ok = gh_out.as_ref().map(|o| o.status.success()).unwrap_or(false);
         if gh_ok {
-            github_url = Some(format!("https://github.com/alazndy/{}", slug));
-            let updated_gitrepo = format!(
-                "# {}\n\n- **GitHub:** {}\n- **Created:** {}\n- **Category:** {}\n",
-                cfg.name,
-                github_url.as_deref().unwrap_or(""),
-                today,
-                cfg.category
-            );
-            let _ = std::fs::write(project_dir.join("gitrepo.md"), updated_gitrepo);
+            github_url = Command::new("gh")
+                .args(["repo", "view", "--json", "url", "-q", ".url"])
+                .current_dir(&project_dir)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| {
+                    let url = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    (!url.is_empty()).then_some(url)
+                });
+            if let Some(url) = github_url.as_deref() {
+                let updated_gitrepo = format!(
+                    "# {}\n\n- **GitHub:** {}\n- **Created:** {}\n- **Category:** {}\n",
+                    cfg.name, url, today, cfg.category
+                );
+                let _ = std::fs::write(project_dir.join("gitrepo.md"), updated_gitrepo);
+            }
         }
         steps.push(("Create GitHub repo".into(), gh_ok));
     }
