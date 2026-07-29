@@ -441,9 +441,18 @@ def find_existing_command(candidates: tuple[str, ...]) -> str | None:
 
 
 def open_terminal(project_path: str, command: str) -> bool:
+    """Launch a terminal running `command` in `project_path`.
+
+    `command` is the raw, unquoted program invocation (e.g. "claude") — this
+    function is the single place responsible for quoting it correctly for
+    whichever shell/interpreter the target platform actually hands it to.
+    Callers must never pre-quote: each platform branch below embeds it into
+    a different shell (bash, AppleScript, PowerShell) with different escaping
+    rules, so quoting done by a caller for one shell is wrong for the others.
+    """
     system = detect_platform()
     quoted_path = shlex.quote(project_path)
-    quoted_command = f"cd {quoted_path} && exec {command}"
+    quoted_command = f"cd {quoted_path} && exec {shlex.quote(command)}"
 
     try:
         if system == "linux":
@@ -462,18 +471,26 @@ def open_terminal(project_path: str, command: str) -> bool:
             return False
 
         if system == "darwin":
+            # AppleScript double-quoted string literal: backslashes must be
+            # escaped before quotes, or a pre-existing backslash (e.g. from
+            # shlex.quote's '\'' escape for an embedded single quote) would
+            # combine with the next replacement into a bogus escape sequence.
+            escaped_command = quoted_command.replace("\\", "\\\\").replace('"', '\\"')
             apple_script = (
                 'tell application "Terminal"\n'
                 "activate\n"
-                f'do script "{quoted_command.replace(chr(34), chr(92) + chr(34))}"\n'
+                f'do script "{escaped_command}"\n'
                 "end tell\n"
             )
             subprocess.Popen(["osascript", "-e", apple_script])
             return True
 
         if system == "windows":
+            # PowerShell single-quoted string literal: embedded single quotes
+            # are escaped by doubling, not via POSIX shlex rules.
+            ps_command = "'" + command.replace("'", "''") + "'"
             subprocess.Popen(
-                ["cmd", "/c", "start", "R-AI-OS", "powershell", "-NoExit", "-Command", command],
+                ["cmd", "/c", "start", "R-AI-OS", "powershell", "-NoExit", "-Command", ps_command],
                 cwd=project_path,
             )
             return True
@@ -488,7 +505,7 @@ def launch_agent(project_path: str, agent: Agent, project_name: str) -> bool:
     if not command:
         return False
     bump_usage(project_name)
-    return open_terminal(project_path, shlex.quote(command))
+    return open_terminal(project_path, command)
 
 
 def launch_vscode(project_path: str) -> bool:
