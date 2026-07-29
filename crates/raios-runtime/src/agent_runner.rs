@@ -1000,13 +1000,36 @@ mod tests {
         // never race on the same env var.
         static DB_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+        // The listener's accept loop is a non-blocking poll (20ms interval,
+        // see start_wrapper_note_ipc), so a connect() can complete at the
+        // kernel level slightly before the worker thread is scheduled to
+        // accept() it. Under CI load (observed twice on macOS runners, with
+        // two different symptoms: a validation mismatch and a raw
+        // ConnectionReset) that window is enough for the OS to reset an
+        // established-but-not-yet-accepted connection. This is a transient
+        // test-harness timing issue, not a bug in the production capability
+        // check itself, so send_note retries the whole round-trip a few
+        // times before giving up rather than the test flaking outright.
         fn send_note(addr: SocketAddr, run_id: &str, note: &str) -> serde_json::Value {
-            let mut stream = TcpStream::connect(addr).unwrap();
             let payload = format!("{}\n", serde_json::json!({"run_id": run_id, "note": note}));
-            stream.write_all(payload.as_bytes()).unwrap();
-            let mut response = String::new();
-            stream.read_to_string(&mut response).unwrap();
-            serde_json::from_str(&response).unwrap()
+            let mut last_err = None;
+            for attempt in 0..5 {
+                if attempt > 0 {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                let attempted: io::Result<serde_json::Value> = (|| {
+                    let mut stream = TcpStream::connect(addr)?;
+                    stream.write_all(payload.as_bytes())?;
+                    let mut response = String::new();
+                    stream.read_to_string(&mut response)?;
+                    Ok(serde_json::from_str(&response).expect("server sent invalid JSON"))
+                })();
+                match attempted {
+                    Ok(value) => return value,
+                    Err(e) => last_err = Some(e),
+                }
+            }
+            panic!("send_note to {addr} failed after retries: {last_err:?}");
         }
 
         fn stop(ipc: WrapperNoteIpc) {

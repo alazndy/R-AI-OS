@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import shlex
@@ -47,6 +48,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+logger = logging.getLogger("raios-tray")
 
 # GTK + AyatanaAppIndicator3 (native Wayland tray on GNOME)
 _gi_path = "/usr/lib/python3/dist-packages"
@@ -117,11 +120,13 @@ def _is_dark_mode() -> bool:
             out = subprocess.run(args, capture_output=True, text=True, timeout=1).stdout.lower()
             if "dark" in out:
                 return True
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to detect dark mode via %s: %s", args[0], e)
             pass
     try:
         return QApplication.palette().color(QPalette.Window).lightness() < 128
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to detect dark mode via palette: %s", e)
         return False
 
 
@@ -241,6 +246,7 @@ TOKEN_CANDIDATES = (
 USAGE_PATH = CONFIG_DIR / "tray-usage.json"
 CACHE_PATH = CONFIG_DIR / "tray-projects-cache.json"
 PROJECTS_CONFIG_PATH = CONFIG_DIR / "tray-projects-config.json"
+LOG_PATH = CONFIG_DIR / "tray.log"
 DIRTY_STATUS_CACHE: dict[str, tuple[float, bool, tuple[float, float]]] = {}
 
 MEM_TYPE_COLORS_DARK = {
@@ -284,7 +290,8 @@ def api_get(path: str, token: str):
     try:
         with urllib.request.urlopen(request, timeout=4) as response:
             return json.loads(response.read())
-    except Exception:
+    except Exception as e:
+        logger.debug("api_get failed for path %s: %s", path, e)
         return None
 
 
@@ -345,7 +352,8 @@ def load_mem_items(project_key: str | None = None, limit: int = 100) -> list[dic
             ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
-    except Exception:
+    except Exception as e:
+        logger.debug("load_memories failed: %s", e)
         return []
 
 
@@ -361,7 +369,8 @@ def load_tasks(limit: int = 50) -> list[dict]:
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
-    except Exception:
+    except Exception as e:
+        logger.debug("load_tasks failed: %s", e)
         return []
 
 
@@ -377,7 +386,8 @@ def add_task(text: str, project: str | None = None) -> bool:
         conn.commit()
         conn.close()
         return True
-    except Exception:
+    except Exception as e:
+        logger.debug("add_task failed: %s", e)
         return False
 
 
@@ -390,7 +400,8 @@ def complete_task(task_id: int) -> bool:
         conn.commit()
         conn.close()
         return True
-    except Exception:
+    except Exception as e:
+        logger.debug("complete_task failed: %s", e)
         return False
 
 
@@ -403,7 +414,8 @@ def delete_task(task_id: int) -> bool:
         conn.commit()
         conn.close()
         return True
-    except Exception:
+    except Exception as e:
+        logger.debug("delete_task failed: %s", e)
         return False
 
 
@@ -441,9 +453,18 @@ def find_existing_command(candidates: tuple[str, ...]) -> str | None:
 
 
 def open_terminal(project_path: str, command: str) -> bool:
+    """Launch a terminal running `command` in `project_path`.
+
+    `command` is the raw, unquoted program invocation (e.g. "claude") — this
+    function is the single place responsible for quoting it correctly for
+    whichever shell/interpreter the target platform actually hands it to.
+    Callers must never pre-quote: each platform branch below embeds it into
+    a different shell (bash, AppleScript, PowerShell) with different escaping
+    rules, so quoting done by a caller for one shell is wrong for the others.
+    """
     system = detect_platform()
     quoted_path = shlex.quote(project_path)
-    quoted_command = f"cd {quoted_path} && exec {command}"
+    quoted_command = f"cd {quoted_path} && exec {shlex.quote(command)}"
 
     try:
         if system == "linux":
@@ -462,18 +483,26 @@ def open_terminal(project_path: str, command: str) -> bool:
             return False
 
         if system == "darwin":
+            # AppleScript double-quoted string literal: backslashes must be
+            # escaped before quotes, or a pre-existing backslash (e.g. from
+            # shlex.quote's '\'' escape for an embedded single quote) would
+            # combine with the next replacement into a bogus escape sequence.
+            escaped_command = quoted_command.replace("\\", "\\\\").replace('"', '\\"')
             apple_script = (
                 'tell application "Terminal"\n'
                 "activate\n"
-                f'do script "{quoted_command.replace(chr(34), chr(92) + chr(34))}"\n'
+                f'do script "{escaped_command}"\n'
                 "end tell\n"
             )
             subprocess.Popen(["osascript", "-e", apple_script])
             return True
 
         if system == "windows":
+            # PowerShell single-quoted string literal: embedded single quotes
+            # are escaped by doubling, not via POSIX shlex rules.
+            ps_command = "'" + command.replace("'", "''") + "'"
             subprocess.Popen(
-                ["cmd", "/c", "start", "R-AI-OS", "powershell", "-NoExit", "-Command", command],
+                ["cmd", "/c", "start", "R-AI-OS", "powershell", "-NoExit", "-Command", ps_command],
                 cwd=project_path,
             )
             return True
@@ -488,7 +517,7 @@ def launch_agent(project_path: str, agent: Agent, project_name: str) -> bool:
     if not command:
         return False
     bump_usage(project_name)
-    return open_terminal(project_path, shlex.quote(command))
+    return open_terminal(project_path, command)
 
 
 def launch_vscode(project_path: str) -> bool:
@@ -1635,7 +1664,8 @@ class RaiosTray(QObject):
             try:
                 n = _GtkNotify.Notification.new(APP_NAME, message, "utilities-system-monitor")
                 n.show()
-            except Exception:
+            except Exception as e:
+                logger.debug("_notify failed: %s", e)
                 pass
 
     # ── icon ─────────────────────────────────────────────────────────────────
@@ -1888,6 +1918,12 @@ def _apply_dark_palette(app: QApplication) -> None:
 
 
 def main() -> int:
+    ensure_parent(LOG_PATH)
+    logging.basicConfig(
+        filename=LOG_PATH,
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     # GTK must be initialized before QApplication grabs the display
     Gtk.init([])
     if _GTK_NOTIFY:
