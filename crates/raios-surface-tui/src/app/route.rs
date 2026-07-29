@@ -1,19 +1,31 @@
+//! Control-plane route enumeration and layout bounds.
+
 use serde::{Deserialize, Serialize};
 
+/// Four main attention-first routes of the control-plane TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum Route {
+    /// Immediate attention approvals, blockers, active runs, and system alerts.
     #[default]
     Now,
+    /// Projects list, tasks, active runs, artifacts, and Product Factory posture.
     Work,
+    /// Search queries, tool execution traces, and live daemon logs.
     Explore,
+    /// Security policy rules, audit log counters, project health, and cron jobs.
     Govern,
 }
 
+/// Height of compact top header bar in rows.
 pub const COMPACT_HEADER_HEIGHT: u16 = 3;
+/// Height of full banner top header bar in rows.
 pub const BANNER_HEADER_HEIGHT: u16 = 8;
+/// Height of route tabs bar in rows.
 pub const TABS_HEIGHT: u16 = 3;
+/// Height of launcher bar in rows.
 pub const LAUNCHER_HEIGHT: u16 = 3;
 
+/// Computes the effective dashboard header height based on screen height.
 pub fn dashboard_header_height(screen_height: u16) -> u16 {
     if screen_height >= 32 {
         BANNER_HEADER_HEIGHT
@@ -23,10 +35,12 @@ pub fn dashboard_header_height(screen_height: u16) -> u16 {
 }
 
 impl Route {
+    /// Returns slice of all four available route variants.
     pub fn all() -> &'static [Route] {
         &[Route::Now, Route::Work, Route::Explore, Route::Govern]
     }
 
+    /// Returns the display title text for this route.
     pub fn title(&self) -> &'static str {
         match self {
             Route::Now => "NOW — Attention & Approvals",
@@ -36,6 +50,7 @@ impl Route {
         }
     }
 
+    /// Returns the short tab bar label string for this route.
     pub fn tab_label(&self) -> &'static str {
         match self {
             Route::Now => "NOW",
@@ -45,6 +60,7 @@ impl Route {
         }
     }
 
+    /// Resolves which route tab was clicked based on mouse column position.
     pub fn tab_at_column(column: u16) -> Option<Self> {
         let mut start = 0u16;
 
@@ -60,6 +76,7 @@ impl Route {
         None
     }
 
+    /// Returns the next route in tab order (wrapping around).
     pub fn next(&self) -> Self {
         match self {
             Route::Now => Route::Work,
@@ -69,6 +86,7 @@ impl Route {
         }
     }
 
+    /// Returns the previous route in tab order (wrapping around).
     pub fn prev(&self) -> Self {
         match self {
             Route::Now => Route::Govern,
@@ -78,6 +96,7 @@ impl Route {
         }
     }
 
+    /// Converts a 0-based tab index to a `Route`.
     pub fn from_index(idx: usize) -> Self {
         match idx {
             0 => Route::Now,
@@ -88,6 +107,7 @@ impl Route {
         }
     }
 
+    /// Converts a `Route` to its 0-based tab index.
     pub fn to_index(&self) -> usize {
         match self {
             Route::Now => 0,

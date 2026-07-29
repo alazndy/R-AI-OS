@@ -1,3 +1,5 @@
+//! Projects list, detail, and graph report view rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the Projects list panel.
 pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
     let data = raios_surface_tui::app::build_projects_panel_data(app);
 
@@ -125,6 +128,7 @@ pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(table, table_area, &mut state);
 }
 
+/// Renders the full-screen Project detail view mode.
 pub fn render_project_detail(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(PANEL_BG)), area);
@@ -419,6 +423,7 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     frame.render_widget(footer, footer_area);
 }
 
+/// Renders the full-screen Graphify knowledge-graph report view mode.
 pub fn render_graph_report(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let rows = Layout::vertical([

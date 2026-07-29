@@ -1,3 +1,5 @@
+//! Core TUI application state management and event loop controller.
+
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -37,11 +39,15 @@ pub mod events;
 
 // ─── Command palette ─────────────────────────────────────────────────────────
 
+/// Entry item in the TUI command palette `/` popup menu.
 pub struct PaletteItem {
+    /// Command string invocation prefix (e.g. `"/now"`).
     pub cmd: &'static str,
+    /// Description explaining the command action.
     pub desc: &'static str,
 }
 
+/// Constant list of available command palette commands.
 pub const PALETTE_ITEMS: &[PaletteItem] = &[
     PaletteItem {
         cmd: "/now",
@@ -153,6 +159,7 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     },
 ];
 
+/// Filters command palette items matching the query text.
 pub fn filtered_palette(query: &str) -> Vec<&'static PaletteItem> {
     let q = query.trim_start_matches('/').to_lowercase();
     PALETTE_ITEMS
@@ -163,6 +170,7 @@ pub fn filtered_palette(query: &str) -> Vec<&'static PaletteItem> {
         .collect()
 }
 
+/// Constant list of main menu panel options.
 pub const MENU_ITEMS: &[&str] = &[
     "Recent",
     "System Rules",
@@ -182,69 +190,83 @@ pub const MENU_ITEMS: &[&str] = &[
     "Extensions",
 ];
 
+/// Primary TUI application container holding state and event queues.
 pub struct App {
+    /// Active high-level screen state.
     pub state: AppState,
+    /// `true` when the main event loop should terminate.
     pub should_quit: bool,
+    /// Monotonically increasing tick counter.
     pub tick: u64,
 
-    // Config
+    /// Loaded system configuration.
     pub config: Config,
 
+    /// Setup state metadata.
     pub setup: SetupState,
 
-    // Search
+    /// Neural search state.
     pub search: SearchState,
 
-    // System & Diagnostics
+    /// System and diagnostics state.
     pub system: SystemState,
 
+    /// UI navigation state.
     pub ui: UIState,
 
+    /// Workspace inventory state.
     pub inventory: InventoryState,
 
-    // Editor & File View
+    /// File viewer/editor state.
     pub editor: EditorState,
 
-    // Health Dashboard
+    /// Health dashboard state.
     pub health: HealthState,
 
-    // Projects
+    /// Tracked projects state.
     pub projects: ProjectState,
 
-    // Background
+    /// Sender channel for background worker messages.
     pub tx: Sender<BgMsg>,
+    /// Receiver channel for background worker messages.
     pub rx: Receiver<BgMsg>,
+    /// Optional sender channel to daemon IPC socket.
     pub tx_daemon: Option<Sender<String>>,
 
-    // Remote Hub mode
+    /// Whether connected to a remote Cortex Hub host.
     pub is_remote: bool,
+    /// Host address when connected to a remote hub.
     pub remote_host: Option<String>,
 
+    /// Active terminal screen width in columns.
     pub width: u16,
+    /// Active terminal screen height in rows.
     pub height: u16,
 
+    /// Timeline activity log state.
     pub timeline: TimelineState,
 
-    // MemPalace
+    /// MemPalace view state.
     pub mempalace: MempalaceState,
 
-    // Tasks
+    /// Unified task list state.
     pub tasks: TaskState,
 
-    // Extensions
+    /// Extensions panel state.
     pub ext: ExtState,
 
-    // File Watcher
+    /// Optional file watcher instance.
     pub _watcher: Option<Box<dyn Watcher>>,
 
-    // Setup Wizard
+    /// Setup wizard state.
     pub wizard: WizardState,
 
-    // Constitution Editor
+    /// Constitution section editor state.
     pub constitution: ConstitutionState,
 
-    // Control-Plane Typed State & Client
+    /// Typed control-plane snapshot store.
     pub store: store::Store,
+    /// Typed IPC client transport controller.
     pub client: client::Client,
 }
 
@@ -255,6 +277,7 @@ impl Default for App {
 }
 
 impl App {
+    /// Creates a new `App` instance connected to the local daemon or embedded workers.
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel::<BgMsg>();
         let boot_tx = tx.clone();
@@ -410,6 +433,7 @@ impl App {
         }
     }
 
+    /// Advances the application tick timer and performs background checks.
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
 
@@ -475,6 +499,7 @@ impl App {
         });
     }
 
+    /// Returns list of files associated with the active menu item.
     pub fn current_menu_files(&self) -> Vec<FileEntry> {
         match self.ui.menu_cursor {
             1 => vec![],
@@ -485,6 +510,7 @@ impl App {
         }
     }
 
+    /// Discovers and reloads available constitution files into editor tabs.
     pub fn refresh_constitution_tabs(&mut self) {
         let mut tabs = vec![raios_surface_tui::app::state::ConstitutionTarget::Global {
             path: self.config.master_md_path.clone(),
@@ -503,6 +529,7 @@ impl App {
         self.load_constitution_tab(0);
     }
 
+    /// Loads the constitution file sections for the specified tab index.
     pub fn load_constitution_tab(&mut self, idx: usize) {
         let Some(target) = self.constitution.tabs.get(idx) else {
             return;
@@ -515,6 +542,7 @@ impl App {
         self.constitution.active_tab = idx;
     }
 
+    /// Returns project list indices sorted according to active sort order.
     pub fn sorted_project_indices(&self) -> Vec<usize> {
         raios_surface_tui::app::sort_project_indices(
             &self.projects.list,
@@ -523,6 +551,7 @@ impl App {
         )
     }
 
+    /// Returns the project entity currently selected under the cursor.
     pub fn project_at_cursor(&self) -> Option<&raios_core::entities::EntityProject> {
         let indices = self.sorted_project_indices();
         indices
@@ -539,6 +568,7 @@ impl App {
             .map(|p| p.local_path.clone())
     }
 
+    /// Dispatches the currently selected task to an agent harness.
     pub fn dispatch_task(&mut self, agent: &str) {
         let task = match self.tasks.list.get(self.tasks.cursor) {
             Some(t) => t.clone(),
@@ -589,6 +619,7 @@ impl App {
         );
     }
 
+    /// Adds a log entry to the activity timeline feed.
     pub fn add_activity(&mut self, source: &str, message: &str, level: &'static str) {
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
         self.timeline.activities.push(Activity {
@@ -624,6 +655,7 @@ impl App {
         }
     }
 
+    /// Spawns Graphify knowledge-graph generation on a project directory.
     pub fn run_graphify(&self, project_path: &Path) -> String {
         let script = match &self.system.graphify_script {
             Some(s) => s,

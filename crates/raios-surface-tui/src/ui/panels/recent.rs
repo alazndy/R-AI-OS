@@ -1,3 +1,5 @@
+//! Recent projects panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the Recent Projects panel.
 pub fn render_recent(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);

@@ -1,8 +1,11 @@
+//! Reducer functions applying user intents and daemon events to the store.
+
 use raios_contracts::Event;
 
 use crate::app::intent::Intent;
 use crate::app::store::Store;
 
+/// Reduces a user intent action into updated store state.
 pub fn reduce_intent(store: &mut Store, intent: Intent) {
     match intent {
         Intent::SwitchRoute(r) => {
@@ -59,6 +62,7 @@ pub fn reduce_intent(store: &mut Store, intent: Intent) {
     }
 }
 
+/// Reduces an incoming daemon event into updated store state.
 pub fn reduce_event(store: &mut Store, event: Event) {
     match event {
         Event::SnapshotUpdated(env) => {

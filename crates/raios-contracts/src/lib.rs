@@ -1,3 +1,10 @@
+//! Serialization-only transport contracts for the R-AI-OS control plane.
+//!
+//! Provides typed command, event, query, DTO, and domain snapshot definitions
+//! shared across CLI, TUI, and daemon IPC boundaries.
+
+#![warn(missing_docs)]
+
 pub mod anka;
 pub mod command;
 pub mod dto;

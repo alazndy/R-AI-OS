@@ -1,3 +1,5 @@
+//! File browser and viewer modal panel rendering.
+
 use raios_runtime::filebrowser::FileEntry;
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
@@ -9,6 +11,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the file browser panel for navigating project files.
 pub fn render_file_panel(frame: &mut Frame, area: Rect, app: &App, files: &[FileEntry]) {
     let block = Block::new()
         .borders(Borders::TOP)
@@ -65,6 +68,7 @@ pub fn render_file_panel(frame: &mut Frame, area: Rect, app: &App, files: &[File
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
+/// Renders the full-screen file view mode.
 pub fn render_file_view(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(PANEL_BG)), area);
@@ -190,6 +194,7 @@ pub fn render_file_view(frame: &mut Frame, app: &App) {
     frame.render_widget(footer, footer_area);
 }
 
+/// Renders the full-screen file editor mode.
 pub fn render_file_edit(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(PANEL_BG)), area);

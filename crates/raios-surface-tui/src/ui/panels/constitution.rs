@@ -1,3 +1,5 @@
+//! System constitution section editor panel rendering.
+
 use raios_surface_tui::app::state::OutlineRow;
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
@@ -9,6 +11,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the Constitution section editor panel.
 pub fn render_constitution(frame: &mut Frame, area: Rect, app: &App) {
     if app.constitution.creator.active {
         render_creator(frame, area, app);

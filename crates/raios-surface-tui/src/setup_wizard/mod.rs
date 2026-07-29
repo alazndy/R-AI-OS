@@ -1,5 +1,8 @@
+//! Setup wizard for initial workspace configuration and agent environment detection.
+
 mod exec;
 mod templates;
+/// Data types and environment detector for the setup wizard.
 pub mod types;
 
 pub use exec::{

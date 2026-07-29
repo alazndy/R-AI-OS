@@ -1,3 +1,5 @@
+//! Inbox and handovers panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,8 +10,7 @@ use ratatui::{
     Frame,
 };
 
-/// Control-plane inbox: pending approvals (including agent handoffs), active runs,
-/// and blocked tasks. Mirrors the MCP `get_inbox` tool, but rendered for humans.
+/// Renders the Inbox and pending handovers panel.
 pub fn render_inbox(frame: &mut Frame, area: Rect, app: &App) {
     let _ = app;
 

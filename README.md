@@ -38,6 +38,7 @@
   <a href="#-tri-protocol-interface">Protocols</a> •
   <a href="#-core-modules">Modules</a> •
   <a href="#-vs-code-extension">VS Code</a> •
+  <a href="#%EF%B8%8F-system-tray-raios-tray">System Tray</a> •
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-cli-reference">CLI</a> •
   <a href="#-roadmap">Roadmap</a>
@@ -346,6 +347,29 @@ code --install-extension raios-*.vsix
 | Security Scan | `Ctrl+Shift+R S` | `Cmd+Shift+R S` |
 | Health Check | `Ctrl+Shift+R H` | `Cmd+Shift+R H` |
 | Scan Current File | `Ctrl+Shift+R F` | `Cmd+Shift+R F` |
+
+---
+
+## 🖥️ System Tray (`raios-tray`)
+
+R-AI-OS provides a desktop system tray application built with PySide6 (`tools/raios-tray/raios-tray.py`) for persistent status monitoring and quick agent orchestration.
+
+```
+tools/raios-tray/
+├── raios-tray.py           # PySide6 system tray application
+├── raios-tray.service      # User systemd service template
+├── requirements.txt        # Runtime dependencies
+└── requirements.lock.txt   # Pinned dependency lockfile
+```
+
+### Features
+
+- **Daemon Health Polling**: Polls `aiosd`'s `/api/health` on an interval; the tray icon switches to an urgent-update glyph and shows a dirty-project count in its title whenever any managed project has uncommitted changes.
+- **Project Quick Launcher**: Open a terminal running an agent (`claude`/`codex`/`opencode`/`agy`) in a project's directory, or launch VS Code — auto-detects the first available terminal emulator (`ptyxis`, `gnome-terminal`, `konsole`, `xfce4-terminal`, or `x-terminal-emulator` on Linux; `Terminal.app` on macOS; PowerShell on Windows).
+- **Project Manager**: Add, edit, remove, and pin tracked projects from a dedicated dialog; pinned projects surface at the top of the tray menu.
+- **Memory & Task Panels**: Shows recent `mem_items` and open tasks from the workspace database directly in the tray UI.
+- **Systemd User Integration**: Managed as a user service via `raios-tray.service` pointing to its canonical virtual environment (`tools/raios-tray/.venv/bin/python`).
+- **Structured Debug Logging**: Diagnostics written to `~/.config/raios/tray.log`.
 
 ---
 

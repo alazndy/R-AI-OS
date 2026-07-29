@@ -1,3 +1,5 @@
+//! Sentinel health and self-correction hub rendering.
+
 use raios_runtime::sentinel::SentinelState;
 use raios_surface_tui::app::App;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the Sentinel Hub panel.
 pub fn render_sentinel_hub(frame: &mut Frame, area: Rect, app: &App) {
     let mut items = Vec::new();
 

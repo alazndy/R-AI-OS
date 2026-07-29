@@ -1,3 +1,5 @@
+//! Reusable TUI widget components and modal dialog rendering.
+
 #![allow(clippy::vec_init_then_push)]
 
 use raios_surface_tui::app::{filtered_palette, App};
@@ -10,6 +12,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the initial boot progress screen.
 pub fn render_boot(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(PANEL_BG)), area);
@@ -66,6 +69,7 @@ pub fn render_boot(frame: &mut Frame, app: &App) {
     frame.render_widget(list, rows[3]);
 }
 
+/// Renders an animated floating alert banner overlay.
 pub fn render_bouncing_alert(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let width = 60;
@@ -104,6 +108,7 @@ pub fn render_bouncing_alert(frame: &mut Frame, app: &App) {
     frame.render_widget(paragraph, rect);
 }
 
+/// Renders the agent launcher control bar.
 pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::new()
         .borders(Borders::TOP)
@@ -175,6 +180,7 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(content), inner);
 }
 
+/// Renders the command palette `/` search popup.
 pub fn render_command_palette(frame: &mut Frame, app: &App) {
     let filtered = filtered_palette(&app.ui.command_buf);
     if filtered.is_empty() {
@@ -239,6 +245,7 @@ pub fn render_command_palette(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(items)), inner);
 }
 
+/// Renders the external file mutation notification badge.
 pub fn render_file_changed_badge(frame: &mut Frame, _app: &App) {
     let area = frame.area();
     let badge_w = 42u16;
@@ -257,6 +264,7 @@ pub fn render_file_changed_badge(frame: &mut Frame, _app: &App) {
     );
 }
 
+/// Renders the full agent launch modal dialog.
 pub fn render_launcher_modal(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let popup = center_rect(36, 12, area);
@@ -310,6 +318,7 @@ pub fn render_launcher_modal(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
+/// Calculates a centered rectangle inside a parent container area.
 pub fn center_rect(width: u16, height: u16, parent: Rect) -> Rect {
     let x = parent.x + parent.width.saturating_sub(width) / 2;
     let y = parent.y + parent.height.saturating_sub(height) / 2;
@@ -321,6 +330,7 @@ pub fn center_rect(width: u16, height: u16, parent: Rect) -> Rect {
     }
 }
 
+/// Renders the session handover modal dialog.
 pub fn render_handover_modal(frame: &mut Frame, app: &App) {
     if let Some((target, instruction)) = &app.system.handover_modal {
         let area = center_rect(60, 40, frame.area());
@@ -390,6 +400,7 @@ pub fn render_handover_modal(frame: &mut Frame, app: &App) {
     }
 }
 
+/// Renders the constitution save confirmation modal dialog.
 pub fn render_constitution_save_modal(frame: &mut Frame, app: &App) {
     if let Some(ref pending) = app.constitution.pending_save {
         let area = center_rect(70, 60, frame.area());

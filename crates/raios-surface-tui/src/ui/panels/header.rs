@@ -1,3 +1,5 @@
+//! Top status header bar panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the top status header bar panel.
 pub fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let version_tag = Span::styled(
         format!(" v{} (Stable) ", env!("CARGO_PKG_VERSION")),

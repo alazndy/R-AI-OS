@@ -1,3 +1,5 @@
+//! Live daemon logs replay panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the Live Logs replay panel.
 pub fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Length(30), Constraint::Min(0)]).areas(area);

@@ -1,21 +1,35 @@
+//! Data types and environment detector for the setup wizard.
+
 use std::process::Command;
 
+/// Steps in the initial setup wizard sequence.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum WizardStep {
+    /// Welcome screen introducing the setup process.
     #[default]
     Welcome,
+    /// Workspace root directory selection step.
     Workspace,
+    /// Constitution and guidelines setup step.
     Constitution,
+    /// Claude Code agent harness setup step.
     Claude,
+    /// Codex agent harness setup step.
     Codex,
+    /// OpenCode agent harness setup step.
     OpenCode,
+    /// Skills and hooks installation step.
     Skills,
+    /// Agent wrapper script installation step.
     AgentWrapper,
+    /// Database and service initialization step.
     Initialize,
+    /// Completion summary screen.
     Done,
 }
 
 impl WizardStep {
+    /// Advances to the next step in the setup sequence.
     pub fn next(&self) -> Self {
         match self {
             Self::Welcome => Self::Workspace,
@@ -31,6 +45,7 @@ impl WizardStep {
         }
     }
 
+    /// Returns the 0-based index of the step.
     pub fn index(&self) -> usize {
         match self {
             Self::Welcome => 0,
@@ -46,10 +61,12 @@ impl WizardStep {
         }
     }
 
+    /// Returns the total count of active configuration steps.
     pub fn total() -> usize {
         9
     }
 
+    /// Returns the header title for the step.
     pub fn title(&self) -> &'static str {
         match self {
             Self::Welcome => "WELCOME TO K-AI-RA",
@@ -66,22 +83,36 @@ impl WizardStep {
     }
 }
 
+/// System environment detection results for agent harnesses and tools.
 #[derive(Debug, Clone, Default)]
 pub struct AgentStatus {
+    /// Whether `claude` is detected on system PATH.
     pub claude_installed: bool,
+    /// Output version string for `claude`.
     pub claude_version: String,
+    /// Whether `codex` is detected on system PATH.
     pub codex_installed: bool,
+    /// Output version string for `codex`.
     pub codex_version: String,
+    /// Whether `opencode` is detected on system PATH.
     pub opencode_installed: bool,
+    /// Output version string for `opencode`.
     pub opencode_version: String,
+    /// Whether `agy` binary is detected on system PATH.
     pub agy_installed: bool,
+    /// Output version string for `agy`.
     pub agy_version: String,
+    /// Whether `git` is detected on system PATH.
     pub git_installed: bool,
+    /// Output version string for `git`.
     pub git_version: String,
+    /// Whether `gh` GitHub CLI is detected on system PATH.
     pub gh_installed: bool,
+    /// Output version string for `gh`.
     pub gh_version: String,
 }
 
+/// Detects installed agent harnesses and tools on the local system.
 pub fn detect_agents() -> AgentStatus {
     let mut s = AgentStatus::default();
 
@@ -126,10 +157,14 @@ fn run_version(args: &[&str]) -> Option<(bool, String)> {
     ))
 }
 
+/// Action execution result for a setup wizard step.
 #[derive(Debug, Clone)]
 pub struct WizardAction {
+    /// Description of the action performed.
     pub desc: String,
+    /// `true` if the action succeeded or was skipped cleanly.
     pub ok: bool,
+    /// `true` if the action was skipped because pre-conditions were already met.
     pub skipped: bool,
 }
 

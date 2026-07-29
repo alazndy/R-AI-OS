@@ -1,3 +1,5 @@
+//! Task management panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the Tasks panel.
 pub fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.ui.right_panel_focus && app.ui.menu_cursor == 0;
     let border_color = if focused { GREEN } else { DIM };

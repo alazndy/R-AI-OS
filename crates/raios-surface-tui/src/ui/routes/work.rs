@@ -1,3 +1,5 @@
+//! Work route rendering (projects list, tasks, artifacts, and Product Factory posture).
+
 use raios_contracts::ProjectDto;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -31,6 +33,7 @@ fn selected_project(store: &Store) -> Option<&ProjectDto> {
         .or_else(|| store.snapshot.work.projects.first())
 }
 
+/// Renders the Work route panel view.
 pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)

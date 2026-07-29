@@ -1,3 +1,5 @@
+//! Left navigation menu panel rendering.
+
 use raios_surface_tui::app::{route::Route, App};
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the left navigation menu panel.
 pub fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
     let titles: Vec<Line> = Route::all()
         .iter()

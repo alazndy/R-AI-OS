@@ -1,3 +1,5 @@
+//! Main dashboard layout rendering.
+
 use crate::app::route::{dashboard_header_height, LAUNCHER_HEIGHT, TABS_HEIGHT};
 use crate::app::App;
 use crate::ui::routes::render_route_view;
@@ -7,6 +9,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the main dashboard multi-panel layout.
 pub fn render_dashboard(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let header_height = dashboard_header_height(area.height);

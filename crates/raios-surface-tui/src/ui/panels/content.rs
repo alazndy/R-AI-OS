@@ -1,3 +1,5 @@
+//! Content viewer panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the outer content panel frame.
 pub fn render_content(frame: &mut Frame, area: Rect, app: &App) {
     let menu_files = app.current_menu_files();
 
@@ -25,6 +28,7 @@ pub fn render_content(frame: &mut Frame, area: Rect, app: &App) {
     render_content_body(frame, body_area, app);
     render_file_panel(frame, files_area, app, &menu_files);
 }
+/// Renders the inner content body view.
 pub fn render_content_body(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::new()
         .borders(Borders::NONE)

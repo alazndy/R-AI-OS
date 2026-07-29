@@ -1,3 +1,5 @@
+//! Mouse event handling for tab clicks and list scrolling.
+
 use anyhow::Result;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
@@ -8,6 +10,7 @@ use crate::app::state::AppState;
 use crate::app::{filtered_palette, App};
 
 impl App {
+    /// Handles mouse clicks and scroll wheel events in the TUI dashboard.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Result<()> {
         if self.state != AppState::Dashboard
             || self.ui.show_launcher

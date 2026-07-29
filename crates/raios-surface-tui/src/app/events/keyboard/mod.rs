@@ -1,15 +1,23 @@
+//! Keyboard shortcut and keypress event handling.
+
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use raios_surface_tui::app::state::AppState;
 use raios_surface_tui::app::App;
 
+/// Dashboard keyboard event handlers.
 pub mod dashboard;
+/// File editor keyboard event handlers.
 pub mod editor;
+/// Health view keyboard event handlers.
 pub mod health;
+/// Project view keyboard event handlers.
 pub mod project;
+/// Setup wizard keyboard event handlers.
 pub mod setup;
 
 impl App {
+    /// Handles an incoming keyboard event based on current application state.
     pub fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.should_quit = true;

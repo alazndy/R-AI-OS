@@ -1,3 +1,5 @@
+//! MemPalace full-screen memory room viewer rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the MemPalace summary info panel.
 pub fn render_mempalace_info(frame: &mut Frame, area: Rect, app: &App) {
     let count: usize = app.mempalace.rooms.iter().map(|r| r.projects.len()).sum();
     let hint = if count > 0 {
@@ -32,6 +35,7 @@ pub fn render_mempalace_info(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
+/// Renders the full-screen MemPalace memory room view.
 pub fn render_mempalace_view(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(PANEL_BG)), area);
