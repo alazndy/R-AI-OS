@@ -1,7 +1,10 @@
+//! Helper utilities for launching agents and appending session memos.
+
 use chrono::Local;
 use std::io::Write;
 use std::path::Path;
 
+/// Launches the specified agent harness binary in a terminal emulator.
 pub fn launch_agent(agent: &str, project_path: &Path) -> String {
     // "antigravity" is the identity name; the installed CLI binary is `agy`
     let cmd = match agent {
@@ -18,6 +21,7 @@ pub fn launch_agent(agent: &str, project_path: &Path) -> String {
     }
 }
 
+/// Appends a quick timestamped memo text line to `_session_notes.md`.
 pub fn append_memo(text: &str, dev_ops: &Path) -> String {
     use std::fs::OpenOptions;
     let ts = Local::now().format("%Y-%m-%d %H:%M").to_string();

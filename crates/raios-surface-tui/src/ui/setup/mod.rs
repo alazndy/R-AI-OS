@@ -1,3 +1,5 @@
+//! Setup wizard UI step rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::setup_wizard::WizardStep;
 use raios_surface_tui::ui::*;
@@ -17,6 +19,7 @@ pub(super) const DIM_B: Color = Color::Rgb(20, 35, 50);
 
 pub(super) const MASTER_PREVIEW: &str = "# AGENT CONSTITUTION (v5.0)\n# K-AI-RA — Single source of truth\n\n## Identity\n- Claude Kaira  |  Codex Kaira\n\n## RIPER-5\n1. Requirement  2. Investigation\n3. Planning     4. Execution\n5. Review & Refactor\n\n## AgentShield (OWASP)\n- No client-side secrets\n- Parameterized queries only\n- pnpm audit on every commit\n\n## Skills\nraios · search-first · graphify\nprompt-master · ki-snapshot";
 
+/// Renders the current setup wizard step frame.
 pub fn render_setup(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(PANEL)), area);

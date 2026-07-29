@@ -1,3 +1,5 @@
+//! Now route rendering (approvals, active agent runs, blocked tasks, and system alerts).
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -8,6 +10,7 @@ use ratatui::{
 
 use crate::app::store::Store;
 
+/// Renders the Now route panel view.
 pub fn render_now_route(f: &mut Frame, area: Rect, store: &Store) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)

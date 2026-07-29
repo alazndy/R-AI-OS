@@ -1,3 +1,5 @@
+//! Background worker message handling and state updates.
+
 #![allow(clippy::field_reassign_with_default)]
 
 use raios_core::config::Config;
@@ -14,6 +16,7 @@ use raios_runtime::filebrowser::load_file_content;
 use raios_surface_tui::app::{state::*, App};
 
 impl App {
+    /// Dispatches an incoming background worker message to update application state.
     pub fn handle_bg_msg(&mut self, msg: BgMsg) {
         match msg {
             BgMsg::BootResult { name, pass, done } => self.handle_boot_result(name, pass, done),

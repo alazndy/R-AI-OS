@@ -1,3 +1,5 @@
+//! Security policy rules panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the Security Policies panel.
 pub fn render_policies(frame: &mut Frame, area: Rect, app: &App) {
     let _ = app;
 

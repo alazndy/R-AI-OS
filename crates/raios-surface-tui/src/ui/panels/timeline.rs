@@ -1,3 +1,5 @@
+//! Activity timeline feed panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the activity Timeline feed panel.
 pub fn render_timeline(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::new()
         .borders(Borders::NONE)

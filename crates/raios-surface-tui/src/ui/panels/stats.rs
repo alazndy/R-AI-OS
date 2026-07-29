@@ -1,3 +1,5 @@
+//! Quick system statistics summary panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the Quick Stats summary panel.
 pub fn render_quick_stats(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::new()
         .borders(Borders::LEFT | Borders::TOP)

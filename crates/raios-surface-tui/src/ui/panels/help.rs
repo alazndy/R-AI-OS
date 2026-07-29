@@ -1,3 +1,5 @@
+//! Help reference panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -44,121 +46,67 @@ fn section(title: &'static str) -> Line<'static> {
     ))
 }
 
+/// Renders the keyboard shortcuts and commands reference help panel.
 pub fn render_help(frame: &mut Frame, area: Rect, _app: &App) {
     let chunks = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).split(area);
 
-    let title = Paragraph::new(Line::from(vec![Span::styled(
-        format!(
-            "  R-AI-OS v{} — KEYS & COMMANDS  ",
-            env!("CARGO_PKG_VERSION")
-        ),
-        Style::new().fg(CYAN).bold(),
-    )]))
+    let filter_text = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("  Help Reference", Style::new().fg(CYAN).bold()),
+            Span::styled(" — press ", Style::new().fg(DIM)),
+            Span::styled("Esc", Style::new().fg(AMBER)),
+            Span::styled(" or ", Style::new().fg(DIM)),
+            Span::styled("q", Style::new().fg(AMBER)),
+            Span::styled(" to close", Style::new().fg(DIM)),
+        ]),
+        Line::from(Span::styled(
+            "  Keyboard Shortcuts & Available Commands",
+            Style::new().fg(DIM),
+        )),
+    ])
     .block(
         Block::new()
             .borders(Borders::BOTTOM)
             .border_style(Style::new().fg(DIM)),
     );
-    frame.render_widget(title, chunks[0]);
+    frame.render_widget(filter_text, chunks[0]);
 
-    let [left_area, right_area] =
-        Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)])
-            .areas(chunks[1]);
-
-    let keys_text = vec![
+    let text = vec![
         Line::from(""),
-        section("GLOBAL"),
-        key_line("?", "Open this help screen"),
-        key_line("q", "Quit (dashboard) / back (sub-views)"),
-        key_line("Ctrl + C", "Hard exit"),
-        key_line("Ctrl + P", "Neural fuzzy search (global)"),
-        key_line("/", "Open Command Center"),
-        key_line(
-            "Mouse",
-            "Click tabs/items; wheel navigates; click bottom bar for commands",
-        ),
-        key_line("1–4 / Tab", "Switch NOW, WORK, EXPLORE, and GOVERN routes"),
-        key_line("↑↓ / j k", "Move through menu & lists"),
-        key_line("→ / l", "Focus right panel"),
-        key_line("← / h", "Back to menu"),
-        key_line("Enter", "Select / open"),
-        key_line("Esc", "Back / cancel"),
+        section("NAVIGATION & SEARCH"),
+        key_line("/", "Command Palette (type to filter)"),
+        key_line("Ctrl+P", "Quick Search modal"),
+        key_line("1..4", "Jump to route (1:NOW 2:WORK 3:EXPLORE 4:GOVERN)"),
+        key_line("Tab / Shift+Tab", "Next / previous section"),
+        key_line("j / k or ↓ / ↑", "Move cursor down / up"),
+        key_line("h / l or ← / →", "Move between panels / tabs"),
+        key_line("Enter", "Select item / open detail view"),
+        key_line("Esc / q", "Back / close view"),
         Line::from(""),
-        section("FILE PANELS (Rules · Agents · Policies · MemPalace)"),
-        key_line("Enter", "View file"),
-        key_line("e", "Edit in built-in editor"),
-        key_line("o", "Open in VS Code"),
+        section("PROJECTS & ACTIONS"),
+        key_line("Ctrl+O", "Open project selector"),
+        key_line("s", "Sort projects (Activity / Name / Health)"),
+        key_line("e", "Edit active project file"),
+        key_line("v", "View active project file"),
+        key_line("r", "Re-run Sentinel check on active project"),
+        key_line("g", "Generate Knowledge Graph (Graphify)"),
         Line::from(""),
-        section("TASKS (Recent panel focused)"),
-        key_line("Space / v", "Toggle task done"),
-        key_line("c / x / o / a", "Send task → Claude/Codex/OpenCode/Agy"),
-        Line::from(""),
-        section("ALL PROJECTS"),
-        key_line("Enter", "Open project detail"),
-        key_line("s", "Cycle sort mode"),
-        key_line("L", "Agent launcher for selected project"),
-        key_line("C / O / A", "Quick-launch Claude/OpenCode/Agy"),
-        Line::from(""),
-        section("PROJECT DETAIL"),
-        key_line("e", "Edit memory.md"),
-        key_line("g / r", "Run graphify / view report"),
-        key_line("d", "Git diff"),
-        key_line("l", "Agent launcher"),
-        Line::from(""),
-        section("EXTENSIONS (→ to focus, Esc to leave)"),
-        key_line("Tab", "Switch Commands / Config"),
-        key_line("← →", "Switch selected extension"),
-        key_line("Enter", "Run command / save config field"),
-        key_line("e", "Edit config field"),
-        Line::from(""),
-        section("EDITOR"),
-        key_line("Ctrl + S", "Save file"),
-        key_line("Esc", "Exit without saving"),
-    ];
-
-    let cmds_text = vec![
-        Line::from(""),
-        section("COMMANDS (type / to open the palette)"),
-        key_line("/now", "Approvals, blockers, and active runs"),
-        key_line("/work", "Projects, tasks, and artifacts"),
-        key_line("/explore", "Search, traces, and daemon logs"),
-        key_line("/govern", "Policies, audit ledger, and scheduler"),
-        key_line("/refresh", "Refresh the control-plane snapshot"),
+        section("COMMAND PALETTE QUICK REF"),
+        key_line("/now", "Now route (approvals, blockers, runs)"),
+        key_line("/work", "Work route (projects, tasks, factory)"),
+        key_line("/explore", "Explore route (search, traces, logs)"),
+        key_line("/govern", "Govern route (policies, audit, jobs)"),
+        key_line("/ocak", "Ocak product lifecycle manager"),
+        key_line("/discover", "Rescan Dev Ops for projects"),
         key_line("/sync", "Sync all agents with MASTER.md"),
-        key_line("/discover", "Rescan workspace projects"),
-        key_line("/health", "Open Health Dashboard"),
-        key_line("/reindex", "Rebuild neural search index"),
-        key_line("/search <q>", "Neural search"),
-        key_line("/open <proj>", "Jump to project detail"),
-        key_line("/view <file>", "View any known file"),
-        key_line("/edit <file>", "Edit any known file"),
-        key_line("/memo <text>", "Append quick session note"),
-        key_line("/task add <t>", "Add task (@agent #project)"),
-        key_line("/task send <a>", "Dispatch top task to agent"),
-        key_line("/timeline", "Activity timeline"),
-        key_line("/logs [n]", "Live daemon logs"),
-        key_line("/audit", "AI system audit scan"),
-        key_line("/mempalace", "MemPalace full-screen view"),
-        key_line("/ext", "Extensions panel"),
-        key_line("/graphify", "Knowledge graph (needs project)"),
-        key_line("/heal", "Sentinel self-correction (project)"),
-        key_line("/rules", "Jump to System Rules"),
-        key_line("/memory", "Jump to MemPalace files"),
-        key_line("/vault-create <p>", "Create Obsidian vault note"),
-        key_line("/run <cmd>", "Remote hub: run raios command"),
-        key_line("/q", "Quit"),
+        key_line("/memo <text>", "Record quick project note"),
+        key_line("/task add <t>", "Add new task"),
+        key_line("/quit", "Exit R-AI-OS TUI"),
         Line::from(""),
-        section("PANEL-SPECIFIC"),
-        key_line("f", "System Core: compliance auto-fix"),
-        key_line("i", "Inbox pending: view file-change diff"),
     ];
 
-    frame.render_widget(
-        Paragraph::new(keys_text).wrap(Wrap { trim: false }),
-        left_area,
-    );
-    frame.render_widget(
-        Paragraph::new(cmds_text).wrap(Wrap { trim: false }),
-        right_area,
-    );
+    let paragraph = Paragraph::new(text)
+        .block(Block::new().style(Style::new().bg(PANEL_BG)))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, chunks[1]);
 }

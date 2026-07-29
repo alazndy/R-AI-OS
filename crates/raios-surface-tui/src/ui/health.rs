@@ -1,3 +1,5 @@
+//! Health dashboard view rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders system diagnostics summary lines.
 pub fn render_diagnostics(frame: &mut Frame, area: Rect, app: &App) {
     let mut lines = vec![
         Line::from(Span::styled(
@@ -58,6 +61,7 @@ pub fn render_diagnostics(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
+/// Renders the full-screen Health View dashboard.
 pub fn render_health_view(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(PANEL_BG)), area);
@@ -303,6 +307,7 @@ pub fn render_health_view(frame: &mut Frame, app: &App) {
     frame.render_widget(footer, footer_area);
 }
 
+/// Renders system audit scan results panel.
 pub fn render_system_audit(frame: &mut Frame, area: Rect, app: &App) {
     let mut lines = vec![
         Line::from(Span::styled(

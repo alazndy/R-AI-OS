@@ -1,3 +1,5 @@
+//! Git diff preview panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the full-screen Git diff preview view.
 pub fn render_git_diff_view(frame: &mut Frame, app: &App) {
     let size = frame.area();
 

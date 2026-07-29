@@ -1,3 +1,5 @@
+//! Background data loading services and panel projection functions.
+
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

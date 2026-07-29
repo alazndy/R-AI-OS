@@ -1,3 +1,5 @@
+//! Main UI rendering engine and syntax highlighter for the TUI surface.
+
 pub mod components;
 pub mod filebrowser;
 pub mod health;
@@ -44,6 +46,7 @@ const HEADER_BG: Color = Color::Rgb(0, 12, 30);
 
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+/// Returns a braille spinner animation frame character for the given tick count.
 pub fn spinner_char(tick: u64) -> char {
     SPINNER[(tick as usize) % SPINNER.len()]
 }
@@ -60,6 +63,7 @@ const BANNER: &str = "\
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
+/// Main entry point for rendering the entire TUI application frame.
 pub fn render(frame: &mut Frame, app: &App) {
     match app.state {
         AppState::Booting => render_boot(frame, app),
@@ -122,6 +126,7 @@ const PURPLE: Color = Color::Rgb(180, 100, 220);
 const TEAL: Color = Color::Rgb(100, 200, 200);
 const OLIVE: Color = Color::Rgb(100, 180, 100);
 
+/// Updates code block fence toggle state when parsing Markdown files line-by-line.
 pub fn update_code_block_state(line: &str, ext: &str, in_block: &mut bool) {
     if ext == "md" {
         let t = line.trim();
@@ -131,6 +136,7 @@ pub fn update_code_block_state(line: &str, ext: &str, in_block: &mut bool) {
     }
 }
 
+/// Applies syntax highlighting styles to a single line of text based on file extension.
 pub fn highlight_line<'a>(line: &'a str, in_block: &mut bool, ext: &str) -> Vec<Span<'a>> {
     match ext {
         "md" => {

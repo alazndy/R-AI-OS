@@ -1,3 +1,5 @@
+//! Explore route rendering (search results, tool traces, and daemon logs).
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -8,6 +10,7 @@ use ratatui::{
 
 use crate::app::store::Store;
 
+/// Renders the Explore route panel view.
 pub fn render_explore_route(f: &mut Frame, area: Rect, store: &Store) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)

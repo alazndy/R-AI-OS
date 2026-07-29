@@ -1,3 +1,5 @@
+//! Background job scheduler panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the Scheduler background jobs panel.
 pub fn render_scheduler(frame: &mut Frame, area: Rect, app: &App) {
     let _ = app;
 

@@ -1,15 +1,20 @@
+//! Control-plane daemon IPC client handle.
+
 use raios_contracts::{Command, FactoryCommand, Problem, Query};
 use std::sync::mpsc::Sender;
 
+/// IPC Client handle for sending command and query messages to the daemon.
 pub struct Client {
     tx_daemon: Option<Sender<String>>,
 }
 
 impl Client {
+    /// Creates a new `Client` with an optional daemon message sender.
     pub fn new(tx_daemon: Option<Sender<String>>) -> Self {
         Self { tx_daemon }
     }
 
+    /// Sends a general control-plane command to the daemon.
     pub fn send_command(&self, cmd: Command) -> Result<(), Problem> {
         self.send_serialized(&cmd, "Command")
     }
@@ -34,6 +39,7 @@ impl Client {
         }
     }
 
+    /// Sends a query request to the daemon.
     pub fn send_query(&self, query: Query) -> Result<(), Problem> {
         if let Some(ref tx) = self.tx_daemon {
             let json = serde_json::to_string(&query).map_err(|e| {

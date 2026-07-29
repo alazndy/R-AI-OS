@@ -1,3 +1,5 @@
+//! Search modal and search results panel rendering.
+
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -8,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the search modal dialog overlay.
 pub fn render_search(frame: &mut Frame, app: &App) {
     // Render dashboard in background
     render_dashboard(frame, app);
@@ -92,6 +95,7 @@ pub fn render_search(frame: &mut Frame, app: &App) {
     frame.render_widget(results_list, chunks[1]);
 }
 
+/// Renders the neural search results panel.
 pub fn render_search_panel(frame: &mut Frame, area: Rect, app: &App) {
     let mut lines = vec![
         Line::from(Span::styled(

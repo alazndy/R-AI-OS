@@ -1,3 +1,5 @@
+//! Govern route rendering (policy summary, audit logs, health reports, and cron jobs).
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -8,6 +10,7 @@ use ratatui::{
 
 use crate::app::store::Store;
 
+/// Renders the Govern route panel view.
 pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)

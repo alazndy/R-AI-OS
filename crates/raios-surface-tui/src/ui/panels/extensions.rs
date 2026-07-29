@@ -1,3 +1,5 @@
+//! Extensions list panel rendering.
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -17,6 +19,7 @@ const GREEN: Color = Color::Green;
 const RED: Color = Color::Red;
 const YELLOW: Color = Color::Yellow;
 
+/// Renders the Extensions list panel.
 pub fn render_extensions(frame: &mut Frame, area: Rect, app: &App) {
     if !app.ext.loaded {
         let msg = Paragraph::new("Loading extensions…")
