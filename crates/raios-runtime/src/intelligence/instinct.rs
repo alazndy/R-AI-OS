@@ -16,7 +16,7 @@ pub struct InstinctEngine {
 
 impl InstinctEngine {
     pub fn init() -> Self {
-        let home = dirs::home_dir().expect("Home dir not found");
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let path = home.join(".agents").join("instincts.json");
 
         let data = if path.exists() {

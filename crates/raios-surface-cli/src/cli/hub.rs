@@ -62,7 +62,7 @@ fn probe_port(port: u16) -> bool {
     // Try Tailscale IP from policy
     if let Some(ip) = raios_runtime::server::http::detect_tailscale_ip() {
         if TcpStream::connect_timeout(
-            &format!("{ip}:{port}").parse().unwrap(),
+            &std::net::SocketAddr::new(ip, port),
             Duration::from_millis(200),
         )
         .is_ok()
@@ -536,14 +536,20 @@ pub fn cmd_logs(lines: usize) {
             "\x1b[90m--- following {} (Ctrl-C to exit) ---\x1b[0m",
             path.display()
         );
-        let mut tail = Command::new("tail")
+        match Command::new("tail")
             .args(["-f", "-n", "0"])
             .arg(&path)
             .stdout(Stdio::inherit())
             .stderr(Stdio::null())
             .spawn()
-            .expect("tail not found");
-        let _ = tail.wait();
+        {
+            Ok(mut tail) => {
+                let _ = tail.wait();
+            }
+            Err(e) => {
+                eprintln!("  Could not start `tail` for follow mode: {e}");
+            }
+        }
     }
     #[cfg(windows)]
     println!("--- end of log (Windows follow mode: Get-Content -Wait) ---");
