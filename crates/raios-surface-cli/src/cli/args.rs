@@ -399,7 +399,8 @@ pub enum Commands {
         #[command(subcommand)]
         action: TraceAction,
     },
-    /// Read or safely execute local Product Factory lifecycle commands
+    /// Read or safely execute local Ocak (Product Factory) lifecycle commands
+    #[command(name = "ocak", alias = "factory")]
     Factory {
         #[command(subcommand)]
         action: FactoryAction,

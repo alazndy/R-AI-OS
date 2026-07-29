@@ -306,3 +306,25 @@ pub fn run(cli: Cli) {
         Commands::Ext { name, args } => ext::cmd_ext(&name, &args, &cfg.dev_ops_path, cli.json),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_project_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn resolve_project_path_with_no_project_uses_the_current_directory() {
+        let resolved = resolve_project_path(None, Path::new("/fallback/dev-ops"));
+        assert_eq!(
+            resolved,
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/fallback/dev-ops"))
+        );
+    }
+
+    #[test]
+    fn resolve_project_path_with_an_existing_absolute_path_returns_it_directly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let resolved = resolve_project_path(Some(tmp.path().display().to_string()), Path::new("."));
+        assert_eq!(resolved, tmp.path());
+    }
+}
