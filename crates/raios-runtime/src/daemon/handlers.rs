@@ -216,7 +216,9 @@ pub async fn handle_client_connection(h: ClientHandle) {
                                 }
                                 if let Ok(snap) = crate::control_plane::service::load_system_snapshot(&conn) {
                                     let evt = raios_contracts::Event::SnapshotUpdated(Box::new(snap));
-                                    let _ = writer.write_all(format!("{}\n", serde_json::to_string(&evt).unwrap()).as_bytes()).await;
+                                    if let Ok(serialized) = serde_json::to_string(&evt) {
+                                        let _ = writer.write_all(format!("{serialized}\n").as_bytes()).await;
+                                    }
                                 }
                             }
                             Err(problem) => {
@@ -224,7 +226,9 @@ pub async fn handle_client_connection(h: ClientHandle) {
                                     idempotency_key: cmd.idempotency_key().to_string(),
                                     problem,
                                 };
-                                let _ = writer.write_all(format!("{}\n", serde_json::to_string(&err_evt).unwrap()).as_bytes()).await;
+                                if let Ok(serialized) = serde_json::to_string(&err_evt) {
+                                    let _ = writer.write_all(format!("{serialized}\n").as_bytes()).await;
+                                }
                             }
                         }
                     }
@@ -258,7 +262,9 @@ pub async fn handle_client_connection(h: ClientHandle) {
                                 }
                                 if let Ok(snapshot) = crate::control_plane::service::load_system_snapshot(&conn) {
                                     let event = raios_contracts::Event::SnapshotUpdated(Box::new(snapshot));
-                                    let _ = writer.write_all(format!("{}\n", serde_json::to_string(&event).unwrap()).as_bytes()).await;
+                                    if let Ok(serialized) = serde_json::to_string(&event) {
+                                        let _ = writer.write_all(format!("{serialized}\n").as_bytes()).await;
+                                    }
                                 }
                             }
                             Err(problem) => {
@@ -317,11 +323,12 @@ pub async fn handle_client_connection(h: ClientHandle) {
                                 let s = state_for_client.read().await;
                                 if let Some(ref idx) = s.index {
                                     let results = idx.search(query);
-                                    let response = format!(
-                                        "{{\"event\":\"SearchResults\",\"results\":{}}}\n",
-                                        serde_json::to_string(&results).unwrap()
-                                    );
-                                    let _ = writer.write_all(response.as_bytes()).await;
+                                    if let Ok(serialized) = serde_json::to_string(&results) {
+                                        let response = format!(
+                                            "{{\"event\":\"SearchResults\",\"results\":{serialized}}}\n"
+                                        );
+                                        let _ = writer.write_all(response.as_bytes()).await;
+                                    }
                                 }
                             }
                         }
@@ -368,12 +375,15 @@ pub async fn handle_client_connection(h: ClientHandle) {
                                         "source": r.source.label()
                                     })
                                 }).collect();
-                                let response = format!(
-                                    "{{\"event\":\"VectorResults\",\"results\":{},\"vector_hits\":{}}}\n",
-                                    serde_json::to_string(&results).unwrap(),
-                                    serde_json::to_string(&vector_hits).unwrap()
-                                );
-                                let _ = writer.write_all(response.as_bytes()).await;
+                                if let (Ok(results_json), Ok(hits_json)) = (
+                                    serde_json::to_string(&results),
+                                    serde_json::to_string(&vector_hits),
+                                ) {
+                                    let response = format!(
+                                        "{{\"event\":\"VectorResults\",\"results\":{results_json},\"vector_hits\":{hits_json}}}\n"
+                                    );
+                                    let _ = writer.write_all(response.as_bytes()).await;
+                                }
                             }
                         }
                         "CortexReindex" => {
@@ -442,13 +452,14 @@ pub async fn handle_client_connection(h: ClientHandle) {
                         }
                         "HealthScan" => {
                             let s = state_for_client.read().await;
-                            let report_json = serde_json::to_string(&s.health_reports).unwrap();
-                            let response = format!(
-                                "{{\"event\":\"HealthReport\",\"report\":{}}}\n", report_json
-                            );
-                            let _ = writer.write_all(response.as_bytes()).await;
-                            let delta = format!("{{\"event\":\"HealthDelta\",\"report\":{}}}", report_json);
-                            let _ = _tx_sender.send(delta);
+                            if let Ok(report_json) = serde_json::to_string(&s.health_reports) {
+                                let response = format!(
+                                    "{{\"event\":\"HealthReport\",\"report\":{report_json}}}\n"
+                                );
+                                let _ = writer.write_all(response.as_bytes()).await;
+                                let delta = format!("{{\"event\":\"HealthDelta\",\"report\":{report_json}}}");
+                                let _ = _tx_sender.send(delta);
+                            }
                         }
                         "GetState" => {
                             let s = state_for_client.read().await;
