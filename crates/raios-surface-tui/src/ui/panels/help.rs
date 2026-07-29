@@ -64,7 +64,11 @@ pub fn render_help(frame: &mut Frame, area: Rect, _app: &App) {
             Style::new().fg(DIM),
         )),
     ])
-    .block(Block::new().borders(Borders::BOTTOM).border_style(Style::new().fg(DIM)));
+    .block(
+        Block::new()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::new().fg(DIM)),
+    );
     frame.render_widget(filter_text, chunks[0]);
 
     let text = vec![
