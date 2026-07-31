@@ -108,7 +108,7 @@ synced: 2026-07-31T22:00:00
 ---
 # some-project
 
-← [[_MOC|ai projeleri]]
+← [[ai-MOC|ai projeleri]]
 
 <verbatim memory.md content>
 ```
@@ -117,7 +117,11 @@ synced: 2026-07-31T22:00:00
 `beklemede`, `waiting`. See Open Question below for why there's no
 "production" tag.
 
-Category `_MOC.md`:
+Category MOC file is named `<category>-MOC.md` (e.g. `ai-MOC.md`), not a
+bare `_MOC.md`, specifically so every category's MOC has a vault-wide
+unique filename — Obsidian resolves `[[wikilinks]]` by filename, and 8
+identically-named `_MOC.md` files (one per category folder) would make
+`[[_MOC]]` ambiguous everywhere it's used.
 
 ```yaml
 ---
@@ -199,6 +203,51 @@ extend `EntityProject`/the DB schema to add a production concept. Adding
 that tier (new column, migration, `load_entities`/`save_entities` changes)
 is out of scope for this phase and can be proposed as its own follow-up if
 still wanted later.
+
+## Amendment: `raios new` integration (added during planning)
+
+While mapping this spec to real code, a second, already-existing vault
+integration point turned up: `crates/raios-runtime/src/new_project.rs`
+step 9 calls `update_vault_atlas()`, which is meant to append a row to a
+vault's "Proje Atlası.md" on every `raios new`. It is dead code — it only
+checks a hardcoded Windows path
+(`C:\Users\turha\Documents\Obsidian Vaults\Vault101\...`) and a Linux
+fallback path that has never existed on this machine
+(`Vault101/Projeler/Proje Atlası.md`) — so it has silently no-op'd on
+every project creation since the Linux migration. The user asked to fix
+this forward rather than leave it dead or just delete it: `raios new`
+should keep the new `~/Obsidian` vault in sync going forward, not only via
+manual `raios obsidian-sync` runs.
+
+Resolution: `update_vault_atlas()` is deleted. Step 9 of `new_project::create`
+instead calls the same sync engine this spec builds for the CLI command
+(see Architecture amendment below), so there is exactly one code path that
+writes project notes into the vault — used both by the manual bulk command
+and automatically by project creation.
+
+## Amendment: testability split (added during planning)
+
+`raios_core::entities::load_entities()` reads from the single global
+`~/.config/raios/workspace.db`, not from whatever `dev_ops` path is passed
+in — so a test that passes a tempdir as `dev_ops` would still load the
+real machine's real 68+ projects out of the real database, making the sync
+engine's own tests slow and non-deterministic on any machine that already
+has raios set up (which is every machine this ships to).
+
+To keep the engine testable, the sync logic is split into two layers in
+`raios-runtime`:
+
+- `sync_vault_projects(vault: &Path, projects: &[EntityProject], dry_run: bool) -> ObsidianSyncReport` —
+  does the actual note/MOC/atlas rendering and writing for an explicit,
+  caller-supplied project list. Fully hermetic: tests pass hand-built
+  `EntityProject` fixtures pointing at tempdir paths, no DB involved.
+- `sync_vault(dev_ops: &Path, vault: &Path, dry_run: bool) -> ObsidianSyncReport` —
+  thin wrapper: `load_entities(dev_ops)` then delegates to
+  `sync_vault_projects`. This is what the CLI command and `raios new` call.
+
+Both `raios obsidian-sync` (CLI) and `new_project::create`'s vault step
+call `sync_vault`/`sync_vault_projects` — the same engine, so the two
+integration points cannot drift into different note formats.
 
 ## Rollout
 
