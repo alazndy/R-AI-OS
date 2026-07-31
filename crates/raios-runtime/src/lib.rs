@@ -17,7 +17,7 @@ pub mod intelligence;
 pub mod job_executor;
 pub mod kernel;
 pub mod new_project;
-mod obsidian;
+pub mod obsidian;
 pub mod product_factory;
 pub mod proxy_store;
 pub mod radar;
