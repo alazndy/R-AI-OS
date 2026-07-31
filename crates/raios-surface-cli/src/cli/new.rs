@@ -19,6 +19,7 @@ pub(super) fn cmd_new(
         dev_ops,
         github,
         no_vault,
+        vault_path: None,
     };
     let result = raios_runtime::new_project::create(&cfg);
 

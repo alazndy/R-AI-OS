@@ -13,6 +13,7 @@ fn create_scaffolds_a_project_without_fabricating_a_github_url() {
         dev_ops: dev_ops.path(),
         github: false,
         no_vault: true,
+        vault_path: None,
     };
 
     let result = create(&cfg);
@@ -37,4 +38,36 @@ fn create_scaffolds_a_project_without_fabricating_a_github_url() {
 
     let all_steps_have_a_description = result.steps.iter().all(|(desc, _)| !desc.is_empty());
     assert!(all_steps_have_a_description);
+}
+
+#[test]
+fn create_writes_a_vault_note_when_vault_is_enabled() {
+    let dev_ops = tempfile::tempdir().expect("dev_ops tempdir");
+    let vault = tempfile::tempdir().expect("vault tempdir");
+
+    let cfg = NewProjectConfig {
+        name: "vaulted-project",
+        category: "tools",
+        dev_ops: dev_ops.path(),
+        github: false,
+        no_vault: false,
+        vault_path: Some(vault.path()),
+    };
+
+    let result = create(&cfg);
+
+    let vault_ok = result
+        .steps
+        .iter()
+        .find(|(desc, _)| desc == "Update Obsidian Vault")
+        .map(|(_, ok)| *ok)
+        .unwrap_or(false);
+    assert!(vault_ok, "vault step should succeed: {:?}", result.steps);
+
+    let note_path = vault
+        .path()
+        .join("Projeler")
+        .join("tools")
+        .join("vaulted-project.md");
+    assert!(note_path.exists(), "expected vault note at {note_path:?}");
 }
