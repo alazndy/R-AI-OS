@@ -506,7 +506,8 @@ raios bootstrap
 | `raios usage` | Show local usage/quota signals across AI tools |
 | `raios search "<query>"` | Semantic search across portfolio |
 | `raios locate "<pattern>" [--dir <path>] [-i] [--reindex]` | Exhaustive exact/regex search over the trigram index (grep-equivalent) |
-| `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules) |
+| `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules); also syncs the new project's note into the Obsidian vault at `~/Obsidian` by default (unless `--no-vault`) |
+| `raios obsidian-sync [--vault <path>] [--dry-run]` | Regenerate the Obsidian vault (`~/Obsidian` by default) from current raios project data — one note per project, a `<category>-MOC.md` per category, and a root `Proje Atlası.md` index. Every run fully overwrites project notes/MOCs/index; manual edits made directly inside a vault note are lost on the next sync |
 | `raios task "<description>"` | Route task to best agent |
 | `raios handoff --to <agent> --status <SUCCESS\|FAILED\|BLOCKER> --msg "<text>"` | Atomic agent-to-agent handoff via the control plane |
 | `raios trace record/search/forget` | Store, recall, and delete local tool/session trace memory |

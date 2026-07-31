@@ -113,9 +113,12 @@ synced: 2026-07-31T22:00:00
 <verbatim memory.md content>
 ```
 
-`status` uses raios's actual DB vocabulary as-is: `active`, `archived`,
-`beklemede`, `waiting`. See Open Question below for why there's no
-"production" tag.
+`status` uses raios's actual DB vocabulary as-is, rendered verbatim
+whatever string it holds — currently observed on this machine: `active`,
+`archived`, `beklemede`, `waiting`. `production`, `early`, and `legacy`
+are also valid, supported status values in raios's schema (see Open
+Question below) and will render as `durum/production` etc. automatically
+if/when they appear in the data — no rendering-code change needed.
 
 Category MOC file is named `<category>-MOC.md` (e.g. `ai-MOC.md`), not a
 bare `_MOC.md`, specifically so every category's MOC has a vault-wide
@@ -180,6 +183,31 @@ surprise.
 - Unreadable/corrupt `memory.md` (I/O error mid-read): treat like "missing"
   for that one project, log to stderr (or the `errors` array in `--json`
   mode), continue with the rest.
+- Known limitation: orphaned project notes are not pruned. Every one of the
+  8 known category MOCs (see Vault layout above) is rewritten on every
+  non-dry-run sync, including empty ones — so a category's MOC can never go
+  stale-and-orphaned just because its last project disappeared. But
+  individual project notes are a different story: if a project is deleted,
+  renamed, or its status flips to `waiting`/`beklemede` (filtered out
+  upstream by `load_entities`) so it no longer appears in the current run's
+  project list, its old `<name>.md` note file is left in place — it is
+  simply never linked from any MOC again. Full pruning of stale individual
+  project notes was considered and explicitly deferred (minimum-viable fix
+  only); a future phase can add it if it becomes a real problem.
+- Known limitation: a second, pre-existing vault writer exists in the TUI.
+  `crates/raios-surface-tui/src/app/services.rs`'s `create_vault_note`
+  function (reachable via the TUI's `/vault-create` command) is a separate,
+  older vault-writing feature that this phase did not touch or unify. It
+  writes a different note format (flat file layout, different frontmatter,
+  a generated stub body instead of `memory.md` content, never-overwrite
+  instead of always-overwrite) to a different — and currently
+  misconfigured — target path (`config.vault_projects_path`), so the TUI's
+  "has vault note" badge will not reflect notes written by
+  `raios obsidian-sync` or the new `raios new` vault step. This is
+  consistent with this phase's Non-goals ("no MCP/TUI in this phase"); the
+  user was consulted directly and explicitly decided to leave the TUI
+  feature untouched for now, documenting it as a known gap. Reconciling or
+  retiring it is left for a future phase.
 
 ## Testing
 
@@ -195,14 +223,29 @@ surprise.
 
 ## Open Question (resolved)
 
-raios's `projects.status` column only has four real values in the DB today
-(`active`, `archived`, `beklemede`, `waiting`) — there is no "production"
-tier. The user asked for "aktif, production gibi tagler" but on discovering
-this gap, chose to **use the four existing statuses as-is** rather than
-extend `EntityProject`/the DB schema to add a production concept. Adding
-that tier (new column, migration, `load_entities`/`save_entities` changes)
-is out of scope for this phase and can be proposed as its own follow-up if
-still wanted later.
+raios's `projects.status` column only has four real values in the
+**current database's data** on this machine today (`active`, `archived`,
+`beklemede`, `waiting`). The user asked for "aktif, production gibi
+tagler" but at the time this spec was written, the team believed there was
+no "production" tier at all in raios and chose to **use the four
+currently-observed statuses as-is**.
+
+**Correction (added during final review):** that belief was wrong.
+`crates/raios-core/src/db/projects.rs`'s upsert logic actually whitelists
+`production`, `active`, `early`, `legacy`, `waiting` — a `production`
+status IS a valid, supported value in raios's schema, not a hypothetical
+extension. `crates/raios-core/src/mempalace.rs`'s status-normalization
+function (`normalize_status`) can actively produce `production`, `early`,
+or `legacy` from a project's `memory.md` text. Those values simply don't
+happen to be present in this machine's current database rows — that's a
+data-population fact, not a schema limitation. No code change is needed to
+support them: this feature's status-tag rendering
+(`render_project_note`/`render_moc`/`render_atlas` in
+`crates/raios-runtime/src/obsidian.rs`) is generic over whatever string
+`status` holds, so a `durum/production` tag will simply appear
+automatically the first time a project's `memory.md` says "production" and
+`raios discover` runs. The four currently-observed values above remain
+accurate as *today's* data, just not as the schema's ceiling.
 
 ## Amendment: `raios new` integration (added during planning)
 
