@@ -107,11 +107,15 @@ pub enum Commands {
     },
     /// Show workspace portfolio statistics
     Stats,
-    /// Sync the Obsidian vault from current raios project data
+    /// Sync the Obsidian vault from current raios project data. Every run
+    /// FULLY REGENERATES project notes, category MOCs, and the root index —
+    /// any manual edits made directly inside a vault note will be
+    /// overwritten on the next sync.
     ObsidianSync {
         /// Vault path (default: ~/Obsidian)
         #[arg(long)]
         vault: Option<String>,
+        /// Preview what would be written without touching disk.
         #[arg(long)]
         dry_run: bool,
     },

@@ -208,9 +208,19 @@ List the key languages, frameworks, and tools used.
     if !cfg.no_vault {
         let owned_default = crate::obsidian::default_vault_path();
         let vault = cfg.vault_path.unwrap_or(owned_default.as_path());
-        let projects = raios_core::entities::load_entities(cfg.dev_ops);
-        let report = crate::obsidian::sync_vault_projects(vault, &projects, false);
-        steps.push(("Update Obsidian Vault".into(), report.errors.is_empty()));
+        let report = crate::obsidian::sync_vault(cfg.dev_ops, vault, false);
+
+        // Scope this step's pass/fail to THIS project's own note, not
+        // `report.errors.is_empty()` across the whole vault sync — a
+        // permissions problem on some unrelated project's directory must
+        // not make `raios new` report failure for a note that was in fact
+        // written fine.
+        let expected_note_path = vault
+            .join("Projeler")
+            .join(cfg.category)
+            .join(format!("{}.md", cfg.name));
+        let this_project_ok = report.paths.contains(&expected_note_path);
+        steps.push(("Update Obsidian Vault".into(), this_project_ok));
     }
 
     NewProjectResult {

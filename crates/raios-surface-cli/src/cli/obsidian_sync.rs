@@ -1,11 +1,6 @@
 use std::path::{Path, PathBuf};
 
-pub(super) fn cmd_obsidian_sync(
-    vault: Option<String>,
-    dry_run: bool,
-    dev_ops: &Path,
-    json: bool,
-) {
+pub(super) fn cmd_obsidian_sync(vault: Option<String>, dry_run: bool, dev_ops: &Path, json: bool) {
     let vault_path: PathBuf = vault
         .map(PathBuf::from)
         .unwrap_or_else(raios_runtime::obsidian::default_vault_path);
@@ -20,6 +15,9 @@ pub(super) fn cmd_obsidian_sync(
             "errors": report.errors,
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        if !report.errors.is_empty() {
+            std::process::exit(1);
+        }
         return;
     }
 
@@ -35,5 +33,6 @@ pub(super) fn cmd_obsidian_sync(
         for e in &report.errors {
             println!("  ✗ {e}");
         }
+        std::process::exit(1);
     }
 }

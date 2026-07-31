@@ -3,10 +3,47 @@
 //! See docs/superpowers/specs/2026-07-31-obsidian-vault-sync-design.md.
 
 use raios_core::entities::{load_entities, EntityProject};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
+
+/// The 8 category folder names raios's `EntityProject.category` values are
+/// expected to use (see `docs/superpowers/plans/2026-07-31-obsidian-vault-sync.md`,
+/// Global Constraints). Every one of these gets a `<category>-MOC.md` written
+/// on every non-dry-run sync, even if no project currently belongs to it —
+/// this keeps a category's MOC from going stale-and-orphaned if its last
+/// project disappears (deleted, renamed, or filtered out upstream). This is
+/// a minimum-viable fix: individual project notes for projects that vanish
+/// are NOT pruned and can still go stale (documented limitation).
+const KNOWN_CATEGORIES: [&str; 8] = [
+    "ai", "web", "embedded", "tools", "core", "audio", "mobile", "archives",
+];
 
 fn yaml_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Maps a string to a YAML-tag-safe form for use inside the `tags: [...]`
+/// frontmatter line: keeps `[A-Za-z0-9_/-]` characters as-is and replaces
+/// anything else (spaces, quotes, em-dashes, newlines, etc.) with `_`, so a
+/// raw value can never break out of the `"kategori/..."`/`"durum/..."`
+/// literal it's interpolated into. Falls back to `"unknown"` if the result
+/// would be empty (i.e. the input itself was empty).
+fn tag_slug(s: &str) -> String {
+    let slug: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if slug.is_empty() {
+        "unknown".to_string()
+    } else {
+        slug
+    }
 }
 
 fn render_project_note(
@@ -21,7 +58,7 @@ fn render_project_note(
 
     format!(
         "---\n\
-         tags: [proje, \"kategori/{category}\", \"durum/{status}\"]\n\
+         tags: [proje, \"kategori/{category_tag}\", \"durum/{status_tag}\"]\n\
          category: {category_q}\n\
          status: {status_q}\n\
          local_path: {local_path_q}\n\
@@ -36,7 +73,8 @@ fn render_project_note(
          \n\
          {body}\n",
         category = project.category,
-        status = project.status,
+        category_tag = tag_slug(&project.category),
+        status_tag = tag_slug(&project.status),
         category_q = yaml_quote(&project.category),
         status_q = yaml_quote(&project.status),
         local_path_q = yaml_quote(&project.local_path.to_string_lossy()),
@@ -53,11 +91,14 @@ fn render_moc(category: &str, entries: &[(String, String)]) -> String {
     let mut sorted = entries.to_vec();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let mut out = format!(
-        "---\ntags: [moc, \"kategori/{category}\"]\n---\n# {category} projeleri\n\n"
-    );
-    for (name, status) in &sorted {
-        out.push_str(&format!("- [[{name}]] — {status}\n"));
+    let mut out =
+        format!("---\ntags: [moc, \"kategori/{category}\"]\n---\n# {category} projeleri\n\n");
+    if sorted.is_empty() {
+        out.push_str("_Bu kategoride şu anda proje yok._\n");
+    } else {
+        for (name, status) in &sorted {
+            out.push_str(&format!("- [[{name}]] — {status}\n"));
+        }
     }
     out
 }
@@ -72,9 +113,14 @@ fn render_atlas(projects: &[EntityProject]) -> String {
         *by_status.entry(p.status.as_str()).or_insert(0) += 1;
     }
 
-    let mut out = format!("# Proje Atlası\n\nToplam: {} proje\n\n## Kategoriler\n", projects.len());
+    let mut out = format!(
+        "# Proje Atlası\n\nToplam: {} proje\n\n## Kategoriler\n",
+        projects.len()
+    );
     for (category, count) in &by_category {
-        out.push_str(&format!("- [[{category}-MOC|{category}]] — {count} proje\n"));
+        out.push_str(&format!(
+            "- [[{category}-MOC|{category}]] — {count} proje\n"
+        ));
     }
     out.push_str("\n## Durum\n");
     for (status, count) in &by_status {
@@ -83,6 +129,7 @@ fn render_atlas(projects: &[EntityProject]) -> String {
     out
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub struct ObsidianSyncReport {
     pub written: usize,
     pub errors: Vec<String>,
@@ -143,9 +190,24 @@ pub fn sync_vault_projects(
     }
 
     if !dry_run {
-        for (category, entries) in &by_category {
+        // Write a MOC for every known category (even ones with zero projects
+        // in this run) plus any unrecognized category that did have
+        // projects, so a category's MOC never goes stale-and-orphaned when
+        // its last project disappears from `by_category` (finding 1).
+        let mut categories_to_write: std::collections::BTreeSet<&str> =
+            KNOWN_CATEGORIES.iter().copied().collect();
+        categories_to_write.extend(by_category.keys().copied());
+
+        let no_entries: Vec<(String, String)> = Vec::new();
+        for category in categories_to_write {
+            let entries = by_category.get(category).unwrap_or(&no_entries);
             let moc = render_moc(category, entries);
-            let moc_path = projeler_dir.join(category).join(format!("{category}-MOC.md"));
+            let category_dir = projeler_dir.join(category);
+            if let Err(e) = std::fs::create_dir_all(&category_dir) {
+                report.errors.push(format!("{category}: mkdir failed: {e}"));
+                continue;
+            }
+            let moc_path = category_dir.join(format!("{category}-MOC.md"));
             if let Err(e) = std::fs::write(&moc_path, moc) {
                 report
                     .errors
@@ -227,6 +289,65 @@ mod tests {
         assert!(note.contains("github: \"\""));
         assert!(note.contains("last_commit: \"\""));
         assert!(note.contains("version: \"\""));
+    }
+
+    #[test]
+    fn tag_slug_keeps_safe_chars_and_replaces_unsafe_with_underscore() {
+        assert_eq!(tag_slug("ai"), "ai");
+        assert_eq!(tag_slug("kategori/ai-2"), "kategori/ai-2");
+        assert_eq!(tag_slug("a b\"c—d\ne"), "a_b_c_d_e");
+    }
+
+    #[test]
+    fn tag_slug_falls_back_to_unknown_when_result_is_empty() {
+        assert_eq!(tag_slug(""), "unknown");
+    }
+
+    #[test]
+    fn render_project_note_tags_line_is_escaped_when_category_or_status_has_a_quote() {
+        let mut project = sample_project();
+        project.category = "ai\"quote".to_string();
+        project.status = "beklemede\"tag".to_string();
+        let note = render_project_note(&project, Some("x"), "2026-07-31T22:00:00");
+
+        let tags_line = note
+            .lines()
+            .find(|l| l.starts_with("tags:"))
+            .expect("tags line present");
+        // The raw, quote-containing values must never appear verbatim inside
+        // the tags line — that's exactly the bug (escaping bypass).
+        assert!(!tags_line.contains("ai\"quote"));
+        assert!(!tags_line.contains("beklemede\"tag"));
+        assert!(tags_line.contains("kategori/ai_quote"));
+        assert!(tags_line.contains("durum/beklemede_tag"));
+        // Well-formed: exactly the 2 expected double-quote-delimited tag
+        // tokens (`proje` is bare, unquoted), i.e. 4 quote characters total.
+        assert_eq!(tags_line.matches('"').count(), 4);
+
+        // The separate scalar fields keep the original value, properly
+        // escaped via yaml_quote (backslash-escaped quote, not slugged).
+        assert!(note.contains("category: \"ai\\\"quote\""));
+        assert!(note.contains("status: \"beklemede\\\"tag\""));
+    }
+
+    #[test]
+    fn render_project_note_tags_line_is_escaped_when_status_is_an_em_dash() {
+        let mut project = sample_project();
+        project.status = "—".to_string();
+        let note = render_project_note(&project, Some("x"), "2026-07-31T22:00:00");
+
+        let tags_line = note
+            .lines()
+            .find(|l| l.starts_with("tags:"))
+            .expect("tags line present");
+        assert!(!tags_line.contains('—'));
+        assert!(tags_line.contains("durum/_"));
+        assert_eq!(tags_line.matches('"').count(), 4);
+
+        // The separate status: scalar field still shows the original raw
+        // em-dash value, properly yaml_quote-escaped (no escaping needed
+        // for an em-dash, so it passes through unchanged).
+        assert!(note.contains("status: \"—\""));
     }
 
     #[test]
@@ -320,9 +441,69 @@ mod tests {
         assert_eq!(report.written, 1);
         assert!(report.errors.is_empty());
         let note = std::fs::read_to_string(
-            vault.path().join("Projeler").join("ai").join("sample-project.md"),
+            vault
+                .path()
+                .join("Projeler")
+                .join("ai")
+                .join("sample-project.md"),
         )
         .unwrap();
         assert!(note.contains("_memory.md not found_"));
+    }
+
+    #[test]
+    fn sync_vault_projects_writes_a_moc_for_every_known_category_including_empty_ones() {
+        let vault = tempfile::tempdir().expect("vault tempdir");
+
+        let mut p1 = sample_project();
+        p1.category = "ai".to_string();
+        let mut p2 = sample_project();
+        p2.name = "other-project".to_string();
+        p2.category = "web".to_string();
+
+        let report = sync_vault_projects(vault.path(), &[p1, p2], false);
+        assert!(report.errors.is_empty());
+
+        // Every known category directory gets a `<category>-MOC.md`, not
+        // just the 2 categories that had a project in this run.
+        for category in KNOWN_CATEGORIES {
+            let moc_path = vault
+                .path()
+                .join("Projeler")
+                .join(category)
+                .join(format!("{category}-MOC.md"));
+            assert!(
+                moc_path.exists(),
+                "expected a MOC for category {category} at {moc_path:?}"
+            );
+        }
+
+        let ai_moc =
+            std::fs::read_to_string(vault.path().join("Projeler").join("ai").join("ai-MOC.md"))
+                .unwrap();
+        assert!(ai_moc.contains("[[sample-project]]"));
+
+        let web_moc =
+            std::fs::read_to_string(vault.path().join("Projeler").join("web").join("web-MOC.md"))
+                .unwrap();
+        assert!(web_moc.contains("[[other-project]]"));
+
+        // Categories with zero projects in this run get an empty MOC — no
+        // `[[...]]` project links.
+        for category in KNOWN_CATEGORIES
+            .iter()
+            .filter(|c| **c != "ai" && **c != "web")
+        {
+            let moc_path = vault
+                .path()
+                .join("Projeler")
+                .join(category)
+                .join(format!("{category}-MOC.md"));
+            let moc = std::fs::read_to_string(&moc_path).unwrap();
+            assert!(
+                !moc.contains("[["),
+                "expected no project links in empty category {category}, got: {moc}"
+            );
+        }
     }
 }
