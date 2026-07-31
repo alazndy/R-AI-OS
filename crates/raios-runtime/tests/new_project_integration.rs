@@ -1,11 +1,29 @@
 //! End-to-end coverage for `raios_runtime::new_project::create`, exercising
 //! the real filesystem + git scaffolding path (no network / gh CLI calls).
+//!
+//! `create()` always writes to `entities.json` via
+//! `raios_core::db::open_db()` (step 8, `add_to_entities`/`save_entities`) —
+//! that call ignores the `dev_ops` argument for DB routing and unconditionally
+//! resolves to `~/.config/raios/workspace.db` unless `RAIOS_DB_PATH` is set.
+//! Every test in this file MUST point `RAIOS_DB_PATH` at a tempdir before
+//! calling `create()`, or it will read and permanently write rows into the
+//! developer's real global database. Env vars are process-global (not
+//! thread-scoped) and Rust runs tests in the same binary on parallel
+//! threads, so `ENV_LOCK` serializes the set/restore around each test body —
+//! mirrors the pattern in `crates/raios-core/src/db/tests/db_path.rs`.
 
 use raios_runtime::new_project::{create, NewProjectConfig};
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn create_scaffolds_a_project_without_fabricating_a_github_url() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let original_db_path = std::env::var("RAIOS_DB_PATH").ok();
+
     let dev_ops = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("RAIOS_DB_PATH", dev_ops.path().join("test-workspace.db"));
 
     let cfg = NewProjectConfig {
         name: "sample-project",
@@ -17,6 +35,11 @@ fn create_scaffolds_a_project_without_fabricating_a_github_url() {
     };
 
     let result = create(&cfg);
+
+    match original_db_path {
+        Some(v) => std::env::set_var("RAIOS_DB_PATH", v),
+        None => std::env::remove_var("RAIOS_DB_PATH"),
+    }
 
     let project_dir = dev_ops.path().join("tools").join("sample-project");
     assert_eq!(result.path, project_dir);
@@ -42,8 +65,12 @@ fn create_scaffolds_a_project_without_fabricating_a_github_url() {
 
 #[test]
 fn create_writes_a_vault_note_when_vault_is_enabled() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let original_db_path = std::env::var("RAIOS_DB_PATH").ok();
+
     let dev_ops = tempfile::tempdir().expect("dev_ops tempdir");
     let vault = tempfile::tempdir().expect("vault tempdir");
+    std::env::set_var("RAIOS_DB_PATH", dev_ops.path().join("test-workspace.db"));
 
     let cfg = NewProjectConfig {
         name: "vaulted-project",
@@ -55,6 +82,11 @@ fn create_writes_a_vault_note_when_vault_is_enabled() {
     };
 
     let result = create(&cfg);
+
+    match original_db_path {
+        Some(v) => std::env::set_var("RAIOS_DB_PATH", v),
+        None => std::env::remove_var("RAIOS_DB_PATH"),
+    }
 
     let vault_ok = result
         .steps
