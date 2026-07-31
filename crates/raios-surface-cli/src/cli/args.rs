@@ -107,6 +107,14 @@ pub enum Commands {
     },
     /// Show workspace portfolio statistics
     Stats,
+    /// Sync the Obsidian vault from current raios project data
+    ObsidianSync {
+        /// Vault path (default: ~/Obsidian)
+        #[arg(long)]
+        vault: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Search the current project (Semantic + BM25). Pass --dir to scan a different directory fully.
     Search {
         query: String,

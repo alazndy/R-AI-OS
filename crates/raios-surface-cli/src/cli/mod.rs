@@ -14,6 +14,7 @@ mod instinct;
 mod locate;
 mod mem;
 mod new;
+mod obsidian_sync;
 mod policy;
 mod refactor;
 mod reflect;
@@ -124,6 +125,9 @@ pub fn run(cli: Cli) {
             dry_run,
         } => health::cmd_commit(project, message, push, dry_run, &cfg.dev_ops_path, cli.json),
         Commands::Stats => health::cmd_stats(&cfg.dev_ops_path, cli.json),
+        Commands::ObsidianSync { vault, dry_run } => {
+            obsidian_sync::cmd_obsidian_sync(vault, dry_run, &cfg.dev_ops_path, cli.json)
+        }
         Commands::Search {
             query,
             top_k,
