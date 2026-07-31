@@ -122,6 +122,36 @@ pub fn discover_entities(dev_ops: &Path) -> Vec<EntityProject> {
     dedup_nested(projects)
 }
 
+/// Pure filesystem scan — every project with a `memory.md`, no DB round-trip,
+/// no status filtering. Unlike `load_entities`/`discover_entities`, this does
+/// NOT exclude `waiting`/`beklemede` projects: callers that need the complete,
+/// unfiltered project list (e.g. the Obsidian vault sync) use this instead.
+pub fn discover_all_entities(dev_ops: &Path) -> Vec<EntityProject> {
+    let rooms = raios_core::mempalace::build(dev_ops);
+    let mut projects = Vec::new();
+
+    for room in &rooms {
+        for proj in &room.projects {
+            if !proj.path.exists() || !proj.path.join("memory.md").exists() {
+                continue;
+            }
+            projects.push(EntityProject {
+                name: proj.name.clone(),
+                category: room.folder_name.clone(),
+                local_path: proj.path.clone(),
+                github: None,
+                status: proj.status.clone(),
+                stars: None,
+                last_commit: None,
+                version: proj.version.clone(),
+                version_nickname: proj.version_nickname.clone(),
+            });
+        }
+    }
+
+    dedup_nested(projects)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn row_to_entity(r: raios_core::db::DbProject) -> EntityProject {
@@ -179,4 +209,55 @@ fn load_entities_json_fallback(dev_ops: &Path) -> Vec<EntityProject> {
     serde_json::from_str::<EntitiesFile>(&content)
         .map(|f| f.projects)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discover_all_entities_includes_every_project_regardless_of_status() {
+        let dev_ops = tempfile::tempdir().expect("tempdir");
+
+        let with_status = dev_ops.path().join("ai").join("has-status");
+        std::fs::create_dir_all(with_status.join(".git")).unwrap();
+        std::fs::write(
+            with_status.join("memory.md"),
+            "# Memory\n\n## Son Durum\n- Durum: active\n",
+        )
+        .unwrap();
+
+        let without_status = dev_ops.path().join("ai").join("no-status");
+        std::fs::create_dir_all(without_status.join(".git")).unwrap();
+        std::fs::write(
+            without_status.join("memory.md"),
+            "# Memory\n\nJust some notes, no status line.\n",
+        )
+        .unwrap();
+
+        let no_memory = dev_ops.path().join("ai").join("untracked-dir");
+        std::fs::create_dir_all(&no_memory).unwrap();
+
+        let projects = discover_all_entities(dev_ops.path());
+        let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
+
+        assert!(names.contains(&"has-status"));
+        assert!(names.contains(&"no-status"));
+        assert!(
+            !names.contains(&"untracked-dir"),
+            "directories without memory.md must be excluded"
+        );
+
+        let has_status = projects.iter().find(|p| p.name == "has-status").unwrap();
+        assert_eq!(has_status.category, "ai");
+        assert_eq!(has_status.status, "active");
+        assert!(has_status.github.is_none());
+        assert!(has_status.last_commit.is_none());
+
+        let no_status = projects.iter().find(|p| p.name == "no-status").unwrap();
+        assert_eq!(
+            no_status.status, "—",
+            "projects without a parseable status line still get returned, not filtered"
+        );
+    }
 }

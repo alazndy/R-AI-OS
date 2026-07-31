@@ -58,12 +58,14 @@ existing command pattern (`health.rs`, `workspace.rs`):
   the `Commands` enum in `args.rs`.
 - Dispatch line in `mod.rs`:
   `Commands::ObsidianSync { vault, dry_run } => obsidian_sync::cmd_obsidian_sync(vault, dry_run, &cfg.dev_ops_path, cli.json)`.
-- `cmd_obsidian_sync` calls `raios_core::entities::load_entities(dev_ops)`
-  for the project list (already carries `name`, `category`, `local_path`,
-  `github`, `status`, `last_commit`, `version`) and
+- `cmd_obsidian_sync` → `raios_runtime::obsidian::sync_vault(dev_ops, vault, dry_run)`
+  → `raios_core::entities::discover_all_entities(dev_ops)` for the project
+  list (see "Amendment: syncing all real projects, not just DB-active ones"
+  below for why this is `discover_all_entities`, not `load_entities`), and
   `raios_runtime::filebrowser` helpers to read each project's `memory.md`.
-- No new reads of `raios-core`'s DB schema are needed; this command is pure
-  read-from-raios, write-to-vault.
+- No writes to `raios-core`'s DB schema — `discover_all_entities` is a pure
+  filesystem scan (via `raios_core::mempalace::build`), no DB round-trip at
+  all; this command is pure read-from-filesystem, write-to-vault.
 
 ## Vault layout
 
@@ -188,8 +190,9 @@ surprise.
   non-dry-run sync, including empty ones — so a category's MOC can never go
   stale-and-orphaned just because its last project disappeared. But
   individual project notes are a different story: if a project is deleted,
-  renamed, or its status flips to `waiting`/`beklemede` (filtered out
-  upstream by `load_entities`) so it no longer appears in the current run's
+  renamed, or its git/`memory.md` markers stop satisfying
+  `raios_core::mempalace`'s project-root detection (see "Amendment: syncing
+  all real projects" below) so it no longer appears in the current run's
   project list, its old `<name>.md` note file is left in place — it is
   simply never linked from any MOC again. Full pruning of stale individual
   project notes was considered and explicitly deferred (minimum-viable fix
@@ -216,10 +219,11 @@ surprise.
   frontmatter and body produced (including the missing-`memory.md` case).
 - Manual verification after implementation: run `raios obsidian-sync`
   against the real `~/dev` workspace into real `~/Obsidian`; confirm note
-  count matches `raios projects` output; open the folder in Obsidian and
-  confirm `[[wikilinks]]` between project notes and their category `_MOC`
-  resolve; spot-check frontmatter on a few notes across different
-  categories/statuses.
+  count is close to `raios projects`' output (see "Amendment: syncing all
+  real projects" below for why it's not expected to be an exact match);
+  open the folder in Obsidian and confirm `[[wikilinks]]` between project
+  notes and their category MOC resolve; spot-check frontmatter on a few
+  notes across different categories/statuses.
 
 ## Open Question (resolved)
 
@@ -285,12 +289,81 @@ To keep the engine testable, the sync logic is split into two layers in
   caller-supplied project list. Fully hermetic: tests pass hand-built
   `EntityProject` fixtures pointing at tempdir paths, no DB involved.
 - `sync_vault(dev_ops: &Path, vault: &Path, dry_run: bool) -> ObsidianSyncReport` —
-  thin wrapper: `load_entities(dev_ops)` then delegates to
+  thin wrapper: loads the project list, then delegates to
   `sync_vault_projects`. This is what the CLI command and `raios new` call.
+  (Originally `load_entities`; see the next amendment for why this became
+  `discover_all_entities`.)
 
 Both `raios obsidian-sync` (CLI) and `new_project::create`'s vault step
 call `sync_vault`/`sync_vault_projects` — the same engine, so the two
 integration points cannot drift into different note formats.
+
+## Amendment: syncing all real projects, not just DB-active ones (added post-ship)
+
+After the first real sync, the user looked at `~/Obsidian` and pointed out
+it only had 11 of their 68 real projects — several categories (`ai`,
+`archives`, `audio`) had nothing but an empty MOC. This traced back to
+`sync_vault`'s original data source, `raios_core::entities::load_entities`,
+which is DB-backed and deliberately excludes any project whose `status`
+row is `waiting` or `beklemede` — a filter applied consistently by every
+existing DB-backed raios command (`health`, `stats`, `commit`, `discover`).
+66 of the 68 real projects on this machine carry one of those two statuses
+in the DB (a lifecycle classification, unrelated to each project's actual
+`memory.md` content), so `load_entities` returned only 11.
+
+The user was asked directly and confirmed: they want the vault to reflect
+every real project, not the DB-curated subset — "everything in the vault
+should be real." Since re-deriving "real" from the DB's lifecycle status
+was rejected (that status isn't about project reality, just DB bookkeeping
+staleness — confirmed by re-running `raios discover`, which re-scans the
+filesystem and still only returned 11, because the *exclusion* happens
+after the scan, not because the scan itself is incomplete), the fix
+changes `sync_vault`'s data source entirely:
+
+- New function `raios_core::entities::discover_all_entities(dev_ops)` — a
+  pure filesystem scan via `raios_core::mempalace::build` (the same
+  scanner `raios discover` uses to find fresh projects, but without the
+  DB round-trip or the `waiting`/`beklemede` filter applied afterward).
+  Every project mempalace recognizes as a project root (has `.git`,
+  `Cargo.toml`, `package.json`, `.raios.yaml`, or `memory.md` alongside a
+  `src`/`app`/`lib`/`scripts` folder) with a `memory.md` file is included,
+  regardless of status. `status` on the resulting `EntityProject` comes
+  from `mempalace`'s own per-project status parsing of `memory.md`
+  (`production`/`active`/`early`/`legacy`, or `—` if unparseable) — not
+  from the DB at all. `github`/`last_commit`/`stars` are `None` for every
+  project (that metadata is DB-only and this path never touches the DB).
+- `sync_vault` now calls `discover_all_entities` instead of
+  `load_entities`. This applies to both `raios obsidian-sync` and
+  `raios new`'s vault step (they share `sync_vault`), so the two stay
+  consistent — deliberately diverging from `health`/`stats`/`commit`/
+  `discover`, which remain DB-scoped on purpose (this is the one command
+  in the family whose whole point is "show me everything that's real").
+
+**Result: 65 of 68 projects sync**, not all 68. The remaining 3-project
+gap is not a bug in this fix — it's `raios projects`' own scan
+(`discover_memory_files`, a flat "any directory with a `memory.md`" walk,
+no project-root reasoning) being *more* permissive than is actually
+correct:
+- `ai-trader/backend/memory.md` and `ai-trader/frontend/memory.md` are
+  sub-components of the single `ai-trader` project (which itself syncs
+  correctly). `raios projects` counts these as 2 separate top-level
+  projects; `mempalace::build` correctly recognizes `ai-trader` as one
+  project root (it has `.git`) and, per its own documented behavior, does
+  not recurse into a project root looking for nested projects — so
+  `backend`/`frontend` are (correctly) not surfaced as independent
+  top-level vault notes.
+- `core/Vault101/Vault101/memory.md` is an empty (0-byte) file nested two
+  directories inside `core/Vault101/`, which itself has `.git` at the
+  *outer* level. `mempalace` recognizes the outer `Vault101/` folder as
+  the project root and (per the same "don't recurse into a project root"
+  rule) never reaches the inner, git-less, memory-less `Vault101/Vault101/`
+  directory `raios projects` found via its flat walk.
+
+Both gaps were reviewed and judged not worth forcing: fixing them would
+mean either weakening `mempalace`'s shared project-root detection (used
+elsewhere, e.g. `raios discover`) or special-casing monorepo sub-projects,
+neither of which this phase's scope justifies for 3 edge-case entries out
+of 68. This is recorded as a known, accepted gap, not a TODO.
 
 ## Rollout
 

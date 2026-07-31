@@ -2,7 +2,7 @@
 //!
 //! See docs/superpowers/specs/2026-07-31-obsidian-vault-sync-design.md.
 
-use raios_core::entities::{load_entities, EntityProject};
+use raios_core::entities::{discover_all_entities, EntityProject};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -226,8 +226,14 @@ pub fn sync_vault_projects(
     report
 }
 
+/// Uses `discover_all_entities` (pure filesystem scan), not `load_entities`
+/// (DB-backed) — the vault is meant to reflect every real project raios can
+/// see, not just the subset the DB's `waiting`/`beklemede` lifecycle status
+/// currently keeps active. This intentionally makes `raios obsidian-sync`
+/// (and `raios new`'s vault step, which shares this function) diverge from
+/// `raios health`/`stats`/`commit`/`discover`, which stay DB-scoped.
 pub fn sync_vault(dev_ops: &Path, vault: &Path, dry_run: bool) -> ObsidianSyncReport {
-    let projects = load_entities(dev_ops);
+    let projects = discover_all_entities(dev_ops);
     sync_vault_projects(vault, &projects, dry_run)
 }
 
