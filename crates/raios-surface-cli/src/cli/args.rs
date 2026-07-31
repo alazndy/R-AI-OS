@@ -110,7 +110,10 @@ pub enum Commands {
     /// Sync the Obsidian vault from current raios project data. Every run
     /// FULLY REGENERATES project notes, category MOCs, and the root index —
     /// any manual edits made directly inside a vault note will be
-    /// overwritten on the next sync.
+    /// overwritten on the next sync. Notes for projects that vanish or
+    /// change status are NOT pruned — they persist as orphans (category
+    /// MOCs are always fully rewritten, so they never link to them, but
+    /// the note files themselves remain on disk until removed by hand).
     ObsidianSync {
         /// Vault path (default: ~/Obsidian)
         #[arg(long)]
