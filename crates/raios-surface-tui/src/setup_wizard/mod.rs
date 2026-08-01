@@ -9,4 +9,5 @@ pub use exec::{
     exec_agent_wrapper, exec_claude, exec_codex, exec_initialize, exec_master, exec_opencode,
     exec_skills, exec_workspace,
 };
-pub use types::{detect_agents, AgentStatus, WizardAction, WizardStep};
+pub use templates::master_template;
+pub use types::{detect_agents, AgentStatus, ConstitutionParams, WizardAction, WizardStep};

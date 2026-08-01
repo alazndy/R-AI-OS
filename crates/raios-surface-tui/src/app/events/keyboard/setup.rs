@@ -41,11 +41,11 @@ impl App {
                 self.wizard.field_cursor -= 1;
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                // AgentWrapper has 2 choices (0 = All, 1 = Skip), cap at 1
-                let max = if self.wizard.step == WizardStep::AgentWrapper {
-                    1
-                } else {
-                    usize::MAX
+                let max = match self.wizard.step {
+                    WizardStep::Workspace => 2,
+                    WizardStep::Constitution => 6,
+                    WizardStep::AgentWrapper => 1,
+                    _ => usize::MAX,
                 };
                 if self.wizard.field_cursor < max {
                     self.wizard.field_cursor += 1;

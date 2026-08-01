@@ -409,9 +409,16 @@ impl App {
                 2 => self.wizard.vault = self.wizard.input.clone(),
                 _ => {}
             },
-            WizardStep::Constitution => {
-                self.wizard.master = self.wizard.input.clone();
-            }
+            WizardStep::Constitution => match self.wizard.field_cursor {
+                0 => self.wizard.master = self.wizard.input.clone(),
+                1 => self.wizard.system_name = self.wizard.input.clone(),
+                2 => self.wizard.claude_name = self.wizard.input.clone(),
+                3 => self.wizard.codex_name = self.wizard.input.clone(),
+                4 => self.wizard.opencode_name = self.wizard.input.clone(),
+                5 => self.wizard.antigravity_name = self.wizard.input.clone(),
+                6 => self.wizard.communication_lang = self.wizard.input.clone(),
+                _ => {}
+            },
             _ => {}
         }
         self.wizard.input.clear();
@@ -426,7 +433,16 @@ impl App {
                 2 => self.wizard.vault.clone(),
                 _ => String::new(),
             },
-            WizardStep::Constitution => self.wizard.master.clone(),
+            WizardStep::Constitution => match self.wizard.field_cursor {
+                0 => self.wizard.master.clone(),
+                1 => self.wizard.system_name.clone(),
+                2 => self.wizard.claude_name.clone(),
+                3 => self.wizard.codex_name.clone(),
+                4 => self.wizard.opencode_name.clone(),
+                5 => self.wizard.antigravity_name.clone(),
+                6 => self.wizard.communication_lang.clone(),
+                _ => String::new(),
+            },
             _ => return,
         };
         self.wizard.editing = true;
@@ -456,9 +472,9 @@ impl App {
             WizardStep::Constitution if !master.as_os_str().is_empty() => {
                 let tx2 = tx.clone();
                 let m = master.clone();
-                let gh = github.clone();
+                let params = self.wizard.to_constitution_params();
                 thread::spawn(move || {
-                    let actions = raios_surface_tui::setup_wizard::exec_master(&m, &gh);
+                    let actions = raios_surface_tui::setup_wizard::exec_master(&m, &params);
                     tx2.send(BgMsg::WizardActions(actions)).ok();
                 });
             }
@@ -507,6 +523,7 @@ impl App {
             _ => {}
         }
 
+        self.wizard.field_cursor = 0;
         self.wizard.step = self.wizard.step.next();
         self.wizard.field_cursor = 0;
     }

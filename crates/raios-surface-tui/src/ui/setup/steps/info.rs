@@ -1,4 +1,4 @@
-use super::{ACCENT, MASTER_PREVIEW};
+use super::ACCENT;
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
@@ -9,6 +9,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the setup wizard welcome screen displaying branding, feature summary, and system scan status.
 pub fn render_welcome(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
@@ -113,6 +114,7 @@ pub fn render_welcome(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(r)), right);
 }
 
+/// Renders the setup wizard step for configuring workspace directories, GitHub, and Vault paths.
 pub fn render_workspace(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
@@ -266,73 +268,122 @@ pub fn render_workspace(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(r)), right);
 }
 
+/// Renders the setup wizard step for specifying constitution parameters and previewing the generated file.
 pub fn render_master(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
 
-    let val = &app.wizard.master;
-    let edit = app.wizard.editing;
-    let exists = !val.is_empty() && std::path::Path::new(val).exists();
+    let fields = [
+        (
+            "1. AGENT_CONSTITUTION.md Path",
+            "Mevcut yol veya oluşturulacak konum",
+            if app.wizard.master.is_empty() {
+                "~/AGENT_CONSTITUTION.md".to_string()
+            } else {
+                app.wizard.master.clone()
+            },
+        ),
+        (
+            "2. System Name",
+            "AI sisteminizin genel adı",
+            app.wizard.system_name.clone(),
+        ),
+        (
+            "3. Claude Agent Identity",
+            "Claude harness kimlik ismi",
+            app.wizard.claude_name.clone(),
+        ),
+        (
+            "4. Codex Agent Identity",
+            "Codex harness kimlik ismi",
+            app.wizard.codex_name.clone(),
+        ),
+        (
+            "5. OpenCode Agent Identity",
+            "OpenCode harness kimlik ismi",
+            app.wizard.opencode_name.clone(),
+        ),
+        (
+            "6. Antigravity Agent Identity",
+            "Antigravity harness kimlik ismi",
+            app.wizard.antigravity_name.clone(),
+        ),
+        (
+            "7. Communication Style & Language",
+            "Sohbet dili ve iletişim tercihi",
+            app.wizard.communication_lang.clone(),
+        ),
+    ];
 
-    let disp = if edit {
-        format!("  {}█", app.wizard.input)
-    } else if val.is_empty() {
-        "  (opsiyonel — [s] ile atla)".into()
-    } else if exists {
-        format!("  ✓ {} (mevcut)", val)
-    } else {
-        format!("  + {} (oluşturulacak)", val)
-    };
-
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled(
-            "  K-AI-RA — AGENT CONSTITUTION",
+            "  R-AI-OS — INTERACTIVE AGENT CONSTITUTION",
             Style::new().fg(MID).bold(),
         )),
-        Line::from(""),
         Line::from(Span::styled(
-            "  Tüm AI ajanların tek kaynağı (Claude, Codex).",
-            Style::new().fg(DIM),
-        )),
-        Line::from(Span::styled(
-            "  CLAUDE.md, AGENTS.md bu dosyaya symlink olur.",
+            "  Tüm AI ajanların kişiselleştirilmiş kimlik ve kural kaynağı.",
             Style::new().fg(DIM),
         )),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  ▶ ", Style::new().fg(ACCENT)),
-            Span::styled("AGENT_CONSTITUTION.md Path", Style::new().fg(ACCENT).bold()),
-        ]),
-        Line::from(Span::styled(
-            "      Mevcut yol veya oluşturulacak konum",
-            Style::new().fg(DIM),
-        )),
-        Line::from(Span::styled(
-            disp,
-            if edit {
-                Style::new().fg(GREEN).bg(Color::Rgb(0, 25, 10))
-            } else if val.is_empty() {
-                Style::new().fg(DIM)
-            } else if exists {
-                Style::new().fg(GREEN)
-            } else {
-                Style::new().fg(AMBER)
-            },
-        )),
     ];
+
+    for (idx, (label, desc, val)) in fields.iter().enumerate() {
+        let is_sel = app.wizard.field_cursor == idx;
+        let is_edit = is_sel && app.wizard.editing;
+
+        let disp = if is_edit {
+            format!("      {}█", app.wizard.input)
+        } else if val.is_empty() {
+            "      (boş)".into()
+        } else {
+            format!("      {}", val)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                if is_sel { "  ▶ " } else { "    " },
+                Style::new().fg(if is_sel { ACCENT } else { DIM }),
+            ),
+            Span::styled(
+                *label,
+                if is_sel {
+                    Style::new().fg(ACCENT).bold()
+                } else {
+                    Style::new().fg(MID)
+                },
+            ),
+            Span::styled(format!(" — {}", desc), Style::new().fg(DIM)),
+        ]));
+
+        lines.push(Line::from(Span::styled(
+            disp,
+            if is_edit {
+                Style::new().fg(GREEN).bg(Color::Rgb(0, 25, 10))
+            } else if is_sel {
+                Style::new().fg(GREEN).bold()
+            } else {
+                Style::new().fg(DIM)
+            },
+        )));
+    }
+
     frame.render_widget(Paragraph::new(Text::from(lines)), left);
+
+    // Live preview pane
+    let params = app.wizard.to_constitution_params();
+    let live_content = raios_surface_tui::setup_wizard::master_template(&params);
 
     let mut r = vec![
         Line::from(Span::styled(
-            "  TEMPLATE ÖNİZLEME",
-            Style::new().fg(DIM).bold(),
+            "  CANLI CONSTITUTION ÖNİZLEMESİ",
+            Style::new().fg(ACCENT).bold(),
         )),
         Line::from(""),
     ];
-    for l in MASTER_PREVIEW.lines() {
+    for l in live_content.lines() {
         r.push(Line::from(Span::styled(
             format!("  {}", l),
-            Style::new().fg(Color::Rgb(100, 120, 140)),
+            Style::new().fg(Color::Rgb(120, 140, 160)),
         )));
     }
     frame.render_widget(Paragraph::new(Text::from(r)), right);

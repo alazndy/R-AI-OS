@@ -6,4 +6,4 @@ pub(super) use action::{
 };
 pub(super) use info::{render_master, render_welcome, render_workspace};
 
-use super::{ACCENT, DIM_B, MASTER_PREVIEW};
+use super::{ACCENT, DIM_B};
