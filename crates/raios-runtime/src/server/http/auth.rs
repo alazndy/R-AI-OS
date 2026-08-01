@@ -43,6 +43,29 @@ pub(super) async fn auth_middleware(
     mut req: Request,
     next: axum::middleware::Next,
 ) -> Result<Response, StatusCode> {
+    if req.method() == axum::http::Method::OPTIONS {
+        let mut response = Response::new(axum::body::Body::empty());
+        *response.status_mut() = StatusCode::OK;
+        if let Some(origin) = headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()) {
+            if origin.starts_with("http://localhost:") || origin.starts_with("http://127.0.0.1:") {
+                if let Ok(val) = origin.parse() {
+                    response
+                        .headers_mut()
+                        .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
+                }
+            }
+        }
+        response.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            "GET, POST, OPTIONS".parse().unwrap(),
+        );
+        response.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            "Authorization, Content-Type".parse().unwrap(),
+        );
+        return Ok(response);
+    }
+
     let path = req.uri().path();
     if path == "/health" || path == "/api/health" || path == "/.well-known/agent.json" {
         return Ok(next.run(req).await);
@@ -100,7 +123,16 @@ pub(super) async fn auth_middleware(
     };
     req.extensions_mut().insert(actor);
 
-    Ok(next.run(req).await)
+    let mut resp = next.run(req).await;
+    if let Some(origin) = headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()) {
+        if origin.starts_with("http://localhost:") || origin.starts_with("http://127.0.0.1:") {
+            if let Ok(val) = origin.parse() {
+                resp.headers_mut()
+                    .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
+            }
+        }
+    }
+    Ok(resp)
 }
 
 fn validate_api_key(provided: &str) -> bool {

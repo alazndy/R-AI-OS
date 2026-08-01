@@ -352,7 +352,7 @@ code --install-extension raios-*.vsix
 
 ## 🖥️ System Tray (`raios-tray`)
 
-R-AI-OS provides a desktop system tray application built with PySide6 (`tools/raios-tray/raios-tray.py`) for persistent status monitoring and quick agent orchestration.
+R-AI-OS provides a desktop system tray application built with PySide6 (`tools/raios-tray/raios-tray.py`) for persistent status monitoring and quick agent orchestration. See [tools/raios-tray/README.md](tools/raios-tray/README.md) for setup and configuration details.
 
 ```
 tools/raios-tray/
@@ -370,6 +370,36 @@ tools/raios-tray/
 - **Memory & Task Panels**: Shows recent `mem_items` and open tasks from the workspace database directly in the tray UI.
 - **Systemd User Integration**: Managed as a user service via `raios-tray.service` pointing to its canonical virtual environment (`tools/raios-tray/.venv/bin/python`).
 - **Structured Debug Logging**: Diagnostics written to `~/.config/raios/tray.log`.
+
+---
+
+## 🏭 Product Factory Visual Control Studio (`raios-factory-ui`)
+
+R-AI-OS provides a modern, interactive React web application (`tools/raios-factory-ui/`) for visualizing, auditing, and orchestrating the Product Factory across all 10 lifecycle phases (Phases 0–9). See [tools/raios-factory-ui/README.md](tools/raios-factory-ui/README.md) for detailed setup and usage instructions.
+
+```
+tools/raios-factory-ui/
+├── src/
+│   ├── components/
+│   │   ├── PipelineFlow.jsx          # 10-Phase Pipeline flowchart & inspector
+│   │   ├── IntakeCharterStudio.jsx   # Product intake & Markdown Charter editor
+│   │   ├── ChangeControlGraph.jsx    # CR & AI Impact Assessment network graph
+│   │   ├── CycleExecutionMatrix.jsx  # Stage task graph DAG & SHA-256 evidence
+│   │   ├── QualityReleaseGate.jsx    # Closed-testing quality checklist & signoff
+│   │   ├── SupportTriageDesk.jsx     # Support ticket triage & CR linking
+│   │   └── CommandTerminal.jsx       # Interactive IPC terminal & command log
+│   ├── App.jsx                       # Main workspace switcher & state engine
+│   └── mockData.js                   # Product Factory domain projection data
+```
+
+### Features
+
+- **10-Phase Pipeline Map**: Interactive 10-step lifecycle flowchart with security invariant validation.
+- **Intake & Charter Studio**: Discovery questionnaire runner, versioned Charter editor, and requirement matrix.
+- **Change Control Visualizer**: Network topology graph connecting Change Requests to affected requirements, code modules, and security risk levels.
+- **Execution & Evidence Matrix**: Real-time cycle status controls (`Pause`, `Resume`, `Cancel`), stage task DAG, and content-addressed SHA-256 evidence inspector.
+- **Quality & Release Sign-off Gate**: Closed-testing checklist (React Native Expo check, TypeScript clean, Rust 42% coverage floor), release blockers counter, and release approval workflow.
+- **Interactive Control-Plane Terminal**: Collapsible live terminal logging typed CLI commands and daemon JSON payload contracts in real time.
 
 ---
 
