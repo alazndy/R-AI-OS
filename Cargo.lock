@@ -2775,7 +2775,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "raios-contracts"
-version = "3.7.1"
+version = "3.8.0"
 dependencies = [
  "chrono",
  "serde",
@@ -2786,7 +2786,7 @@ dependencies = [
 
 [[package]]
 name = "raios-core"
-version = "3.7.1"
+version = "3.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2810,7 +2810,7 @@ dependencies = [
 
 [[package]]
 name = "raios-runtime"
-version = "3.7.1"
+version = "3.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2843,7 +2843,7 @@ dependencies = [
 
 [[package]]
 name = "raios-surface-cli"
-version = "3.7.1"
+version = "3.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2873,7 +2873,7 @@ dependencies = [
 
 [[package]]
 name = "raios-surface-mcp"
-version = "3.7.1"
+version = "3.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2890,7 +2890,7 @@ dependencies = [
 
 [[package]]
 name = "raios-surface-tui"
-version = "3.7.1"
+version = "3.8.0"
 dependencies = [
  "anyhow",
  "chrono",
