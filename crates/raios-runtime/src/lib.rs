@@ -1,6 +1,7 @@
 extern crate self as raios_runtime;
 pub mod agent_runner;
 pub mod agent_wrapper;
+pub mod bootstrap;
 pub mod anka;
 pub mod compliance;
 pub mod compressor;
