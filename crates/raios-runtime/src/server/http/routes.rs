@@ -315,6 +315,82 @@ pub(super) async fn handle_cp_command(
     }
 }
 
+pub(super) async fn handle_factory_overview() -> impl IntoResponse {
+    let Ok(conn) = raios_core::db::open_db() else {
+        return Json(
+            json!({"status": "error", "problem": raios_contracts::Problem::internal("Failed to open database")}),
+        );
+    };
+
+    match crate::control_plane::service::load_work_snapshot(&conn) {
+        Ok(snap) => Json(json!({"status": "ok", "overview": snap.factory})),
+        Err(e) => {
+            Json(json!({"status": "error", "problem": raios_contracts::Problem::internal(e)}))
+        }
+    }
+}
+
+pub(super) async fn handle_factory_command(
+    Extension(actor): Extension<crate::control_plane::service::ControlActor>,
+    Json(cmd): Json<raios_contracts::FactoryCommand>,
+) -> impl IntoResponse {
+    if !http_may_execute(&cmd) {
+        return Json(
+            json!({"status": "error", "problem": raios_contracts::Problem::forbidden("factory_approval_required: this command must be approved by the human owner in the Product Factory UI")}),
+        );
+    }
+
+    let factory_enabled = raios_core::config::Config::load()
+        .map(|config| config.factory.enabled)
+        .unwrap_or(false);
+
+    let Ok(mut conn) = raios_core::db::open_db() else {
+        return Json(
+            json!({"status": "error", "problem": raios_contracts::Problem::internal("Failed to open database")}),
+        );
+    };
+
+    match crate::product_factory::dispatch_factory_command(&mut conn, &actor, factory_enabled, &cmd)
+    {
+        Ok(val) => Json(json!({"status": "ok", "result": val})),
+        Err(problem) => Json(json!({"status": "error", "problem": problem})),
+    }
+}
+
+fn http_may_execute(command: &raios_contracts::FactoryCommand) -> bool {
+    matches!(
+        command,
+        raios_contracts::FactoryCommand::CreateWorkspace { .. }
+            | raios_contracts::FactoryCommand::CreateProductDraft { .. }
+            | raios_contracts::FactoryCommand::SetProductMode { .. }
+            | raios_contracts::FactoryCommand::AttachExistingProject { .. }
+            | raios_contracts::FactoryCommand::StartIntake { .. }
+            | raios_contracts::FactoryCommand::RecordIntakeAnswer { .. }
+            | raios_contracts::FactoryCommand::CreateCharterDraft { .. }
+            | raios_contracts::FactoryCommand::GenerateCharterDraft { .. }
+            | raios_contracts::FactoryCommand::CreateRequirementDraft { .. }
+            | raios_contracts::FactoryCommand::SubmitChangeRequest { .. }
+            | raios_contracts::FactoryCommand::AssessChangeRequest { .. }
+            | raios_contracts::FactoryCommand::CreatePlanDraft { .. }
+            | raios_contracts::FactoryCommand::MaterializePlannedCycle { .. }
+            | raios_contracts::FactoryCommand::PauseCycle { .. }
+            | raios_contracts::FactoryCommand::ResumeCycle { .. }
+            | raios_contracts::FactoryCommand::MaterializeStageTaskGraph { .. }
+            | raios_contracts::FactoryCommand::RecordStageEvidence { .. }
+            | raios_contracts::FactoryCommand::LinkStageEvidenceToRequirement { .. }
+            | raios_contracts::FactoryCommand::InspectReleaseReadiness { .. }
+            | raios_contracts::FactoryCommand::CreateQualityProfile { .. }
+            | raios_contracts::FactoryCommand::EnsureReactNativeClosedTestingQualityProfile { .. }
+            | raios_contracts::FactoryCommand::RecordQualityCheck { .. }
+            | raios_contracts::FactoryCommand::CreateReleaseDraft { .. }
+            | raios_contracts::FactoryCommand::CreateSupportItem { .. }
+            | raios_contracts::FactoryCommand::InspectSupportOverview { .. }
+            | raios_contracts::FactoryCommand::TriageSupportItem { .. }
+            | raios_contracts::FactoryCommand::ResolveSupportItem { .. }
+            | raios_contracts::FactoryCommand::LinkSupportToChangeRequest { .. }
+    )
+}
+
 fn decode_base64(s: &str) -> anyhow::Result<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
         .decode(s)
@@ -353,5 +429,20 @@ mod tests {
 
         let resolved = resolve_pending_diff_target(&file, tmp.path());
         assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn http_may_execute_rejects_human_approval_commands() {
+        let cmd = raios_contracts::FactoryCommand::ApprovePlan {
+            plan_id: "plan-1".into(),
+            idempotency_key: "idem-1".into(),
+        };
+        assert!(!super::http_may_execute(&cmd));
+
+        let allowed = raios_contracts::FactoryCommand::CreateWorkspace {
+            name: "WS".into(),
+            idempotency_key: "idem-2".into(),
+        };
+        assert!(super::http_may_execute(&allowed));
     }
 }
