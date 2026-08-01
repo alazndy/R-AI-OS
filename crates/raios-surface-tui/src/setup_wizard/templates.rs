@@ -1,27 +1,65 @@
+use super::types::ConstitutionParams;
 use std::path::Path;
 
-pub(super) fn master_template(github_user: &str) -> String {
-    let user = if github_user.is_empty() {
+pub fn master_template(params: &ConstitutionParams) -> String {
+    let user = if params.github_user.is_empty() {
         "User"
     } else {
-        github_user
+        &params.github_user
     };
+    let dev_ops = if params.dev_ops_path.is_empty() {
+        "~/dev"
+    } else {
+        &params.dev_ops_path
+    };
+    let system_name = if params.system_name.is_empty() {
+        "raios"
+    } else {
+        &params.system_name
+    };
+    let claude_name = if params.claude_name.is_empty() {
+        "Claude"
+    } else {
+        &params.claude_name
+    };
+    let codex_name = if params.codex_name.is_empty() {
+        "Codex"
+    } else {
+        &params.codex_name
+    };
+    let opencode_name = if params.opencode_name.is_empty() {
+        "OpenCode"
+    } else {
+        &params.opencode_name
+    };
+    let antigravity_name = if params.antigravity_name.is_empty() {
+        "Antigravity"
+    } else {
+        &params.antigravity_name
+    };
+    let comm_lang = if params.communication_lang.is_empty() {
+        "English in chat and code."
+    } else {
+        &params.communication_lang
+    };
+
     format!(
         r#"# AGENT CONSTITUTION (v5.0 — Unified)
-# K-AI-RA — Single source of truth for all AI agents (Claude, Codex, OpenCode)
+# {system_name} — Single source of truth for all AI agents ({claude_name}, {codex_name}, {opencode_name}, {antigravity_name})
 # GitHub: {user} | Edit this file; all agents pick up changes automatically.
 
 ---
 
 ## 1. Identity & Persona
-* **System Name:** k-ai-ra
+* **System Name:** {system_name}
 * **Agent Identities:**
-  * **Claude:** Claude Kaira
-  * **Codex:** Codex Kaira
-  * **OpenCode:** OpenCode Kaira
+  * **Claude:** {claude_name}
+  * **Codex:** {codex_name}
+  * **OpenCode:** {opencode_name}
+  * **Antigravity:** {antigravity_name}
 * **Role:** {user}'s senior partner. Security (OWASP Hardened), Performance, and Premium UX specialist.
 * **Attitude:** Genuine, open to slang and wordplay, hacker-vibe senior dev.
-* **Communication:** Turkish in chat (direct, no filler). English in code and technical docs.
+* **Communication:** {comm_lang}
 * **Philosophy:** "Secure by Design", "Performance is a Feature", "Visual Excellence".
 
 ---
@@ -79,7 +117,7 @@ Every task — no exceptions — follows this loop:
 ## 6. Workspace Rules
 
 ### Project Structure
-All projects under `{dev_ops}/`, categorized as:
+All projects under {dev_ops}/, categorized as:
 * `ai/`: AI and data projects.
 * `embedded/`: ESP32, C/C++, IoT projects.
 * `web/`: React, Next.js, Vite projects.
@@ -99,9 +137,7 @@ Update these after every major change or before every commit:
 
 ## Change Log & Agent Trail
 - [YYYY-MM-DD] [Agent Identity]: [Brief summary of changes made in this session]
-"#,
-        user = user,
-        dev_ops = "~/dev",
+"#
     )
 }
 
@@ -278,3 +314,62 @@ Files named `<event>.sh` or `<event>.ps1` will be picked up by the hook system.
 echo "Tool used: $TOOL_NAME" >> ~/.raios/tool-log.txt
 ```
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::setup_wizard::ConstitutionParams;
+
+    #[test]
+    fn master_template_substitutes_custom_params() {
+        let params = ConstitutionParams {
+            github_user: "octocat".to_string(),
+            dev_ops_path: "/home/user/workspace".to_string(),
+            system_name: "custom-aios".to_string(),
+            claude_name: "Claude Pro".to_string(),
+            codex_name: "Codex Pro".to_string(),
+            opencode_name: "OpenCode Pro".to_string(),
+            antigravity_name: "Antigravity Pro".to_string(),
+            communication_lang: "English in chat and code".to_string(),
+        };
+
+        let output = master_template(&params);
+
+        assert!(output.contains("# custom-aios — Single source of truth"));
+        assert!(output.contains("* **System Name:** custom-aios"));
+        assert!(output.contains("* **Claude:** Claude Pro"));
+        assert!(output.contains("* **Codex:** Codex Pro"));
+        assert!(output.contains("* **OpenCode:** OpenCode Pro"));
+        assert!(output.contains("* **Antigravity:** Antigravity Pro"));
+        assert!(output.contains("* **Communication:** English in chat and code"));
+        assert!(output.contains("All projects under /home/user/workspace/"));
+        assert!(output.contains("GitHub: octocat"));
+    }
+
+    #[test]
+    fn master_template_falls_back_to_defaults_on_empty_strings() {
+        let params = ConstitutionParams {
+            github_user: String::new(),
+            dev_ops_path: String::new(),
+            system_name: String::new(),
+            claude_name: String::new(),
+            codex_name: String::new(),
+            opencode_name: String::new(),
+            antigravity_name: String::new(),
+            communication_lang: String::new(),
+        };
+
+        let output = master_template(&params);
+
+        assert!(output.contains("# raios — Single source of truth"));
+        assert!(output.contains("* **System Name:** raios"));
+        assert!(output.contains("* **Claude:** Claude"));
+        assert!(output.contains("* **Communication:** English in chat and code."));
+        assert!(output.contains("All projects under ~/dev/"));
+        assert!(output.contains("GitHub: User"));
+        assert!(
+            !output.contains("Kaira"),
+            "default output must not carry any persona nickname"
+        );
+    }
+}

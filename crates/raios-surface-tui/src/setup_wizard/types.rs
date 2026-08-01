@@ -2,6 +2,46 @@
 
 use std::process::Command;
 
+/// Parameters for generating an interactive AGENT_CONSTITUTION.md file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstitutionParams {
+    /// GitHub username of the workspace owner.
+    pub github_user: String,
+    /// Dev_Ops directory path.
+    pub dev_ops_path: String,
+    /// Overall system name (e.g., "raios").
+    pub system_name: String,
+    /// Claude agent identity name (e.g., "Claude").
+    pub claude_name: String,
+    /// Codex agent identity name (e.g., "Codex").
+    pub codex_name: String,
+    /// OpenCode agent identity name (e.g., "OpenCode").
+    pub opencode_name: String,
+    /// Antigravity agent identity name (e.g., "Antigravity").
+    pub antigravity_name: String,
+    /// Primary communication language & chat style preference.
+    pub communication_lang: String,
+}
+
+/// Neutral, non-personal defaults — every field here is what a stranger who
+/// never touches a field gets, so none of them may be a specific person's
+/// persona/nickname or a non-English-default language choice. Plain agent
+/// product names and a generic system name, not "<Agent> Kaira"/"k-ai-ra".
+impl Default for ConstitutionParams {
+    fn default() -> Self {
+        Self {
+            github_user: String::new(),
+            dev_ops_path: String::from("~/dev"),
+            system_name: String::from("raios"),
+            claude_name: String::from("Claude"),
+            codex_name: String::from("Codex"),
+            opencode_name: String::from("OpenCode"),
+            antigravity_name: String::from("Antigravity"),
+            communication_lang: String::from("English in chat and code."),
+        }
+    }
+}
+
 /// Steps in the initial setup wizard sequence.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum WizardStep {

@@ -91,7 +91,10 @@ pub fn exec_workspace(dev_ops: &Path, github_user: &str) -> Vec<WizardAction> {
 }
 
 /// Create AGENT_CONSTITUTION.md and set up workspace symlinks.
-pub fn exec_master(master_path: &Path, github_user: &str) -> Vec<WizardAction> {
+pub fn exec_master(
+    master_path: &Path,
+    params: &super::types::ConstitutionParams,
+) -> Vec<WizardAction> {
     let mut log = Vec::new();
 
     if let Some(parent) = master_path.parent() {
@@ -101,7 +104,7 @@ pub fn exec_master(master_path: &Path, github_user: &str) -> Vec<WizardAction> {
     if master_path.exists() {
         log.push(WizardAction::skip("exists: AGENT_CONSTITUTION.md"));
     } else {
-        let content = master_template(github_user);
+        let content = master_template(params);
         match std::fs::write(master_path, content) {
             Ok(_) => log.push(WizardAction::ok(format!(
                 "created: {}",
