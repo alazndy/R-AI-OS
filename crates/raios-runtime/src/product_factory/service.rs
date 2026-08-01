@@ -174,6 +174,7 @@ pub fn dispatch_factory_command_with_config(
                     dev_ops: &config.dev_ops_path,
                     github: false,
                     no_vault: true,
+                    vault_path: None,
                 });
                 if !scaffold.path.join("README.md").is_file()
                     || !scaffold.path.join("memory.md").is_file()

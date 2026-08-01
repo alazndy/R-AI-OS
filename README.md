@@ -48,7 +48,7 @@
 
 ## 🔭 The Vision
 
-R-AI-OS is not a CLI tool — it is a **Kernel**. While traditional operating systems manage hardware, R-AI-OS manages the **AI layer**: a decentralized swarm of autonomous specialists running across Claude Code, Codex CLI, OpenCode, Antigravity (`agy`), and any MCP-compatible agent, drawing on external agent/skill ecosystems (Maestro, everything-claude-code) that `raios new`/`raios bootstrap` can pull in — see [CLI Reference](#-cli-reference) for what's actually installed on your machine.
+R-AI-OS is not a CLI tool — it is a **Kernel**. While traditional operating systems manage hardware, R-AI-OS manages the **AI layer**: a decentralized swarm of autonomous specialists running across Claude Code, Codex CLI, OpenCode, Antigravity (`agy`), and any MCP-compatible agent. `raios new` scaffolds a project; `raios bootstrap` provisions whatever global tools, Claude Code marketplaces/plugins, and rule-sync repos you've explicitly listed under `[bootstrap]` in `config.toml` — see [CLI Reference](#-cli-reference) for what's actually installed on your machine.
 
 It solves the fundamental problem of **unsupervised agent execution**: agents that run unchecked can leak secrets, corrupt files, and make unauthorized network calls. R-AI-OS sits between the human and the swarm as a hardened control plane — enforcing policies, auditing every action, and managing context economics.
 
@@ -487,11 +487,40 @@ the latest known project status. If an older local daemon has not yet been
 restarted, the TUI safely fills a missing preview from a project path only
 after confirming that it is inside the configured workspace root.
 
-Bootstrap your AI factory (syncs the Maestro/ECC agent and skill ecosystems, exact counts printed at the end of the run):
+Provision a machine from your own `[bootstrap]` config: `raios bootstrap` prints a plan of whatever global npm tools, Claude Code marketplaces/plugins, rule-sync repos, and plugin-enables you've listed under `[bootstrap]` in `~/.config/raios/config.toml`, then asks for confirmation before running anything. With no `[bootstrap]` section configured it prints an empty plan and exits — a safe no-op, not an automatic sync of any external agent ecosystem. Re-running against an already-provisioned machine is idempotent: steps that are already done (marketplace already added, plugin already installed/enabled) are reported and skipped rather than treated as failures.
 
 ```bash
-raios bootstrap
+raios bootstrap             # prints the plan, asks for confirmation, then executes it
+raios bootstrap --dry-run   # prints the plan only, never prompts or executes
+raios bootstrap --yes       # skips the confirmation prompt (also: -y)
 ```
+
+See [`[bootstrap]` Configuration](#bootstrap-configuration) below for the full config schema.
+
+### Bootstrap Configuration
+
+Nothing under `[bootstrap]` runs unless you put it there — this section is entirely opt-in and empty by default. Add it to `~/.config/raios/config.toml`:
+
+```toml
+[bootstrap]
+# Global npm packages to install if missing (skipped if already on PATH).
+global_npm_tools = ["sigmap", "ctx7"]
+
+# Plugin names to enable from the official Claude Code marketplace.
+enable_claude_plugins = ["github@claude-plugins-official"]
+
+# Claude Code plugin marketplaces to add, each with its own plugins to install.
+[[bootstrap.claude_marketplaces]]
+url = "https://github.com/example/repo.git"
+plugins = ["plugin@marketplace"]
+
+# Git repos whose rules/ directory gets synced into local agent rule dirs.
+[[bootstrap.rule_sync_repos]]
+git_url = "https://github.com/example/rules.git"
+targets = ["~/.claude/rules", "~/.antigravity/rules"]
+```
+
+`global_npm_tools` and `enable_claude_plugins` are plain string lists; `claude_marketplaces` and `rule_sync_repos` are each a list of tables (`[[bootstrap.claude_marketplaces]]` / `[[bootstrap.rule_sync_repos]]`, repeatable for multiple entries). `targets` paths support a leading `~/` for the current user's home directory. Field names come straight from `BootstrapConfig`/`ClaudeMarketplace`/`RuleSyncRepo` in `crates/raios-core/src/config.rs` — that's the source of truth if this drifts.
 
 ---
 
@@ -506,7 +535,8 @@ raios bootstrap
 | `raios usage` | Show local usage/quota signals across AI tools |
 | `raios search "<query>"` | Semantic search across portfolio |
 | `raios locate "<pattern>" [--dir <path>] [-i] [--reindex]` | Exhaustive exact/regex search over the trigram index (grep-equivalent) |
-| `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules) |
+| `raios new "ProjectName"` | Scaffold a new project (follows MASTER rules); also syncs the new project's note into the Obsidian vault at `~/Obsidian` by default (unless `--no-vault`) |
+| `raios obsidian-sync [--vault <path>] [--dry-run]` | Regenerate the Obsidian vault (`~/Obsidian` by default) from current raios project data — one note per project, a `<category>-MOC.md` per category, and a root `Proje Atlası.md` index. Every run fully overwrites project notes/MOCs/index; manual edits made directly inside a vault note are lost on the next sync |
 | `raios task "<description>"` | Route task to best agent |
 | `raios handoff --to <agent> --status <SUCCESS\|FAILED\|BLOCKER> --msg "<text>"` | Atomic agent-to-agent handoff via the control plane |
 | `raios trace record/search/forget` | Store, recall, and delete local tool/session trace memory |
@@ -514,9 +544,9 @@ raios bootstrap
 | `raios evolve from-traces` | Generate pending instinct candidates from successful trace fixes |
 | `raios ocak overview [--json]` (alias: `factory`) | Read the canonical Ocak (Product Factory) snapshot without changing state |
 | `raios ocak execute --file <command.json> [--json]` (alias: `factory`) | Dispatch one bounded local typed `FactoryCommand`; human-only approval, cancellation, stage activation/completion, requirement application, and release approval commands are rejected |
+| `raios bootstrap [--dry-run] [--yes\|-y]` | Print (and, after confirmation, run) the plan from `[bootstrap]` in `config.toml` — empty/no-op unless configured |
 
 Existing Git repositories can be attached through `FactoryCommand::AttachExistingProject`. The command accepts only an absolute repository root, verifies the Git worktree, `origin` remote, and `HEAD` SHA before persisting the owner-bound product source. HTTP(S) remotes containing embedded credentials are rejected.
-| `raios bootstrap` | Replicate AI factory on a new machine |
 
 ### Security
 

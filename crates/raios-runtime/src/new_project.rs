@@ -8,6 +8,7 @@ pub struct NewProjectConfig<'a> {
     pub dev_ops: &'a Path,
     pub github: bool,
     pub no_vault: bool,
+    pub vault_path: Option<&'a Path>,
 }
 
 pub struct NewProjectResult {
@@ -203,17 +204,23 @@ List the key languages, frameworks, and tools used.
     );
     steps.push(("Update entities.json".into(), entities_ok));
 
-    // 9. Update Vault Proje Atlası (unless --no-vault)
+    // 9. Sync Obsidian vault (unless --no-vault)
     if !cfg.no_vault {
-        let vault_ok = update_vault_atlas(
-            cfg.dev_ops,
-            cfg.name,
-            cfg.category,
-            &project_dir,
-            github_url.as_deref(),
-            &today,
-        );
-        steps.push(("Update Vault Proje Atlası".into(), vault_ok));
+        let owned_default = crate::obsidian::default_vault_path();
+        let vault = cfg.vault_path.unwrap_or(owned_default.as_path());
+        let report = crate::obsidian::sync_vault(cfg.dev_ops, vault, false);
+
+        // Scope this step's pass/fail to THIS project's own note, not
+        // `report.errors.is_empty()` across the whole vault sync — a
+        // permissions problem on some unrelated project's directory must
+        // not make `raios new` report failure for a note that was in fact
+        // written fine.
+        let expected_note_path = vault
+            .join("Projeler")
+            .join(cfg.category)
+            .join(format!("{}.md", cfg.name));
+        let this_project_ok = report.paths.contains(&expected_note_path);
+        steps.push(("Update Obsidian Vault".into(), this_project_ok));
     }
 
     NewProjectResult {
@@ -246,53 +253,4 @@ fn add_to_entities(
         version_nickname: None,
     });
     raios_core::entities::save_entities(dev_ops, projects).is_ok()
-}
-
-fn update_vault_atlas(
-    dev_ops: &Path,
-    name: &str,
-    category: &str,
-    _path: &Path,
-    github: Option<&str>,
-    today: &str,
-) -> bool {
-    let atlas_candidates = [
-        PathBuf::from(
-            r"C:\Users\turha\Documents\Obsidian Vaults\Vault101\Projeler\Proje Atlası.md",
-        ),
-        dev_ops
-            .join("..")
-            .join("..")
-            .join("Documents")
-            .join("Obsidian Vaults")
-            .join("Vault101")
-            .join("Projeler")
-            .join("Proje Atlası.md"),
-    ];
-
-    for atlas_path in &atlas_candidates {
-        if !atlas_path.exists() {
-            continue;
-        }
-
-        let Ok(mut content) = std::fs::read_to_string(atlas_path) else {
-            continue;
-        };
-
-        let github_display = github.unwrap_or("—");
-        let entry = format!(
-            "\n| {} | {} | active | — | {} | {} |",
-            name, category, github_display, today
-        );
-
-        // Append before last line or at end
-        if let Some(pos) = content.rfind('\n') {
-            content.insert_str(pos, &entry);
-        } else {
-            content.push_str(&entry);
-        }
-
-        return std::fs::write(atlas_path, content).is_ok();
-    }
-    false
 }

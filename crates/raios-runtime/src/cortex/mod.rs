@@ -9,7 +9,7 @@
 //! use std::path::Path;
 //!
 //! let mut cortex = Cortex::init().unwrap();
-//! cortex.index_workspace(Path::new("/path/to/Dev_Ops_New")).unwrap();
+//! cortex.index_workspace(Path::new("/path/to/your/workspace")).unwrap();
 //! let hits = cortex.search("security vulnerability", 10).unwrap();
 //! ```
 

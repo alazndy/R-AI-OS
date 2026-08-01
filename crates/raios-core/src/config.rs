@@ -84,6 +84,9 @@ pub struct Config {
     /// and explicitly enabled by the control owner.
     #[serde(default)]
     pub factory: FactoryConfig,
+    /// `raios bootstrap` action list — empty by default (safe no-op).
+    #[serde(default)]
+    pub bootstrap: BootstrapConfig,
 }
 
 /// Configuration boundary for the Product Factory domain.
@@ -111,6 +114,36 @@ pub struct FactoryStorageConfig {
     pub snapshot_root: Option<PathBuf>,
 }
 
+/// Configuration for `raios bootstrap` — an explicit, opt-in list of global
+/// tools, Claude Code marketplaces/plugins, and rule-sync repos to install.
+/// Empty by default: an unconfigured install is a safe no-op.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BootstrapConfig {
+    /// Global npm packages to install if missing (e.g. "sigmap").
+    pub global_npm_tools: Vec<String>,
+    /// Claude Code plugin marketplaces to add, each with its plugins to install.
+    pub claude_marketplaces: Vec<ClaudeMarketplace>,
+    /// Git repos whose `rules/` directory gets synced into local agent rule dirs.
+    pub rule_sync_repos: Vec<RuleSyncRepo>,
+    /// Plugin names to enable from the official Claude Code marketplace.
+    pub enable_claude_plugins: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeMarketplace {
+    pub url: String,
+    #[serde(default)]
+    pub plugins: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleSyncRepo {
+    pub git_url: String,
+    #[serde(default)]
+    pub targets: Vec<String>,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -123,6 +156,7 @@ impl Default for Config {
             agent_wrapper_enabled: false,
             daemon: DaemonConfig::default(),
             factory: FactoryConfig::default(),
+            bootstrap: BootstrapConfig::default(),
         }
     }
 }
@@ -200,6 +234,7 @@ impl Config {
             agent_wrapper_enabled: false,
             daemon: DaemonConfig::default(),
             factory: FactoryConfig::default(),
+            bootstrap: BootstrapConfig::default(),
         }
     }
 }
@@ -337,5 +372,68 @@ skills_path = "/tmp/.agents/skills"
             DaemonConfig::default().git_interval_secs
         );
         assert!(!config.factory.enabled);
+    }
+
+    #[test]
+    fn bootstrap_config_defaults_to_empty() {
+        let config = Config::default();
+        assert!(config.bootstrap.global_npm_tools.is_empty());
+        assert!(config.bootstrap.claude_marketplaces.is_empty());
+        assert!(config.bootstrap.rule_sync_repos.is_empty());
+        assert!(config.bootstrap.enable_claude_plugins.is_empty());
+    }
+
+    #[test]
+    fn deserialize_legacy_config_without_bootstrap_section_uses_empty_default() {
+        let config: Config = toml::from_str(
+            r#"
+dev_ops_path = "/tmp/devops"
+master_md_path = "/tmp/MASTER.md"
+skills_path = "/tmp/.agents/skills"
+"#,
+        )
+        .unwrap();
+        assert!(config.bootstrap.global_npm_tools.is_empty());
+    }
+
+    #[test]
+    fn deserialize_config_with_bootstrap_section() {
+        let config: Config = toml::from_str(
+            r#"
+dev_ops_path = "/tmp/devops"
+master_md_path = "/tmp/MASTER.md"
+skills_path = "/tmp/.agents/skills"
+
+[bootstrap]
+global_npm_tools = ["sigmap"]
+enable_claude_plugins = ["github@claude-plugins-official"]
+
+[[bootstrap.claude_marketplaces]]
+url = "https://github.com/example/repo.git"
+plugins = ["plugin@marketplace"]
+
+[[bootstrap.rule_sync_repos]]
+git_url = "https://github.com/example/rules.git"
+targets = ["~/.claude/rules"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.bootstrap.global_npm_tools,
+            vec!["sigmap".to_string()]
+        );
+        assert_eq!(config.bootstrap.claude_marketplaces.len(), 1);
+        assert_eq!(
+            config.bootstrap.claude_marketplaces[0].url,
+            "https://github.com/example/repo.git"
+        );
+        assert_eq!(
+            config.bootstrap.claude_marketplaces[0].plugins,
+            vec!["plugin@marketplace".to_string()]
+        );
+        assert_eq!(
+            config.bootstrap.rule_sync_repos[0].targets,
+            vec!["~/.claude/rules".to_string()]
+        );
     }
 }

@@ -14,6 +14,7 @@ mod instinct;
 mod locate;
 mod mem;
 mod new;
+mod obsidian_sync;
 mod policy;
 mod refactor;
 mod reflect;
@@ -124,6 +125,9 @@ pub fn run(cli: Cli) {
             dry_run,
         } => health::cmd_commit(project, message, push, dry_run, &cfg.dev_ops_path, cli.json),
         Commands::Stats => health::cmd_stats(&cfg.dev_ops_path, cli.json),
+        Commands::ObsidianSync { vault, dry_run } => {
+            obsidian_sync::cmd_obsidian_sync(vault, dry_run, &cfg.dev_ops_path, cli.json)
+        }
         Commands::Search {
             query,
             top_k,
@@ -207,7 +211,7 @@ pub fn run(cli: Cli) {
             let project_path = resolve_project_path(project, &cfg.dev_ops_path);
             handoff::cmd_handoff(to, status, msg, report, &project_path, cli.json);
         }
-        Commands::Bootstrap => new::cmd_bootstrap(),
+        Commands::Bootstrap { dry_run, yes } => new::cmd_bootstrap(&cfg.bootstrap, dry_run, yes),
         Commands::VersionBump {
             level,
             project,

@@ -107,6 +107,21 @@ pub enum Commands {
     },
     /// Show workspace portfolio statistics
     Stats,
+    /// Sync the Obsidian vault from current raios project data. Every run
+    /// FULLY REGENERATES project notes, category MOCs, and the root index —
+    /// any manual edits made directly inside a vault note will be
+    /// overwritten on the next sync. Notes for projects that vanish or
+    /// change status are NOT pruned — they persist as orphans (category
+    /// MOCs are always fully rewritten, so they never link to them, but
+    /// the note files themselves remain on disk until removed by hand).
+    ObsidianSync {
+        /// Vault path (default: ~/Obsidian)
+        #[arg(long)]
+        vault: Option<String>,
+        /// Preview what would be written without touching disk.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Search the current project (Semantic + BM25). Pass --dir to scan a different directory fully.
     Search {
         query: String,
@@ -215,8 +230,16 @@ pub enum Commands {
         #[arg(short, long)]
         project: Option<String>,
     },
-    /// Install/Bootstrap the entire ECC, Maestro, and system architecture
-    Bootstrap,
+    /// Install/enable the tools, Claude Code marketplaces/plugins, and
+    /// rule-sync repos configured under [bootstrap] in config.toml
+    Bootstrap {
+        /// Print the plan and exit without making any changes
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
     /// Bump project version (semver) and optionally update CHANGELOG
     VersionBump {
         level: String,
