@@ -1,5 +1,6 @@
 use raios_core::config::BootstrapConfig;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub enum BootstrapAction {
@@ -95,6 +96,161 @@ pub fn build_plan(cfg: &BootstrapConfig) -> Vec<BootstrapAction> {
     }
 
     actions
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionOutcome {
+    Ok,
+    Skipped(String),
+    Failed(String),
+}
+
+/// Executes every planned action best-effort: one failure doesn't stop the
+/// rest. Callers decide whether to invoke this at all — see the dry-run/
+/// empty-plan/confirmation gate in `raios-surface-cli`'s `cmd_bootstrap`.
+pub fn execute(actions: &[BootstrapAction]) -> Vec<(String, ActionOutcome)> {
+    actions
+        .iter()
+        .map(|action| (action.describe(), execute_one(action)))
+        .collect()
+}
+
+fn execute_one(action: &BootstrapAction) -> ActionOutcome {
+    match action {
+        BootstrapAction::InstallNpmTool { name } => install_npm_tool(name),
+        BootstrapAction::AddMarketplaceAndInstall { url, plugins } => {
+            add_marketplace_and_install(url, plugins)
+        }
+        BootstrapAction::SyncRules { git_url, targets } => sync_rules(git_url, targets),
+        BootstrapAction::EnablePlugin { name } => enable_plugin(name),
+    }
+}
+
+fn install_npm_tool(name: &str) -> ActionOutcome {
+    if which::which(name).is_ok() {
+        return ActionOutcome::Skipped(format!("\"{name}\" already on PATH"));
+    }
+    if which::which("npm").is_err() {
+        return ActionOutcome::Skipped("\"npm\" not found on PATH".to_string());
+    }
+    match Command::new("npm").args(["install", "-g", name]).status() {
+        Ok(status) if status.success() => ActionOutcome::Ok,
+        Ok(status) => ActionOutcome::Failed(format!("npm install exited with {status}")),
+        Err(e) => ActionOutcome::Failed(format!("failed to run npm: {e}")),
+    }
+}
+
+fn add_marketplace_and_install(url: &str, plugins: &[String]) -> ActionOutcome {
+    if which::which("claude").is_err() {
+        return ActionOutcome::Skipped("\"claude\" not found on PATH".to_string());
+    }
+    if let Err(e) = Command::new("claude")
+        .args(["plugin", "marketplace", "add", url])
+        .status()
+    {
+        return ActionOutcome::Failed(format!("failed to add marketplace: {e}"));
+    }
+    for plugin in plugins {
+        match Command::new("claude")
+            .args(["plugin", "install", plugin, "--scope", "user"])
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                return ActionOutcome::Failed(format!(
+                    "install of \"{plugin}\" exited with {status}"
+                ))
+            }
+            Err(e) => {
+                return ActionOutcome::Failed(format!("failed to install \"{plugin}\": {e}"))
+            }
+        }
+    }
+    ActionOutcome::Ok
+}
+
+fn sanitize_repo_name(url: &str) -> String {
+    url.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+fn sync_rules(git_url: &str, targets: &[PathBuf]) -> ActionOutcome {
+    if which::which("git").is_err() {
+        return ActionOutcome::Skipped("\"git\" not found on PATH".to_string());
+    }
+    let temp_dir = std::env::temp_dir().join(format!(
+        "raios-bootstrap-{}",
+        sanitize_repo_name(git_url)
+    ));
+    let clone_result = if temp_dir.exists() {
+        Command::new("git")
+            .current_dir(&temp_dir)
+            .args(["pull"])
+            .status()
+    } else {
+        Command::new("git")
+            .args([
+                "clone",
+                "--depth",
+                "1",
+                git_url,
+                &temp_dir.to_string_lossy(),
+            ])
+            .status()
+    };
+    match clone_result {
+        Ok(status) if status.success() => {}
+        Ok(status) => return ActionOutcome::Failed(format!("git exited with {status}")),
+        Err(e) => return ActionOutcome::Failed(format!("failed to run git: {e}")),
+    }
+
+    let src = temp_dir.join("rules");
+    if !src.is_dir() {
+        return ActionOutcome::Failed(format!("no rules/ directory in {git_url}"));
+    }
+
+    for target in targets {
+        if let Err(e) = std::fs::create_dir_all(target) {
+            return ActionOutcome::Failed(format!(
+                "failed to create {}: {e}",
+                target.display()
+            ));
+        }
+        copy_dir_recursive(&src, target);
+    }
+    ActionOutcome::Ok
+}
+
+fn enable_plugin(name: &str) -> ActionOutcome {
+    if which::which("claude").is_err() {
+        return ActionOutcome::Skipped("\"claude\" not found on PATH".to_string());
+    }
+    match Command::new("claude")
+        .args(["plugin", "enable", name])
+        .status()
+    {
+        Ok(status) if status.success() => ActionOutcome::Ok,
+        Ok(status) => ActionOutcome::Failed(format!("enable exited with {status}")),
+        Err(e) => ActionOutcome::Failed(format!("failed to enable: {e}")),
+    }
+}
+
+/// Moved from `raios-surface-cli/src/cli/new.rs` unchanged. Returns the
+/// number of files actually copied.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> usize {
+    use walkdir::WalkDir;
+    let mut copied = 0;
+    for entry in WalkDir::new(src).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let destination = dst.join(path.strip_prefix(src).expect("Path stripping failed"));
+        if path.is_dir() {
+            let _ = std::fs::create_dir_all(&destination);
+        } else if std::fs::copy(path, &destination).is_ok() {
+            copied += 1;
+        }
+    }
+    copied
 }
 
 #[cfg(test)]
