@@ -331,6 +331,7 @@ pub fn exec_initialize(
         agent_wrapper_enabled,
         daemon: Default::default(),
         factory: Default::default(),
+        bootstrap: Default::default(),
     };
 
     match config.save() {

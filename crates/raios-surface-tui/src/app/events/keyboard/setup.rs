@@ -80,6 +80,7 @@ impl App {
                                 agent_wrapper_enabled: self.wizard.agent_wrapper_choice == 0,
                                 daemon: Default::default(),
                                 factory: Default::default(),
+                                bootstrap: Default::default(),
                             };
                             let _ = cfg.save();
                             self.config = cfg;
