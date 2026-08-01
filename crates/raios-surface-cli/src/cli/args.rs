@@ -230,8 +230,16 @@ pub enum Commands {
         #[arg(short, long)]
         project: Option<String>,
     },
-    /// Install/Bootstrap the entire ECC, Maestro, and system architecture
-    Bootstrap,
+    /// Install/enable the tools, Claude Code marketplaces/plugins, and
+    /// rule-sync repos configured under [bootstrap] in config.toml
+    Bootstrap {
+        /// Print the plan and exit without making any changes
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
     /// Bump project version (semver) and optionally update CHANGELOG
     VersionBump {
         level: String,

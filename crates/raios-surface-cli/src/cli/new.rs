@@ -89,155 +89,59 @@ pub(super) fn cmd_task(
     let _ = raios_runtime::agent_runner::run_agent(&agent, project_dir, None, vec![]);
 }
 
-pub(super) fn cmd_bootstrap() {
-    println!("Starting Raios TOTAL SYSTEM BOOTSTRAP...");
+pub(super) fn cmd_bootstrap(cfg: &raios_core::config::BootstrapConfig, dry_run: bool, yes: bool) {
+    let plan = raios_runtime::bootstrap::build_plan(cfg);
 
-    let is_windows = cfg!(target_os = "windows");
-    let home_dir = dirs::home_dir().expect("Could not find home directory");
-    let temp_dir = std::env::temp_dir();
+    if plan.is_empty() {
+        println!("Nothing configured — see [bootstrap] in ~/.config/raios/config.toml");
+        return;
+    }
 
-    println!("--- [1/5] Checking Global CLI Ecosystem ---");
-    for tool in ["sigmap", "ctx7", "vercel", "firebase-tools"] {
-        let check_cmd = if is_windows { "where" } else { "which" };
-        let status = std::process::Command::new(check_cmd)
-            .arg(tool)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        if status.is_err() || !status.unwrap().success() {
-            println!("Installing {} globally via npm...", tool);
-            let _ = std::process::Command::new("npm")
-                .args(["install", "-g", tool])
-                .status();
-        } else {
-            println!("✓ {} is already installed.", tool);
+    println!("raios bootstrap plan ({} action(s)):", plan.len());
+    for (i, action) in plan.iter().enumerate() {
+        println!("  {}. {}", i + 1, action.describe());
+    }
+    println!();
+
+    if dry_run {
+        println!("(dry run — nothing executed)");
+        return;
+    }
+
+    if !yes {
+        print!("Proceed with {} action(s)? [y/N] ", plan.len());
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err()
+            || !matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+        {
+            println!("Aborted.");
+            return;
         }
     }
 
-    println!("--- [2/5] Configuring Claude Code Plugins ---");
-    for args in [
-        vec![
-            "plugin",
-            "marketplace",
-            "add",
-            "https://github.com/josstei/maestro-orchestrate.git",
-        ],
-        vec![
-            "plugin",
-            "marketplace",
-            "add",
-            "https://github.com/affaan-m/everything-claude-code.git",
-        ],
-        vec![
-            "plugin",
-            "install",
-            "maestro@maestro-orchestrator",
-            "--scope",
-            "user",
-        ],
-        vec![
-            "plugin",
-            "install",
-            "everything-claude-code@everything-claude-code",
-            "--scope",
-            "user",
-        ],
-    ] {
-        let _ = std::process::Command::new("claude").args(&args).status();
-    }
+    let results = raios_runtime::bootstrap::execute(&plan);
 
-    println!("--- [4/5] Syncing ECC Skills & Rules ---");
-    let ecc_temp_path = temp_dir.join("ecc-master");
-    if !ecc_temp_path.exists() {
-        let _ = std::process::Command::new("git")
-            .args([
-                "clone",
-                "--depth",
-                "1",
-                "https://github.com/affaan-m/everything-claude-code.git",
-                ecc_temp_path.to_string_lossy().as_ref(),
-            ])
-            .status();
+    println!();
+    let mut failed = 0;
+    for (desc, outcome) in &results {
+        match outcome {
+            raios_runtime::bootstrap::ActionOutcome::Ok => println!("  [ok] {desc}"),
+            raios_runtime::bootstrap::ActionOutcome::Skipped(reason) => {
+                println!("  [skipped: {reason}] {desc}")
+            }
+            raios_runtime::bootstrap::ActionOutcome::Failed(reason) => {
+                println!("  [failed: {reason}] {desc}");
+                failed += 1;
+            }
+        }
+    }
+    println!();
+    if failed == 0 {
+        println!("Bootstrap complete.");
     } else {
-        let _ = std::process::Command::new("git")
-            .current_dir(&ecc_temp_path)
-            .args(["pull"])
-            .status();
+        println!("Bootstrap completed with {failed} failure(s).");
+        std::process::exit(1);
     }
-
-    let claude_rules = home_dir.join(".claude").join("rules");
-    let antigravity_rules = home_dir.join(".antigravity").join("rules");
-    let opencode_dir = home_dir.join(".config").join("opencode");
-    for d in [&claude_rules, &antigravity_rules, &opencode_dir] {
-        let _ = std::fs::create_dir_all(d);
-    }
-
-    let copied = copy_dir_recursive(&ecc_temp_path.join("rules"), &claude_rules);
-    copy_dir_recursive(&ecc_temp_path.join("rules"), &antigravity_rules);
-    println!("    Synced {copied} rule file(s) from everything-claude-code.");
-
-    println!("--- [5/5] Final Touches & Activations ---");
-    let master_path = home_dir
-        .join("Documents")
-        .join("Obsidian Vaults")
-        .join("Vault101")
-        .join("MASTER.md");
-    if !master_path.exists() {
-        if let Some(parent) = master_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(&master_path, DEFAULT_MASTER_MD);
-        println!("✓ Writing default MASTER.md to {}", master_path.display());
-    }
-
-    for plugin in [
-        "superpowers@claude-plugins-official",
-        "context7@claude-plugins-official",
-        "frontend-design@claude-plugins-official",
-        "github@claude-plugins-official",
-    ] {
-        let _ = std::process::Command::new("claude")
-            .args(["plugin", "enable", plugin])
-            .status();
-    }
-
-    println!("\nBOOTSTRAP COMPLETE: Your AI OS Factory is fully operational!");
-    println!(
-        "Synced {copied} skill/rule file(s). Run `raios agents` to see registered agent configs."
-    );
 }
-
-/// Returns the number of files actually copied, so callers can report a
-/// real count instead of a guessed or hardcoded one.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> usize {
-    use walkdir::WalkDir;
-    let mut copied = 0;
-    for entry in WalkDir::new(src).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        let destination = dst.join(path.strip_prefix(src).expect("Path stripping failed"));
-        if path.is_dir() {
-            let _ = std::fs::create_dir_all(&destination);
-        } else if std::fs::copy(path, &destination).is_ok() {
-            copied += 1;
-        }
-    }
-    copied
-}
-
-const DEFAULT_MASTER_MD: &str = r#"# MASTER — Goktug
-
-## 1. Identity & Behavior
-You are Goktug's personal assistant. Speak like a work friend. Code: English | Communication: Turkish.
-
-## 2. Coding Standards
-pnpm > npm/yarn. Python: uv/pip. Write functionally. Error handling always. No comment lines.
-
-## 3. Security
-API keys never client-side. RLS day 0. Managed services preferred.
-
-## 4. System & Process
-All projects under Dev_Ops_New/, no exceptions.
-
-## 5. Agent System
-Claude Code: interactive dev | Antigravity: IDE dev.
-"#;

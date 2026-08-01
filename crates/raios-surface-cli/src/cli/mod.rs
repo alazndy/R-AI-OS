@@ -211,7 +211,9 @@ pub fn run(cli: Cli) {
             let project_path = resolve_project_path(project, &cfg.dev_ops_path);
             handoff::cmd_handoff(to, status, msg, report, &project_path, cli.json);
         }
-        Commands::Bootstrap => new::cmd_bootstrap(),
+        Commands::Bootstrap { dry_run, yes } => {
+            new::cmd_bootstrap(&cfg.bootstrap, dry_run, yes)
+        }
         Commands::VersionBump {
             level,
             project,
