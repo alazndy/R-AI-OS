@@ -144,11 +144,13 @@ fn add_marketplace_and_install(url: &str, plugins: &[String]) -> ActionOutcome {
     if which::which("claude").is_err() {
         return ActionOutcome::Skipped("\"claude\" not found on PATH".to_string());
     }
-    if let Err(e) = Command::new("claude")
+    match Command::new("claude")
         .args(["plugin", "marketplace", "add", url])
         .status()
     {
-        return ActionOutcome::Failed(format!("failed to add marketplace: {e}"));
+        Ok(status) if status.success() => {}
+        Ok(status) => return ActionOutcome::Failed(format!("marketplace add exited with {status}")),
+        Err(e) => return ActionOutcome::Failed(format!("failed to add marketplace: {e}")),
     }
     for plugin in plugins {
         match Command::new("claude")
@@ -210,6 +212,15 @@ fn sync_rules(git_url: &str, targets: &[PathBuf]) -> ActionOutcome {
         return ActionOutcome::Failed(format!("no rules/ directory in {git_url}"));
     }
 
+    // Check if source directory has any files to copy
+    let source_has_files = {
+        use walkdir::WalkDir;
+        WalkDir::new(&src)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .any(|e| e.path().is_file())
+    };
+
     for target in targets {
         if let Err(e) = std::fs::create_dir_all(target) {
             return ActionOutcome::Failed(format!(
@@ -217,7 +228,13 @@ fn sync_rules(git_url: &str, targets: &[PathBuf]) -> ActionOutcome {
                 target.display()
             ));
         }
-        copy_dir_recursive(&src, target);
+        let copied = copy_dir_recursive(&src, target);
+        if source_has_files && copied == 0 {
+            return ActionOutcome::Failed(format!(
+                "no files copied to {} (0 files succeeded)",
+                target.display()
+            ));
+        }
     }
     ActionOutcome::Ok
 }
