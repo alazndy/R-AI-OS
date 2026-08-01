@@ -70,18 +70,22 @@ impl App {
                             PathBuf::from(&self.wizard.vault)
                         };
                         if !dev_ops.as_os_str().is_empty() {
-                            let cfg = Config {
-                                dev_ops_path: dev_ops,
-                                master_md_path: master,
-                                skills_path: skills,
-                                vault_projects_path: vault,
-                                system_name: "k-ai-ra".to_string(),
-                                github_user: String::new(),
-                                agent_wrapper_enabled: self.wizard.agent_wrapper_choice == 0,
-                                daemon: Default::default(),
-                                factory: Default::default(),
-                                bootstrap: Default::default(),
-                            };
+                            // Start from the config already on disk rather
+                            // than a fresh `Config { .. }` literal — this
+                            // wizard step only owns the workspace paths and
+                            // the agent-wrapper choice. Building from
+                            // scratch here would silently wipe hand-
+                            // authored `[daemon]`, `[factory]`,
+                            // `[bootstrap]`, `github_user`, etc. every time
+                            // it runs (this is the same defect Task 4's
+                            // `Config::load().unwrap_or_default()` pattern
+                            // fixes at the other setup-wizard call site).
+                            let mut cfg = Config::load().unwrap_or_default();
+                            cfg.dev_ops_path = dev_ops;
+                            cfg.master_md_path = master;
+                            cfg.skills_path = skills;
+                            cfg.vault_projects_path = vault;
+                            cfg.agent_wrapper_enabled = self.wizard.agent_wrapper_choice == 0;
                             let _ = cfg.save();
                             self.config = cfg;
                         }

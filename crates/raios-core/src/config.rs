@@ -418,7 +418,10 @@ targets = ["~/.claude/rules"]
 "#,
         )
         .unwrap();
-        assert_eq!(config.bootstrap.global_npm_tools, vec!["sigmap".to_string()]);
+        assert_eq!(
+            config.bootstrap.global_npm_tools,
+            vec!["sigmap".to_string()]
+        );
         assert_eq!(config.bootstrap.claude_marketplaces.len(), 1);
         assert_eq!(
             config.bootstrap.claude_marketplaces[0].url,

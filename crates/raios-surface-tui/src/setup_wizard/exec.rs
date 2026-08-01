@@ -321,18 +321,17 @@ pub fn exec_initialize(
 ) -> Vec<WizardAction> {
     let mut log = Vec::new();
 
-    let config = raios_core::config::Config {
-        dev_ops_path: dev_ops.to_path_buf(),
-        master_md_path: master_path.to_path_buf(),
-        skills_path: skills_path.to_path_buf(),
-        vault_projects_path: vault_path.map(|p| p.to_path_buf()).unwrap_or_default(),
-        system_name: "k-ai-ra".to_string(),
-        github_user: String::new(),
-        agent_wrapper_enabled,
-        daemon: Default::default(),
-        factory: Default::default(),
-        bootstrap: Default::default(),
-    };
+    // Start from whatever's already on disk (if anything) rather than a
+    // fresh `Config { .. }` literal — the wizard only owns the fields it
+    // actually collects (workspace paths + agent-wrapper choice). Building
+    // from scratch here would silently wipe hand-authored `[daemon]`,
+    // `[factory]`, `[bootstrap]`, `github_user`, etc. on every re-run.
+    let mut config = raios_core::config::Config::load().unwrap_or_default();
+    config.dev_ops_path = dev_ops.to_path_buf();
+    config.master_md_path = master_path.to_path_buf();
+    config.skills_path = skills_path.to_path_buf();
+    config.vault_projects_path = vault_path.map(|p| p.to_path_buf()).unwrap_or_default();
+    config.agent_wrapper_enabled = agent_wrapper_enabled;
 
     match config.save() {
         Ok(_) => log.push(WizardAction::ok("saved: ~/.config/raios/config.toml")),

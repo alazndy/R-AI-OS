@@ -47,6 +47,50 @@ impl BootstrapAction {
     }
 }
 
+/// `claude`'s CLI returns a non-zero exit code both for real failures and
+/// for "there's nothing to do here" cases (marketplace already added,
+/// plugin already installed/enabled). There's no dedicated exit code or
+/// machine-readable flag for the latter, so we do a generous, case-
+/// insensitive substring match for "already" across combined stdout+stderr.
+/// This intentionally errs toward under-classifying-as-failure: any real
+/// unrelated failure message containing the word "already" (e.g. "an
+/// instance is already running") would also be treated as already-done,
+/// but `claude plugin` subcommands don't have such messages in practice,
+/// and false-negative-as-Failed is worse for idempotent re-runs than a
+/// false-positive-as-done would be for a genuinely broken install.
+fn output_indicates_already_done(output: &std::process::Output) -> bool {
+    combined_output_contains_already(&output.stdout, &output.stderr)
+}
+
+/// Takes raw stdout/stderr rather than a full `Output` so it (and its test
+/// coverage) doesn't need a real spawned process just to get an `ExitStatus`.
+fn combined_output_contains_already(stdout: &[u8], stderr: &[u8]) -> bool {
+    let mut combined = String::from_utf8_lossy(stdout).to_lowercase();
+    combined.push(' ');
+    combined.push_str(&String::from_utf8_lossy(stderr).to_lowercase());
+    combined.contains("already")
+}
+
+/// Short diagnostic snippet (last non-empty line of stderr, falling back to
+/// stdout) so a genuine failure's `ActionOutcome::Failed` message says more
+/// than just the exit status.
+fn output_snippet(output: &std::process::Output) -> String {
+    snippet_from(&output.stdout, &output.stderr)
+}
+
+fn snippet_from(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stdout = String::from_utf8_lossy(stdout);
+    stderr
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .or_else(|| stdout.lines().rev().find(|l| !l.trim().is_empty()))
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
 /// Mirrors the private `expand_tilde` in `proxy_store.rs` — small enough
 /// that duplicating it here is simpler than introducing a shared-utils
 /// module for one six-line helper.
@@ -144,31 +188,60 @@ fn add_marketplace_and_install(url: &str, plugins: &[String]) -> ActionOutcome {
     if which::which("claude").is_err() {
         return ActionOutcome::Skipped("\"claude\" not found on PATH".to_string());
     }
+
+    // Tracks whether anything in this action actually changed state, vs.
+    // every step turning out to already be done. A single "already"-only
+    // run reports Skipped (nothing needed to happen — consistent with
+    // install_npm_tool's Skipped for "already on PATH"); as soon as one
+    // step does real work, the whole action reports Ok.
+    let mut did_new_work = false;
+
     match Command::new("claude")
         .args(["plugin", "marketplace", "add", url])
-        .status()
+        .output()
     {
-        Ok(status) if status.success() => {}
-        Ok(status) => return ActionOutcome::Failed(format!("marketplace add exited with {status}")),
+        Ok(output) if output.status.success() => did_new_work = true,
+        Ok(output) if output_indicates_already_done(&output) => {
+            // Already added — don't bail out early. A marketplace that's
+            // already registered may still have newly-configured plugins
+            // that haven't been installed yet, so fall through to the
+            // install loop below instead of returning here.
+        }
+        Ok(output) => {
+            return ActionOutcome::Failed(format!(
+                "marketplace add exited with {}: {}",
+                output.status,
+                output_snippet(&output)
+            ))
+        }
         Err(e) => return ActionOutcome::Failed(format!("failed to add marketplace: {e}")),
     }
+
     for plugin in plugins {
         match Command::new("claude")
             .args(["plugin", "install", plugin, "--scope", "user"])
-            .status()
+            .output()
         {
-            Ok(status) if status.success() => {}
-            Ok(status) => {
+            Ok(output) if output.status.success() => did_new_work = true,
+            Ok(output) if output_indicates_already_done(&output) => {}
+            Ok(output) => {
                 return ActionOutcome::Failed(format!(
-                    "install of \"{plugin}\" exited with {status}"
+                    "install of \"{plugin}\" exited with {}: {}",
+                    output.status,
+                    output_snippet(&output)
                 ))
             }
-            Err(e) => {
-                return ActionOutcome::Failed(format!("failed to install \"{plugin}\": {e}"))
-            }
+            Err(e) => return ActionOutcome::Failed(format!("failed to install \"{plugin}\": {e}")),
         }
     }
-    ActionOutcome::Ok
+
+    if did_new_work {
+        ActionOutcome::Ok
+    } else {
+        ActionOutcome::Skipped(format!(
+            "marketplace {url} and plugin(s) already added/installed"
+        ))
+    }
 }
 
 fn sanitize_repo_name(url: &str) -> String {
@@ -181,10 +254,21 @@ fn sync_rules(git_url: &str, targets: &[PathBuf]) -> ActionOutcome {
     if which::which("git").is_err() {
         return ActionOutcome::Skipped("\"git\" not found on PATH".to_string());
     }
-    let temp_dir = std::env::temp_dir().join(format!(
-        "raios-bootstrap-{}",
-        sanitize_repo_name(git_url)
-    ));
+    // Under the user's own cache dir rather than the shared, world-writable
+    // /tmp: a predictable /tmp path is a local hijack risk (a pre-existing
+    // or maliciously pre-planted directory there would have `git pull` run
+    // inside it, with no ownership/identity check, potentially executing
+    // attacker-controlled git hooks/config). `dirs::cache_dir()` resolves
+    // to a location under the user's home (e.g. ~/.cache on Linux), which
+    // removes the shared-tmp collision risk.
+    let temp_dir = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("raios")
+        .join("bootstrap")
+        .join(sanitize_repo_name(git_url));
+    if let Some(parent) = temp_dir.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let clone_result = if temp_dir.exists() {
         Command::new("git")
             .current_dir(&temp_dir)
@@ -223,10 +307,7 @@ fn sync_rules(git_url: &str, targets: &[PathBuf]) -> ActionOutcome {
 
     for target in targets {
         if let Err(e) = std::fs::create_dir_all(target) {
-            return ActionOutcome::Failed(format!(
-                "failed to create {}: {e}",
-                target.display()
-            ));
+            return ActionOutcome::Failed(format!("failed to create {}: {e}", target.display()));
         }
         let copied = copy_dir_recursive(&src, target);
         if source_has_files && copied == 0 {
@@ -245,10 +326,17 @@ fn enable_plugin(name: &str) -> ActionOutcome {
     }
     match Command::new("claude")
         .args(["plugin", "enable", name])
-        .status()
+        .output()
     {
-        Ok(status) if status.success() => ActionOutcome::Ok,
-        Ok(status) => ActionOutcome::Failed(format!("enable exited with {status}")),
+        Ok(output) if output.status.success() => ActionOutcome::Ok,
+        Ok(output) if output_indicates_already_done(&output) => {
+            ActionOutcome::Skipped(format!("\"{name}\" already enabled"))
+        }
+        Ok(output) => ActionOutcome::Failed(format!(
+            "enable exited with {}: {}",
+            output.status,
+            output_snippet(&output)
+        )),
         Err(e) => ActionOutcome::Failed(format!("failed to enable: {e}")),
     }
 }
@@ -328,6 +416,43 @@ mod tests {
             }
             other => panic!("expected SyncRules, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn already_done_detects_already_substring_in_stderr_case_insensitively() {
+        assert!(combined_output_contains_already(
+            b"",
+            b"Error: Marketplace ALREADY added"
+        ));
+    }
+
+    #[test]
+    fn already_done_detects_already_substring_in_stdout() {
+        assert!(combined_output_contains_already(
+            b"plugin already installed",
+            b""
+        ));
+    }
+
+    #[test]
+    fn already_done_is_false_for_unrelated_failure() {
+        assert!(!combined_output_contains_already(
+            b"",
+            b"Error: network unreachable"
+        ));
+    }
+
+    #[test]
+    fn output_snippet_prefers_last_nonempty_stderr_line() {
+        assert_eq!(
+            snippet_from(b"ignored stdout", b"line one\nline two\n\n"),
+            "line two"
+        );
+    }
+
+    #[test]
+    fn output_snippet_falls_back_to_stdout_when_stderr_empty() {
+        assert_eq!(snippet_from(b"only stdout here", b""), "only stdout here");
     }
 
     #[test]
