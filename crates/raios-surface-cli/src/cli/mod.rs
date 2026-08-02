@@ -24,6 +24,7 @@ mod session;
 mod swarm;
 mod task_update;
 mod trace;
+mod update_check;
 mod version;
 mod workspace;
 use self::anka::cmd_anka;
@@ -309,6 +310,7 @@ pub fn run(cli: Cli) {
         }
         Commands::Ext { name, args } => ext::cmd_ext(&name, &args, &cfg.dev_ops_path, cli.json),
     }
+    update_check::maybe_notify_update();
 }
 
 #[cfg(test)]
