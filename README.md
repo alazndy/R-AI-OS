@@ -72,7 +72,7 @@ The Security Kernel is the core of R-AI-OS. It enforces a **zero-trust model** f
 ### Architecture
 
 ```
-src/security/
+crates/raios-core/src/security/
 ├── sandbox.rs       # Phase 1 — Filesystem Jail (canonicalize + boundary)
 ├── policy.rs        # Phase 2 — Policy Manager (TOML allow/deny/confirm)
 ├── verify_chain.rs  # Phase 3 — Audit Chain (SHA-256 hash-chained SQLite)
@@ -176,7 +176,7 @@ All three protocols share one event bus and one security kernel:
 
 ### 🎯 Unified Agent Router
 
-Maps natural-language task descriptions to the right specialist using local BM25 + vector hybrid indexing. Bridges the Maestro and ECC (everything-claude-code) agent ecosystems natively — exact agent counts depend on those upstream projects' current state, not something R-AI-OS pins or guarantees.
+Maps natural-language task descriptions to the right specialist using local BM25 + vector hybrid indexing — entirely local, no external routing dependency. `[bootstrap]` config can optionally point at external rule-sync repos (e.g. community skill/rule packs) to seed a workspace, but that's an opt-in setup step, not something the router itself bridges or depends on.
 
 ### 🔄 Agent Swarm Mesh
 
@@ -260,7 +260,7 @@ See [`docs/ANKA.md`](docs/ANKA.md) for cache and authority boundaries.
 
 ### ⏳ Lifecycle Worker
 
-Background daemon task (`src/daemon/lifecycle.rs`) that keeps project status honest without manual upkeep. Every `lifecycle_interval_secs`, it checks each tracked project's last commit time and transitions status automatically:
+Background daemon task (`crates/raios-runtime/src/daemon/lifecycle.rs`) that keeps project status honest without manual upkeep. Every `lifecycle_interval_secs`, it checks each tracked project's last commit time and transitions status automatically:
 
 | Transition | Trigger |
 | :--- | :--- |
@@ -317,13 +317,13 @@ vscode-extension/
 
 ### Install
 
-The packaged `.vsix` is committed to the repo (`vscode-extension/raios-0.8.0.vsix`) so it can be installed directly without a Node toolchain:
+No `.vsix` is committed to the repo. Every [GitHub Release](https://github.com/alazndy/R-AI-OS/releases/latest) attaches a prebuilt `raios-<version>.vsix` as a release asset — download it and install directly, no Node toolchain required:
 
 ```bash
-code --install-extension vscode-extension/raios-0.8.0.vsix --force
+code --install-extension raios-0.8.1.vsix --force
 ```
 
-To rebuild from source and reinstall, use the bundled script — it compiles, repackages, **uninstalls any existing `alazndy.raios` install first**, then installs the fresh `.vsix`. This guarantees only one version is ever registered, no matter how many times you re-run it:
+To build from source instead, use the bundled script — it compiles, repackages, **uninstalls any existing `alazndy.raios` install first**, then installs the fresh `.vsix`. This guarantees only one version is ever registered, no matter how many times you re-run it:
 
 ```bash
 cd vscode-extension && ./install.sh
@@ -627,29 +627,17 @@ Existing Git repositories can be attached through `FactoryCommand::AttachExistin
 
 ## 📁 Project Structure
 
+R-AI-OS is a Cargo workspace of 6 crates — there is no monolithic `src/` at the repo root:
+
 ```
-src/
-├── bin/
-│   ├── raios.rs          # CLI entrypoint
-│   └── aiosd.rs          # Daemon entrypoint
-├── app/
-│   └── events/           # Event handling (actions, keyboard, commands)
-│       └── keyboard/     # Keyboard module (6 sub-modules)
-├── cli/                  # CLI command implementations
-├── core/
-│   ├── build/            # Build logic (language-specific, 10 sub-modules)
-│   └── deps/             # Dependency management (10 sub-modules)
-├── cortex/               # Vector store, BM25 index, session memory
-├── daemon/               # aiosd background daemon
-├── intelligence/         # Agent routing, instinct engine, RBJ
-├── mcp/                  # MCP server — policy-gated tool call handler
-├── search/               # Neural search (BM25 + vector hybrid)
-├── security/             # Security Kernel (sandbox, policy, chain, egress)
-├── sentinel/             # Redaction engine, Sentry integration
-├── server/               # HTTP/WebSocket server (Axum, :42071)
-├── swarm/                # Parallel worktree agent management + SQLite store
-└── ui/
-    └── panels/           # TUI panels (14 modules — dashboard, security, inbox, etc.)
+crates/
+├── raios-contracts/      # Shared types/DTOs used across every other crate
+├── raios-core/           # Config, DB layer, Security Kernel (sandbox, policy, chain, egress)
+├── raios-runtime/        # Daemon, intelligence/routing, cortex (BM25+vector), swarm, server (Axum),
+│                         # sentinel (redaction), session_memory, bootstrap, agent_runner
+├── raios-surface-cli/    # `raios` CLI — one module per subcommand (cli/*.rs)
+├── raios-surface-mcp/    # MCP server — policy-gated tool call handler
+└── raios-surface-tui/    # TUI — panels (dashboard, security, inbox, etc.) + setup wizard
 
 vscode-extension/
 ├── src/
@@ -680,7 +668,7 @@ vscode-extension/
 - [x] **Phase 13:** Rate Limiting — Fixed-window counter per tool, `-32029` on exceed, `raios rate-status`
 - [x] **Phase 14:** Quarantine Mode — Pattern-matched quarantine queue, `-32027` on block, `raios quarantine list/approve/deny`
 - [x] **Phase 15:** Write-Back Bridge — Sidebar checkboxes interactive, `raios task-update` CLI syncs back to `memory.md`
-- [x] **Phase 16:** Lifecycle Worker — git-activity-based auto active/beklemede/archived transitions (`src/daemon/lifecycle.rs`)
+- [x] **Phase 16:** Lifecycle Worker — git-activity-based auto active/beklemede/archived transitions (`crates/raios-runtime/src/daemon/lifecycle.rs`)
 - [x] **Phase 17:** 4-Agent Matrix & Atomic Handoff — Gemini CLI retired; Claude/Codex/OpenCode/Antigravity (`agy`) as canonical identities; `raios handoff` on the control plane with real per-CLI prompt injection, secret scanning, diff-stat attachment, and stale-handoff supersede; new TUI **Inbox** panel
 - [x] **Phase 18:** `aiosd` systemd user service auto-start on login — `aiosd.service` enabled via `systemctl --user enable aiosd`, `WantedBy=default.target`
 - [x] **Phase 19:** Cortex Real Embeddings — `default = ["cortex"]`, fastembed all-MiniLM-L6-v2, adaptive CPU throttling in embed_batch
