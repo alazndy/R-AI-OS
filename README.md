@@ -405,6 +405,16 @@ tools/raios-factory-ui/
 
 ## 🚀 Quick Start
 
+### Fastest: install a release binary (Linux/macOS, x86_64)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alazndy/R-AI-OS/master/scripts/get-raios.sh | sh
+```
+
+Downloads the latest signed release from [GitHub Releases](https://github.com/alazndy/R-AI-OS/releases), verifies its sha256 checksum, and installs `raios`/`aiosd` to `~/.local/bin` (override with `RAIOS_INSTALL_DIR`). Pin a specific version with `RAIOS_VERSION=v3.8.0 curl ... | sh`. No arm64/Apple Silicon build yet — Apple Silicon Macs and ARM Linux need the build-from-source path below.
+
+### From source (any platform/architecture)
+
 ```bash
 git clone https://github.com/alazndy/R-AI-OS.git
 cd R-AI-OS
