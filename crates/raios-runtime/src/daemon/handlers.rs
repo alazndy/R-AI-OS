@@ -846,12 +846,21 @@ mod auth_handshake_tests {
             "response was: {resp}"
         );
 
-        // Server must close right after rejecting — a further read returns 0 (EOF).
-        let n2 = client.read(&mut buf).await.unwrap();
-        assert_eq!(
-            n2, 0,
-            "server should have closed the connection after auth failure"
-        );
+        // Server must close right after rejecting. The socket is dropped
+        // (not gracefully shut down) on the server side, so the client's
+        // next read may see either a clean EOF (n == 0, typical on
+        // Linux/macOS) or a connection-reset error (typical on Windows,
+        // where an abruptly dropped socket more readily produces a RST
+        // instead of a FIN under CI scheduling — confirmed flaky here as
+        // `ConnectionReset`/WSAECONNRESET on windows-latest, not a real
+        // product defect). Either outcome means the same thing: the server
+        // did not leave the connection open.
+        match client.read(&mut buf).await {
+            Ok(0) => {}
+            Ok(n) => panic!("expected the connection to be closed, but read {n} more byte(s)"),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+            Err(e) => panic!("expected EOF or a connection-reset, got: {e}"),
+        }
 
         server_task.await.unwrap();
     }
