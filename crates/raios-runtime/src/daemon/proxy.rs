@@ -154,7 +154,8 @@ impl ExecutionProxy {
     /// Death Timer: exceeding it kills the session and records
     /// `"Killed by Death Timer (Timeout)"`, unchanged from before.
     ///
-    /// Does not touch `AgentProcess.logs` — see Task 3 for output capture.
+    /// Also captures pane output into `AgentProcess.logs` via `tmux
+    /// pipe-pane` writing to a logfile, tailed by a second background task.
     pub(crate) async fn spawn_via_tmux(
         &self,
         id: Uuid,
@@ -193,9 +194,77 @@ impl ExecutionProxy {
             .status()
             .await?;
 
+        // Capture the pane's output into a logfile via `tmux pipe-pane`, so
+        // `AgentProcess.logs` stays populated for tmux-launched agents (Task
+        // 2 dropped this when it moved off piped `Command::spawn` stdout).
+        let log_dir = std::env::temp_dir().join("raios-agent-logs");
+        tokio::fs::create_dir_all(&log_dir).await.ok();
+        let logfile = log_dir.join(format!("{session}.log"));
+
+        Command::new("tmux")
+            .args([
+                "pipe-pane",
+                "-o",
+                "-t",
+                &session,
+                &format!("cat >> {}", logfile.display()),
+            ])
+            .status()
+            .await?;
+
         let state = self.state.clone();
         let event_tx = self.event_tx.clone();
         let session_for_task = session.clone();
+
+        let state_for_logs = self.state.clone();
+        let logfile_for_task = logfile.clone();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+
+            // `cat >>` creates the file on open even before the first write,
+            // but there's a short window right after the pipe-pane command
+            // returns before that open happens — wait for it rather than
+            // failing to open.
+            for _ in 0..25 {
+                if tokio::fs::metadata(&logfile_for_task).await.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let Ok(file) = tokio::fs::File::open(&logfile_for_task).await else {
+                return;
+            };
+            let mut reader = BufReader::new(file);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) => {
+                        // EOF on a plain file doesn't mean "no more data
+                        // ever" the way it would on a closed pipe — `cat`
+                        // may still be appending. Poll instead of stopping.
+                        // Give up once the session itself is gone.
+                        let still_alive = Command::new("tmux")
+                            .args(["has-session", "-t", &session])
+                            .status()
+                            .await
+                            .map(|s| s.success())
+                            .unwrap_or(false);
+                        if !still_alive {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    }
+                    Ok(_) => {
+                        let mut s = state_for_logs.write().await;
+                        if let Some(agent) = s.active_agents.iter_mut().find(|a| a.id == id) {
+                            agent.logs.push(line.trim_end().to_string());
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
 
         tokio::spawn(async move {
             let poll_interval = Duration::from_millis(500);
@@ -426,5 +495,95 @@ mod tests {
             }
         }
         assert_eq!(status, "Killed by Death Timer (Timeout)");
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_via_tmux_captures_output_into_logs() {
+        use super::{AgentProcess, DaemonState, ExecutionProxy};
+        use std::sync::Arc;
+        use tokio::process::Command;
+        use tokio::sync::RwLock;
+
+        let state = Arc::new(RwLock::new(DaemonState::default()));
+        let proxy = ExecutionProxy::new(state.clone());
+        let id = uuid::Uuid::new_v4();
+
+        // Same find-only contract as the other `spawn_via_tmux` tests above:
+        // it never registers an `AgentProcess` itself, so the caller (here,
+        // the test) must do so first or the log-tailing task's `find` will
+        // never match anything to push lines into.
+        {
+            let mut state_lock = state.write().await;
+            state_lock.active_agents.push(AgentProcess {
+                id,
+                name: "sh".to_string(),
+                status: "Running".to_string(),
+                started_at: std::time::SystemTime::now(),
+                logs: Vec::new(),
+            });
+        }
+
+        // `tmux pipe-pane` attaches to the pane in a follow-up `tmux` call
+        // *after* `new-session` has already started the pane's command —
+        // empirically ~20-25ms later on this machine (three sequential
+        // `tmux` client invocations: new-session, set-option, pipe-pane).
+        // A command that prints and exits immediately (bare `echo`) races
+        // that attach: on a loaded system the pane can already be dead
+        // before pipe-pane hooks up, which makes tmux refuse to attach at
+        // all ("target pane has exited") and lose the output entirely —
+        // reproduced directly at ~30% with a bare `echo` in manual testing.
+        // Real steer targets (claude/codex/opencode/agy) are long-running
+        // interactive processes, so this window is a non-issue in
+        // production; here we just give the pane's first output a small
+        // head start margin so the test is deterministic, which also
+        // exercises the tailing task's "EOF, poll for more" loop (the
+        // actual behavior Task 3 adds) instead of only the trivial
+        // already-has-a-line-on-first-open case.
+        proxy
+            .spawn_via_tmux(
+                id,
+                "sh",
+                &[
+                    "-c".to_string(),
+                    "sleep 0.5 && echo hello-from-tmux".to_string(),
+                ],
+                ".",
+                5,
+            )
+            .await
+            .expect("tmux spawn should succeed");
+
+        let mut found = false;
+        for _ in 0..30 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let s = state.read().await;
+            if let Some(agent) = s.active_agents.iter().find(|a| a.id == id) {
+                if agent.logs.iter().any(|l| l.contains("hello-from-tmux")) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        // This test only waits for the echoed line to land in `logs`, not
+        // for the (untouched, Task 2) exit-status polling task to observe
+        // the pane's death and tear the session down itself — `sh -c echo`
+        // exits fast enough that the assertion above routinely wins that
+        // race, and #[tokio::test]'s per-test runtime drops the still-sleeping
+        // polling task without letting it reach its own `kill-session` call.
+        // Clean up explicitly rather than leaking a dead tmux session (and
+        // its logfile) on every run.
+        let session = super::tmux_session_name(id);
+        let _ = Command::new("tmux")
+            .args(["kill-session", "-t", &session])
+            .status()
+            .await;
+        let _ = tokio::fs::remove_file(
+            std::env::temp_dir()
+                .join("raios-agent-logs")
+                .join(format!("{session}.log")),
+        )
+        .await;
+
+        assert!(found, "expected captured logs to contain the echoed line");
     }
 }
