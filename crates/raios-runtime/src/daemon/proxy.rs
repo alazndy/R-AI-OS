@@ -416,10 +416,35 @@ impl ExecutionProxy {
             ));
         }
 
-        Command::new("tmux")
+        let send_status = Command::new("tmux")
             .args(["send-keys", "-t", &session, message, "Enter"])
             .status()
             .await?;
+        if !send_status.success() {
+            // TOCTOU: the target session was alive at the `has-session`
+            // check above but can still die in the window before this
+            // `send-keys` call lands (the agent process exits/crashes
+            // between the two `tmux` invocations). A nonzero exit here
+            // means delivery did NOT happen — falling through to the
+            // `AgentSteered` event and `agent.steer` audit entry below
+            // would record a steer that never reached its target, which
+            // defeats the point of an audit ledger. Fail loudly instead,
+            // mirroring the `!alive` branch above.
+            let mut state_lock = self.state.write().await;
+            if let Some(agent) = state_lock
+                .active_agents
+                .iter_mut()
+                .find(|a| a.id == agent_id)
+            {
+                agent.status = "Session Not Found (Steer Failed)".to_string();
+            }
+            return Err(anyhow::anyhow!(
+                "tmux send-keys failed for session '{}' (exit: {:?}) — steer to agent '{}' not delivered",
+                session,
+                send_status.code(),
+                target_name
+            ));
+        }
 
         self.push_event(serde_json::json!({
             "event": "AgentSteered",
