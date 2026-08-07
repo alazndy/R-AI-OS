@@ -236,7 +236,7 @@ impl McpServer {
             std::env::var("RAIOS_AGENT_IDENTITY").unwrap_or_else(|_| "claude_kaira".into());
 
         raios_runtime::daemon_client::steer_agent_via_http(&agent_id, &message, &sender)
-            .map(|_| serde_json::json!({ "steer": "sent", "agent_id": agent_id }))
+            .map(|_| json!({ "steer": "sent", "agent_id": agent_id }))
             .map_err(|e| e.to_string())
     }
 }
@@ -244,6 +244,8 @@ impl McpServer {
 #[cfg(test)]
 mod steer_tool_tests {
     use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
 
     #[test]
     fn steer_agent_requires_both_fields() {
@@ -255,5 +257,90 @@ mod steer_tool_tests {
 
         let both = json!({ "agent_id": "abc", "message": "hi" });
         assert!(super::McpServer::extract_steer_args(&both).is_ok());
+    }
+
+    #[test]
+    fn steer_agent_extract_validates_required_fields() {
+        // Verify extract_steer_args validates both required fields
+        let result = super::McpServer::extract_steer_args(&json!({
+            "agent_id": "test-agent",
+            "message": "test message"
+        }));
+        assert!(result.is_ok());
+        let (agent_id, message) = result.unwrap();
+        assert_eq!(agent_id, "test-agent");
+        assert_eq!(message, "test message");
+    }
+
+    #[test]
+    fn steer_agent_extract_rejects_non_string_fields() {
+        // agent_id as number instead of string
+        let result = super::McpServer::extract_steer_args(&json!({
+            "agent_id": 123,
+            "message": "test"
+        }));
+        assert!(result.is_err());
+
+        // message as object instead of string
+        let result = super::McpServer::extract_steer_args(&json!({
+            "agent_id": "test",
+            "message": {}
+        }));
+        assert!(result.is_err());
+    }
+
+    /// Spawns a mock HTTP server on the default port (127.0.0.1:42071) that
+    /// accepts one connection, drains the request, and responds with the given body.
+    /// Returns the join handle so the test can wait for completion.
+    fn spawn_mock_daemon_at_default_port(
+        response_body: &'static str,
+    ) -> std::thread::JoinHandle<()> {
+        let listener =
+            TcpListener::bind("127.0.0.1:42071").expect("bind mock daemon to default port");
+
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept mock request");
+
+            // Drain the request
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write mock response");
+            stream.flush().expect("flush mock response");
+        })
+    }
+
+    #[test]
+    fn tool_steer_agent_succeeds_when_daemon_responds_ok() {
+        let mock_thread = spawn_mock_daemon_at_default_port(r#"{"status":"ok"}"#);
+
+        let server = super::McpServer::new_for_test();
+        let args = json!({ "agent_id": "test-agent", "message": "hello world" });
+
+        let result = server.tool_steer_agent(&args);
+
+        mock_thread.join().expect("mock server thread panicked");
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        let response = result.unwrap();
+        assert_eq!(response["steer"], "sent");
+        assert_eq!(response["agent_id"], "test-agent");
+    }
+
+    #[test]
+    fn tool_steer_agent_returns_error_when_required_fields_missing() {
+        let server = super::McpServer::new_for_test();
+
+        let no_agent = json!({ "message": "hello" });
+        assert!(server.tool_steer_agent(&no_agent).is_err());
+
+        let no_message = json!({ "agent_id": "test-agent" });
+        assert!(server.tool_steer_agent(&no_message).is_err());
     }
 }
