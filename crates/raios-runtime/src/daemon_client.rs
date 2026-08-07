@@ -22,7 +22,15 @@ pub(crate) fn resolve_base_url() -> String {
 /// daemon's own error message on any non-2xx response or transport failure —
 /// callers (CLI, MCP) surface this string directly rather than wrapping it.
 pub fn steer_agent_via_http(agent_id: &str, message: &str, sender: &str) -> Result<()> {
-    let url = format!("{}/api/agents/steer", resolve_base_url());
+    steer_agent_at(&resolve_base_url(), agent_id, message, sender)
+}
+
+/// Does the actual request/response work for [`steer_agent_via_http`], with
+/// the daemon base URL passed in explicitly rather than resolved internally.
+/// Split out so tests can point it at a local mock listener instead of a
+/// real running daemon on the policy-resolved port.
+fn steer_agent_at(base_url: &str, agent_id: &str, message: &str, sender: &str) -> Result<()> {
+    let url = format!("{base_url}/api/agents/steer");
     let body = serde_json::json!({
         "agent_id": agent_id,
         "message": message,
@@ -51,7 +59,9 @@ pub fn steer_agent_via_http(agent_id: &str, message: &str, sender: &str) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_base_url;
+    use super::{resolve_base_url, steer_agent_at};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
 
     #[test]
     fn resolve_base_url_defaults_to_42071() {
@@ -59,5 +69,62 @@ mod tests {
         // documented default port, same default the policy file itself
         // ships (raios-policy.toml:7, `http_port = 42071`).
         assert_eq!(resolve_base_url(), "http://127.0.0.1:42071");
+    }
+
+    /// Binds an ephemeral local listener, accepts exactly one connection,
+    /// drains the request, and writes back `body` as a
+    /// `200 OK application/json` response. Returns the listener's
+    /// `http://127.0.0.1:<port>` base URL and the accept-thread's join
+    /// handle so the test can wait for the exchange to finish before
+    /// asserting.
+    fn spawn_mock_daemon(body: &'static str) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let addr = listener.local_addr().expect("read bound addr");
+
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept mock request");
+
+            // Drain the request so the client's write completes cleanly;
+            // the mock doesn't need to parse it, only respond.
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write mock response");
+            stream.flush().expect("flush mock response");
+        });
+
+        (format!("http://{addr}"), handle)
+    }
+
+    #[test]
+    fn steer_agent_at_returns_ok_when_daemon_reports_status_ok() {
+        let (base_url, handle) = spawn_mock_daemon(r#"{"status":"ok"}"#);
+
+        let result = steer_agent_at(&base_url, "agent-1", "hello", "claude_kaira");
+
+        handle.join().expect("mock server thread panicked");
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    #[test]
+    fn steer_agent_at_returns_err_with_daemon_message_when_status_error() {
+        let (base_url, handle) =
+            spawn_mock_daemon(r#"{"status":"error","message":"steer target not found"}"#);
+
+        let result = steer_agent_at(&base_url, "agent-1", "hello", "claude_kaira");
+
+        handle.join().expect("mock server thread panicked");
+        let err = result.expect_err("expected Err on status:error response");
+        assert!(
+            err.to_string().contains("steer target not found"),
+            "expected error to surface the daemon's message, got: {err}"
+        );
     }
 }
