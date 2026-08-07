@@ -165,28 +165,6 @@ impl ExecutionProxy {
     ) -> Result<()> {
         let session = tmux_session_name(id);
 
-        // Ensure a "Running" entry exists for `id` before the background
-        // poller starts. `spawn_agent`'s caller already registered one with
-        // the real agent name before reaching this point, so this is a
-        // harmless no-op re-confirmation in that path — this find-or-insert
-        // is what makes `spawn_via_tmux` independently callable/testable
-        // (see the `spawn_agent_via_tmux_*` tests, which call it directly
-        // without going through `spawn_agent`'s own registration step).
-        {
-            let mut state_lock = self.state.write().await;
-            if let Some(agent) = state_lock.active_agents.iter_mut().find(|a| a.id == id) {
-                agent.status = "Running".to_string();
-            } else {
-                state_lock.active_agents.push(AgentProcess {
-                    id,
-                    name: program.to_string(),
-                    status: "Running".to_string(),
-                    started_at: std::time::SystemTime::now(),
-                    logs: Vec::new(),
-                });
-            }
-        }
-
         let mut new_session = Command::new("tmux");
         new_session
             .arg("new-session")
@@ -297,7 +275,13 @@ impl ExecutionProxy {
 
 #[cfg(test)]
 mod tests {
-    use super::agent_command;
+    use super::{agent_command, tmux_session_name};
+
+    #[test]
+    fn tmux_session_name_uses_raios_agent_prefix_and_id() {
+        let id = uuid::Uuid::new_v4();
+        assert_eq!(tmux_session_name(id), format!("raios-agent-{id}"));
+    }
 
     #[test]
     fn agent_command_resolves_all_canonical_identities() {
@@ -350,7 +334,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_agent_via_tmux_reaches_completed_status() {
-        use super::{DaemonState, ExecutionProxy};
+        use super::{AgentProcess, DaemonState, ExecutionProxy};
         use std::sync::Arc;
         use tokio::sync::RwLock;
 
@@ -363,6 +347,22 @@ mod tests {
         let state = Arc::new(RwLock::new(DaemonState::default()));
         let proxy = ExecutionProxy::new(state.clone());
         let id = uuid::Uuid::new_v4();
+
+        // `spawn_via_tmux`'s contract only ever *finds and updates* an
+        // existing `AgentProcess` entry — it does not register one itself.
+        // The real `spawn_agent` caller registers this "Running" entry
+        // before calling `spawn_via_tmux`; mirror that here since this test
+        // calls `spawn_via_tmux` directly.
+        {
+            let mut state_lock = state.write().await;
+            state_lock.active_agents.push(AgentProcess {
+                id,
+                name: "true".to_string(),
+                status: "Running".to_string(),
+                started_at: std::time::SystemTime::now(),
+                logs: Vec::new(),
+            });
+        }
 
         proxy
             .spawn_via_tmux(id, "true", &[], ".", 5)
@@ -387,13 +387,27 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_agent_via_tmux_death_timer_kills_long_running_session() {
-        use super::{DaemonState, ExecutionProxy};
+        use super::{AgentProcess, DaemonState, ExecutionProxy};
         use std::sync::Arc;
         use tokio::sync::RwLock;
 
         let state = Arc::new(RwLock::new(DaemonState::default()));
         let proxy = ExecutionProxy::new(state.clone());
         let id = uuid::Uuid::new_v4();
+
+        // See the matching comment in `spawn_agent_via_tmux_reaches_completed_status`
+        // above — `spawn_via_tmux` only updates a pre-existing entry, it never
+        // registers one, so this test registers it itself before calling in.
+        {
+            let mut state_lock = state.write().await;
+            state_lock.active_agents.push(AgentProcess {
+                id,
+                name: "sleep".to_string(),
+                status: "Running".to_string(),
+                started_at: std::time::SystemTime::now(),
+                logs: Vec::new(),
+            });
+        }
 
         proxy
             .spawn_via_tmux(id, "sleep", &["30".to_string()], ".", 1)
