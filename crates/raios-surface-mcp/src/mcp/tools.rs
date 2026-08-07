@@ -295,7 +295,8 @@ mod steer_tool_tests {
     fn spawn_mock_daemon_on_ephemeral_port(
         response_body: &'static str,
     ) -> (String, std::thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock daemon to ephemeral port");
+        let listener =
+            TcpListener::bind("127.0.0.1:0").expect("bind mock daemon to ephemeral port");
         let addr = listener.local_addr().expect("read bound addr");
 
         let handle = std::thread::spawn(move || {
@@ -324,7 +325,12 @@ mod steer_tool_tests {
         let (base_url, mock_thread) = spawn_mock_daemon_on_ephemeral_port(r#"{"status":"ok"}"#);
 
         // Call the injectable function directly, bypassing the hardcoded port resolution
-        let result = raios_runtime::daemon_client::steer_agent_at(&base_url, "test-agent", "hello world", "claude_kaira");
+        let result = raios_runtime::daemon_client::steer_agent_at(
+            &base_url,
+            "test-agent",
+            "hello world",
+            "claude_kaira",
+        );
 
         mock_thread.join().expect("mock server thread panicked");
         assert!(result.is_ok(), "expected Ok, got {result:?}");
