@@ -89,16 +89,19 @@ TUI decides how to fold it into current work.
 
 1. `raios steer <agent> "<msg>"` (CLI) or `steer_agent` (MCP) call arrives.
    Both call `ExecutionProxy::steer_agent`.
-2. **Policy check first.** Consult `raios-policy.toml`'s resolved action for
-   `steer_agent`:
-   - `Deny` → reject immediately with the same error shape used by other
-     policy-denied calls elsewhere in the codebase.
-   - `Confirm` → follow the existing `Handover` precedent exactly: a pending
-     row is filed through the existing approval flow (`cp_approvals` +
-     `raios sessions`/inbox — the same mechanism already used for handoff
-     approvals). The CLI/MCP call returns "queued for approval," not a
-     synchronous block. The real `send-keys` fires only once approved.
-   - `Allow` → proceed immediately.
+2. **Policy check — MCP path only.** No CLI command in this codebase goes
+   through `PolicyConfig`/`validate_tool_call` (verified: only
+   `cli/policy.rs` and `cli/security/audit.rs` reference it) — the human
+   typing the command is the authorization, same as `raios handoff` today.
+   `raios steer` (CLI) therefore calls `ExecutionProxy::steer_agent`
+   directly, ungated, exactly like the CLI handoff path.
+   The MCP tool `steer_agent` is different: every MCP tool call already
+   passes through `McpServer`'s central dispatch
+   (`crates/raios-surface-mcp/src/mcp/tools.rs`), which resolves
+   `raios-policy.toml`'s `Allow`/`Deny`/`Confirm` verdict and records
+   `record_tool_audit` generically for *any* registered tool. Registering
+   `steer_agent` there is enough to get this gating — no bespoke
+   confirm/approval logic needs to be written for it.
 3. Look up `agent_id` in `DaemonState.active_agents`. Not found, or
    `AgentProcess.status != "Running"` (the exact string already used in
    `daemon/proxy.rs`) → clear error, no tmux call attempted.
@@ -119,8 +122,7 @@ TUI decides how to fold it into current work.
 |---|---|
 | `tmux` binary missing | `spawn_agent` fails fast at spawn time with a clear error. No silent fallback to the old `Command::spawn` path — one code path, not two. |
 | `tmux has-session` fails | Steer returns a clear "session not found" error; matching `AgentProcess` is marked inactive. |
-| Policy `Deny` | Same error shape as existing policy-denied paths. |
-| Policy `Confirm` | Routed through the existing approval mechanism (see Data Flow step 2) — not a new bespoke confirmation UI. |
+| Policy `Deny`/`Confirm` (MCP `steer_agent` only) | Already enforced by `McpServer`'s existing central tool dispatch before our handler ever runs — nothing to build. The CLI `raios steer` path is ungated, same as `raios handoff`. |
 
 ## Testing
 
