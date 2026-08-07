@@ -119,6 +119,15 @@ pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> Doct
         binary_name
     ));
 
+    match which::which("tmux") {
+        Ok(path) => notes.push(format!("tmux: found at {}", path.display())),
+        Err(_) => notes.push(
+            "tmux: NOT FOUND on PATH — required for `raios steer` and daemon-spawned \
+             agent sessions; install it (e.g. `apt install tmux` / `brew install tmux`)"
+                .to_string(),
+        ),
+    }
+
     if target_tier == DoctorTier::Offline {
         return DoctorResult {
             agent: canonical_agent.to_string(),
@@ -264,6 +273,16 @@ mod tests {
         let res = run_doctor_check("non_existent_fake_agent_12345", None);
         assert_eq!(res.tier_reached, DoctorTier::Offline);
         assert!(res.notes.iter().any(|n| n.contains("not found")));
+    }
+
+    #[test]
+    fn doctor_check_notes_tmux_presence() {
+        let res = run_doctor_check("claude", None);
+        assert!(
+            res.notes.iter().any(|n| n.starts_with("tmux:")),
+            "expected a tmux presence note, got: {:?}",
+            res.notes
+        );
     }
 
     #[test]
