@@ -230,6 +230,14 @@ pub enum Commands {
         #[arg(short, long)]
         project: Option<String>,
     },
+    /// Inject a message into a currently-running, daemon-spawned agent
+    /// session (best-effort — does not know if the target is mid-turn).
+    Steer {
+        /// The agent process id (UUID) reported by `raios agents`/`raios sessions`.
+        agent_id: String,
+        /// The message to inject, as if typed into the agent's session.
+        message: String,
+    },
     /// Install/enable the tools, Claude Code marketplaces/plugins, and
     /// rule-sync repos configured under [bootstrap] in config.toml
     Bootstrap {
