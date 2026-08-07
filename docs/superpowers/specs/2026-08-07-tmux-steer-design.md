@@ -78,7 +78,7 @@ TUI decides how to fold it into current work.
 |---|---|
 | `daemon/proxy.rs::spawn_agent` | Launch via `tmux new-session -d` instead of direct `Command::spawn`. |
 | Output capture | Immediately after `new-session`: `tmux pipe-pane -o -t <session> 'cat >> <logfile>'`. `AgentProcess.logs` is now populated by tailing that logfile instead of reading the child's stdout handle directly. This is the one existing code path this change touches. |
-| `daemon/proxy.rs::steer_agent` (new fn) | `steer_agent(agent_id: Uuid, message: &str, sender: &str) -> Result<SteerOutcome>`. Validates the target against `DaemonState.active_agents`, confirms liveness with `tmux has-session`, then `send-keys`. |
+| `daemon/proxy.rs::steer_agent` (new fn) | `steer_agent(agent_id: Uuid, message: &str, sender: &str) -> Result<SteerOutcome>`. `sender` is resolved the same way existing handoff/audit call sites already resolve caller identity (`canonical_agent_identity` for CLI callers, the MCP request's caller context for `steer_agent` tool calls) — no new identity scheme. Validates the target against `DaemonState.active_agents`, confirms liveness with `tmux has-session`, then `send-keys`. |
 | `raios-surface-cli/src/cli/steer.rs` (new) | `raios steer <agent> "<message>"`, same skeleton as `cli/handoff.rs`. |
 | MCP tool `steer_agent` | Agent-to-agent steering, same underlying function as the CLI path. |
 | `raios-policy.toml` | New explicit `[[tools.rules]]` entry for `steer_agent` with `action = "confirm"` (the existing `default_action = "confirm"` already covers it; an explicit rule documents the intent, matching the precedent set for `Handover`). |
@@ -99,8 +99,9 @@ TUI decides how to fold it into current work.
      approvals). The CLI/MCP call returns "queued for approval," not a
      synchronous block. The real `send-keys` fires only once approved.
    - `Allow` → proceed immediately.
-3. Look up `agent_id` in `DaemonState.active_agents`. Not found, or status
-   isn't "running" → clear error, no tmux call attempted.
+3. Look up `agent_id` in `DaemonState.active_agents`. Not found, or
+   `AgentProcess.status != "Running"` (the exact string already used in
+   `daemon/proxy.rs`) → clear error, no tmux call attempted.
 4. Defensive liveness check: `tmux has-session -t <session>`. If the session
    is gone (agent crashed or exited without state catching up yet), return a
    clear "target session not found — agent may have finished or crashed"
