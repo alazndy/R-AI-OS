@@ -28,8 +28,9 @@ pub fn steer_agent_via_http(agent_id: &str, message: &str, sender: &str) -> Resu
 /// Does the actual request/response work for [`steer_agent_via_http`], with
 /// the daemon base URL passed in explicitly rather than resolved internally.
 /// Split out so tests can point it at a local mock listener instead of a
-/// real running daemon on the policy-resolved port.
-fn steer_agent_at(base_url: &str, agent_id: &str, message: &str, sender: &str) -> Result<()> {
+/// real running daemon on the policy-resolved port. Public to allow cross-crate
+/// testing in raios-surface-mcp.
+pub fn steer_agent_at(base_url: &str, agent_id: &str, message: &str, sender: &str) -> Result<()> {
     let url = format!("{base_url}/api/agents/steer");
     let body = serde_json::json!({
         "agent_id": agent_id,

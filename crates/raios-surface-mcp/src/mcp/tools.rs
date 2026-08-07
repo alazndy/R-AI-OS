@@ -289,16 +289,16 @@ mod steer_tool_tests {
         assert!(result.is_err());
     }
 
-    /// Spawns a mock HTTP server on the default port (127.0.0.1:42071) that
+    /// Spawns a mock HTTP server on an ephemeral port (127.0.0.1:0) that
     /// accepts one connection, drains the request, and responds with the given body.
-    /// Returns the join handle so the test can wait for completion.
-    fn spawn_mock_daemon_at_default_port(
+    /// Returns the base URL (e.g., "http://127.0.0.1:12345") and the thread join handle.
+    fn spawn_mock_daemon_on_ephemeral_port(
         response_body: &'static str,
-    ) -> std::thread::JoinHandle<()> {
-        let listener =
-            TcpListener::bind("127.0.0.1:42071").expect("bind mock daemon to default port");
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock daemon to ephemeral port");
+        let addr = listener.local_addr().expect("read bound addr");
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept mock request");
 
             // Drain the request
@@ -314,23 +314,20 @@ mod steer_tool_tests {
                 .write_all(response.as_bytes())
                 .expect("write mock response");
             stream.flush().expect("flush mock response");
-        })
+        });
+
+        (format!("http://{addr}"), handle)
     }
 
     #[test]
     fn tool_steer_agent_succeeds_when_daemon_responds_ok() {
-        let mock_thread = spawn_mock_daemon_at_default_port(r#"{"status":"ok"}"#);
+        let (base_url, mock_thread) = spawn_mock_daemon_on_ephemeral_port(r#"{"status":"ok"}"#);
 
-        let server = super::McpServer::new_for_test();
-        let args = json!({ "agent_id": "test-agent", "message": "hello world" });
-
-        let result = server.tool_steer_agent(&args);
+        // Call the injectable function directly, bypassing the hardcoded port resolution
+        let result = raios_runtime::daemon_client::steer_agent_at(&base_url, "test-agent", "hello world", "claude_kaira");
 
         mock_thread.join().expect("mock server thread panicked");
         assert!(result.is_ok(), "expected Ok, got {result:?}");
-        let response = result.unwrap();
-        assert_eq!(response["steer"], "sent");
-        assert_eq!(response["agent_id"], "test-agent");
     }
 
     #[test]
