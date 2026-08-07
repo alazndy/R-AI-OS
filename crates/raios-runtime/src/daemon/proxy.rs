@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::RwLock;
-use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::daemon::state::DaemonState;
@@ -30,6 +29,12 @@ fn agent_command(agent_name: &str) -> Option<(&'static str, Vec<String>)> {
         "antigravity" | "agy" | "antigravity_kaira" => Some(("agy", vec![])),
         _ => None,
     }
+}
+
+/// One naming scheme for tmux sessions, defined once. Every steer/spawn/kill
+/// call derives the session name this way — never re-formatted ad hoc.
+pub(crate) fn tmux_session_name(id: Uuid) -> String {
+    format!("raios-agent-{id}")
 }
 
 /// Representation of an active agent process.
@@ -109,108 +114,184 @@ impl ExecutionProxy {
             "project_path": project_path,
         }));
 
-        println!(
-            "[Proxy] Spawning agent '{}' (ID: {}) with {}s death timer",
-            agent_name, process_id, timeout_secs
-        );
-
-        let agent_name_cloned = agent_name.to_string();
-        let path_cloned = project_path.to_string();
-        let state_cloned = self.state.clone();
-        let event_tx_cloned = self.event_tx.clone();
-
-        // Spawn a background task to handle the process execution
-        tokio::spawn(async move {
-            use std::process::Stdio;
-            use tokio::io::{AsyncBufReadExt, BufReader};
-
-            let mut cmd = Command::new(program);
-            cmd.args(&program_args);
-            cmd.current_dir(&path_cloned);
-            cmd.stdout(Stdio::piped());
-            cmd.stderr(Stdio::piped());
-
-            // Wait for the child process to complete, with a timeout
-            let result = match cmd.spawn() {
-                Ok(mut child) => {
-                    if let Some(stdout) = child.stdout.take() {
-                        let state_for_logs = state_cloned.clone();
-                        tokio::spawn(async move {
-                            let mut reader = BufReader::new(stdout).lines();
-                            while let Ok(Some(line)) = reader.next_line().await {
-                                let mut s = state_for_logs.write().await;
-                                if let Some(agent) =
-                                    s.active_agents.iter_mut().find(|a| a.id == process_id)
-                                {
-                                    agent.logs.push(format!("[stdout] {}", line));
-                                }
-                            }
-                        });
-                    }
-
-                    if let Some(stderr) = child.stderr.take() {
-                        let state_for_err = state_cloned.clone();
-                        tokio::spawn(async move {
-                            let mut reader = BufReader::new(stderr).lines();
-                            while let Ok(Some(line)) = reader.next_line().await {
-                                let mut s = state_for_err.write().await;
-                                if let Some(agent) =
-                                    s.active_agents.iter_mut().find(|a| a.id == process_id)
-                                {
-                                    agent.logs.push(format!("[stderr] {}", line));
-                                }
-                            }
-                        });
-                    }
-
-                    match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
-                        Ok(Ok(status)) => {
-                            if status.success() {
-                                "Completed Successfully"
-                            } else {
-                                "Exited with Error"
-                            }
-                        }
-                        Ok(Err(_e)) => "Failed to wait on child",
-                        Err(_) => {
-                            println!("[Proxy] Death Timer triggered for agent '{}' (ID: {}). Terminating.", agent_name_cloned, process_id);
-                            let _ = child.kill().await;
-                            "Killed by Death Timer (Timeout)"
-                        }
-                    }
-                }
-                Err(_) => "Failed to spawn process",
-            };
-
-            // Update state
-            let mut state_lock = state_cloned.write().await;
+        let session_name = tmux_session_name(process_id);
+        if let Err(e) = self
+            .spawn_via_tmux(
+                process_id,
+                program,
+                &program_args,
+                project_path,
+                timeout_secs,
+            )
+            .await
+        {
+            let mut state_lock = self.state.write().await;
             if let Some(agent) = state_lock
                 .active_agents
                 .iter_mut()
                 .find(|a| a.id == process_id)
             {
-                agent.status = result.to_string();
+                agent.status = "Failed to spawn process".to_string();
+            }
+            drop(state_lock);
+            return Err(e);
+        }
+        println!(
+            "[Proxy] Spawning agent '{}' (ID: {}) with {}s death timer via tmux session '{}'",
+            agent_name, process_id, timeout_secs, session_name
+        );
+
+        Ok(process_id.to_string())
+    }
+
+    /// Launches `program` (with `args`) inside a detached tmux session named
+    /// after `id`, polls for the pane's exit via tmux's own `remain-on-exit`
+    /// and `pane_dead_status` (tmux keeps the dead pane around instead of
+    /// auto-closing the session, so we can read the real exit code — a bare
+    /// `tmux has-session` poll can't distinguish success from failure), and
+    /// writes the resulting status into `DaemonState.active_agents` exactly
+    /// like the pre-tmux `Command::spawn` path did. `timeout_secs` is the
+    /// Death Timer: exceeding it kills the session and records
+    /// `"Killed by Death Timer (Timeout)"`, unchanged from before.
+    ///
+    /// Does not touch `AgentProcess.logs` — see Task 3 for output capture.
+    pub(crate) async fn spawn_via_tmux(
+        &self,
+        id: Uuid,
+        program: &str,
+        args: &[String],
+        cwd: &str,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        let session = tmux_session_name(id);
+
+        // Ensure a "Running" entry exists for `id` before the background
+        // poller starts. `spawn_agent`'s caller already registered one with
+        // the real agent name before reaching this point, so this is a
+        // harmless no-op re-confirmation in that path — this find-or-insert
+        // is what makes `spawn_via_tmux` independently callable/testable
+        // (see the `spawn_agent_via_tmux_*` tests, which call it directly
+        // without going through `spawn_agent`'s own registration step).
+        {
+            let mut state_lock = self.state.write().await;
+            if let Some(agent) = state_lock.active_agents.iter_mut().find(|a| a.id == id) {
+                agent.status = "Running".to_string();
+            } else {
+                state_lock.active_agents.push(AgentProcess {
+                    id,
+                    name: program.to_string(),
+                    status: "Running".to_string(),
+                    started_at: std::time::SystemTime::now(),
+                    logs: Vec::new(),
+                });
+            }
+        }
+
+        let mut new_session = Command::new("tmux");
+        new_session
+            .arg("new-session")
+            .arg("-d")
+            .arg("-s")
+            .arg(&session)
+            .arg("-c")
+            .arg(cwd)
+            .arg(program);
+        for a in args {
+            new_session.arg(a);
+        }
+        let status = new_session.status().await?;
+        if !status.success() {
+            return Err(anyhow::anyhow!(
+                "tmux new-session failed for session '{}' (exit: {:?})",
+                session,
+                status.code()
+            ));
+        }
+
+        // Keep the pane around after the command exits so we can read its
+        // exit status instead of the session silently vanishing.
+        Command::new("tmux")
+            .args(["set-option", "-t", &session, "remain-on-exit", "on"])
+            .status()
+            .await?;
+
+        let state = self.state.clone();
+        let event_tx = self.event_tx.clone();
+        let session_for_task = session.clone();
+
+        tokio::spawn(async move {
+            let poll_interval = Duration::from_millis(500);
+            let max_polls = ((timeout_secs * 1000) / poll_interval.as_millis() as u64).max(1);
+            let mut final_status = "Killed by Death Timer (Timeout)";
+
+            for _ in 0..max_polls {
+                tokio::time::sleep(poll_interval).await;
+
+                let dead = Command::new("tmux")
+                    .args([
+                        "display-message",
+                        "-p",
+                        "-t",
+                        &session_for_task,
+                        "#{pane_dead}",
+                    ])
+                    .output()
+                    .await
+                    .ok()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
+                    .unwrap_or(false);
+
+                if dead {
+                    let exit_ok = Command::new("tmux")
+                        .args([
+                            "display-message",
+                            "-p",
+                            "-t",
+                            &session_for_task,
+                            "#{pane_dead_status}",
+                        ])
+                        .output()
+                        .await
+                        .ok()
+                        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+                        .unwrap_or(false);
+                    final_status = if exit_ok {
+                        "Completed Successfully"
+                    } else {
+                        "Exited with Error"
+                    };
+                    break;
+                }
             }
 
-            if let Some(tx) = &event_tx_cloned {
+            // Either the pane died naturally (final_status set above) or the
+            // Death Timer ran out (final_status still its default) — either
+            // way, tear the session down. Killing an already-dead session's
+            // remnants is a no-op tmux tolerates.
+            let _ = Command::new("tmux")
+                .args(["kill-session", "-t", &session_for_task])
+                .status()
+                .await;
+
+            let mut state_lock = state.write().await;
+            if let Some(agent) = state_lock.active_agents.iter_mut().find(|a| a.id == id) {
+                agent.status = final_status.to_string();
+            }
+            drop(state_lock);
+
+            if let Some(tx) = &event_tx {
                 let _ = tx.send(
                     serde_json::json!({
                         "event": "AgentStopped",
-                        "agent_id": process_id.to_string(),
-                        "name": agent_name_cloned,
-                        "final_status": result,
+                        "agent_id": id.to_string(),
+                        "final_status": final_status,
                     })
                     .to_string(),
                 );
             }
-
-            println!(
-                "[Proxy] Agent '{}' (ID: {}) finished. Status: {}",
-                agent_name_cloned, process_id, result
-            );
         });
 
-        Ok(process_id.to_string())
+        Ok(())
     }
 }
 
@@ -265,5 +346,71 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(state.read().await.active_agents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_via_tmux_reaches_completed_status() {
+        use super::{DaemonState, ExecutionProxy};
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        // `agent_command("claude")` resolves to a real "claude" binary this test
+        // environment doesn't control, so this test exercises the tmux/exit-status
+        // plumbing directly by calling the new `spawn_via_tmux` helper (Step 3)
+        // with an arbitrary harmless command instead of going through the
+        // `agent_command()` allowlist — that allowlist itself is already covered
+        // by `agent_command_resolves_all_canonical_identities` above.
+        let state = Arc::new(RwLock::new(DaemonState::default()));
+        let proxy = ExecutionProxy::new(state.clone());
+        let id = uuid::Uuid::new_v4();
+
+        proxy
+            .spawn_via_tmux(id, "true", &[], ".", 5)
+            .await
+            .expect("tmux spawn should succeed");
+
+        // Poll up to 3s for the background task to observe pane exit and update state —
+        // `true` exits immediately, well inside the 5s Death Timer.
+        let mut status = String::new();
+        for _ in 0..30 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let s = state.read().await;
+            if let Some(agent) = s.active_agents.iter().find(|a| a.id == id) {
+                status = agent.status.clone();
+                if status != "Running" {
+                    break;
+                }
+            }
+        }
+        assert_eq!(status, "Completed Successfully");
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_via_tmux_death_timer_kills_long_running_session() {
+        use super::{DaemonState, ExecutionProxy};
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let state = Arc::new(RwLock::new(DaemonState::default()));
+        let proxy = ExecutionProxy::new(state.clone());
+        let id = uuid::Uuid::new_v4();
+
+        proxy
+            .spawn_via_tmux(id, "sleep", &["30".to_string()], ".", 1)
+            .await
+            .expect("tmux spawn should succeed");
+
+        let mut status = String::new();
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let s = state.read().await;
+            if let Some(agent) = s.active_agents.iter().find(|a| a.id == id) {
+                status = agent.status.clone();
+                if status != "Running" {
+                    break;
+                }
+            }
+        }
+        assert_eq!(status, "Killed by Death Timer (Timeout)");
     }
 }
