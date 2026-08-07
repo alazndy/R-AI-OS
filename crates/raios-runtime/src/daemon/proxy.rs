@@ -201,7 +201,7 @@ impl ExecutionProxy {
         tokio::fs::create_dir_all(&log_dir).await.ok();
         let logfile = log_dir.join(format!("{session}.log"));
 
-        Command::new("tmux")
+        let pipe_pane_status = Command::new("tmux")
             .args([
                 "pipe-pane",
                 "-o",
@@ -211,6 +211,32 @@ impl ExecutionProxy {
             ])
             .status()
             .await?;
+
+        if !pipe_pane_status.success() {
+            // `.status().await?` above only errors on a spawn failure (the
+            // `tmux` binary itself missing) — a nonzero *exit* from `tmux
+            // pipe-pane` (e.g. "target pane has exited") is still `Ok` and
+            // would otherwise pass through here silently. That specific
+            // failure is exactly the race this file documents elsewhere:
+            // the pane's command already exited before `pipe-pane` attached.
+            // `agent_command()` resolves each identity to a bare binary name
+            // with no PATH/existence check, so a missing binary, broken
+            // PATH, or an agent CLI crashing on startup (e.g. missing auth)
+            // lands squarely in this window — and that's precisely the
+            // moment captured output matters most for diagnosing why the
+            // agent didn't start. Leaving `AgentProcess.logs` silently empty
+            // forever would hide the failure instead of explaining it, so
+            // record an explicit synthetic entry instead. Same find-only
+            // contract as the rest of `spawn_via_tmux` — never inserts.
+            let mut state_lock = self.state.write().await;
+            if let Some(agent) = state_lock.active_agents.iter_mut().find(|a| a.id == id) {
+                agent.logs.push(
+                    "[raios] output capture failed to attach (pane may have already exited)"
+                        .to_string(),
+                );
+            }
+            drop(state_lock);
+        }
 
         let state = self.state.clone();
         let event_tx = self.event_tx.clone();
