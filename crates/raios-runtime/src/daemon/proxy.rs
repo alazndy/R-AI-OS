@@ -366,6 +366,79 @@ impl ExecutionProxy {
 
         Ok(())
     }
+
+    /// Injects `message` into a currently-running, tmux-backed agent session
+    /// as if the sender had typed it — `tmux send-keys`, the same mechanism
+    /// omnigent-ai/omnigent uses for its live-verified `claude-native` steer
+    /// path (see docs/superpowers/specs/2026-08-07-tmux-steer-design.md).
+    /// Best-effort delivery: this does not know whether the target is mid
+    /// turn or idle, and does not claim to. `sender` is recorded verbatim
+    /// into the audit ledger's `actor` column for traceability — callers
+    /// resolve it the same way existing call sites do (CLI:
+    /// `RAIOS_AGENT_IDENTITY` env var; MCP: the tool call's caller context).
+    pub async fn steer_agent(&self, agent_id: Uuid, message: &str, sender: &str) -> Result<()> {
+        let target_name = {
+            let state_lock = self.state.read().await;
+            let agent = state_lock
+                .active_agents
+                .iter()
+                .find(|a| a.id == agent_id && a.status == "Running")
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "steer target not found: no running agent with id '{}'",
+                        agent_id
+                    )
+                })?;
+            agent.name.clone()
+        };
+
+        let session = tmux_session_name(agent_id);
+
+        let alive = Command::new("tmux")
+            .args(["has-session", "-t", &session])
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !alive {
+            let mut state_lock = self.state.write().await;
+            if let Some(agent) = state_lock
+                .active_agents
+                .iter_mut()
+                .find(|a| a.id == agent_id)
+            {
+                agent.status = "Session Not Found (Steer Failed)".to_string();
+            }
+            return Err(anyhow::anyhow!(
+                "steer target session '{}' not found — agent '{}' may have finished or crashed",
+                session,
+                target_name
+            ));
+        }
+
+        Command::new("tmux")
+            .args(["send-keys", "-t", &session, message, "Enter"])
+            .status()
+            .await?;
+
+        self.push_event(serde_json::json!({
+            "event": "AgentSteered",
+            "agent_id": agent_id.to_string(),
+            "sender": sender,
+        }));
+
+        if let Ok(conn) = raios_core::db::open_db() {
+            let data = serde_json::json!({
+                "target_agent_id": agent_id.to_string(),
+                "target_agent_name": target_name,
+                "message": message,
+            })
+            .to_string();
+            let _ = raios_core::security::record_audit_event(&conn, "agent.steer", sender, &data);
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -611,5 +684,112 @@ mod tests {
         .await;
 
         assert!(found, "expected captured logs to contain the echoed line");
+    }
+
+    #[tokio::test]
+    async fn steer_agent_rejects_unknown_target() {
+        use super::{DaemonState, ExecutionProxy};
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let state = Arc::new(RwLock::new(DaemonState::default()));
+        let proxy = ExecutionProxy::new(state);
+        let err = proxy
+            .steer_agent(uuid::Uuid::new_v4(), "hello", "claude_kaira")
+            .await
+            .expect_err("steering an unknown agent id must fail");
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn steer_agent_sends_keys_into_live_session() {
+        use super::{AgentProcess, DaemonState, ExecutionProxy};
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let state = Arc::new(RwLock::new(DaemonState::default()));
+        let proxy = ExecutionProxy::new(state.clone());
+        let id = uuid::Uuid::new_v4();
+
+        // `spawn_via_tmux`'s contract only ever *finds and updates* an
+        // existing `AgentProcess` entry — it does not register one itself
+        // (see the matching comments on the other `spawn_via_tmux` tests
+        // above). `steer_agent` additionally requires a `"Running"` entry to
+        // resolve its target, so register one before spawning, exactly like
+        // every other direct `spawn_via_tmux` caller in this test module.
+        {
+            let mut state_lock = state.write().await;
+            state_lock.active_agents.push(AgentProcess {
+                id,
+                name: "sh".to_string(),
+                status: "Running".to_string(),
+                started_at: std::time::SystemTime::now(),
+                logs: Vec::new(),
+            });
+        }
+
+        // A session that reads one line and echoes it back with a marker prefix —
+        // lets the test assert the steered message actually reached the pane.
+        proxy
+            .spawn_via_tmux(
+                id,
+                "sh",
+                &[
+                    "-c".to_string(),
+                    "read line; echo \"STEERED:$line\"; sleep 5".to_string(),
+                ],
+                ".",
+                10,
+            )
+            .await
+            .expect("tmux spawn should succeed");
+
+        // Give the session a moment to reach the `read` before steering it.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        proxy
+            .steer_agent(id, "ping-from-test", "claude_kaira")
+            .await
+            .expect("steer should succeed against a live session");
+
+        let mut found = false;
+        for _ in 0..30 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let s = state.read().await;
+            if let Some(agent) = s.active_agents.iter().find(|a| a.id == id) {
+                if agent
+                    .logs
+                    .iter()
+                    .any(|l| l.contains("STEERED:ping-from-test"))
+                {
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        // This test's assertion routinely resolves well before the pane's
+        // own `sleep 5` finishes and long before the 10s Death Timer, so
+        // (like `spawn_agent_via_tmux_captures_output_into_logs` above) the
+        // background exit-status/kill-session task never gets to run before
+        // `#[tokio::test]` tears down this test's runtime. Clean up
+        // explicitly rather than leaking a live tmux session (and its
+        // logfile) on every run.
+        let session = super::tmux_session_name(id);
+        let _ = tokio::process::Command::new("tmux")
+            .args(["kill-session", "-t", &session])
+            .status()
+            .await;
+        let _ = tokio::fs::remove_file(
+            std::env::temp_dir()
+                .join("raios-agent-logs")
+                .join(format!("{session}.log")),
+        )
+        .await;
+
+        assert!(
+            found,
+            "expected the steered message to be echoed back through captured logs"
+        );
     }
 }
