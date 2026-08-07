@@ -125,6 +125,37 @@ pub(super) async fn handle_approve(
     Json(json!({ "status": "error", "message": "Task or diff ID not found" }))
 }
 
+#[derive(Deserialize)]
+pub(super) struct SteerPayload {
+    agent_id: String,
+    message: String,
+    sender: String,
+}
+
+pub(super) async fn handle_steer(
+    State(state): State<AppState>,
+    Json(payload): Json<SteerPayload>,
+) -> impl IntoResponse {
+    let id = match uuid::Uuid::parse_str(&payload.agent_id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Json(json!({
+                "status": "error",
+                "message": format!("'{}' is not a valid agent id", payload.agent_id),
+            }));
+        }
+    };
+
+    let proxy = crate::daemon::proxy::ExecutionProxy::new(state.daemon_state.clone());
+    match proxy
+        .steer_agent(id, &payload.message, &payload.sender)
+        .await
+    {
+        Ok(_) => Json(json!({ "status": "ok" })),
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
+    }
+}
+
 pub(super) async fn handle_plans() -> impl IntoResponse {
     let plans_dir = plans::locate_plans_dir();
     let plans = match plans_dir {

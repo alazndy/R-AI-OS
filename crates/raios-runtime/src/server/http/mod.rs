@@ -19,7 +19,7 @@ use auth::auth_middleware;
 use routes::{
     handle_approve, handle_cp_command, handle_cp_query, handle_factory_command,
     handle_factory_overview, handle_git_status, handle_health, handle_inbox, handle_plans,
-    handle_projects, handle_swarm, handle_tasks, handle_usage,
+    handle_projects, handle_steer, handle_swarm, handle_tasks, handle_usage,
 };
 use websocket::handle_websocket;
 
@@ -78,6 +78,7 @@ pub async fn start_http_server(
         .route("/api/usage", get(handle_usage))
         .route("/api/plans", get(handle_plans))
         .route("/api/approve", post(handle_approve))
+        .route("/api/agents/steer", post(handle_steer))
         .route("/api/git-status", get(handle_git_status))
         .route("/api/swarm", get(handle_swarm))
         .route("/api/factory/overview", get(handle_factory_overview))
