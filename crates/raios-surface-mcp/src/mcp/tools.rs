@@ -246,6 +246,13 @@ mod steer_tool_tests {
     use serde_json::json;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::Mutex;
+
+    /// Serializes tests that redirect process-global state (cwd, `HOME`,
+    /// `XDG_CONFIG_HOME`, `RAIOS_AGENT_IDENTITY`). cargo runs a crate's tests
+    /// in one process, so two of these racing would read each other's
+    /// fixtures.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn steer_agent_requires_both_fields() {
@@ -290,21 +297,24 @@ mod steer_tool_tests {
     }
 
     /// Spawns a mock HTTP server on an ephemeral port (127.0.0.1:0) that
-    /// accepts one connection, drains the request, and responds with the given body.
-    /// Returns the base URL (e.g., "http://127.0.0.1:12345") and the thread join handle.
+    /// accepts one connection, **reads back the full request** (request line +
+    /// headers + body), and responds with the given body. Returns the base URL
+    /// (e.g., "http://127.0.0.1:12345") and the thread join handle, whose
+    /// value is the captured request text.
+    ///
+    /// The earlier version discarded the request into a scratch buffer and
+    /// answered `200 OK` unconditionally, which made this test blind to the
+    /// missing `Authorization` header that made every real steer call 401.
     fn spawn_mock_daemon_on_ephemeral_port(
         response_body: &'static str,
-    ) -> (String, std::thread::JoinHandle<()>) {
+    ) -> (String, std::thread::JoinHandle<String>) {
         let listener =
             TcpListener::bind("127.0.0.1:0").expect("bind mock daemon to ephemeral port");
         let addr = listener.local_addr().expect("read bound addr");
 
         let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept mock request");
-
-            // Drain the request
-            let mut buf = [0u8; 4096];
-            let _ = stream.read(&mut buf);
+            let request = read_http_request(&mut stream);
 
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -315,9 +325,47 @@ mod steer_tool_tests {
                 .write_all(response.as_bytes())
                 .expect("write mock response");
             stream.flush().expect("flush mock response");
+            request
         });
 
         (format!("http://{addr}"), handle)
+    }
+
+    /// Reads one HTTP/1.1 request off `stream`: headers, then exactly
+    /// `Content-Length` more bytes so the client's write completes cleanly.
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        let mut raw = Vec::new();
+        let mut byte = [0u8; 1];
+        while !raw.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(0) | Err(_) => return String::from_utf8_lossy(&raw).into_owned(),
+                Ok(_) => raw.push(byte[0]),
+            }
+        }
+
+        let headers = String::from_utf8_lossy(&raw).into_owned();
+        let content_length = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+
+        let mut body = vec![0u8; content_length];
+        if content_length > 0 && stream.read_exact(&mut body).is_err() {
+            body.clear();
+        }
+        format!("{headers}{}", String::from_utf8_lossy(&body))
+    }
+
+    /// True when `request` carries exactly `Authorization: Bearer <token>`.
+    fn has_bearer_token(request: &str, token: &str) -> bool {
+        request.lines().any(|line| {
+            line.split_once(':').is_some_and(|(name, value)| {
+                name.trim().eq_ignore_ascii_case("authorization")
+                    && value.trim() == format!("Bearer {token}")
+            })
+        })
     }
 
     #[test]
@@ -327,13 +375,114 @@ mod steer_tool_tests {
         // Call the injectable function directly, bypassing the hardcoded port resolution
         let result = raios_runtime::daemon_client::steer_agent_at(
             &base_url,
+            "mcp-session-token",
             "test-agent",
             "hello world",
             "claude_kaira",
         );
 
-        mock_thread.join().expect("mock server thread panicked");
+        let request = mock_thread.join().expect("mock server thread panicked");
         assert!(result.is_ok(), "expected Ok, got {result:?}");
+        assert!(
+            has_bearer_token(&request, "mcp-session-token"),
+            "the steer request the MCP tool path sends must carry the session \
+             bearer token, or the daemon's auth_middleware 401s it; got:\n{request}"
+        );
+    }
+
+    /// The success path of `tool_steer_agent` **itself** — previously only its
+    /// two failure paths (missing `agent_id` / missing `message`) were
+    /// covered, and the one "success" test exercised `steer_agent_at`
+    /// directly, skipping everything the tool actually does: resolving the
+    /// daemon port from policy, reading the on-disk session token, and
+    /// resolving `sender` from `RAIOS_AGENT_IDENTITY`.
+    ///
+    /// No production seam is added for this: `steer_agent_via_http` resolves
+    /// its port from `./raios-policy.toml` (checked before the config dir)
+    /// and its token from `dirs::config_dir()`, so redirecting the working
+    /// directory plus `HOME`/`XDG_CONFIG_HOME` to a tempdir is enough to aim
+    /// the whole real path at a mock listener. That mutates process-global
+    /// state, hence the mutex — same pattern, and same rationale, as
+    /// `raios-runtime`'s `server/http/auth.rs` middleware tests.
+    #[cfg(unix)]
+    #[test]
+    fn tool_steer_agent_success_path_sends_authenticated_request_and_returns_sent() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let (base_url, mock_thread) = spawn_mock_daemon_on_ephemeral_port(r#"{"status":"ok"}"#);
+        let port: u16 = base_url
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse().ok())
+            .expect("mock daemon port");
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let original_cwd = std::env::current_dir().expect("cwd");
+        let original_home = std::env::var("HOME").ok();
+        let original_xdg = std::env::var("XDG_CONFIG_HOME").ok();
+        let original_identity = std::env::var("RAIOS_AGENT_IDENTITY").ok();
+
+        // `[filesystem]`/`[tools]` are required fields on `PolicyConfig` — a
+        // file missing them fails to parse and `try_load_default()` silently
+        // returns `None`, which would leave the client on the default port.
+        std::fs::write(
+            tmp.path().join("raios-policy.toml"),
+            format!(
+                "[filesystem]\nenforce_sandbox = false\nallowed_paths = []\nblocked_paths = []\n\n\
+                 [tools]\ndefault_action = \"allow\"\n\n\
+                 [server]\nhttp_port = {port}\n"
+            ),
+        )
+        .expect("write policy");
+
+        std::env::set_current_dir(tmp.path()).expect("chdir to tempdir");
+        std::env::set_var("HOME", tmp.path());
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::set_var("RAIOS_AGENT_IDENTITY", "codex_kaira");
+
+        // Written through `SessionTokenManager::new()` so it lands exactly
+        // where the client will look for it under the redirected HOME.
+        let token = raios_core::security::SessionTokenManager::new()
+            .generate_and_save()
+            .expect("generate session token");
+
+        let server = super::McpServer::new_for_test();
+        let result = server.tool_steer_agent(&json!({
+            "agent_id": "11111111-2222-3333-4444-555555555555",
+            "message": "focus on the failing test",
+        }));
+
+        let request = mock_thread.join().expect("mock server thread panicked");
+
+        let _ = std::env::set_current_dir(&original_cwd);
+        match original_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match original_xdg {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match original_identity {
+            Some(v) => std::env::set_var("RAIOS_AGENT_IDENTITY", v),
+            None => std::env::remove_var("RAIOS_AGENT_IDENTITY"),
+        }
+
+        let value = result.expect("tool_steer_agent should succeed against an ok daemon");
+        assert_eq!(value["steer"], "sent");
+        assert_eq!(value["agent_id"], "11111111-2222-3333-4444-555555555555");
+        assert!(
+            has_bearer_token(&request, &token),
+            "expected the on-disk session token as the bearer, got:\n{request}"
+        );
+        assert!(
+            request.contains(r#""sender":"codex_kaira""#),
+            "expected sender resolved from RAIOS_AGENT_IDENTITY, got:\n{request}"
+        );
+        assert!(
+            request.contains(r#""message":"focus on the failing test""#),
+            "expected the message in the JSON body, got:\n{request}"
+        );
     }
 
     #[test]

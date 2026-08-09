@@ -37,6 +37,62 @@ pub(crate) fn tmux_session_name(id: Uuid) -> String {
     format!("raios-agent-{id}")
 }
 
+/// Upper bound on how many captured output lines one agent keeps in
+/// `AgentProcess.logs`.
+///
+/// `logs` is not a transient buffer: it lives for the daemon's whole lifetime
+/// and the entire `active_agents` list — `logs` included — is serialized into
+/// every state snapshot pushed to every connected TUI/dashboard client. The
+/// tmux `pipe-pane` capture path attaches to a real pty, so what lands here
+/// is whatever the wrapped agent CLI *renders*, including the continuous
+/// ANSI/cursor repaint traffic interactive TUIs emit — orders of magnitude
+/// more than the old non-TTY line-tagged capture. Unbounded, a long-lived
+/// agent grows this without limit and fans the whole thing out on every push.
+///
+/// Oldest-first eviction: the tail is what a human debugging a live agent
+/// actually reads.
+const MAX_AGENT_LOG_LINES: usize = 1000;
+
+/// Appends one captured line to `agent.logs`, evicting from the front once
+/// [`MAX_AGENT_LOG_LINES`] is exceeded — a ring buffer in behavior, without
+/// changing `logs`'s public `Vec<String>` type (it is `serde`-serialized into
+/// the state snapshot every TUI client receives).
+/// Builds the error returned when a steer's `tmux send-keys` call fails
+/// *after* `has-session` already confirmed the target session is alive.
+///
+/// Deliberately does **not** touch `DaemonState` — this is the one thing that
+/// separates it from the `!alive` branch in [`ExecutionProxy::steer_agent`].
+/// That branch legitimately marks the agent dead: its session really is gone.
+/// This one means "the session is there, delivery didn't land" (a TOCTOU race
+/// with a process exiting between the two `tmux` invocations, or a hiccup on
+/// a contended tmux server). Flipping `status` here would be doubly wrong: it
+/// is factually false (the session *was* found), and because `steer_agent`'s
+/// own target lookup requires `status == "Running"`, it is a one-way door —
+/// one failed delivery would permanently make a healthy, running agent
+/// unsteerable. Report the failure to the caller; leave the state alone.
+fn steer_delivery_failed(
+    session: &str,
+    target_name: &str,
+    stage: &str,
+    exit_code: Option<i32>,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "tmux {} failed for session '{}' (exit: {:?}) — steer to agent '{}' not delivered; \
+         the session is still considered live and can be steered again",
+        stage,
+        session,
+        exit_code,
+        target_name
+    )
+}
+
+fn push_capped_log(agent: &mut AgentProcess, line: String) {
+    agent.logs.push(line);
+    while agent.logs.len() > MAX_AGENT_LOG_LINES {
+        agent.logs.remove(0);
+    }
+}
+
 /// Representation of an active agent process.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentProcess {
@@ -157,17 +213,21 @@ impl ExecutionProxy {
     /// Also captures pane output into `AgentProcess.logs` via `tmux
     /// pipe-pane` writing to a logfile, tailed by a second background task.
     ///
-    /// `pub` (rather than `pub(crate)`) solely so `crates/raios-runtime/tests/`
-    /// integration tests — a separate compilation unit outside the crate —
-    /// can exercise this directly with an arbitrary `program`/`args` (e.g. a
-    /// scripted `sh -c '...'`) to drive a controllable spawn+steer roundtrip
-    /// without depending on a real agent CLI being installed. It does not
-    /// register anything in `DaemonState.active_agents` itself (see the
-    /// find-only contract noted below) — external callers should prefer
-    /// `spawn_agent`, which validates the agent identity and registers state
-    /// before delegating here; this is not a general-purpose replacement for
-    /// it.
-    pub async fn spawn_via_tmux(
+    /// Deliberately `pub(crate)`, not `pub`: it takes an arbitrary
+    /// `program`/`args` and would hand any downstream caller the ability to
+    /// launch any binary through the daemon, routing straight around
+    /// `agent_command()`'s four-identity allowlist directly above — the exact
+    /// "ambient authority" this file's own history (the `sh -lc` shell
+    /// injection documented on `agent_command`) exists to prevent. A doc
+    /// comment is not an access boundary; the visibility modifier is. Tests
+    /// that need to drive a scripted `sh -c '...'` through this machinery
+    /// live in-crate (see this module's `#[cfg(test)] mod tests`) rather than
+    /// widening the public API to reach them.
+    ///
+    /// It does not register anything in `DaemonState.active_agents` itself
+    /// (see the find-only contract noted below) — `spawn_agent` validates the
+    /// agent identity and registers state before delegating here.
+    pub(crate) async fn spawn_via_tmux(
         &self,
         id: Uuid,
         program: &str,
@@ -241,7 +301,8 @@ impl ExecutionProxy {
             // contract as the rest of `spawn_via_tmux` — never inserts.
             let mut state_lock = self.state.write().await;
             if let Some(agent) = state_lock.active_agents.iter_mut().find(|a| a.id == id) {
-                agent.logs.push(
+                push_capped_log(
+                    agent,
                     "[raios] output capture failed to attach (pane may have already exited)"
                         .to_string(),
                 );
@@ -295,7 +356,7 @@ impl ExecutionProxy {
                     Ok(_) => {
                         let mut s = state_for_logs.write().await;
                         if let Some(agent) = s.active_agents.iter_mut().find(|a| a.id == id) {
-                            agent.logs.push(line.trim_end().to_string());
+                            push_capped_log(agent, line.trim_end().to_string());
                         }
                     }
                     Err(_) => break,
@@ -412,6 +473,10 @@ impl ExecutionProxy {
             .map(|s| s.success())
             .unwrap_or(false);
         if !alive {
+            // The session really is gone — the agent finished or crashed —
+            // so marking it as such is correct here. Contrast with a
+            // `send-keys` failure *after* this check passes, which is
+            // deliberately non-mutating (see `steer_delivery_failed`).
             let mut state_lock = self.state.write().await;
             if let Some(agent) = state_lock
                 .active_agents
@@ -427,33 +492,44 @@ impl ExecutionProxy {
             ));
         }
 
+        // `-l` (literal) plus the `--` end-of-options separator: without them
+        // tmux parses `message` as *key names*, not text. Verified against
+        // tmux 3.6 — a message of exactly `C-c` sends a real Ctrl-C (which
+        // can kill the target session outright) and a message starting with
+        // `-` (e.g. `-X`) is consumed by tmux's own getopt and fails. Since
+        // `message` is fully caller-controlled (the MCP `steer_agent` tool
+        // makes it agent-controlled), the un-flagged form is an undocumented
+        // remote interrupt/kill primitive hiding inside a text-injection
+        // feature, and the audit ledger would record the raw string as if it
+        // were harmless text. `-l` makes it exactly what it says it is:
+        // literal input.
+        //
+        // Enter must then be a *separate* call: `-l` applies to the whole
+        // argument list, so appending "Enter" to the literal send would type
+        // the five characters `E n t e r` instead of submitting the line.
         let send_status = Command::new("tmux")
-            .args(["send-keys", "-t", &session, message, "Enter"])
+            .args(["send-keys", "-t", &session, "-l", "--", message])
             .status()
             .await?;
         if !send_status.success() {
-            // TOCTOU: the target session was alive at the `has-session`
-            // check above but can still die in the window before this
-            // `send-keys` call lands (the agent process exits/crashes
-            // between the two `tmux` invocations). A nonzero exit here
-            // means delivery did NOT happen — falling through to the
-            // `AgentSteered` event and `agent.steer` audit entry below
-            // would record a steer that never reached its target, which
-            // defeats the point of an audit ledger. Fail loudly instead,
-            // mirroring the `!alive` branch above.
-            let mut state_lock = self.state.write().await;
-            if let Some(agent) = state_lock
-                .active_agents
-                .iter_mut()
-                .find(|a| a.id == agent_id)
-            {
-                agent.status = "Session Not Found (Steer Failed)".to_string();
-            }
-            return Err(anyhow::anyhow!(
-                "tmux send-keys failed for session '{}' (exit: {:?}) — steer to agent '{}' not delivered",
-                session,
+            return Err(steer_delivery_failed(
+                &session,
+                &target_name,
+                "send-keys (literal message)",
                 send_status.code(),
-                target_name
+            ));
+        }
+
+        let enter_status = Command::new("tmux")
+            .args(["send-keys", "-t", &session, "Enter"])
+            .status()
+            .await?;
+        if !enter_status.success() {
+            return Err(steer_delivery_failed(
+                &session,
+                &target_name,
+                "send-keys Enter (submit)",
+                enter_status.code(),
             ));
         }
 
@@ -842,6 +918,343 @@ mod tests {
         assert!(
             found,
             "expected the steered message to be echoed back through captured logs"
+        );
+    }
+
+    #[test]
+    fn push_capped_log_evicts_oldest_lines_past_the_cap() {
+        use super::{push_capped_log, AgentProcess, MAX_AGENT_LOG_LINES};
+
+        let mut agent = AgentProcess {
+            id: uuid::Uuid::new_v4(),
+            name: "sh".to_string(),
+            status: "Running".to_string(),
+            started_at: std::time::SystemTime::now(),
+            logs: Vec::new(),
+        };
+
+        for i in 0..(MAX_AGENT_LOG_LINES + 250) {
+            push_capped_log(&mut agent, format!("line-{i}"));
+        }
+
+        assert_eq!(
+            agent.logs.len(),
+            MAX_AGENT_LOG_LINES,
+            "logs must stay bounded — this vec lives for the daemon's lifetime \
+             and is serialized into every state snapshot pushed to TUI clients"
+        );
+        assert_eq!(
+            agent.logs.first().map(String::as_str),
+            Some("line-250"),
+            "oldest lines are the ones evicted"
+        );
+        let newest = format!("line-{}", MAX_AGENT_LOG_LINES + 249);
+        assert_eq!(
+            agent.logs.last(),
+            Some(&newest),
+            "the newest line must always survive"
+        );
+    }
+
+    /// A steer whose delivery fails *after* `has-session` confirmed the
+    /// session is alive must not mark the agent dead. `steer_agent`'s own
+    /// target lookup requires `status == "Running"`, so flipping the status
+    /// on a delivery failure is a one-way door: a healthy, running agent
+    /// would become permanently unsteerable. Asserted on the error builder
+    /// itself, since the only way to make a real `send-keys` fail against a
+    /// verified-live session is to win a TOCTOU race with it.
+    #[test]
+    fn steer_delivery_failure_error_does_not_claim_the_session_is_gone() {
+        use super::steer_delivery_failed;
+
+        let err = steer_delivery_failed(
+            "raios-agent-x",
+            "claude",
+            "send-keys Enter (submit)",
+            Some(1),
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains("not delivered"),
+            "must state delivery failed, got: {text}"
+        );
+        assert!(
+            text.contains("can be steered again"),
+            "must not imply the agent is gone, got: {text}"
+        );
+        assert!(
+            !text.contains("Session Not Found"),
+            "the dead-session status string belongs only to the has-session \
+             branch, got: {text}"
+        );
+    }
+}
+
+/// End-to-end coverage for the tmux-backed spawn -> steer -> captured-output
+/// path: real `tmux` process, real pane, real `tmux send-keys` delivery.
+/// Requires a real `tmux` binary on PATH — the same runtime dependency `raios
+/// doctor`'s tmux presence check exists to catch.
+///
+/// In-crate (rather than under `crates/raios-runtime/tests/`) on purpose:
+/// driving this path needs `spawn_via_tmux`, and `spawn_via_tmux` is
+/// `pub(crate)` on purpose — it accepts an arbitrary program and would
+/// otherwise let any downstream caller bypass `agent_command()`'s
+/// four-identity allowlist. A test's convenience is not a reason to widen a
+/// security boundary; the test moves to the code instead.
+///
+/// `ExecutionProxy::spawn_agent` only accepts one of the four canonical agent
+/// identities, so there is no way to make it launch a scripted `sh -c '...'`
+/// test double — calling `spawn_via_tmux` directly is the only way to drive a
+/// controllable process through the same tmux launch/capture/teardown
+/// machinery a real agent spawn uses. `spawn_via_tmux` follows a documented
+/// find-only contract against `DaemonState.active_agents` (it updates an
+/// existing entry's `status`/`logs`, it never inserts one), and `spawn_agent`
+/// — its only production caller — registers the `AgentProcess` *before*
+/// delegating to it. This test mirrors that same register-then-spawn
+/// sequence, matching how the two are actually meant to be composed.
+#[cfg(test)]
+mod integration_tests {
+    use super::{AgentProcess, ExecutionProxy};
+    use crate::daemon::state::DaemonState;
+    use std::sync::Arc;
+    use std::time::SystemTime;
+    use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn spawn_then_steer_full_roundtrip() {
+        let state = Arc::new(RwLock::new(DaemonState::default()));
+        let proxy = ExecutionProxy::new(state.clone());
+        let id = uuid::Uuid::new_v4();
+
+        // Mirrors what `spawn_agent` does before delegating to
+        // `spawn_via_tmux`: register the agent as "Running" so `steer_agent`
+        // (which only steers known, running agents) can find it.
+        {
+            let mut state_lock = state.write().await;
+            state_lock.active_agents.push(AgentProcess {
+                id,
+                name: "sh".to_string(),
+                status: "Running".to_string(),
+                started_at: SystemTime::now(),
+                logs: Vec::new(),
+            });
+        }
+
+        proxy
+            .spawn_via_tmux(
+                id,
+                "sh",
+                &[
+                    "-c".to_string(),
+                    "read line; echo \"GOT:$line\"; sleep 3".to_string(),
+                ],
+                ".",
+                10,
+            )
+            .await
+            .expect("spawn should succeed");
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        proxy
+            .steer_agent(id, "integration-test-message", "claude_kaira")
+            .await
+            .expect("steer should succeed");
+
+        let mut ok = false;
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let s = state.read().await;
+            if let Some(agent) = s.active_agents.iter().find(|a| a.id == id) {
+                if agent
+                    .logs
+                    .iter()
+                    .any(|l| l.contains("GOT:integration-test-message"))
+                {
+                    ok = true;
+                    break;
+                }
+            }
+        }
+
+        // Same cleanup this module's other tmux `#[tokio::test]`s apply and
+        // document: the assertion above wins the race against the pane's own
+        // `sleep 3` and the 10s Death Timer, so `#[tokio::test]`'s per-test
+        // runtime drops `spawn_via_tmux`'s still-sleeping
+        // exit-status/kill-session background task before it reaches its own
+        // cleanup. Kill the session (and its pipe-pane logfile) explicitly
+        // rather than leaking a live tmux session on every run.
+        let session = super::tmux_session_name(id);
+        let _ = tokio::process::Command::new("tmux")
+            .args(["kill-session", "-t", &session])
+            .status()
+            .await;
+        let _ = tokio::fs::remove_file(
+            std::env::temp_dir()
+                .join("raios-agent-logs")
+                .join(format!("{session}.log")),
+        )
+        .await;
+
+        assert!(
+            ok,
+            "full spawn -> steer -> captured-output roundtrip failed"
+        );
+    }
+
+    /// I1 regression guard: with `send-keys -l --`, a message of exactly
+    /// `C-c` must be delivered as the literal three characters, not as a real
+    /// Ctrl-C that kills the pane. Without `-l`, tmux parses the message as
+    /// key names — turning a text-injection feature into an undocumented
+    /// remote-interrupt primitive, with the audit ledger recording the raw
+    /// string as if it were harmless text.
+    #[tokio::test]
+    async fn steer_sends_control_sequence_looking_message_as_literal_text() {
+        let state = Arc::new(RwLock::new(DaemonState::default()));
+        let proxy = ExecutionProxy::new(state.clone());
+        let id = uuid::Uuid::new_v4();
+
+        {
+            let mut state_lock = state.write().await;
+            state_lock.active_agents.push(AgentProcess {
+                id,
+                name: "sh".to_string(),
+                status: "Running".to_string(),
+                started_at: SystemTime::now(),
+                logs: Vec::new(),
+            });
+        }
+
+        proxy
+            .spawn_via_tmux(
+                id,
+                "sh",
+                &[
+                    "-c".to_string(),
+                    "read line; echo \"LITERAL:$line\"; sleep 5".to_string(),
+                ],
+                ".",
+                15,
+            )
+            .await
+            .expect("spawn should succeed");
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        proxy
+            .steer_agent(id, "C-c", "claude_kaira")
+            .await
+            .expect("steer with a key-name-looking message should succeed");
+
+        let mut echoed_literally = false;
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let s = state.read().await;
+            if let Some(agent) = s.active_agents.iter().find(|a| a.id == id) {
+                if agent.logs.iter().any(|l| l.contains("LITERAL:C-c")) {
+                    echoed_literally = true;
+                    break;
+                }
+            }
+        }
+
+        let session = super::tmux_session_name(id);
+        // The session must still be alive: an un-flagged send-keys would have
+        // delivered a real SIGINT and killed the pane's `sh`.
+        let still_alive = tokio::process::Command::new("tmux")
+            .args(["has-session", "-t", &session])
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        let _ = tokio::process::Command::new("tmux")
+            .args(["kill-session", "-t", &session])
+            .status()
+            .await;
+        let _ = tokio::fs::remove_file(
+            std::env::temp_dir()
+                .join("raios-agent-logs")
+                .join(format!("{session}.log")),
+        )
+        .await;
+
+        assert!(
+            echoed_literally,
+            "expected 'C-c' to arrive as literal text, echoed back as LITERAL:C-c"
+        );
+        assert!(
+            still_alive,
+            "steering 'C-c' must not interrupt/kill the target session"
+        );
+    }
+
+    /// I1's other half: a message beginning with `-` is otherwise eaten by
+    /// tmux's own getopt (`-X` is a real `send-keys` flag) and the send
+    /// fails. The `--` end-of-options separator is what makes it text.
+    #[tokio::test]
+    async fn steer_sends_dash_prefixed_message_without_tmux_parsing_it_as_a_flag() {
+        let state = Arc::new(RwLock::new(DaemonState::default()));
+        let proxy = ExecutionProxy::new(state.clone());
+        let id = uuid::Uuid::new_v4();
+
+        {
+            let mut state_lock = state.write().await;
+            state_lock.active_agents.push(AgentProcess {
+                id,
+                name: "sh".to_string(),
+                status: "Running".to_string(),
+                started_at: SystemTime::now(),
+                logs: Vec::new(),
+            });
+        }
+
+        proxy
+            .spawn_via_tmux(
+                id,
+                "sh",
+                &[
+                    "-c".to_string(),
+                    "read line; echo \"DASH:$line\"; sleep 5".to_string(),
+                ],
+                ".",
+                15,
+            )
+            .await
+            .expect("spawn should succeed");
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let steer_result = proxy.steer_agent(id, "-X copy-mode", "claude_kaira").await;
+
+        let mut found = false;
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let s = state.read().await;
+            if let Some(agent) = s.active_agents.iter().find(|a| a.id == id) {
+                if agent.logs.iter().any(|l| l.contains("DASH:-X copy-mode")) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        let session = super::tmux_session_name(id);
+        let _ = tokio::process::Command::new("tmux")
+            .args(["kill-session", "-t", &session])
+            .status()
+            .await;
+        let _ = tokio::fs::remove_file(
+            std::env::temp_dir()
+                .join("raios-agent-logs")
+                .join(format!("{session}.log")),
+        )
+        .await;
+
+        steer_result.expect("a '-'-prefixed message must not be parsed as a tmux flag");
+        assert!(
+            found,
+            "expected '-X copy-mode' to arrive as literal text, echoed back as DASH:-X copy-mode"
         );
     }
 }
