@@ -3,130 +3,12 @@
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout},
     style::{Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
-
-/// Renders the Projects list panel.
-pub fn render_projects(frame: &mut Frame, area: Rect, app: &App) {
-    let data = raios_surface_tui::app::build_projects_panel_data(app);
-
-    let [title_area, table_area] =
-        Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(area);
-
-    let title = Line::from(vec![
-        Span::styled(" ALL PROJECTS", Style::new().fg(MID).bold()),
-        Span::styled(format!("  ({} total)", data.total), Style::new().fg(DIM)),
-        Span::styled("  sort: ", Style::new().fg(DIM)),
-        Span::styled(data.sort_label, Style::new().fg(AMBER).bold()),
-        Span::styled(
-            if app.ui.right_panel_focus {
-                "  [↑↓] navigate  [Enter] open  [s] cycle sort"
-            } else {
-                "  [→] focus  [/open <name>] jump"
-            },
-            Style::new().fg(DIM),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(title), title_area);
-
-    if data.items.is_empty() {
-        let msg = Paragraph::new(vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "  entities.json not found or empty",
-                Style::new().fg(DIM).italic(),
-            )),
-            Line::from(Span::styled(
-                "  Expected: Dev Ops/entities.json",
-                Style::new().fg(DIM),
-            )),
-        ]);
-        frame.render_widget(msg, table_area);
-        return;
-    }
-
-    let header = Row::new(vec![
-        "  Name", "V", "Status", "Category", "Health", "Dirty", "CI",
-    ])
-    .style(Style::new().fg(DIM).bold())
-    .bottom_margin(1);
-
-    let rows: Vec<Row> = data
-        .items
-        .iter()
-        .map(|item| {
-            let sc = project_status_color(&item.status);
-
-            let vault_tag = if item.has_vault {
-                Span::styled("V", Style::new().fg(AMBER).bold())
-            } else {
-                Span::styled("-", Style::new().fg(DIM))
-            };
-
-            let gc = match item.compliance_grade.as_str() {
-                "A" => GREEN,
-                "B" => CYAN,
-                "C" => AMBER,
-                "D" | "F" => RED,
-                _ => DIM,
-            };
-
-            let dirty = match item.dirty {
-                Some(true) => Span::styled("DIRTY", Style::new().fg(RED).bold()),
-                Some(false) => Span::styled("clean", Style::new().fg(DIM)),
-                None => Span::styled("?", Style::new().fg(DIM)),
-            };
-
-            let ci = match item.ci_status.as_deref() {
-                Some("success") => Span::styled("✓ pass", Style::new().fg(GREEN)),
-                Some("failure") => Span::styled("✗ fail", Style::new().fg(RED).bold()),
-                Some("in_progress") | Some("queued") => {
-                    Span::styled("↻ sync", Style::new().fg(CYAN))
-                }
-                Some("cancelled") => Span::styled("○ canc", Style::new().fg(DIM)),
-                Some(other) => Span::styled(other, Style::new().fg(AMBER)),
-                None => Span::styled("-", Style::new().fg(DIM)),
-            };
-
-            Row::new(vec![
-                Text::from(item.name.clone()),
-                Text::from(vault_tag),
-                Text::from(Span::styled(item.status.clone(), Style::new().fg(sc))),
-                Text::from(item.category.clone()),
-                Text::from(Span::styled(
-                    item.compliance_grade.clone(),
-                    Style::new().fg(gc).bold(),
-                )),
-                Text::from(dirty),
-                Text::from(ci),
-            ])
-        })
-        .collect();
-
-    let widths = [
-        Constraint::Percentage(22),
-        Constraint::Length(3),
-        Constraint::Percentage(13),
-        Constraint::Percentage(22),
-        Constraint::Percentage(10),
-        Constraint::Percentage(15),
-        Constraint::Percentage(15),
-    ];
-
-    let mut state = TableState::default().with_selected(Some(app.projects.cursor));
-
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(Block::default().borders(Borders::NONE))
-        .row_highlight_style(Style::default().bg(HEADER_BG).fg(GREEN).bold())
-        .highlight_symbol("▶ ");
-
-    frame.render_stateful_widget(table, table_area, &mut state);
-}
 
 /// Renders the full-screen Project detail view mode.
 pub fn render_project_detail(frame: &mut Frame, app: &App) {
@@ -208,7 +90,7 @@ pub fn render_project_detail(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(mem_lines)), mem_inner);
 
     // ── Right: git log + stats ────────────────────────────────────────────────
-    let git_color = if app.ui.right_panel_focus { GREEN } else { DIM };
+    let git_color = if app.projects.panel_focus { GREEN } else { DIM };
     let [git_area, stats_area] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(14)]).areas(right_area);
 

@@ -125,6 +125,62 @@ pub(super) async fn handle_approve(
     Json(json!({ "status": "error", "message": "Task or diff ID not found" }))
 }
 
+#[derive(Deserialize)]
+pub(super) struct SteerPayload {
+    agent_id: String,
+    message: String,
+    sender: String,
+}
+
+pub(super) async fn handle_steer(
+    Extension(actor): Extension<crate::control_plane::service::ControlActor>,
+    State(state): State<AppState>,
+    Json(payload): Json<SteerPayload>,
+) -> impl IntoResponse {
+    // Same gate the sibling mutating routes apply: `handle_cp_command` and
+    // `handle_factory_command` pass their `ControlActor` into a dispatcher
+    // whose first act is to reject any principal without
+    // `may_mutate_control_plane`. Steering has no dispatcher of its own, so
+    // the check lands here — but it is the identical rule, not a new scheme.
+    // `auth.rs` builds a remote-API-key principal without that grant on
+    // purpose: authentication is not an ownership grant. Without this, under
+    // a non-`localhost` `bind_mode` (`tailscale`/`all`) any remote key holder
+    // could inject keystrokes into local agent sessions.
+    if !actor.may_mutate_control_plane() {
+        return Json(json!({
+            "status": "error",
+            "message": "This authenticated principal is not authorized to steer local agent sessions",
+        }));
+    }
+
+    let id = match uuid::Uuid::parse_str(&payload.agent_id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Json(json!({
+                "status": "error",
+                "message": format!("'{}' is not a valid agent id", payload.agent_id),
+            }));
+        }
+    };
+
+    // `.with_event_tx(...)` is what makes `push_event`'s `AgentSteered`
+    // broadcast actually reach connected TUI/dashboard clients — a bare
+    // `ExecutionProxy::new(...)` has `event_tx: None` and drops every event
+    // silently, so the design spec's "a live TUI reflects a steer
+    // immediately" requirement was unmet on this, the only production steer
+    // path. Mirrors `daemon/server.rs`'s existing
+    // `execution_proxy.clone().with_event_tx(tx.clone())` call site.
+    let proxy = crate::daemon::proxy::ExecutionProxy::new(state.daemon_state.clone())
+        .with_event_tx(state.tx.clone());
+    match proxy
+        .steer_agent(id, &payload.message, &payload.sender)
+        .await
+    {
+        Ok(_) => Json(json!({ "status": "ok" })),
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
+    }
+}
+
 pub(super) async fn handle_plans() -> impl IntoResponse {
     let plans_dir = plans::locate_plans_dir();
     let plans = match plans_dir {

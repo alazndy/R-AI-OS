@@ -9,7 +9,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::store::Store;
+use crate::app::store::{Store, WorkFocus};
 
 fn project_status_color(status: &str) -> Color {
     match status.to_ascii_lowercase().as_str() {
@@ -45,13 +45,12 @@ pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
         vec![ListItem::new("No projects registered.")]
     } else {
         store
-            .snapshot
-            .work
-            .projects
-            .iter()
+            .work_project_indices()
+            .into_iter()
             .enumerate()
-            .map(|(i, p)| {
-                let is_selected = store.cursor == i && !store.right_panel_focus;
+            .map(|(i, project_index)| {
+                let p = &store.snapshot.work.projects[project_index];
+                let is_selected = store.cursor == i && store.work_focus == WorkFocus::Projects;
                 let bg = if is_selected {
                     Color::DarkGray
                 } else {
@@ -106,12 +105,17 @@ pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
 
     let proj_block = Block::default()
         .borders(Borders::ALL)
-        .title(" Projects: Status, Git, Memory ")
-        .border_style(Style::default().fg(if !store.right_panel_focus {
-            Color::Green
-        } else {
-            Color::Cyan
-        }));
+        .title(format!(
+            " Projects: Status, Git, Memory — sort: {} ",
+            store.work_sort.label()
+        ))
+        .border_style(
+            Style::default().fg(if store.work_focus == WorkFocus::Projects {
+                Color::Green
+            } else {
+                Color::Cyan
+            }),
+        );
 
     let proj_list = List::new(project_items).block(proj_block);
     f.render_widget(proj_list, chunks[0]);
@@ -121,7 +125,7 @@ pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(9),
+            Constraint::Length(11),
             Constraint::Percentage(45),
             Constraint::Min(8),
         ])
@@ -134,31 +138,20 @@ pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
     } else {
         Color::Yellow
     };
-    let product_detail = match factory.latest_product.as_ref() {
-        Some(product) => {
-            let path_label = product.project_path.as_deref().unwrap_or("unassigned");
-            let stack_label = product.stack.as_deref().unwrap_or("unknown");
-            let mode_label = if product.mode.is_empty() {
-                "governed"
+    let summary_line = |index: usize, label: &str, value: u32| {
+        let selected = store.work_focus == WorkFocus::Ocak && store.cursor == index;
+        Line::from(Span::styled(
+            format!("{} {}: {}", if selected { "▶" } else { " " }, label, value),
+            if selected {
+                Style::default()
+                    .fg(Color::Green)
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
             } else {
-                &product.mode
-            };
-            let scaffold_label = if product.scaffold_state.is_empty() {
-                "unscaffolded"
-            } else {
-                &product.scaffold_state
-            };
-            let source_label = product.source_remote.as_deref().unwrap_or("untracked");
-            let revision_label = product.source_revision.as_deref().unwrap_or("untracked");
-            format!(
-                "Product: {} [{}] | Mode: {} | Stack: {} | Workspace: {}\nPath: {}\nSource: {} @ {}\nQuality blocks: {} | Release blocks: {}",
-                product.title, product.status, mode_label, stack_label, scaffold_label,
-                path_label, source_label, revision_label, product.quality_blockers, product.release_blockers
-            )
-        }
-        None => "No product chartered yet".to_string(),
+                Style::default().fg(Color::White)
+            },
+        ))
     };
-
     let factory_text = vec![
         Line::from(vec![
             Span::styled("State: ", Style::default().fg(Color::Gray)),
@@ -168,27 +161,14 @@ pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
-        Line::from(format!(
-            "Products: {}  Active cycles: {}  Pending changes: {}  Open support: {}",
-            factory.product_count,
-            factory.active_cycle_count,
-            factory.pending_change_request_count,
-            factory.open_support_items,
-        )),
-        Line::from(format!(
-            "Quality blockers: {}  Release drafts: {}",
-            factory.blocking_quality_profiles, factory.release_drafts,
-        )),
-        Line::from(format!(
-            "Verify complete: {}  Closed-testing approved: {}",
-            factory.completed_verify_stages, factory.approved_closed_testing_releases,
-        )),
-        Line::from(vec![
-            Span::styled("Detail: ", Style::default().fg(Color::Gray)),
-            Span::styled(product_detail, Style::default().fg(Color::Cyan)),
-        ]),
+        summary_line(0, "Products", factory.product_count),
+        summary_line(1, "Active cycles", factory.active_cycle_count),
+        summary_line(2, "Pending changes", factory.pending_change_request_count),
+        summary_line(3, "Open support", factory.open_support_items),
+        summary_line(4, "Quality blockers", factory.blocking_quality_profiles),
+        summary_line(5, "Release drafts", factory.release_drafts),
         Line::from(if factory.enabled {
-            "Local TUI: /ocak (audited commands only)"
+            "Enter drafts the matching audited /ocak command"
         } else {
             "Enable in config before local Ocak commands are accepted"
         }),
@@ -214,7 +194,7 @@ pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let bg = if store.right_panel_focus && store.cursor == i {
+                let bg = if store.work_focus == WorkFocus::Tasks && store.cursor == i {
                     Color::DarkGray
                 } else {
                     Color::Reset
@@ -238,11 +218,13 @@ pub fn render_work_route(f: &mut Frame, area: Rect, store: &Store) {
     let tasks_block = Block::default()
         .borders(Borders::ALL)
         .title(" Active Tasks & Assignments ")
-        .border_style(Style::default().fg(if store.right_panel_focus {
-            Color::Green
-        } else {
-            Color::Blue
-        }));
+        .border_style(
+            Style::default().fg(if store.work_focus == WorkFocus::Tasks {
+                Color::Green
+            } else {
+                Color::Blue
+            }),
+        );
 
     let tasks_list = List::new(task_items).block(tasks_block);
     f.render_widget(tasks_list, right_chunks[1]);

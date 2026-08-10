@@ -24,7 +24,7 @@ impl App {
             "/now" | "/approvals" | "/inbox" => {
                 reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Now));
             }
-            "/work" | "/projects" | "/tasks" => {
+            "/work" | "/projects" => {
                 reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Work));
             }
             "/explore" | "/traces" => {
@@ -87,16 +87,12 @@ impl App {
             }
             "/q" | "/quit" | "/exit" => self.should_quit = true,
             "/rules" => {
-                self.ui.menu_cursor = 1;
-                self.ui.right_panel_focus = true;
-                self.ui.right_file_cursor = 0;
+                if self.constitution.tabs.is_empty() {
+                    self.refresh_constitution_tabs();
+                }
+                self.state = AppState::ConstitutionView;
             }
-            "/memory" => {
-                self.ui.menu_cursor = 5;
-                self.ui.right_panel_focus = true;
-                self.ui.right_file_cursor = 2;
-            }
-            "/mempalace" | "/palace" | "/mp" => {
+            "/memory" | "/mempalace" | "/palace" | "/mp" => {
                 if self.mempalace.rooms.is_empty() && !self.mempalace.is_building {
                     self.mempalace.is_building = true;
                     let tx = self.tx.clone();
@@ -124,8 +120,7 @@ impl App {
                 }
             }
             "/search" | "/s" => {
-                self.ui.menu_cursor = 6;
-                self.ui.right_panel_focus = false;
+                self.state = AppState::SearchView;
                 if !arg.is_empty() {
                     self.add_activity("User", &format!("Searching for: {}", arg), "Info");
                     if self.is_remote {
@@ -137,9 +132,6 @@ impl App {
                     } else if let Some(ref idx) = self.search.index {
                         self.search.results = idx.search(arg);
                         self.search.cursor = 0;
-                        if !self.search.results.is_empty() {
-                            self.ui.right_panel_focus = true;
-                        }
                     } else {
                         self.search.status = Some("Index not ready — try again shortly".into());
                     }
@@ -172,17 +164,14 @@ impl App {
                         self.system.sync_status = Some(format!("Project not found: {}", arg));
                     }
                 } else {
-                    self.ui.menu_cursor = 7;
-                    self.ui.right_panel_focus = false;
+                    reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Work));
                 }
             }
             "/timeline" | "/history" => {
-                self.ui.menu_cursor = 8;
-                self.ui.right_panel_focus = false;
+                self.state = AppState::TimelineView;
             }
             "/logs" | "/log" => {
-                self.ui.menu_cursor = 9;
-                self.ui.right_panel_focus = false;
+                self.state = AppState::ActiveAgentsView;
                 // Request fresh log replay from daemon (restores history after reconnect)
                 if let Some(ref tx) = self.tx_daemon {
                     let limit = if arg.is_empty() {
@@ -228,6 +217,15 @@ impl App {
                         self.tasks.list = tasks;
                         self.system.sync_status =
                             Some(format!("{} tasks loaded", self.tasks.list.len()));
+                    }
+                }
+            }
+            "/tasks" => {
+                self.state = AppState::TasksView;
+                if self.tasks.list.is_empty() {
+                    match raios_runtime::tasks::load_tasks(&self.config.dev_ops_path) {
+                        Ok(tasks) => self.tasks.list = tasks,
+                        Err(error) => self.system.sync_status = Some(error.to_string()),
                     }
                 }
             }
@@ -352,8 +350,7 @@ impl App {
                 }
             }
             "/ext" | "/extensions" => {
-                self.ui.menu_cursor = 15;
-                self.ui.right_panel_focus = false;
+                self.state = AppState::ExtensionsView;
                 if !self.ext.loaded {
                     self.load_extensions();
                 }

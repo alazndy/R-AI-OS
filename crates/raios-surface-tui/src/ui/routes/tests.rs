@@ -2,7 +2,7 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
 use crate::app::route::Route;
-use crate::app::store::Store;
+use crate::app::store::{Store, WorkFocus};
 use crate::ui::routes::render_route_view;
 
 fn get_rendered_text(terminal: &Terminal<TestBackend>) -> String {
@@ -55,6 +55,27 @@ fn golden_render_work_route() {
     assert!(rendered.contains("Projects") || rendered.contains("Tasks"));
     assert!(rendered.contains("Ocak"));
     assert!(rendered.contains("Enable in config"));
+}
+
+#[test]
+fn golden_render_work_route_marks_the_selected_ocak_summary() {
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut store = Store::new();
+    store.current_route = Route::Work;
+    store.work_focus = WorkFocus::Ocak;
+    store.right_panel_focus = true;
+    store.cursor = 2;
+
+    terminal
+        .draw(|f| {
+            render_route_view(f, f.area(), &store);
+        })
+        .unwrap();
+
+    let rendered = get_rendered_text(&terminal);
+    assert!(rendered.contains("▶ Pending changes"));
+    assert!(rendered.contains("Release drafts"));
 }
 
 #[test]

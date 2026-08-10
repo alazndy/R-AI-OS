@@ -146,6 +146,19 @@ impl McpServer {
         }
     }
 
+    #[cfg(test)]
+    fn new_for_test() -> Self {
+        Self {
+            config: Config::from_detect_result(Config::auto_detect()),
+            rate_limiter: RateLimiter::disabled(),
+            quarantine: QuarantineStore::disabled(),
+            pin_broken: false,
+            umai: Umai::new(None),
+            egress: EgressFilter::disabled(),
+            blocked_paths: Vec::new(),
+        }
+    }
+
     fn static_tools_manifest() -> serde_json::Value {
         json!({
             "tools": [

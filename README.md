@@ -527,6 +527,14 @@ the latest known project status. If an older local daemon has not yet been
 restarted, the TUI safely fills a missing preview from a project path only
 after confirming that it is inside the configured workspace root.
 
+The command palette also opens dedicated full-screen views for local markdown
+tasks (`/tasks`), Constitution editing (`/rules`), extensions (`/ext`), local
+index search (`/search`), active daemon agents (`/logs`), and the local
+activity timeline (`/timeline`). `/memory` is an alias for the full MemPalace
+view. In `WORK`, Left/Right moves between Projects, the read-only Ocak summary,
+and Tasks; press `Enter` on an Ocak summary line to draft the relevant `/ocak`
+command in the palette. It never submits a Factory command automatically.
+
 Provision a machine from your own `[bootstrap]` config: `raios bootstrap` prints a plan of whatever global npm tools, Claude Code marketplaces/plugins, rule-sync repos, and plugin-enables you've listed under `[bootstrap]` in `~/.config/raios/config.toml`, then asks for confirmation before running anything. With no `[bootstrap]` section configured it prints an empty plan and exits — a safe no-op, not an automatic sync of any external agent ecosystem. Re-running against an already-provisioned machine is idempotent: steps that are already done (marketplace already added, plugin already installed/enabled) are reported and skipped rather than treated as failures.
 
 ```bash

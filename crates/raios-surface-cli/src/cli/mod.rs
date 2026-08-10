@@ -21,6 +21,7 @@ mod reflect;
 mod search;
 mod security;
 mod session;
+mod steer;
 mod swarm;
 mod task_update;
 mod trace;
@@ -212,6 +213,7 @@ pub fn run(cli: Cli) {
             let project_path = resolve_project_path(project, &cfg.dev_ops_path);
             handoff::cmd_handoff(to, status, msg, report, &project_path, cli.json);
         }
+        Commands::Steer { agent_id, message } => steer::cmd_steer(agent_id, message, cli.json),
         Commands::Bootstrap { dry_run, yes } => new::cmd_bootstrap(&cfg.bootstrap, dry_run, yes),
         Commands::VersionBump {
             level,

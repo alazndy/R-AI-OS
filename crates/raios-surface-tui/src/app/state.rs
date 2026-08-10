@@ -117,6 +117,18 @@ pub enum AppState {
     ProjectDetail,
     /// Viewing project health and compliance.
     HealthView,
+    /// Editing the active constitution document.
+    ConstitutionView,
+    /// Managing installed extensions.
+    ExtensionsView,
+    /// Managing local markdown-backed tasks.
+    TasksView,
+    /// Viewing local project-index search results.
+    SearchView,
+    /// Viewing daemon-spawned agents and their logs.
+    ActiveAgentsView,
+    /// Viewing the local UI activity timeline.
+    TimelineView,
     /// Executing search queries.
     Search,
     /// Visualizing MemPalace memory hierarchy.
@@ -843,14 +855,6 @@ pub struct InventoryState {
 /// General UI layout, sub-panel focus, command palette, and modal dialog state.
 #[derive(Debug, Default)]
 pub struct UIState {
-    /// Selected index in left-hand route navigation tab bar.
-    pub menu_cursor: usize,
-    /// Whether right-side detail panel has keyboard focus.
-    pub right_panel_focus: bool,
-    /// Selected index in right panel file list.
-    pub right_file_cursor: usize,
-    /// Scroll position of right detail panel.
-    pub right_panel_scroll: usize,
     /// Whether command palette input mode is active.
     pub command_mode: bool,
     /// Command palette input text buffer.

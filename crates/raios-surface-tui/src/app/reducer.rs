@@ -3,7 +3,7 @@
 use raios_contracts::Event;
 
 use crate::app::intent::Intent;
-use crate::app::store::Store;
+use crate::app::store::{Store, WorkFocus};
 
 /// Reduces a user intent action into updated store state.
 pub fn reduce_intent(store: &mut Store, intent: Intent) {
@@ -13,18 +13,21 @@ pub fn reduce_intent(store: &mut Store, intent: Intent) {
             store.cursor = 0;
             store.sub_cursor = 0;
             store.right_panel_focus = false;
+            store.work_focus = WorkFocus::Projects;
         }
         Intent::NextRoute => {
             store.current_route = store.current_route.next();
             store.cursor = 0;
             store.sub_cursor = 0;
             store.right_panel_focus = false;
+            store.work_focus = WorkFocus::Projects;
         }
         Intent::PrevRoute => {
             store.current_route = store.current_route.prev();
             store.cursor = 0;
             store.sub_cursor = 0;
             store.right_panel_focus = false;
+            store.work_focus = WorkFocus::Projects;
         }
         Intent::CursorUp => {
             if store.cursor > 0 {

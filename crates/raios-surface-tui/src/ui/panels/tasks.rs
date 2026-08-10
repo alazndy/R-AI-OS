@@ -1,6 +1,6 @@
 //! Task management panel rendering.
 
-use raios_surface_tui::app::App;
+use raios_surface_tui::app::{state::AppState, App};
 use raios_surface_tui::ui::*;
 use ratatui::{
     layout::Rect,
@@ -12,11 +12,11 @@ use ratatui::{
 
 /// Renders the Tasks panel.
 pub fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App) {
-    let focused = app.ui.right_panel_focus && app.ui.menu_cursor == 0;
+    let focused = app.state == AppState::TasksView;
     let border_color = if focused { GREEN } else { DIM };
 
     let hint = if focused {
-        " [Space] done  [c] Claude  [x] Codex  [o] OpenCode  [a] Antigravity "
+        " [Space] done  [Esc] close "
     } else {
         " [→] focus "
     };
@@ -118,4 +118,9 @@ pub fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+}
+
+/// Renders the markdown-backed task manager as a dedicated full-screen view.
+pub fn render_tasks_view(frame: &mut Frame, app: &App) {
+    render_tasks_panel(frame, frame.area(), app);
 }
