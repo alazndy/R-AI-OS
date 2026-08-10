@@ -237,6 +237,19 @@ impl ExecutionProxy {
     ) -> Result<()> {
         let session = tmux_session_name(id);
 
+        // Keep panes around after their command exits so we can read exit
+        // status instead of the session silently vanishing. Set as the
+        // *global* default, and *before* the session is created: a
+        // near-instant command (e.g. `true`, or a real agent binary that
+        // crashes on startup) can finish and tear its pane down before a
+        // later, per-session `set-option -t <session> ...` would ever take
+        // effect — that window doesn't exist when new panes already inherit
+        // the setting from birth via the global default.
+        Command::new("tmux")
+            .args(["set-option", "-g", "remain-on-exit", "on"])
+            .status()
+            .await?;
+
         let mut new_session = Command::new("tmux");
         new_session
             .arg("new-session")
@@ -257,13 +270,6 @@ impl ExecutionProxy {
                 status.code()
             ));
         }
-
-        // Keep the pane around after the command exits so we can read its
-        // exit status instead of the session silently vanishing.
-        Command::new("tmux")
-            .args(["set-option", "-t", &session, "remain-on-exit", "on"])
-            .status()
-            .await?;
 
         // Capture the pane's output into a logfile via `tmux pipe-pane`, so
         // `AgentProcess.logs` stays populated for tmux-launched agents (Task
@@ -648,41 +654,34 @@ mod tests {
             });
         }
 
-        // Death Timer widened repeatedly under real, measured CI contention:
-        // 5s (Task 2) -> 30s -> 60s -> 150s here. Under `cargo test
-        // --workspace --lib`'s full parallel run, dozens of
+        // Death Timer widened from the original 5s (Task 2) to 30s: under
+        // `cargo test --workspace --lib`'s full parallel run, dozens of
         // `#[tokio::test]`s across the workspace fork real `tmux`
-        // subprocesses at once, and on a contended GitHub Actions runner
-        // that can slow every individual `tmux display-message`/`tmux
-        // new-session` call enough that `spawn_via_tmux`'s internal
-        // exit-status poller — itself bounded by this same Death Timer —
-        // runs out of polls and declares "Killed by Death Timer (Timeout)"
-        // before it ever observes `true`'s (near-instant) real exit.
-        // Confirmed via Task 8's mandatory full-workspace verification: a
-        // prior fix here that only widened this test's own *outer* wait
-        // loop (not the Death Timer itself) masked the first symptom
-        // (status still "Running") but not this one — the production
-        // poller had already given up and recorded "Killed by Death Timer"
-        // by the time the outer loop's window closed. Giving the poller a
-        // much larger budget (and lengthening the outer wait to match)
-        // fixes the actual bottleneck rather than widening the wrong wait;
-        // this is a test-only timing change to a pre-existing Task 2 test,
-        // not a `spawn_via_tmux` behavior change. Widened from 30s to 60s
-        // after hitting it under `cargo llvm-cov`'s coverage job overhead,
-        // then from 60s to 150s after the *entire raios-runtime test suite*
-        // was measured finishing in 62.64s on a real GitHub Actions
-        // ubuntu-latest run — meaning this one test's 60s budget could be
-        // exhausted well before its own logic even got scheduled CPU time,
-        // independent of `true`'s own (trivial) runtime. 150s gives >2x
-        // headroom over that measured worst case while still bounding the
-        // test if `spawn_via_tmux` were ever genuinely broken.
+        // subprocesses at once, and on a contended box that can slow every
+        // individual `tmux display-message`/`tmux new-session` call enough
+        // that `spawn_via_tmux`'s internal exit-status poller — itself
+        // bounded by this same Death Timer — runs out of polls and declares
+        // "Killed by Death Timer (Timeout)" before it ever observes `true`'s
+        // (near-instant) real exit. This test was also chased through two
+        // over-corrections (60s, then 150s) while CI kept failing at
+        // "Killed by Death Timer" — but those widenings never actually
+        // helped (153s Death Timer -> 153s suite runtime is not a
+        // coincidence): the real bug was that `spawn_via_tmux` set
+        // `remain-on-exit` *after* creating the session, so a near-instant
+        // command like `true` could exit and tear its own pane down before
+        // that later call ever took effect (`can't find session` in CI logs
+        // confirmed it, with the tmux server and every other session still
+        // alive). Fixed at the source: `remain-on-exit` is now a global
+        // default set *before* `new-session`, so new panes inherit it from
+        // birth. 30s is restored as the genuinely-justified contention
+        // budget; it has nothing left to compensate for.
         proxy
-            .spawn_via_tmux(id, "true", &[], ".", 150)
+            .spawn_via_tmux(id, "true", &[], ".", 30)
             .await
             .expect("tmux spawn should succeed");
 
         let mut status = String::new();
-        for _ in 0..1600 {
+        for _ in 0..400 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let s = state.read().await;
             if let Some(agent) = s.active_agents.iter().find(|a| a.id == id) {
