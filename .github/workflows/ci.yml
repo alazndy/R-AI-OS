@@ -52,29 +52,28 @@ jobs:
         with:
           toolchain: 1.96.0
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
-      - name: Ensure tmux is installed and its server is running (steer feature tests need it)
+      - name: Ensure tmux is installed and its server stays up (steer feature tests need it)
         if: runner.os != 'Windows'
         # `cargo test` runs many tests in parallel, and several spawn a real
         # `tmux new-session` concurrently. If no tmux server exists yet, the
         # very first `new-session` call has to bootstrap one — a race that
-        # can make a losing concurrent call fail outright. Pre-starting the
-        # server here (a no-op if one is already running) removes that race
-        # before any test touches tmux. macos-latest doesn't ship tmux at
-        # all, so install it first there; ubuntu-latest already has it.
-        # Not run on Windows: those tmux tests are
+        # can make a losing concurrent call fail outright. macos-latest
+        # doesn't ship tmux at all, so install it first there; ubuntu-latest
+        # already has it. Not run on Windows: those tmux tests are
         # `#[cfg_attr(windows, ignore)]`/module-`cfg(not(windows))`'d out,
         # since tmux has no Windows implementation.
         #
-        # `exit-empty` (a server-wide option, on by default per tmux(1)) exits
-        # the *entire* server the moment the active-session count hits zero.
-        # With dozens of tests concurrently creating and killing their own
-        # (uniquely-named) sessions, the count crosses zero constantly, so
-        # the shared server kept getting torn down mid-run and taking every
-        # other test's still-live session with it — surfacing as "no server
-        # running" and a spurious Death Timer timeout, not the "new-session
-        # failed" race this step was originally added for. Disabling it here
-        # is what actually keeps one bootstrapped server alive for the whole
-        # job.
+        # `tmux start-server` alone isn't enough: it creates a server with
+        # *zero* sessions, and `exit-empty` (a server-wide option, on by
+        # default per tmux(1)) exits the whole server the moment the active
+        # session count hits zero — which can happen in the gap before the
+        # very next command even runs (confirmed live: `tmux set-option`
+        # right after `start-server` failed with "no server running").
+        # Creating a real, long-lived keepalive session atomically starts
+        # the server *with* a session already attached to it, so there's
+        # never a zero-session window in the first place — and it stays
+        # alive for the rest of the job even as dozens of tests concurrently
+        # create and kill their own uniquely-named sessions around it.
         run: |
           if ! command -v tmux >/dev/null 2>&1; then
             if [ "$RUNNER_OS" = "macOS" ]; then
@@ -83,7 +82,7 @@ jobs:
               sudo apt-get update && sudo apt-get install -y tmux
             fi
           fi
-          tmux start-server
+          tmux new-session -d -s __ci_keepalive__ 'sleep 999999'
           tmux set-option -g exit-empty off
       - run: cargo test --workspace --locked
 
@@ -110,13 +109,16 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
       - uses: taiki-e/install-action@75a348306ce8f67c0b06fc62c32a8546140ba955 # cargo-llvm-cov
-      - name: Start tmux server (steer feature tests spawn real tmux sessions)
-        # See the matching step/comment in the `test` job: `exit-empty` (on
-        # by default) tears down the whole server the moment concurrent
-        # tests' session count hits zero, which cargo test's parallel
-        # execution does constantly.
+      - name: Start a persistent tmux keepalive session (steer feature tests spawn real tmux sessions)
+        # See the matching step/comment in the `test` job: `tmux start-server`
+        # alone creates a *zero-session* server, and `exit-empty` (on by
+        # default) tears the whole thing down the moment the session count
+        # hits zero — which cargo test's parallel execution does constantly,
+        # and can even happen before the very next command runs. A real,
+        # long-lived keepalive session avoids that zero-session window
+        # entirely instead of racing to disable the option in time.
         run: |
-          tmux start-server
+          tmux new-session -d -s __ci_keepalive__ 'sleep 999999'
           tmux set-option -g exit-empty off
       - name: Run instrumented tests
         run: cargo llvm-cov --no-report --lib --workspace --locked
