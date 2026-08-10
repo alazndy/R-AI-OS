@@ -398,7 +398,7 @@ tools/raios-factory-ui/
 - **Intake & Charter Studio**: Discovery questionnaire runner, versioned Charter editor, and requirement matrix.
 - **Change Control Visualizer**: Network topology graph connecting Change Requests to affected requirements, code modules, and security risk levels.
 - **Execution & Evidence Matrix**: Real-time cycle status controls (`Pause`, `Resume`, `Cancel`), stage task DAG, and content-addressed SHA-256 evidence inspector.
-- **Quality & Release Sign-off Gate**: Closed-testing checklist (React Native Expo check, TypeScript clean, Rust 42% coverage floor), release blockers counter, and release approval workflow.
+- **Quality & Release Sign-off Gate**: Closed-testing checklist (React Native Expo check, TypeScript clean, Rust 47% coverage floor), release blockers counter, and release approval workflow.
 - **Interactive Control-Plane Terminal**: Collapsible live terminal logging typed CLI commands and daemon JSON payload contracts in real time.
 
 ---
