@@ -1113,17 +1113,22 @@ mod tests {
 
     #[test]
     fn tui_personal_task_create_and_status_update_are_transactional() {
+        let project_path = if cfg!(windows) {
+            r"C:\workspace\raios"
+        } else {
+            "/workspace/raios"
+        };
         let mut conn = Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap();
         conn.execute(
-            "INSERT INTO projects (name, path) VALUES ('R-AI-OS', '/workspace/raios')",
-            [],
+            "INSERT INTO projects (name, path) VALUES ('R-AI-OS', ?1)",
+            params![project_path],
         )
         .unwrap();
 
         let create = Command::CreateTask {
             title: "Build WORK task composer".into(),
-            project_path: Some("/workspace/raios".into()),
+            project_path: Some(project_path.into()),
             priority: 180,
             idempotency_key: "create-tui-task".into(),
         };
@@ -1139,7 +1144,7 @@ mod tests {
             .iter()
             .find(|task| task.id == task_id)
             .unwrap();
-        assert_eq!(task.project_path.as_deref(), Some("/workspace/raios"));
+        assert_eq!(task.project_path.as_deref(), Some(project_path));
         assert_eq!(task.priority, 180);
 
         let update = Command::UpdateTaskStatus {
