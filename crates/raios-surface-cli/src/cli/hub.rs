@@ -580,6 +580,29 @@ fn mask_secret(secret: &str) -> String {
     format!("{}…{}", &secret[..4], &secret[len - 4..])
 }
 
+/// Applies a new `api_key_hash` value to `raios-policy.toml` content,
+/// creating a `[server.hub]` section (and `[server]` parent, if needed).
+/// Extracted as a pure text transform so the four branches — replace an
+/// existing hash, insert into an existing `[server.hub]`, insert a new
+/// `[server.hub]` under an existing `[server]`, or write both sections from
+/// scratch — can be tested without touching the filesystem.
+fn apply_api_key_hash(content: &str, key_hash: &str) -> String {
+    let new_line = format!("api_key_hash = \"{key_hash}\"");
+
+    if content.contains("api_key_hash") {
+        let re = regex::Regex::new(r#"api_key_hash\s*=\s*"[^"]*""#).unwrap();
+        re.replace(content, new_line.as_str()).into_owned()
+    } else if content.contains("[server.hub]") {
+        content.replace("[server.hub]", &format!("[server.hub]\n{new_line}"))
+    } else if content.contains("[server]") {
+        // Append hub section after [server]
+        let insert = format!("\n[server.hub]\n{new_line}\n");
+        content.replacen("[server]", &format!("[server]{insert}"), 1)
+    } else {
+        format!("{content}\n[server]\n[server.hub]\n{new_line}\n")
+    }
+}
+
 pub fn cmd_api_key_show(reveal: bool) {
     let path = api_key_file();
     match fs::read_to_string(&path) {
@@ -658,20 +681,7 @@ pub fn cmd_api_key_generate(force: bool) {
             },
             pol_path.display()
         );
-        let new_line = format!("api_key_hash = \"{key_hash}\"");
-
-        let updated = if content.contains("api_key_hash") {
-            let re = regex::Regex::new(r#"api_key_hash\s*=\s*"[^"]*""#).unwrap();
-            re.replace(&content, new_line.as_str()).into_owned()
-        } else if content.contains("[server.hub]") {
-            content.replace("[server.hub]", &format!("[server.hub]\n{new_line}"))
-        } else if content.contains("[server]") {
-            // Append hub section after [server]
-            let insert = format!("\n[server.hub]\n{new_line}\n");
-            content.replacen("[server]", &format!("[server]{insert}"), 1)
-        } else {
-            format!("{content}\n[server]\n[server.hub]\n{new_line}\n")
-        };
+        let updated = apply_api_key_hash(&content, &key_hash);
 
         if let Err(e) = fs::write(&pol_path, updated) {
             eprintln!("  Warning: could not update policy.toml: {e}");
@@ -698,8 +708,52 @@ mod libc {
 
 #[cfg(test)]
 mod tests {
-    use super::{mask_secret, systemd_unit_content};
+    use super::{apply_api_key_hash, mask_secret, systemd_unit_content};
     use std::path::Path;
+
+    #[test]
+    fn apply_api_key_hash_replaces_an_existing_hash_in_place() {
+        let content =
+            "[server]\n[server.hub]\napi_key_hash = \"old-hash\"\nbind_mode = \"tailscale\"\n";
+        let updated = apply_api_key_hash(content, "new-hash");
+        assert!(updated.contains("api_key_hash = \"new-hash\""));
+        assert!(!updated.contains("old-hash"));
+        assert!(updated.contains("bind_mode = \"tailscale\""));
+    }
+
+    #[test]
+    fn apply_api_key_hash_inserts_into_an_existing_server_hub_section() {
+        let content = "[server]\n[server.hub]\nbind_mode = \"tailscale\"\n";
+        let updated = apply_api_key_hash(content, "abc123");
+        assert!(updated.contains("[server.hub]\napi_key_hash = \"abc123\""));
+        assert!(updated.contains("bind_mode = \"tailscale\""));
+    }
+
+    #[test]
+    fn apply_api_key_hash_creates_server_hub_under_an_existing_server_section() {
+        let content = "[server]\nbind_mode = \"local\"\n";
+        let updated = apply_api_key_hash(content, "abc123");
+        assert!(updated.contains("[server.hub]\napi_key_hash = \"abc123\""));
+        // The pre-existing [server] section's own content must survive untouched.
+        assert!(updated.contains("bind_mode = \"local\""));
+    }
+
+    #[test]
+    fn apply_api_key_hash_writes_both_sections_from_an_empty_file() {
+        let updated = apply_api_key_hash("", "abc123");
+        assert!(updated.contains("[server]"));
+        assert!(updated.contains("[server.hub]"));
+        assert!(updated.contains("api_key_hash = \"abc123\""));
+    }
+
+    #[test]
+    fn apply_api_key_hash_only_replaces_the_first_server_occurrence() {
+        // A malformed file with a duplicate [server] header must not get the
+        // hub section inserted twice.
+        let content = "[server]\n[server]\nbind_mode = \"local\"\n";
+        let updated = apply_api_key_hash(content, "abc123");
+        assert_eq!(updated.matches("[server.hub]").count(), 1);
+    }
 
     #[test]
     fn systemd_unit_content_uses_the_given_paths_not_a_hardcoded_user() {
