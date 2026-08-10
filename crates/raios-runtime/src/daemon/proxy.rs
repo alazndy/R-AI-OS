@@ -648,35 +648,41 @@ mod tests {
             });
         }
 
-        // Death Timer widened from the original 5s (Task 2) to 30s, then to
-        // 60s here: under `cargo test --workspace --lib`'s full parallel
-        // run, dozens of `#[tokio::test]`s across the workspace fork real
-        // `tmux` subprocesses at once, and on a contended box that can slow
-        // every individual `tmux display-message`/`tmux new-session` call
-        // enough that `spawn_via_tmux`'s internal exit-status poller —
-        // itself bounded by this same Death Timer — runs out of polls and
-        // declares "Killed by Death Timer (Timeout)" before it ever
-        // observes `true`'s (near-instant) real exit. Confirmed via Task 8's
-        // mandatory full-workspace verification: a prior fix here that only
-        // widened this test's own *outer* wait loop (not the Death Timer
-        // itself) masked the first symptom (status still "Running") but not
-        // this one — the production poller had already given up and
-        // recorded "Killed by Death Timer" by the time the outer loop's
-        // window closed. Giving the poller a much larger budget (and
-        // lengthening the outer wait to match) fixes the actual bottleneck
-        // rather than widening the wrong wait; this is a test-only timing
-        // change to a pre-existing Task 2 test, not a `spawn_via_tmux`
-        // behavior change. Widened again from 30s to 60s (outer wait 40s to
-        // 70s) after this same test still hit the 30s Death Timer under CI's
-        // `cargo llvm-cov` coverage job, whose instrumentation overhead is
-        // slower again than a plain `cargo test` run.
+        // Death Timer widened repeatedly under real, measured CI contention:
+        // 5s (Task 2) -> 30s -> 60s -> 150s here. Under `cargo test
+        // --workspace --lib`'s full parallel run, dozens of
+        // `#[tokio::test]`s across the workspace fork real `tmux`
+        // subprocesses at once, and on a contended GitHub Actions runner
+        // that can slow every individual `tmux display-message`/`tmux
+        // new-session` call enough that `spawn_via_tmux`'s internal
+        // exit-status poller — itself bounded by this same Death Timer —
+        // runs out of polls and declares "Killed by Death Timer (Timeout)"
+        // before it ever observes `true`'s (near-instant) real exit.
+        // Confirmed via Task 8's mandatory full-workspace verification: a
+        // prior fix here that only widened this test's own *outer* wait
+        // loop (not the Death Timer itself) masked the first symptom
+        // (status still "Running") but not this one — the production
+        // poller had already given up and recorded "Killed by Death Timer"
+        // by the time the outer loop's window closed. Giving the poller a
+        // much larger budget (and lengthening the outer wait to match)
+        // fixes the actual bottleneck rather than widening the wrong wait;
+        // this is a test-only timing change to a pre-existing Task 2 test,
+        // not a `spawn_via_tmux` behavior change. Widened from 30s to 60s
+        // after hitting it under `cargo llvm-cov`'s coverage job overhead,
+        // then from 60s to 150s after the *entire raios-runtime test suite*
+        // was measured finishing in 62.64s on a real GitHub Actions
+        // ubuntu-latest run — meaning this one test's 60s budget could be
+        // exhausted well before its own logic even got scheduled CPU time,
+        // independent of `true`'s own (trivial) runtime. 150s gives >2x
+        // headroom over that measured worst case while still bounding the
+        // test if `spawn_via_tmux` were ever genuinely broken.
         proxy
-            .spawn_via_tmux(id, "true", &[], ".", 60)
+            .spawn_via_tmux(id, "true", &[], ".", 150)
             .await
             .expect("tmux spawn should succeed");
 
         let mut status = String::new();
-        for _ in 0..700 {
+        for _ in 0..1600 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let s = state.read().await;
             if let Some(agent) = s.active_agents.iter().find(|a| a.id == id) {
