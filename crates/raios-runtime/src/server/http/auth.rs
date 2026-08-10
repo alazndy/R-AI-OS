@@ -37,6 +37,19 @@ fn trusted_proxy_enabled() -> bool {
         .unwrap_or(false)
 }
 
+fn cors_allowed_origins() -> Vec<String> {
+    raios_core::security::PolicyConfig::try_load_default()
+        .and_then(|p| p.server)
+        .and_then(|s| s.hub)
+        .map(|h| h.cors_allowed_origins)
+        .unwrap_or_else(|| {
+            vec![
+                "http://localhost:5173".into(),
+                "http://127.0.0.1:5173".into(),
+            ]
+        })
+}
+
 pub(super) async fn auth_middleware(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
@@ -47,7 +60,8 @@ pub(super) async fn auth_middleware(
         let mut response = Response::new(axum::body::Body::empty());
         *response.status_mut() = StatusCode::OK;
         if let Some(origin) = headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()) {
-            if origin.starts_with("http://localhost:") || origin.starts_with("http://127.0.0.1:") {
+            let allowed = cors_allowed_origins();
+            if allowed.iter().any(|a| a == origin) {
                 if let Ok(val) = origin.parse() {
                     response
                         .headers_mut()
@@ -125,7 +139,8 @@ pub(super) async fn auth_middleware(
 
     let mut resp = next.run(req).await;
     if let Some(origin) = headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()) {
-        if origin.starts_with("http://localhost:") || origin.starts_with("http://127.0.0.1:") {
+        let allowed = cors_allowed_origins();
+        if allowed.iter().any(|a| a == origin) {
             if let Ok(val) = origin.parse() {
                 resp.headers_mut()
                     .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
@@ -293,6 +308,23 @@ mod middleware_integration_tests {
             )
             .unwrap();
         }
+
+        fn write_policy_with_cors_origins(&self, origins: &[&str]) {
+            let origins_fmt = origins
+                .iter()
+                .map(|o| format!("\"{o}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            std::fs::write(
+                self.path().join("raios-policy.toml"),
+                format!(
+                    "[filesystem]\nenforce_sandbox = false\nallowed_paths = []\nblocked_paths = []\n\n\
+                     [tools]\ndefault_action = \"confirm\"\n\n\
+                     [server]\n[server.hub]\ncors_allowed_origins = [{origins_fmt}]\n"
+                ),
+            )
+            .unwrap();
+        }
     }
 
     impl Drop for IsolatedEnv {
@@ -447,5 +479,117 @@ mod middleware_integration_tests {
             StatusCode::OK,
             "no bearer, no host — should still pass"
         );
+    }
+
+    #[tokio::test]
+    async fn cors_options_preflight_allows_exact_configured_origin() {
+        let _env = IsolatedEnv::new();
+        let mut req = Request::builder()
+            .method(axum::http::Method::OPTIONS)
+            .uri("/api/protected")
+            .header(header::ORIGIN, "http://localhost:5173")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer("127.0.0.1")));
+        let res = test_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "http://localhost:5173"
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_options_preflight_rejects_unlisted_origin() {
+        let _env = IsolatedEnv::new();
+        let mut req = Request::builder()
+            .method(axum::http::Method::OPTIONS)
+            .uri("/api/protected")
+            .header(header::ORIGIN, "http://localhost:9999")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer("127.0.0.1")));
+        let res = test_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn cors_post_response_allows_exact_configured_origin() {
+        let env = IsolatedEnv::new();
+        let token = env.issue_session_token();
+        let mut req = with_bearer(
+            with_host(request_from(peer("127.0.0.1")), "localhost"),
+            &token,
+        );
+        req.headers_mut()
+            .insert(header::ORIGIN, "http://localhost:5173".parse().unwrap());
+        let res = test_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "http://localhost:5173"
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_post_response_rejects_unlisted_origin() {
+        let env = IsolatedEnv::new();
+        let token = env.issue_session_token();
+        let mut req = with_bearer(
+            with_host(request_from(peer("127.0.0.1")), "localhost"),
+            &token,
+        );
+        req.headers_mut()
+            .insert(header::ORIGIN, "http://localhost:9999".parse().unwrap());
+        let res = test_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn cors_respects_custom_origins_configured_in_policy() {
+        let env = IsolatedEnv::new();
+        env.write_policy_with_cors_origins(&["http://localhost:3000"]);
+        let mut req = Request::builder()
+            .method(axum::http::Method::OPTIONS)
+            .uri("/api/protected")
+            .header(header::ORIGIN, "http://localhost:3000")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer("127.0.0.1")));
+        let res = test_router().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "http://localhost:3000"
+        );
+
+        // Standard 5173 should now be unlisted when custom policy replaces defaults
+        let mut req2 = Request::builder()
+            .method(axum::http::Method::OPTIONS)
+            .uri("/api/protected")
+            .header(header::ORIGIN, "http://localhost:5173")
+            .body(Body::empty())
+            .unwrap();
+        req2.extensions_mut().insert(ConnectInfo(peer("127.0.0.1")));
+        let res2 = test_router().oneshot(req2).await.unwrap();
+        assert_eq!(res2.status(), StatusCode::OK);
+        assert!(res2
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
     }
 }
