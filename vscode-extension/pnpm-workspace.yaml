@@ -1,7 +1,20 @@
 overrides:
-  # GHSA-mh99-v99m-4gvg: DoS via unbounded expansion length, patched >=5.0.8.
+  # GHSA-rgw5-rvv9-x895: DoS via unbounded intermediate arrays, bypassing the
+  # GHSA-mh99-v99m-4gvg mitigation below; patched >=5.0.9.
   # Transitive via @vscode/vsce > glob > minimatch > brace-expansion.
-  brace-expansion: 5.0.8
+  brace-expansion: 5.0.9
+  # GHSA-4cwx-7wf7-3272: cross-user info disclosure + parse-time crash via
+  # degenerate private cache directives, patched >=7.29.0.
+  # Transitive via @vscode/vsce > cheerio > undici.
+  undici: 7.29.0
+  # GHSA-7p8r-x3mc-p8w7: host confusion via backslash authority introducer,
+  # patched >=3.1.5.
+  # Transitive via @vscode/vsce > @secretlint/node > ... > ajv > fast-uri.
+  fast-uri: 3.1.5
+  # GHSA-5p4m-2wfm-xmqj: quadratic CPU consumption in !!omap resolution,
+  # patched >=4.3.1.
+  # Transitive via @vscode/vsce > @secretlint/node > ... > js-yaml.
+  js-yaml: 4.3.1
 
 allowBuilds:
   '@vscode/vsce-sign': false

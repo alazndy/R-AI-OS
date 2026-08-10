@@ -52,6 +52,17 @@ jobs:
         with:
           toolchain: 1.96.0
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Start tmux server (steer feature tests spawn real tmux sessions)
+        if: runner.os != 'Windows'
+        # `cargo test` runs many tests in parallel, and several spawn a real
+        # `tmux new-session` concurrently. If no tmux server exists yet, the
+        # very first `new-session` call has to bootstrap one — a race that
+        # can make a losing concurrent call fail outright. Pre-starting the
+        # server here (a no-op if one is already running) removes that race
+        # before any test touches tmux. Not run on Windows: those tmux tests
+        # are `#[cfg_attr(windows, ignore)]`/module-`cfg(not(windows))`'d out,
+        # since tmux has no Windows implementation.
+        run: tmux start-server
       - run: cargo test --workspace --locked
 
   clippy:
@@ -77,6 +88,8 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
       - uses: taiki-e/install-action@75a348306ce8f67c0b06fc62c32a8546140ba955 # cargo-llvm-cov
+      - name: Start tmux server (steer feature tests spawn real tmux sessions)
+        run: tmux start-server
       - name: Run instrumented tests
         run: cargo llvm-cov --no-report --lib --workspace --locked
       - name: Enforce line-coverage floor

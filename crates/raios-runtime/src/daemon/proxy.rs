@@ -613,6 +613,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        windows,
+        ignore = "tmux is not available on Windows; spawn_via_tmux has no Windows implementation yet"
+    )]
     async fn spawn_agent_via_tmux_reaches_completed_status() {
         use super::{AgentProcess, DaemonState, ExecutionProxy};
         use std::sync::Arc;
@@ -682,6 +686,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        windows,
+        ignore = "tmux is not available on Windows; spawn_via_tmux has no Windows implementation yet"
+    )]
     async fn spawn_agent_via_tmux_death_timer_kills_long_running_session() {
         use super::{AgentProcess, DaemonState, ExecutionProxy};
         use std::sync::Arc;
@@ -725,6 +733,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        windows,
+        ignore = "tmux is not available on Windows; spawn_via_tmux has no Windows implementation yet"
+    )]
     async fn spawn_agent_via_tmux_captures_output_into_logs() {
         use super::{AgentProcess, DaemonState, ExecutionProxy};
         use std::sync::Arc;
@@ -830,6 +842,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        windows,
+        ignore = "tmux is not available on Windows; spawn_via_tmux has no Windows implementation yet"
+    )]
     async fn steer_agent_sends_keys_into_live_session() {
         use super::{AgentProcess, DaemonState, ExecutionProxy};
         use std::sync::Arc;
@@ -1012,7 +1028,10 @@ mod tests {
 /// — its only production caller — registers the `AgentProcess` *before*
 /// delegating to it. This test mirrors that same register-then-spawn
 /// sequence, matching how the two are actually meant to be composed.
-#[cfg(test)]
+///
+/// Windows-excluded: every test in this module drives a real tmux session,
+/// and `spawn_via_tmux` has no Windows implementation (tmux itself has none).
+#[cfg(all(test, not(windows)))]
 mod integration_tests {
     use super::{AgentProcess, ExecutionProxy};
     use crate::daemon::state::DaemonState;

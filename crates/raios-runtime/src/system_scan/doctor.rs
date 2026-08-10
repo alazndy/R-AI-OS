@@ -75,6 +75,19 @@ pub fn get_doctor_result(conn: &Connection, agent: &str) -> Result<Option<Doctor
     .optional()
 }
 
+/// Reports whether `tmux` (required for `raios steer` and daemon-spawned
+/// agent sessions) is present on `PATH`. Split out from `run_doctor_check` so
+/// it can be tested independent of any particular agent's own binary/config
+/// presence, which gates the rest of that function.
+fn tmux_presence_note() -> String {
+    match which::which("tmux") {
+        Ok(path) => format!("tmux: found at {}", path.display()),
+        Err(_) => "tmux: NOT FOUND on PATH — required for `raios steer` and daemon-spawned \
+             agent sessions; install it (e.g. `apt install tmux` / `brew install tmux`)"
+            .to_string(),
+    }
+}
+
 pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> DoctorResult {
     let canonical_agent = match agent.to_lowercase().as_str() {
         "claude" | "claude_kaira" => "claude",
@@ -119,14 +132,7 @@ pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> Doct
         binary_name
     ));
 
-    match which::which("tmux") {
-        Ok(path) => notes.push(format!("tmux: found at {}", path.display())),
-        Err(_) => notes.push(
-            "tmux: NOT FOUND on PATH — required for `raios steer` and daemon-spawned \
-             agent sessions; install it (e.g. `apt install tmux` / `brew install tmux`)"
-                .to_string(),
-        ),
-    }
+    notes.push(tmux_presence_note());
 
     if target_tier == DoctorTier::Offline {
         return DoctorResult {
@@ -277,11 +283,17 @@ mod tests {
 
     #[test]
     fn doctor_check_notes_tmux_presence() {
-        let res = run_doctor_check("claude", None);
+        // Deliberately does not go through `run_doctor_check("claude", ..)`:
+        // that gates every check (including this one) behind the "claude"
+        // agent's own binary/config-dir presence, which is true on a
+        // developer machine running Claude Code but false on a clean CI
+        // runner — making this test fail there for a reason that has
+        // nothing to do with tmux detection itself.
+        let note = tmux_presence_note();
         assert!(
-            res.notes.iter().any(|n| n.starts_with("tmux:")),
+            note.starts_with("tmux:"),
             "expected a tmux presence note, got: {:?}",
-            res.notes
+            note
         );
     }
 
