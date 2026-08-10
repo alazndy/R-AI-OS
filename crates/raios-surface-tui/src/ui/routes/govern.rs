@@ -10,17 +10,74 @@ use ratatui::{
 
 use crate::app::store::Store;
 
-/// Renders the Govern route panel view.
-pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
-    let chunks = Layout::default()
+/// Shared Govern-route rectangles used by rendering and mouse hit testing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct GovernRouteLayout {
+    pub(crate) policy: Rect,
+    pub(crate) audit: Rect,
+    pub(crate) scheduler: Rect,
+    pub(crate) scheduler_actions: Rect,
+}
+
+/// Explicit scheduler actions exposed by the Govern route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GovernCronAction {
+    Trigger,
+    TogglePause,
+}
+
+/// Calculates the stable Govern panels for one dashboard content area.
+pub(crate) fn govern_route_layout(area: Rect) -> GovernRouteLayout {
+    let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
-
-    let left_chunks = Layout::default()
+    let left = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(chunks[0]);
+        .split(columns[0]);
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(6), Constraint::Length(3)])
+        .split(columns[1]);
+
+    GovernRouteLayout {
+        policy: left[0],
+        audit: left[1],
+        scheduler: right[0],
+        scheduler_actions: right[1],
+    }
+}
+
+/// Maps an explicit action-strip click to its bounded scheduler operation.
+pub(crate) fn govern_cron_action_at(
+    layout: GovernRouteLayout,
+    column: u16,
+    row: u16,
+) -> Option<GovernCronAction> {
+    let action_row = layout.scheduler_actions.y.saturating_add(1);
+    if row != action_row
+        || column < layout.scheduler_actions.x
+        || column
+            >= layout
+                .scheduler_actions
+                .x
+                .saturating_add(layout.scheduler_actions.width)
+    {
+        return None;
+    }
+    let relative_column = column.saturating_sub(layout.scheduler_actions.x);
+    [
+        (1, 14, GovernCronAction::Trigger),
+        (17, 37, GovernCronAction::TogglePause),
+    ]
+    .into_iter()
+    .find_map(|(start, end, action)| ((start..end).contains(&relative_column)).then_some(action))
+}
+
+/// Renders the Govern route panel view.
+pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
+    let layout = govern_route_layout(area);
 
     // 1. Security & Policy Summary
     let pol = &store.snapshot.govern.policy_summary;
@@ -74,7 +131,7 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
         }));
 
     let policy_p = Paragraph::new(policy_lines).block(policy_block);
-    f.render_widget(policy_p, left_chunks[0]);
+    f.render_widget(policy_p, layout.policy);
 
     // 2. Audit Ledger Stats
     let aud = &store.snapshot.govern.audit_summary;
@@ -122,7 +179,7 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
         }));
 
     let audit_p = Paragraph::new(audit_lines).block(audit_block);
-    f.render_widget(audit_p, left_chunks[1]);
+    f.render_widget(audit_p, layout.audit);
 
     // 3. Cron Scheduler Jobs
     let cron_items: Vec<ListItem> = if store.snapshot.govern.cron_jobs.is_empty() {
@@ -177,5 +234,51 @@ pub fn render_govern_route(f: &mut Frame, area: Rect, store: &Store) {
         }));
 
     let cron_list = List::new(cron_items).block(cron_block);
-    f.render_widget(cron_list, chunks[1]);
+    f.render_widget(cron_list, layout.scheduler);
+
+    let action_strip = Paragraph::new(Line::from(vec![
+        Span::styled(" [r] Run now ", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(
+            " [p] Pause/Resume ",
+            Style::default().fg(Color::Yellow).bold(),
+        ),
+        Span::styled(
+            " selected scheduler job",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if store.right_panel_focus {
+                Color::Green
+            } else {
+                Color::DarkGray
+            })),
+    );
+    f.render_widget(action_strip, layout.scheduler_actions);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{govern_cron_action_at, govern_route_layout, GovernCronAction};
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn action_strip_accepts_only_visible_scheduler_buttons() {
+        let layout = govern_route_layout(Rect::new(0, 0, 120, 36));
+        let row = layout.scheduler_actions.y + 1;
+        assert_eq!(
+            govern_cron_action_at(layout, layout.scheduler_actions.x + 2, row),
+            Some(GovernCronAction::Trigger)
+        );
+        assert_eq!(
+            govern_cron_action_at(layout, layout.scheduler_actions.x + 20, row),
+            Some(GovernCronAction::TogglePause)
+        );
+        assert_eq!(
+            govern_cron_action_at(layout, layout.scheduler_actions.x + 15, row),
+            None
+        );
+    }
 }

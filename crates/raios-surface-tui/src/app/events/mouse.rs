@@ -2,12 +2,20 @@
 
 use anyhow::Result;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 
 use crate::app::intent::Intent;
+use crate::app::operations::OperationPanel;
 use crate::app::reducer::reduce_intent;
 use crate::app::route::{dashboard_header_height, Route, LAUNCHER_HEIGHT, TABS_HEIGHT};
 use crate::app::state::AppState;
 use crate::app::{filtered_palette, App};
+use crate::ui::routes::explore::explore_route_layout;
+use crate::ui::routes::govern::{govern_cron_action_at, govern_route_layout, GovernCronAction};
+use crate::ui::routes::work::{
+    task_composer_action_at, work_route_layout, work_task_action_at, TaskComposerMouseAction,
+    WorkTaskAction,
+};
 
 impl App {
     /// Handles mouse clicks and scroll wheel events in the TUI dashboard.
@@ -24,9 +32,20 @@ impl App {
         let tabs_top = header_height;
         let content_top = tabs_top + TABS_HEIGHT;
         let launcher_top = self.height.saturating_sub(LAUNCHER_HEIGHT);
+        let content_area = Rect::new(
+            0,
+            content_top,
+            self.width,
+            launcher_top.saturating_sub(content_top),
+        );
 
         if self.ui.command_mode {
             self.handle_command_palette_mouse(mouse);
+            return Ok(());
+        }
+
+        if self.store.task_composer.is_open {
+            self.handle_task_composer_mouse(mouse, content_area);
             return Ok(());
         }
 
@@ -46,30 +65,42 @@ impl App {
             MouseEventKind::Down(MouseButton::Left)
                 if (content_top..launcher_top).contains(&mouse.row) =>
             {
-                let (row, right_panel_focus) = match self.store.current_route {
-                    Route::Now => (
-                        mouse.row.saturating_sub(content_top + 1) as usize,
-                        mouse.column >= self.width.saturating_mul(60) / 100,
-                    ),
-                    Route::Work => (
-                        mouse.row.saturating_sub(content_top + 1) as usize,
-                        mouse.column >= self.width.saturating_mul(40) / 100,
-                    ),
-                    Route::Explore => {
-                        let traces_end =
-                            content_top + 3 + launcher_top.saturating_sub(content_top + 3) / 2;
-                        if mouse.row < traces_end {
-                            (mouse.row.saturating_sub(content_top + 4) as usize, false)
+                if self.store.current_route == Route::Now {
+                    let action_top =
+                        launcher_top.saturating_sub(crate::ui::routes::now::NOW_ACTIONS_HEIGHT);
+                    if mouse.row >= action_top {
+                        self.select_operation_action(
+                            mouse.row.saturating_sub(action_top + 1) as usize
+                        );
+                    } else if mouse.row >= content_top + crate::ui::routes::now::NOW_SUMMARY_HEIGHT
+                    {
+                        let project_panel = mouse.column >= self.width / 2;
+                        self.set_operation_panel(if project_panel {
+                            OperationPanel::Project
                         } else {
-                            (mouse.row.saturating_sub(traces_end + 1) as usize, true)
+                            OperationPanel::Attention
+                        });
+                        if !project_panel {
+                            self.store.cursor = mouse.row.saturating_sub(
+                                content_top + crate::ui::routes::now::NOW_SUMMARY_HEIGHT + 1,
+                            ) as usize;
+                            self.select_control_row(self.store.cursor, false);
                         }
                     }
-                    Route::Govern => (
-                        mouse.row.saturating_sub(content_top + 1) as usize,
-                        mouse.column >= self.width / 2,
-                    ),
-                };
-                self.select_control_row(row, right_panel_focus);
+                    return Ok(());
+                }
+                if self.store.current_route == Route::Work {
+                    self.handle_work_mouse(mouse, content_area);
+                    return Ok(());
+                }
+                if self.store.current_route == Route::Explore {
+                    self.handle_explore_mouse(mouse, content_area);
+                    return Ok(());
+                }
+                if self.store.current_route == Route::Govern {
+                    self.handle_govern_mouse(mouse, content_area);
+                    return Ok(());
+                }
             }
             MouseEventKind::ScrollUp if (content_top..launcher_top).contains(&mouse.row) => {
                 self.move_control_cursor(false);
@@ -81,6 +112,98 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Handles visible WORK controls using the same geometry as the renderer.
+    fn handle_work_mouse(&mut self, mouse: MouseEvent, area: Rect) {
+        let MouseEventKind::Down(MouseButton::Left) = mouse.kind else {
+            return;
+        };
+        let layout = work_route_layout(area);
+
+        if let Some(action) = work_task_action_at(layout, mouse.column, mouse.row) {
+            match action {
+                WorkTaskAction::Create => self.begin_task_composer(),
+                WorkTaskAction::SetInProgress => self.update_selected_work_task("in_progress"),
+                WorkTaskAction::SetBlocked => self.update_selected_work_task("blocked"),
+                WorkTaskAction::SetCompleted => self.update_selected_work_task("completed"),
+            }
+            return;
+        }
+
+        if rect_contains(layout.projects, mouse.column, mouse.row) {
+            self.select_control_row(
+                mouse
+                    .row
+                    .saturating_sub(layout.projects.y.saturating_add(1)) as usize,
+                false,
+            );
+        } else if rect_contains(layout.tasks, mouse.column, mouse.row) {
+            self.select_control_row(
+                mouse.row.saturating_sub(layout.tasks.y.saturating_add(1)) as usize,
+                true,
+            );
+        }
+    }
+
+    /// Keeps Explore click targets aligned with the renderer's shared layout.
+    fn handle_explore_mouse(&mut self, mouse: MouseEvent, area: Rect) {
+        let MouseEventKind::Down(MouseButton::Left) = mouse.kind else {
+            return;
+        };
+        let layout = explore_route_layout(area);
+
+        if rect_contains(layout.search, mouse.column, mouse.row) {
+            self.store.explore_search.begin();
+        } else if rect_contains(layout.results, mouse.column, mouse.row) {
+            let row = mouse.row.saturating_sub(layout.results.y.saturating_add(1)) as usize;
+            self.select_control_row(row, false);
+        } else if rect_contains(layout.logs, mouse.column, mouse.row) {
+            let row = mouse.row.saturating_sub(layout.logs.y.saturating_add(1)) as usize;
+            self.select_control_row(row, true);
+        }
+    }
+
+    /// Keeps GOVERN scheduler clicks aligned with the visible action strip.
+    fn handle_govern_mouse(&mut self, mouse: MouseEvent, area: Rect) {
+        let MouseEventKind::Down(MouseButton::Left) = mouse.kind else {
+            return;
+        };
+        let layout = govern_route_layout(area);
+        if let Some(action) = govern_cron_action_at(layout, mouse.column, mouse.row) {
+            match action {
+                GovernCronAction::Trigger => self.trigger_selected_cron_job(),
+                GovernCronAction::TogglePause => self.toggle_selected_cron_job(),
+            }
+            return;
+        }
+        if rect_contains(layout.scheduler, mouse.column, mouse.row) {
+            let row = mouse
+                .row
+                .saturating_sub(layout.scheduler.y.saturating_add(1))
+                as usize;
+            self.select_control_row(row, true);
+        }
+    }
+
+    /// Handles only explicit composer buttons; typing remains keyboard-driven.
+    fn handle_task_composer_mouse(&mut self, mouse: MouseEvent, area: Rect) {
+        let MouseEventKind::Down(MouseButton::Left) = mouse.kind else {
+            return;
+        };
+        match task_composer_action_at(area, mouse.column, mouse.row) {
+            Some(TaskComposerMouseAction::DecreasePriority) => {
+                self.store.task_composer.priority =
+                    self.store.task_composer.priority.saturating_sub(10);
+            }
+            Some(TaskComposerMouseAction::IncreasePriority) => {
+                self.store.task_composer.priority =
+                    self.store.task_composer.priority.saturating_add(10);
+            }
+            Some(TaskComposerMouseAction::Cancel) => self.store.task_composer.cancel(),
+            Some(TaskComposerMouseAction::Submit) => self.submit_task_composer(),
+            None => {}
+        }
     }
 
     fn handle_command_palette_mouse(&mut self, mouse: MouseEvent) {
@@ -119,4 +242,11 @@ impl App {
             _ => {}
         }
     }
+}
+
+fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
+    column >= rect.x
+        && column < rect.x.saturating_add(rect.width)
+        && row >= rect.y
+        && row < rect.y.saturating_add(rect.height)
 }

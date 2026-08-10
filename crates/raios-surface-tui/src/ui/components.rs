@@ -126,8 +126,12 @@ pub fn render_launcher(frame: &mut Frame, area: Rect, app: &App) {
         ])
     } else if app.state == raios_surface_tui::app::state::AppState::Dashboard {
         let action_hint = match app.store.current_route {
-            raios_surface_tui::app::route::Route::Now => " [a] approve  [r] reject",
-            raios_surface_tui::app::route::Route::Work => " [/] Command Center",
+            raios_surface_tui::app::route::Route::Now => {
+                " [Space] panel  [Enter] next action  [a/r] resolve approval  [g] refresh"
+            }
+            raios_surface_tui::app::route::Route::Work => {
+                " [n] new task  [i/b/c] status  [/] Command Center"
+            }
             raios_surface_tui::app::route::Route::Explore => " [/] Command Center",
             raios_surface_tui::app::route::Route::Govern => " [r] run job  [g] refresh",
         };

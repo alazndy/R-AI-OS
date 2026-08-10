@@ -26,6 +26,7 @@ pub mod ipc_support;
 pub mod client;
 pub mod control_navigation;
 pub mod intent;
+pub mod operations;
 pub mod reducer;
 pub mod route;
 pub mod store;
@@ -678,12 +679,21 @@ impl App {
     }
 
     pub(crate) fn update_search(&mut self) {
+        let query = self.search.query.trim();
+        if query.is_empty() {
+            return;
+        }
+        if query.chars().count() > 240 {
+            self.search.status = Some("Search query must contain at most 240 characters.".into());
+            return;
+        }
+        if raios_core::security::looks_like_secret(query).is_some() {
+            self.search.status =
+                Some("Search query appears to contain a secret and was not sent.".into());
+            return;
+        }
         if let Some(ref tx) = self.tx_daemon {
-            let cmd = format!(
-                "{{\"command\":\"Search\",\"query\":\"{}\"}}",
-                self.search.query
-            );
-            let _ = tx.send(cmd);
+            let _ = tx.send(daemon_search_command(query));
         }
     }
 

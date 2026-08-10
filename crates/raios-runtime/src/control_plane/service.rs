@@ -7,9 +7,16 @@ use raios_contracts::{
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+const MAX_TASK_TITLE_CHARS: usize = 240;
+const MAX_PROJECT_PATH_CHARS: usize = 4_096;
+const MAX_AGENT_PROMPT_CHARS: usize = 600;
+const OPERATOR_TASK_STATUSES: &[&str] =
+    &["queued", "in_progress", "blocked", "completed", "cancelled"];
 
 /// Principal derived by an authenticated transport. It is intentionally not
 /// serialized or accepted from a client payload.
@@ -172,7 +179,7 @@ pub fn load_work_snapshot(conn: &Connection) -> Result<WorkSnapshot, String> {
             project_path: t.project_name,
             assignee: t.assignee_id,
             status: t.status,
-            priority: 1,
+            priority: t.priority.clamp(0, i64::from(u8::MAX)) as u8,
             created_at: t.created_at,
         })
         .collect();
@@ -417,6 +424,102 @@ fn command_name(cmd: &Command) -> &'static str {
     }
 }
 
+fn validate_task_title(title: &str) -> Result<String, Problem> {
+    let title = title.trim();
+    if title.is_empty() || title.chars().count() > MAX_TASK_TITLE_CHARS {
+        return Err(Problem::invalid_input(format!(
+            "Task title must contain 1 to {MAX_TASK_TITLE_CHARS} characters"
+        )));
+    }
+    if raios_core::security::looks_like_secret(title).is_some() {
+        return Err(Problem::invalid_input(
+            "Task title appears to contain a secret and was not stored",
+        ));
+    }
+    Ok(title.to_owned())
+}
+
+fn validate_project_path(project_path: Option<&str>) -> Result<Option<String>, Problem> {
+    let Some(project_path) = project_path else {
+        return Ok(None);
+    };
+    let project_path = project_path.trim();
+    if project_path.is_empty() || project_path.chars().count() > MAX_PROJECT_PATH_CHARS {
+        return Err(Problem::invalid_input(format!(
+            "Project path must contain 1 to {MAX_PROJECT_PATH_CHARS} characters"
+        )));
+    }
+    if !std::path::Path::new(project_path).is_absolute() {
+        return Err(Problem::invalid_input("Project path must be absolute"));
+    }
+    Ok(Some(project_path.to_owned()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentLaunchRequest {
+    agent_name: String,
+    project_path: String,
+    prompt: Option<String>,
+}
+
+fn validate_agent_name(agent_name: &str) -> Result<String, Problem> {
+    match agent_name.trim().to_ascii_lowercase().as_str() {
+        "claude" => Ok("claude".into()),
+        "codex" => Ok("codex".into()),
+        "opencode" => Ok("opencode".into()),
+        "antigravity" | "agy" => Ok("antigravity".into()),
+        _ => Err(Problem::invalid_input(
+            "Agent must be one of: claude, codex, opencode, antigravity",
+        )),
+    }
+}
+
+fn validate_agent_prompt(prompt: Option<&str>) -> Result<Option<String>, Problem> {
+    let Some(prompt) = prompt else {
+        return Ok(None);
+    };
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Ok(None);
+    }
+    if prompt.starts_with('-') || prompt.chars().count() > MAX_AGENT_PROMPT_CHARS {
+        return Err(Problem::invalid_input(format!(
+            "Agent prompt must contain 1 to {MAX_AGENT_PROMPT_CHARS} characters and cannot begin with '- '"
+        )));
+    }
+    if raios_core::security::looks_like_secret(prompt).is_some() {
+        return Err(Problem::invalid_input(
+            "Agent prompt appears to contain a secret and was not sent",
+        ));
+    }
+    Ok(Some(prompt.to_owned()))
+}
+
+/// Opens the trusted wrapper in a separate terminal, preserving the agent's
+/// interactive TTY and all existing `raios run` session tracking.
+fn launch_agent_in_terminal(request: &AgentLaunchRequest) -> Result<(), Problem> {
+    let mut args = vec![
+        "run".into(),
+        request.agent_name.clone(),
+        "--project".into(),
+        request.project_path.clone(),
+    ];
+    if let Some(prompt) = &request.prompt {
+        args.push(prompt.clone());
+    }
+    if raios_core::core::process::launch_in_terminal_argv(
+        "raios",
+        &args,
+        Path::new(&request.project_path),
+    ) {
+        Ok(())
+    } else {
+        Err(Problem::internal(
+            "No supported terminal launcher was available for the requested agent session",
+        ))
+    }
+}
+
 /// Dispatches a control-plane command with payload-bound idempotency, atomic DB
 /// execution, explicit unsupported-command errors, and a transactional audit entry.
 ///
@@ -488,6 +591,7 @@ pub fn dispatch_control_command(
         .unchecked_transaction()
         .map_err(|e| Problem::internal(format!("Failed starting transaction: {}", e)))?;
 
+    let mut launch_request: Option<AgentLaunchRequest> = None;
     let result_val: Option<serde_json::Value> = match cmd {
         Command::ApproveHandoff { approval_id, .. } => {
             let handoff = tx
@@ -594,6 +698,130 @@ pub fn dispatch_control_command(
                 .map_err(|e| Problem::internal(e.to_string()))?;
             Some(serde_json::json!({"job_id": job_id, "status": status_str}))
         }
+        Command::LaunchAgent {
+            agent_name,
+            project_path,
+            prompt,
+            ..
+        } => {
+            let agent_name = validate_agent_name(agent_name)?;
+            let project_path = validate_project_path(Some(project_path))?
+                .ok_or_else(|| Problem::invalid_input("Project path is required"))?;
+            let project_exists: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM projects WHERE path = ?1",
+                    params![project_path],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| Problem::internal(error.to_string()))?;
+            if project_exists.is_none() {
+                return Err(Problem::not_found(
+                    "Agent launch requires a registered project path",
+                ));
+            }
+            let prompt = validate_agent_prompt(prompt.as_deref())?;
+            launch_request = Some(AgentLaunchRequest {
+                agent_name: agent_name.clone(),
+                project_path: project_path.clone(),
+                prompt,
+            });
+            Some(serde_json::json!({
+                "agent_name": agent_name,
+                "project_path": project_path,
+                "status": "launching",
+            }))
+        }
+        Command::CreateTask {
+            title,
+            project_path,
+            priority,
+            ..
+        } => {
+            let title = validate_task_title(title)?;
+            let project_path = validate_project_path(project_path.as_deref())?;
+            let project_id = project_path
+                .as_deref()
+                .map(|path| {
+                    tx.query_row(
+                        "SELECT id FROM projects WHERE path = ?1",
+                        params![path],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()
+                })
+                .transpose()
+                .map_err(|error| Problem::internal(error.to_string()))?
+                .flatten();
+            let task_id = uuid::Uuid::new_v4().to_string();
+            let now = Utc::now().to_rfc3339();
+            let display_order: i64 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(display_order), -1) + 1 FROM cp_task_list_items",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|error| Problem::internal(error.to_string()))?;
+
+            tx.execute(
+                "INSERT INTO cp_tasks
+                 (id, project_id, plan_id, parent_task_id, title, description, priority, status,
+                  assignee_kind, assignee_id, acceptance_criteria, created_at, updated_at)
+                 VALUES (?1, ?2, NULL, NULL, ?3, '', ?4, 'queued',
+                         NULL, NULL, '', ?5, ?5)",
+                params![task_id, project_id, title, i64::from(*priority), now],
+            )
+            .map_err(|error| Problem::internal(error.to_string()))?;
+            tx.execute(
+                "INSERT INTO cp_task_list_items
+                 (task_id, source_kind, source_path, display_order, project_name, created_at)
+                 VALUES (?1, 'tui', 'control-plane', ?2, ?3, ?4)",
+                params![task_id, display_order, project_path, now],
+            )
+            .map_err(|error| Problem::internal(error.to_string()))?;
+
+            Some(serde_json::json!({
+                "task_id": task_id,
+                "status": "queued",
+            }))
+        }
+        Command::UpdateTaskStatus {
+            task_id, status, ..
+        } => {
+            let status = status.trim();
+            if task_id.trim().is_empty() || !OPERATOR_TASK_STATUSES.contains(&status) {
+                return Err(Problem::invalid_input(
+                    "Task id and an allowed operator task status are required",
+                ));
+            }
+            let now = Utc::now().to_rfc3339();
+            let changed = tx
+                .execute(
+                    "UPDATE cp_tasks
+                     SET status = ?1, updated_at = ?2
+                     WHERE id = ?3
+                       AND plan_id IS NULL
+                       AND parent_task_id IS NULL
+                       AND EXISTS (
+                         SELECT 1 FROM cp_task_list_items li
+                         WHERE li.task_id = cp_tasks.id AND li.source_kind = 'tui'
+                       )
+                       AND NOT EXISTS (
+                         SELECT 1 FROM cp_approvals ap WHERE ap.task_id = cp_tasks.id
+                       )
+                       AND NOT EXISTS (
+                         SELECT 1 FROM cp_agent_runs ar WHERE ar.task_id = cp_tasks.id
+                       )",
+                    params![status, now, task_id],
+                )
+                .map_err(|error| Problem::internal(error.to_string()))?;
+            if changed != 1 {
+                return Err(Problem::not_found(
+                    "TUI-managed personal task was not found or cannot be updated",
+                ));
+            }
+            Some(serde_json::json!({"task_id": task_id, "status": status}))
+        }
         unhandled => {
             return Err(Problem::not_implemented(format!(
                 "Command '{:?}' is not implemented",
@@ -621,6 +849,21 @@ pub fn dispatch_control_command(
 
     tx.commit()
         .map_err(|e| Problem::internal(format!("Commit failed: {}", e)))?;
+
+    if let Some(request) = launch_request {
+        if let Err(problem) = launch_agent_in_terminal(&request) {
+            let failed_result = serde_json::json!({
+                "agent_name": request.agent_name,
+                "project_path": request.project_path,
+                "status": "failed_to_launch",
+            });
+            let _ = conn.execute(
+                "UPDATE cp_idempotency SET result_json = ?1, status = 'FAILED' WHERE idempotency_key = ?2",
+                params![failed_result.to_string(), key],
+            );
+            return Err(problem);
+        }
+    }
 
     Ok(result_val)
 }
@@ -840,19 +1083,133 @@ mod tests {
     }
 
     #[test]
-    fn command_unsupported_returns_not_implemented() {
+    fn launch_agent_rejects_unknown_identity_before_terminal_spawn() {
         let mut conn = Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap();
 
         let unsupported = Command::LaunchAgent {
-            agent_name: "codex".into(),
+            agent_name: "codex; touch /tmp/pwned".into(),
             prompt: Some("Do something".into()),
             project_path: "/tmp".into(),
-            idempotency_key: "idem-unsupported".into(),
+            idempotency_key: "idem-invalid-agent".into(),
         };
 
         let res = dispatch_control_command(&mut conn, &ControlActor::test_local(), &unsupported);
         assert!(res.is_err());
-        assert_eq!(res.unwrap_err().code, "NOT_IMPLEMENTED");
+        assert_eq!(res.unwrap_err().code, "INVALID_INPUT");
+    }
+
+    #[test]
+    fn launch_validation_bounds_identity_and_prompt_without_spawning() {
+        assert_eq!(validate_agent_name(" AGY ").unwrap(), "antigravity");
+        assert!(validate_agent_name("codex; touch /tmp/pwned").is_err());
+        assert_eq!(
+            validate_agent_prompt(Some("  inspect the project ")).unwrap(),
+            Some("inspect the project".into())
+        );
+        assert!(validate_agent_prompt(Some("--dangerous-extra-flag")).is_err());
+        assert!(validate_agent_prompt(Some(&"x".repeat(MAX_AGENT_PROMPT_CHARS + 1))).is_err());
+    }
+
+    #[test]
+    fn tui_personal_task_create_and_status_update_are_transactional() {
+        let project_path = if cfg!(windows) {
+            r"C:\workspace\raios"
+        } else {
+            "/workspace/raios"
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (name, path) VALUES ('R-AI-OS', ?1)",
+            params![project_path],
+        )
+        .unwrap();
+
+        let create = Command::CreateTask {
+            title: "Build WORK task composer".into(),
+            project_path: Some(project_path.into()),
+            priority: 180,
+            idempotency_key: "create-tui-task".into(),
+        };
+        let result = dispatch_control_command(&mut conn, &ControlActor::test_local(), &create)
+            .unwrap()
+            .unwrap();
+        let task_id = result["task_id"].as_str().unwrap().to_owned();
+        assert_eq!(result["status"], "queued");
+
+        let snapshot = load_work_snapshot(&conn).unwrap();
+        let task = snapshot
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .unwrap();
+        assert_eq!(task.project_path.as_deref(), Some(project_path));
+        assert_eq!(task.priority, 180);
+
+        let update = Command::UpdateTaskStatus {
+            task_id: task_id.clone(),
+            status: "in_progress".into(),
+            idempotency_key: "update-tui-task".into(),
+        };
+        let result = dispatch_control_command(&mut conn, &ControlActor::test_local(), &update)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["status"], "in_progress");
+        assert_eq!(
+            conn.query_row(
+                "SELECT status FROM cp_tasks WHERE id = ?1",
+                params![task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "in_progress"
+        );
+    }
+
+    #[test]
+    fn task_commands_reject_invalid_or_non_tui_managed_mutations() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let invalid_create = Command::CreateTask {
+            title: " ".into(),
+            project_path: None,
+            priority: 50,
+            idempotency_key: "empty-tui-task".into(),
+        };
+        assert_eq!(
+            dispatch_control_command(&mut conn, &ControlActor::test_local(), &invalid_create)
+                .unwrap_err()
+                .code,
+            "INVALID_INPUT"
+        );
+
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO cp_tasks
+             (id, plan_id, parent_task_id, title, description, priority, status,
+              acceptance_criteria, created_at, updated_at)
+             VALUES ('markdown-task', NULL, NULL, 'Legacy task', '', 50, 'queued', '', ?1, ?1)",
+            params![now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cp_task_list_items
+             (task_id, source_kind, source_path, display_order, created_at)
+             VALUES ('markdown-task', 'markdown', 'tasks.md', 0, ?1)",
+            params![now],
+        )
+        .unwrap();
+        let protected_update = Command::UpdateTaskStatus {
+            task_id: "markdown-task".into(),
+            status: "completed".into(),
+            idempotency_key: "protect-legacy-task".into(),
+        };
+        assert_eq!(
+            dispatch_control_command(&mut conn, &ControlActor::test_local(), &protected_update)
+                .unwrap_err()
+                .code,
+            "NOT_FOUND"
+        );
     }
 }

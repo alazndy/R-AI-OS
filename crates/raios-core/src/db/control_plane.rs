@@ -107,6 +107,7 @@ pub fn cp_task_graph_shell_cmd(conn: &Connection, task_id: &str) -> Result<Optio
 pub struct UnifiedTaskRow {
     pub id: String,
     pub title: String,
+    pub priority: i64,
     pub status: String,
     /// "personal" | "task_graph" | "file_approval" | "swarm"
     pub origin: String,
@@ -159,7 +160,7 @@ const ORIGIN_EXPR: &str = "
 /// All non-terminal tasks from cp_tasks, ordered by updated_at DESC.
 pub fn cp_query_active_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> {
     let sql = format!(
-        "SELECT t.id, t.title, t.status, {origin} AS origin,
+        "SELECT t.id, t.title, t.priority, t.status, {origin} AS origin,
                 t.assignee_id, li.project_name, t.created_at, t.updated_at
          FROM cp_tasks t
          LEFT JOIN cp_task_list_items li ON li.task_id = t.id
@@ -172,12 +173,13 @@ pub fn cp_query_active_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> {
         Ok(UnifiedTaskRow {
             id: row.get(0)?,
             title: row.get(1)?,
-            status: row.get(2)?,
-            origin: row.get(3)?,
-            assignee_id: row.get(4)?,
-            project_name: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
+            priority: row.get(2)?,
+            status: row.get(3)?,
+            origin: row.get(4)?,
+            assignee_id: row.get(5)?,
+            project_name: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
         })
     })?;
     rows.collect()
@@ -186,7 +188,7 @@ pub fn cp_query_active_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> {
 /// All blocked tasks (status = 'blocked').
 pub fn cp_query_blocked_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> {
     let sql = format!(
-        "SELECT t.id, t.title, t.status, {origin} AS origin,
+        "SELECT t.id, t.title, t.priority, t.status, {origin} AS origin,
                 t.assignee_id, li.project_name, t.created_at, t.updated_at
          FROM cp_tasks t
          LEFT JOIN cp_task_list_items li ON li.task_id = t.id
@@ -199,12 +201,13 @@ pub fn cp_query_blocked_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> 
         Ok(UnifiedTaskRow {
             id: row.get(0)?,
             title: row.get(1)?,
-            status: row.get(2)?,
-            origin: row.get(3)?,
-            assignee_id: row.get(4)?,
-            project_name: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
+            priority: row.get(2)?,
+            status: row.get(3)?,
+            origin: row.get(4)?,
+            assignee_id: row.get(5)?,
+            project_name: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
         })
     })?;
     rows.collect()

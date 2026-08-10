@@ -223,6 +223,72 @@ pub fn launch_in_terminal(command: &str, work_dir: &Path) -> bool {
     }
 }
 
+/// Starts a trusted executable inside a terminal emulator without constructing
+/// a shell command. Callers must still validate the executable and arguments;
+/// this primitive deliberately preserves every argument boundary.
+pub fn launch_in_terminal_argv(program: &str, args: &[String], work_dir: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let work_dir = work_dir.to_string_lossy().into_owned();
+        return Command::new("wt")
+            .args(["-d", &work_dir, "--", program])
+            .args(args)
+            .spawn()
+            .is_ok();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (program, args, work_dir);
+        // AppleScript terminal invocation is string-based; fail closed here
+        // rather than weakening argv boundaries for user-provided prompts.
+        return false;
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        let work_dir = work_dir.to_string_lossy().into_owned();
+        let candidates: [(&str, Vec<String>); 4] = [
+            (
+                "x-terminal-emulator",
+                std::iter::once("-e".into())
+                    .chain(std::iter::once(program.into()))
+                    .chain(args.iter().cloned())
+                    .collect(),
+            ),
+            (
+                "gnome-terminal",
+                std::iter::once("--working-directory".into())
+                    .chain(std::iter::once(work_dir.clone()))
+                    .chain(std::iter::once("--".into()))
+                    .chain(std::iter::once(program.into()))
+                    .chain(args.iter().cloned())
+                    .collect(),
+            ),
+            (
+                "konsole",
+                std::iter::once("--workdir".into())
+                    .chain(std::iter::once(work_dir))
+                    .chain(std::iter::once("-e".into()))
+                    .chain(std::iter::once(program.into()))
+                    .chain(args.iter().cloned())
+                    .collect(),
+            ),
+            (
+                "xterm",
+                std::iter::once("-e".into())
+                    .chain(std::iter::once(program.into()))
+                    .chain(args.iter().cloned())
+                    .collect(),
+            ),
+        ];
+
+        candidates.into_iter().any(|(terminal, terminal_args)| {
+            Command::new(terminal).args(terminal_args).spawn().is_ok()
+        })
+    }
+}
+
 fn escape_shell_arg(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

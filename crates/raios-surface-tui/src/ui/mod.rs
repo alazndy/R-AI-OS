@@ -1,5 +1,6 @@
 //! Main UI rendering engine and syntax highlighter for the TUI surface.
 
+pub mod brand;
 pub mod components;
 pub mod filebrowser;
 pub mod health;
@@ -30,17 +31,19 @@ use ratatui::{
 
 use raios_surface_tui::app::{App, AppState};
 
+use brand::{BRAND_BLUE, BRAND_BLUE_DEEP, BRAND_INK, BRAND_ORANGE, BRAND_ORANGE_DEEP, BRAND_PANEL};
+
 // ─── Colour palette ──────────────────────────────────────────────────────────
 
-const GREEN: Color = Color::Rgb(0, 200, 180); // Turquoise (turkuaz)
-const CYAN: Color = Color::Rgb(0, 180, 255); // Cyan (cyan)
+const GREEN: Color = BRAND_BLUE; // Brand electric blue
+const CYAN: Color = BRAND_BLUE_DEEP; // Brand deep blue
 const DIM: Color = Color::Rgb(80, 80, 80);
 const MID: Color = Color::Rgb(170, 170, 170);
-const AMBER: Color = Color::Rgb(255, 100, 20); // Orange (turuncu)
-const RED: Color = Color::Rgb(255, 60, 0); // Orange-Red
-const MAGENTA: Color = Color::Rgb(30, 120, 255); // Blue (mavi)
-const PANEL_BG: Color = Color::Rgb(8, 12, 16);
-const HEADER_BG: Color = Color::Rgb(0, 12, 30);
+const AMBER: Color = BRAND_ORANGE; // Brand hot orange
+const RED: Color = BRAND_ORANGE_DEEP; // Brand orange-red
+const MAGENTA: Color = BRAND_BLUE_DEEP; // Brand deep blue
+const PANEL_BG: Color = BRAND_INK;
+const HEADER_BG: Color = BRAND_PANEL;
 
 // ─── Spinner ─────────────────────────────────────────────────────────────────
 
@@ -50,16 +53,6 @@ const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧
 pub fn spinner_char(tick: u64) -> char {
     SPINNER[(tick as usize) % SPINNER.len()]
 }
-
-// ─── Banner (6 lines) ────────────────────────────────────────────────────────
-
-const BANNER: &str = "\
-  ██████╗       █████╗ ██╗      ██████╗ ███████╗\n\
-  ██╔══██╗     ██╔══██╗██║     ██╔═══██╗██╔════╝\n\
-  ██████╔╝     ███████║██║     ██║   ██║███████╗\n\
-  ██╔══██╗     ██╔══██║██║     ██║   ██║╚════██║\n\
-  ██║  ██║     ██║  ██║██║     ╚██████╔╝███████║\n\
-  ╚═╝  ╚═╝     ╚═╝  ╚═╝╚═╝      ╚═════╝ ╚══════╝";
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
