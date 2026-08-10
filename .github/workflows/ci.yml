@@ -52,17 +52,27 @@ jobs:
         with:
           toolchain: 1.96.0
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
-      - name: Start tmux server (steer feature tests spawn real tmux sessions)
+      - name: Ensure tmux is installed and its server is running (steer feature tests need it)
         if: runner.os != 'Windows'
         # `cargo test` runs many tests in parallel, and several spawn a real
         # `tmux new-session` concurrently. If no tmux server exists yet, the
         # very first `new-session` call has to bootstrap one — a race that
         # can make a losing concurrent call fail outright. Pre-starting the
         # server here (a no-op if one is already running) removes that race
-        # before any test touches tmux. Not run on Windows: those tmux tests
-        # are `#[cfg_attr(windows, ignore)]`/module-`cfg(not(windows))`'d out,
+        # before any test touches tmux. macos-latest doesn't ship tmux at
+        # all, so install it first there; ubuntu-latest already has it.
+        # Not run on Windows: those tmux tests are
+        # `#[cfg_attr(windows, ignore)]`/module-`cfg(not(windows))`'d out,
         # since tmux has no Windows implementation.
-        run: tmux start-server
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              brew install tmux
+            else
+              sudo apt-get update && sudo apt-get install -y tmux
+            fi
+          fi
+          tmux start-server
       - run: cargo test --workspace --locked
 
   clippy:

@@ -648,31 +648,35 @@ mod tests {
             });
         }
 
-        // Death Timer widened from the original 5s (Task 2) to 30s: under
-        // `cargo test --workspace --lib`'s full parallel run, dozens of
-        // `#[tokio::test]`s across the workspace fork real `tmux`
-        // subprocesses at once, and on a contended box that can slow every
-        // individual `tmux display-message`/`tmux new-session` call enough
-        // that `spawn_via_tmux`'s internal exit-status poller — itself
-        // bounded by this same Death Timer — runs out of polls and declares
-        // "Killed by Death Timer (Timeout)" before it ever observes `true`'s
-        // (near-instant) real exit. Confirmed via Task 8's mandatory
-        // full-workspace verification: a prior fix here that only widened
-        // this test's own *outer* wait loop (not the Death Timer itself)
-        // masked the first symptom (status still "Running") but not this
-        // one — the production poller had already given up and recorded
-        // "Killed by Death Timer" by the time the outer loop's window
-        // closed. Giving the poller a much larger budget (and lengthening
-        // the outer wait to match) fixes the actual bottleneck rather than
-        // widening the wrong wait; this is a test-only timing change to a
-        // pre-existing Task 2 test, not a `spawn_via_tmux` behavior change.
+        // Death Timer widened from the original 5s (Task 2) to 30s, then to
+        // 60s here: under `cargo test --workspace --lib`'s full parallel
+        // run, dozens of `#[tokio::test]`s across the workspace fork real
+        // `tmux` subprocesses at once, and on a contended box that can slow
+        // every individual `tmux display-message`/`tmux new-session` call
+        // enough that `spawn_via_tmux`'s internal exit-status poller —
+        // itself bounded by this same Death Timer — runs out of polls and
+        // declares "Killed by Death Timer (Timeout)" before it ever
+        // observes `true`'s (near-instant) real exit. Confirmed via Task 8's
+        // mandatory full-workspace verification: a prior fix here that only
+        // widened this test's own *outer* wait loop (not the Death Timer
+        // itself) masked the first symptom (status still "Running") but not
+        // this one — the production poller had already given up and
+        // recorded "Killed by Death Timer" by the time the outer loop's
+        // window closed. Giving the poller a much larger budget (and
+        // lengthening the outer wait to match) fixes the actual bottleneck
+        // rather than widening the wrong wait; this is a test-only timing
+        // change to a pre-existing Task 2 test, not a `spawn_via_tmux`
+        // behavior change. Widened again from 30s to 60s (outer wait 40s to
+        // 70s) after this same test still hit the 30s Death Timer under CI's
+        // `cargo llvm-cov` coverage job, whose instrumentation overhead is
+        // slower again than a plain `cargo test` run.
         proxy
-            .spawn_via_tmux(id, "true", &[], ".", 30)
+            .spawn_via_tmux(id, "true", &[], ".", 60)
             .await
             .expect("tmux spawn should succeed");
 
         let mut status = String::new();
-        for _ in 0..400 {
+        for _ in 0..700 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let s = state.read().await;
             if let Some(agent) = s.active_agents.iter().find(|a| a.id == id) {
