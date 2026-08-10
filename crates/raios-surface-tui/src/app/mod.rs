@@ -9,7 +9,7 @@ use notify::{Config as WatchConfig, RecursiveMode, Watcher};
 use raios_core::config::Config;
 #[allow(unused_imports)]
 use raios_core::safe_io;
-use raios_runtime::filebrowser::{load_file_content, load_recent_projects, FileEntry};
+use raios_runtime::filebrowser::{load_file_content, load_recent_projects};
 
 pub mod state;
 pub use state::*;
@@ -128,6 +128,10 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     PaletteItem {
         cmd: "/task",
         desc: "Tasks: /task add <text> | /task send <agent>",
+    },
+    PaletteItem {
+        cmd: "/tasks",
+        desc: "Open local Markdown task manager",
     },
     PaletteItem {
         cmd: "/timeline",
@@ -368,6 +372,45 @@ impl App {
         }
     }
 
+    /// Constructs a minimal `App` for unit tests. Unlike `new()`, this does
+    /// not spawn background threads, auto-launch the local daemon, or attempt
+    /// any network/filesystem I/O — those side effects are unsafe to trigger
+    /// inside `cargo test`.
+    #[cfg(test)]
+    pub(crate) fn test_instance() -> Self {
+        let (tx, rx) = mpsc::channel::<BgMsg>();
+        Self {
+            state: AppState::Dashboard,
+            should_quit: false,
+            tick: 0,
+            config: Config::default(),
+            setup: SetupState::default(),
+            search: SearchState::default(),
+            system: SystemState::default(),
+            ui: UIState::default(),
+            inventory: InventoryState::default(),
+            editor: EditorState::default(),
+            health: HealthState::default(),
+            projects: ProjectState::default(),
+            tx,
+            rx,
+            tx_daemon: None,
+            is_remote: false,
+            remote_host: None,
+            width: 80,
+            height: 24,
+            timeline: TimelineState::default(),
+            mempalace: MempalaceState::default(),
+            tasks: TaskState::default(),
+            ext: ExtState::default(),
+            _watcher: None,
+            wizard: WizardState::default(),
+            constitution: ConstitutionState::default(),
+            store: store::Store::new(),
+            client: client::Client::new(None),
+        }
+    }
+
     /// Launch TUI connected to a remote Cortex Hub over Tailscale.
     /// Skips local daemon auto-spawn and embedded workers.
     pub fn new_remote(host: String) -> Self {
@@ -497,17 +540,6 @@ impl App {
             )))
             .ok();
         });
-    }
-
-    /// Returns list of files associated with the active menu item.
-    pub fn current_menu_files(&self) -> Vec<FileEntry> {
-        match self.ui.menu_cursor {
-            1 => vec![],
-            3 => self.inventory.agent_files.clone(),
-            4 => self.inventory.policy_files.clone(),
-            5 => self.inventory.mempalace_files.clone(),
-            _ => vec![],
-        }
     }
 
     /// Discovers and reloads available constitution files into editor tabs.

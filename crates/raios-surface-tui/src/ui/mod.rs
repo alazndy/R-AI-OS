@@ -74,6 +74,12 @@ pub fn render(frame: &mut Frame, app: &App) {
         AppState::FileEdit => render_file_edit(frame, app),
         AppState::ProjectDetail => render_project_detail(frame, app),
         AppState::HealthView => render_health_view(frame, app),
+        AppState::ConstitutionView => render_constitution(frame, frame.area(), app),
+        AppState::ExtensionsView => render_extensions(frame, frame.area(), app),
+        AppState::TasksView => render_tasks_view(frame, app),
+        AppState::SearchView => render_search_panel(frame, frame.area(), app),
+        AppState::ActiveAgentsView => render_logs(frame, frame.area(), app),
+        AppState::TimelineView => render_timeline(frame, frame.area(), app),
         AppState::MemPalaceView => render_mempalace_view(frame, app),
         AppState::GraphReport => render_graph_report(frame, app),
         AppState::GitDiffView => render_git_diff_view(frame, app),
@@ -441,3 +447,66 @@ fn build_preview(app: &App) -> Vec<Line<'static>> {
 // ─── File-changed notification badge ─────────────────────────────────────────
 
 // ─── Agent launcher modal ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod render_dispatch_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn rendered_text(app: &App) -> String {
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<&str>>()
+            .join("")
+    }
+
+    #[test]
+    fn constitution_view_renders_empty_state_hint() {
+        let mut app = App::test_instance();
+        app.state = AppState::ConstitutionView;
+        assert!(rendered_text(&app).contains("empty or unparsed"));
+    }
+
+    #[test]
+    fn extensions_view_renders_loading_state() {
+        let mut app = App::test_instance();
+        app.state = AppState::ExtensionsView;
+        assert!(rendered_text(&app).contains("Loading extensions"));
+    }
+
+    #[test]
+    fn tasks_view_renders_empty_state_hint() {
+        let mut app = App::test_instance();
+        app.state = AppState::TasksView;
+        assert!(rendered_text(&app).contains("No tasks"));
+    }
+
+    #[test]
+    fn search_view_renders_empty_state_hint() {
+        let mut app = App::test_instance();
+        app.state = AppState::SearchView;
+        assert!(rendered_text(&app).contains("No index"));
+    }
+
+    #[test]
+    fn active_agents_view_renders_empty_state_hint() {
+        let mut app = App::test_instance();
+        app.state = AppState::ActiveAgentsView;
+        assert!(rendered_text(&app).contains("No active agents"));
+    }
+
+    #[test]
+    fn timeline_view_renders_empty_state_hint() {
+        let mut app = App::test_instance();
+        app.state = AppState::TimelineView;
+        assert!(rendered_text(&app).contains("No recent activities recorded"));
+    }
+}

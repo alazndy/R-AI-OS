@@ -102,7 +102,7 @@ impl App {
             BgMsg::AiAuditReport(report) => {
                 self.system.report = Some(report);
                 self.system.is_scanning = false;
-                self.ui.menu_cursor = 11; // Open Diagnostics/System tab
+                self.system.sync_status = Some("AI audit report is ready.".into());
             }
             BgMsg::HealthReport(report) => {
                 self.health.report = report;

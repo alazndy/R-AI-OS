@@ -578,53 +578,6 @@ impl App {
         self.ui.show_launcher = false;
     }
 
-    pub(crate) fn run_compliance_auto_fix(&mut self) {
-        if let Some(ref report) = self.health.compliance {
-            if !report.violations.is_empty() && !self.health.is_fixing {
-                self.health.is_fixing = true;
-                self.health.fix_status = Some("Claude fixing issues...".into());
-                self.add_activity("Agent", "Initiating Auto-Fix with Claude Code", "Warning");
-                let tx = self.tx.clone();
-                thread::spawn(move || {
-                    thread::sleep(std::time::Duration::from_secs(3));
-                    tx.send(BgMsg::SyncDone("Auto-Fix Complete: Issues resolved".into()))
-                        .ok();
-                });
-            }
-        }
-    }
-
-    pub(crate) fn open_current_file_in_editor(&mut self) {
-        let files = self.current_menu_files();
-        if let Some(entry) = files.into_iter().nth(self.ui.right_file_cursor) {
-            let _ = raios_runtime::discovery::open_in_editor(&entry.path);
-            if let Some(ref tx) = self.tx_daemon {
-                let line = (self.editor.scroll as u64) + 1;
-                let msg = serde_json::json!({
-                    "event": "OpenFile",
-                    "path": entry.path.to_string_lossy(),
-                    "line": line,
-                    "col": 1
-                });
-                let _ = tx.send(msg.to_string());
-            }
-        }
-    }
-
-    pub(crate) fn launch_agent_for_selected_project(&mut self, agent: &str) {
-        let project_path = match self.ui.menu_cursor {
-            7 => self.project_at_cursor().map(|p| p.local_path.clone()),
-            _ => None,
-        };
-
-        if let Some(path) = project_path {
-            self.add_activity("Agent", &format!("Launching {} for project", agent), "Info");
-            self.system.sync_status = Some(raios_surface_tui::app::events::helpers::launch_agent(
-                agent, &path,
-            ));
-        }
-    }
-
     pub(crate) fn run_graphify_on_active(&mut self) {
         if let Some(ref proj) = self.projects.active.clone() {
             let msg = self.run_graphify(&proj.local_path);

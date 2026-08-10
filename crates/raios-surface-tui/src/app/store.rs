@@ -5,6 +5,19 @@ use raios_contracts::{
 };
 
 use crate::app::route::Route;
+use crate::app::state::SortMode;
+
+/// Focus target inside the three-pane Work route.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WorkFocus {
+    /// Registered projects in the left pane.
+    #[default]
+    Projects,
+    /// Read-only Ocak summary lines in the upper right pane.
+    Ocak,
+    /// Control-plane tasks in the lower right pane.
+    Tasks,
+}
 
 /// Central reactive state store for the TUI control-plane views.
 #[derive(Debug, Clone)]
@@ -19,6 +32,10 @@ pub struct Store {
     pub daemon_address: String,
     /// `true` if focus is on the right-hand panel.
     pub right_panel_focus: bool,
+    /// Active focus target while the Work route is open.
+    pub work_focus: WorkFocus,
+    /// Client-side ordering for the typed Work project snapshot.
+    pub work_sort: SortMode,
     /// Main list selection cursor index.
     pub cursor: usize,
     /// Sub-item list selection cursor index.
@@ -54,6 +71,8 @@ impl Default for Store {
             daemon_connected: false,
             daemon_address: "127.0.0.1:42071".into(),
             right_panel_focus: false,
+            work_focus: WorkFocus::Projects,
+            work_sort: SortMode::default(),
             cursor: 0,
             sub_cursor: 0,
             selected_project_path: None,
@@ -85,6 +104,31 @@ impl Store {
             self.logs.remove(0);
         }
     }
+
+    /// Returns project indices in the currently selected local ordering.
+    pub fn work_project_indices(&self) -> Vec<usize> {
+        let projects = &self.snapshot.work.projects;
+        let mut indices: Vec<usize> = (0..projects.len()).collect();
+        match self.work_sort {
+            SortMode::Name => indices.sort_by_key(|&index| projects[index].name.to_lowercase()),
+            SortMode::Grade => indices.sort_by_key(|&index| !projects[index].has_memory),
+            SortMode::GitDirty => {
+                indices.sort_by_key(|&index| std::cmp::Reverse(projects[index].dirty_files));
+            }
+            SortMode::Category => indices.sort_by_key(|&index| {
+                std::path::Path::new(&projects[index].path)
+                    .parent()
+                    .and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+            }),
+            SortMode::Status => {
+                indices.sort_by_key(|&index| projects[index].status.to_ascii_lowercase());
+            }
+        }
+        indices
+    }
 }
 
 fn enrich_legacy_daemon_memory(mut env: SnapshotEnvelope) -> SnapshotEnvelope {
@@ -102,4 +146,32 @@ fn enrich_legacy_daemon_memory(mut env: SnapshotEnvelope) -> SnapshotEnvelope {
     }
 
     env
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Store;
+    use crate::app::state::SortMode;
+    use raios_contracts::ProjectDto;
+
+    #[test]
+    fn work_project_order_follows_the_selected_sort_mode() {
+        let mut store = Store::new();
+        store.snapshot.work.projects = vec![
+            ProjectDto {
+                name: "zeta".into(),
+                dirty_files: 1,
+                ..Default::default()
+            },
+            ProjectDto {
+                name: "alpha".into(),
+                dirty_files: 4,
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(store.work_project_indices(), vec![1, 0]);
+        store.work_sort = SortMode::GitDirty;
+        assert_eq!(store.work_project_indices(), vec![1, 0]);
+    }
 }
