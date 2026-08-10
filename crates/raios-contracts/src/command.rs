@@ -63,8 +63,9 @@ pub enum Command {
     CreateTask {
         /// Short title describing the task.
         title: String,
-        /// Optional project ID associated with the task.
-        project_id: Option<String>,
+        /// Optional absolute project-root path associated with the task.
+        #[serde(alias = "project_id")]
+        project_path: Option<String>,
         /// Task priority rating (0-255).
         priority: u8,
         /// Unique key to prevent duplicate execution.

@@ -54,6 +54,28 @@ mod tests {
     }
 
     #[test]
+    fn create_task_accepts_legacy_project_id_payloads() {
+        let json = r#"{
+            "command_type":"CreateTask",
+            "payload":{
+                "title":"Compatibility task",
+                "project_id":"/workspace/example",
+                "priority":50,
+                "idempotency_key":"legacy-project-id"
+            }
+        }"#;
+
+        let command: Command = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            command,
+            Command::CreateTask {
+                project_path: Some(ref path),
+                ..
+            } if path == "/workspace/example"
+        ));
+    }
+
+    #[test]
     fn problem_construction() {
         let p = Problem::unauthorized("Access denied");
         assert_eq!(p.code, "UNAUTHORIZED");

@@ -2,6 +2,32 @@ use rusqlite::{params, Connection, OptionalExtension, Result};
 
 // ─── Memory Items (mem_items) ─────────────────────────────────────────────────
 
+/// Imports are local user actions, but the input is still untrusted JSON.
+/// Bound it before deserialization to prevent an accidental or hostile file from
+/// exhausting memory in the long-running CLI process.
+const MAX_PORTABLE_MEMORY_IMPORT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_PORTABLE_MEMORY_IMPORT_ITEMS: usize = 50_000;
+
+fn portable_memory_error(message: impl Into<String>) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        message.into(),
+    )))
+}
+
+fn ensure_portable_memory_items_are_safe(items: &[MemItemRow]) -> Result<()> {
+    for item in items {
+        for field in [&item.title, &item.description, &item.body] {
+            if crate::security::looks_like_secret(field).is_some() {
+                return Err(portable_memory_error(
+                    "portable memory export/import refuses secret-like content",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provenance {
@@ -138,6 +164,16 @@ pub struct MemUpsert<'a> {
 /// because a single `Connection` is never used to run two transactions
 /// concurrently within this codebase's call patterns.
 pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    mem_upsert_in_transaction(&tx, item)?;
+    tx.commit()
+}
+
+/// Apply one memory upsert inside an already-open transaction.
+///
+/// Keeping this separate lets a portable import retain all-or-nothing semantics
+/// while preserving the existing one-item atomicity of [`mem_upsert`].
+fn mem_upsert_in_transaction(tx: &rusqlite::Transaction<'_>, item: MemUpsert) -> Result<()> {
     let MemUpsert {
         project_key,
         item_type,
@@ -155,21 +191,19 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
     let provenance_str = provenance.unwrap_or(Provenance::Observed).as_str();
     let conf_val = confidence.unwrap_or(1.0);
 
-    let tx = conn.unchecked_transaction()?;
-
     // Archive the previous body as an immutable revision node before replacing.
     if !body.is_empty() {
-        if let Some(prev) = mem_get(&tx, project_key, slug)? {
+        if let Some(prev) = mem_get(tx, project_key, slug)? {
             if !prev.body.is_empty() && prev.body != body {
                 let node_id = mem_node_add(
-                    &tx,
+                    tx,
                     project_key,
                     "revision",
                     &prev.updated_at,
                     &prev.body,
                     prev.session_id.as_deref(),
                 )?;
-                mem_lineage_add(&tx, "item", &prev.id, "node", &node_id, "revision")?;
+                mem_lineage_add(tx, "item", &prev.id, "node", &node_id, "revision")?;
             }
         }
     }
@@ -213,7 +247,6 @@ pub fn mem_upsert(conn: &Connection, item: MemUpsert) -> Result<()> {
         ],
     )?;
 
-    tx.commit()?;
     Ok(())
 }
 
@@ -243,8 +276,7 @@ pub fn mem_list(conn: &Connection, project_key: &str) -> Result<Vec<MemItemRow>>
                 last_used_at: row.get(13)?,
             })
         })?
-        .flatten()
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     Ok(rows)
 }
 
@@ -288,6 +320,36 @@ pub fn mem_on_used(conn: &Connection, project_key: &str, slug: &str) -> Result<b
         params![now, project_key, slug],
     )?;
     Ok(n > 0)
+}
+
+pub fn mem_list_all(conn: &Connection) -> Result<Vec<MemItemRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_key, item_type, slug, title, description, body, created_at, updated_at, session_id, layer, provenance, confidence, last_used_at
+         FROM mem_items ORDER BY project_key, layer DESC, item_type, slug",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            let prov_str: String = row.get(11)?;
+            let provenance = prov_str.parse().unwrap_or(Provenance::Observed);
+            Ok(MemItemRow {
+                id: row.get(0)?,
+                project_key: row.get(1)?,
+                item_type: row.get(2)?,
+                slug: row.get(3)?,
+                title: row.get(4)?,
+                description: row.get(5)?,
+                body: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+                session_id: row.get(9)?,
+                layer: row.get(10)?,
+                provenance,
+                confidence: row.get(12)?,
+                last_used_at: row.get(13)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 pub fn mem_delete(conn: &Connection, project_key: &str, slug: &str) -> Result<bool> {
@@ -357,6 +419,64 @@ pub fn mem_export(
     );
     let _ = std::fs::write(&index_path, content);
 
+    Ok(items.len())
+}
+
+/// Export ALL memory items across all projects as a portable JSON file.
+pub fn mem_export_portable(conn: &Connection, dst: &std::path::Path) -> Result<usize> {
+    let items = mem_list_all(conn)?;
+    if items.is_empty() {
+        return Ok(0);
+    }
+    ensure_portable_memory_items_are_safe(&items)?;
+    let json = serde_json::to_string_pretty(&items)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    std::fs::write(dst, &json).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    Ok(items.len())
+}
+
+/// Import memory items from a portable JSON file previously created by `mem_export_portable`.
+/// Upserts each item into the local DB. Returns the number of items imported.
+pub fn mem_import_portable(conn: &Connection, src: &std::path::Path) -> Result<usize> {
+    let metadata =
+        std::fs::metadata(src).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    if metadata.len() > MAX_PORTABLE_MEMORY_IMPORT_BYTES {
+        return Err(portable_memory_error(format!(
+            "portable memory import exceeds the {} MiB limit",
+            MAX_PORTABLE_MEMORY_IMPORT_BYTES / (1024 * 1024)
+        )));
+    }
+    let json = std::fs::read_to_string(src)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let items: Vec<MemItemRow> = serde_json::from_str(&json)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    if items.len() > MAX_PORTABLE_MEMORY_IMPORT_ITEMS {
+        return Err(portable_memory_error(format!(
+            "portable memory import exceeds the {} item limit",
+            MAX_PORTABLE_MEMORY_IMPORT_ITEMS
+        )));
+    }
+    ensure_portable_memory_items_are_safe(&items)?;
+    let tx = conn.unchecked_transaction()?;
+    for item in &items {
+        mem_upsert_in_transaction(
+            &tx,
+            MemUpsert {
+                project_key: &item.project_key,
+                item_type: &item.item_type,
+                slug: &item.slug,
+                title: &item.title,
+                description: &item.description,
+                body: &item.body,
+                session_id: item.session_id.as_deref(),
+                layer: item.layer,
+                provenance: Some(item.provenance),
+                confidence: Some(item.confidence),
+                last_used_at: item.last_used_at.as_deref(),
+            },
+        )?;
+    }
+    tx.commit()?;
     Ok(items.len())
 }
 
