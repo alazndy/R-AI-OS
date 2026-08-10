@@ -1,3 +1,4 @@
+use crate::app::operations::OperationPanel;
 use crate::app::route::Route;
 use crate::app::state::UIState;
 use crate::app::store::WorkFocus;
@@ -40,10 +41,14 @@ fn bounded_cursor(cursor: usize, count: usize, down: bool) -> usize {
 impl App {
     pub(crate) fn control_item_count(&self) -> usize {
         match self.store.current_route {
-            Route::Now if self.store.right_panel_focus => {
-                self.store.snapshot.now.blocked_tasks.len()
-            }
-            Route::Now => self.store.snapshot.now.approvals.len(),
+            Route::Now => match self.store.operations.panel {
+                OperationPanel::Attention => {
+                    self.store.snapshot.now.approvals.len()
+                        + self.store.snapshot.now.blocked_tasks.len()
+                }
+                OperationPanel::Project => usize::from(self.store.selected_project().is_some()),
+                OperationPanel::Actions => self.store.operations.actions.len(),
+            },
             Route::Work => match self.store.work_focus {
                 WorkFocus::Projects => self.store.snapshot.work.projects.len(),
                 WorkFocus::Ocak => 6,
@@ -52,7 +57,7 @@ impl App {
             Route::Explore if self.store.right_panel_focus => {
                 self.store.snapshot.explore.recent_logs.len()
             }
-            Route::Explore => self.store.snapshot.explore.recent_traces.len(),
+            Route::Explore => self.store.explore_results().len(),
             Route::Govern if self.store.right_panel_focus => {
                 self.store.snapshot.govern.cron_jobs.len()
             }
@@ -61,22 +66,37 @@ impl App {
     }
 
     pub(crate) fn control_focus_label(&self) -> &'static str {
+        if self.store.current_route == Route::Now {
+            return match self.store.operations.panel {
+                OperationPanel::Attention => "ATTENTION",
+                OperationPanel::Project => "PROJECT",
+                OperationPanel::Actions => "NEXT ACTIONS",
+            };
+        }
+
         match (self.store.current_route, self.store.right_panel_focus) {
-            (Route::Now, false) => "APPROVALS",
-            (Route::Now, true) => "BLOCKED TASKS",
             (Route::Work, _) => match self.store.work_focus {
                 WorkFocus::Projects => "PROJECTS",
                 WorkFocus::Ocak => "OCAK",
                 WorkFocus::Tasks => "TASKS",
             },
-            (Route::Explore, false) => "TRACES",
+            (Route::Explore, false) => "RESULTS",
             (Route::Explore, true) => "LOGS",
             (Route::Govern, false) => "OVERVIEW",
             (Route::Govern, true) => "SCHEDULER",
+            (Route::Now, _) => unreachable!("NOW focus is handled above"),
         }
     }
 
     pub(crate) fn set_control_focus(&mut self, right_panel_focus: bool) {
+        if self.store.current_route == Route::Now {
+            self.set_operation_panel(if right_panel_focus {
+                OperationPanel::Project
+            } else {
+                OperationPanel::Attention
+            });
+            return;
+        }
         self.store.right_panel_focus = right_panel_focus;
         if self.store.current_route == Route::Work {
             self.store.work_focus = if right_panel_focus {
@@ -117,7 +137,27 @@ impl App {
         apply_ocak_command_draft(&mut self.ui, self.store.cursor);
     }
 
+    pub(crate) fn set_operation_panel(&mut self, panel: OperationPanel) {
+        self.store.operations.panel = panel;
+        self.store.right_panel_focus = panel == OperationPanel::Project;
+        self.clamp_control_cursor();
+    }
+
+    pub(crate) fn cycle_operation_panel(&mut self) {
+        self.set_operation_panel(self.store.operations.panel.next());
+    }
+
     pub(crate) fn move_control_cursor(&mut self, down: bool) {
+        if self.store.current_route == Route::Now
+            && self.store.operations.panel == OperationPanel::Actions
+        {
+            self.store.operations.action_cursor = bounded_cursor(
+                self.store.operations.action_cursor,
+                self.store.operations.actions.len(),
+                down,
+            );
+            return;
+        }
         self.store.cursor = bounded_cursor(self.store.cursor, self.control_item_count(), down);
         self.sync_selected_work_project();
     }
@@ -130,6 +170,16 @@ impl App {
     }
 
     fn clamp_control_cursor(&mut self) {
+        if self.store.current_route == Route::Now
+            && self.store.operations.panel == OperationPanel::Actions
+        {
+            self.store.operations.action_cursor = self
+                .store
+                .operations
+                .action_cursor
+                .min(self.store.operations.actions.len().saturating_sub(1));
+            return;
+        }
         self.store.cursor = self
             .store
             .cursor
@@ -167,7 +217,29 @@ impl App {
 
         if let Some(project_path) = project_path {
             self.store.selected_project_path = Some(project_path);
+            self.store.rebuild_operations();
         }
+    }
+
+    /// Returns the selected handoff approval only while the NOW attention panel is focused.
+    pub(crate) fn selected_now_approval_id(&self) -> Option<String> {
+        if self.store.current_route != Route::Now
+            || self.store.operations.panel != OperationPanel::Attention
+        {
+            return None;
+        }
+        self.store
+            .snapshot
+            .now
+            .approvals
+            .get(self.store.cursor)
+            .map(|approval| approval.id.clone())
+    }
+
+    pub(crate) fn select_operation_action(&mut self, row: usize) {
+        self.set_operation_panel(OperationPanel::Actions);
+        self.store.operations.action_cursor = row;
+        self.clamp_control_cursor();
     }
 }
 

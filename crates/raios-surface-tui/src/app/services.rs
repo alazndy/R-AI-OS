@@ -12,45 +12,69 @@ use raios_surface_tui::app::{
     App,
 };
 
+/// Data projection container for the inbox panel, holding pending approvals, active runs, and blocked tasks.
 #[derive(Debug, Default, Clone)]
 pub struct InboxPanelData {
+    /// Pending approvals awaiting human or agent resolution.
     pub approvals: Vec<ScoredApproval>,
+    /// Currently running agent execution sessions.
     pub runs: Vec<RunOverviewRow>,
+    /// System tasks blocked on external actions.
     pub blocked: Vec<UnifiedTaskRow>,
 }
 
+/// Data projection container for the scheduler panel listing background cron jobs.
 #[derive(Debug, Default, Clone)]
 pub struct SchedulerPanelData {
+    /// List of registered scheduled background jobs.
     pub jobs: Vec<ScheduledJob>,
 }
 
+/// Security policy configuration and audit record counter posture.
 #[derive(Debug, Clone)]
 pub struct PoliciesPanelData {
+    /// Loaded security policy configuration, if available.
     pub policy: Option<raios_core::security::PolicyConfig>,
+    /// Total count of recorded audit log entries.
     pub audit_count: Option<i64>,
 }
 
+/// Summarized project item metadata formatted for the TUI projects list view.
 #[derive(Debug, Clone)]
 pub struct ProjectListItem {
+    /// Project display name.
     pub name: String,
+    /// Whether an Obsidian Vault note exists for this project.
     pub has_vault: bool,
+    /// Current lifecycle status string.
     pub status: String,
+    /// Assigned workspace category string.
     pub category: String,
+    /// Policy compliance letter grade.
     pub compliance_grade: String,
+    /// Whether uncommitted Git working tree modifications are present.
     pub dirty: Option<bool>,
+    /// Latest continuous integration build status string.
     pub ci_status: Option<String>,
 }
 
+/// Projection container for the projects panel, holding list items and sort status.
 #[derive(Debug, Clone)]
 pub struct ProjectsPanelData {
+    /// Total count of tracked projects.
     pub total: usize,
+    /// Human-readable label for the active sorting mode.
     pub sort_label: &'static str,
+    /// Formatted project item entries.
     pub items: Vec<ProjectListItem>,
 }
 
+/// Detailed memory document content and Git commit history for a selected project.
 #[derive(Debug, Default, Clone)]
 pub struct ProjectDetailData {
+    /// Lines read from the project's `memory.md` file.
     pub memory_lines: Vec<String>,
+    /// Recent Git commit log summary lines.
     pub git_log: Vec<String>,
 }
 
@@ -64,6 +88,7 @@ const MEMORY_PREVIEW_MAX_FILE_BYTES: u64 = 128 * 1024;
 const MEMORY_PREVIEW_MAX_LINES: usize = 8;
 const MEMORY_PREVIEW_MAX_CHARS_PER_LINE: usize = 140;
 
+/// Queries the control-plane database to load pending approvals, active runs, and blocked tasks for the inbox.
 pub fn load_inbox_panel_data() -> Result<InboxPanelData, String> {
     let conn = raios_core::db::open_db().map_err(|e| e.to_string())?;
     load_inbox_panel_data_from_conn(&conn).map_err(|e| e.to_string())
@@ -79,6 +104,7 @@ fn load_inbox_panel_data_from_conn(
     })
 }
 
+/// Queries the control-plane database for configured scheduled background jobs.
 pub fn load_scheduler_panel_data() -> Result<SchedulerPanelData, String> {
     let conn = raios_core::db::open_db().map_err(|e| e.to_string())?;
     Ok(SchedulerPanelData {
@@ -86,6 +112,7 @@ pub fn load_scheduler_panel_data() -> Result<SchedulerPanelData, String> {
     })
 }
 
+/// Loads security policy configuration and total audit log entry count from disk and database.
 pub fn load_policies_panel_data() -> PoliciesPanelData {
     let policy = raios_core::security::PolicyConfig::try_load_default();
     let audit_count = raios_core::db::open_db().ok().and_then(|conn| {
@@ -98,6 +125,7 @@ pub fn load_policies_panel_data() -> PoliciesPanelData {
     }
 }
 
+/// Sorts project array indices according to the specified `SortMode` criteria (Name, Grade, GitDirty, Category, Status).
 pub fn sort_project_indices(
     projects: &[EntityProject],
     health: &[ProjectHealth],
@@ -139,6 +167,7 @@ pub fn sort_project_indices(
     indices
 }
 
+/// Constructs a `ProjectsPanelData` snapshot from active application state and health reports.
 pub fn build_projects_panel_data(app: &App) -> ProjectsPanelData {
     let indices = sort_project_indices(&app.projects.list, &app.health.report, &app.projects.sort);
     let items = indices
@@ -166,6 +195,7 @@ pub fn build_projects_panel_data(app: &App) -> ProjectsPanelData {
     }
 }
 
+/// Reads memory file lines and Git commit history for a specified project root directory.
 pub fn load_project_detail_data(project_path: &Path) -> ProjectDetailData {
     let memory_path = project_path.join("memory.md");
     let content = raios_runtime::filebrowser::load_file_content(&memory_path);
@@ -242,6 +272,7 @@ fn bounded_memory_preview(contents: &str) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
+/// Loads lines from `GRAPH_REPORT.md` in the target project directory.
 pub fn load_graph_report_lines(project_path: &Path) -> Result<Vec<String>, String> {
     let report_path = project_path.join("GRAPH_REPORT.md");
     if !report_path.exists() {
@@ -253,6 +284,7 @@ pub fn load_graph_report_lines(project_path: &Path) -> Result<Vec<String>, Strin
         .collect())
 }
 
+/// Executes `git diff` in the specified project directory and returns line output.
 pub fn load_git_diff_lines(project_path: &Path) -> Vec<String> {
     let output = Command::new("git")
         .current_dir(project_path)
@@ -272,6 +304,7 @@ pub fn load_git_diff_lines(project_path: &Path) -> Vec<String> {
     }
 }
 
+/// Serializes a JSON daemon IPC command string for executing a search query.
 pub fn daemon_search_command(query: &str) -> String {
     format!(
         "{{\"command\":\"Search\",\"query\":\"{}\"}}",
@@ -279,10 +312,12 @@ pub fn daemon_search_command(query: &str) -> String {
     )
 }
 
+/// Serializes a JSON daemon IPC command string for retrieving logs up to a limit count.
 pub fn daemon_get_logs_command(limit: u64) -> String {
     format!("{{\"command\":\"GetLogs\",\"limit\":{}}}", limit)
 }
 
+/// Serializes a JSON daemon IPC job submission payload wrapping a `raios` CLI invocation.
 pub fn daemon_submit_raios_command(args: &str) -> String {
     let escaped = args.replace('"', "\\\"");
     let shell_cmd = format!("raios {}", escaped);
@@ -292,6 +327,7 @@ pub fn daemon_submit_raios_command(args: &str) -> String {
     )
 }
 
+/// Generates an Obsidian Vault markdown note for a project if one does not already exist.
 pub fn create_vault_note(
     vault_projects_path: &Path,
     project: &EntityProject,
@@ -314,6 +350,7 @@ pub fn create_vault_note(
     Ok(true)
 }
 
+/// Invokes `systemctl is-active --quiet <service>` to check if a systemd service is active.
 pub fn probe_service_active(service: &str) -> bool {
     Command::new("systemctl")
         .args(["is-active", "--quiet", service])
@@ -322,6 +359,7 @@ pub fn probe_service_active(service: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Scans the workspace directory tree for valid extension manifests (`raios-extension.toml`).
 pub fn scan_extensions(dev_ops_path: &Path) -> Vec<ExtensionInfo> {
     #[derive(serde::Deserialize)]
     struct Manifest {
@@ -424,6 +462,7 @@ pub fn scan_extensions(dev_ops_path: &Path) -> Vec<ExtensionInfo> {
     result
 }
 
+/// Executes an extension command in a background thread, streaming output lines over an MPSC channel.
 pub fn run_extension_command_bg(
     tx: &std::sync::mpsc::Sender<BgMsg>,
     ext_path: &Path,
@@ -604,6 +643,7 @@ pub fn run_extension_command_bg(
     }
 }
 
+/// Reads the string value associated with a key from a `.env` configuration file.
 pub fn read_env_key(env_path: &Path, key: &str) -> Option<String> {
     let content = std::fs::read_to_string(env_path).ok()?;
     for line in content.lines() {
@@ -619,6 +659,7 @@ pub fn read_env_key(env_path: &Path, key: &str) -> Option<String> {
     None
 }
 
+/// Updates an existing key or appends a new key-value pair to a `.env` file.
 pub fn write_env_key(env_path: &Path, key: &str, value: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(env_path).unwrap_or_default();
     let mut found = false;

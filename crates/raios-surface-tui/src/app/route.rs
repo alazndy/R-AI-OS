@@ -26,8 +26,11 @@ pub const TABS_HEIGHT: u16 = 3;
 pub const LAUNCHER_HEIGHT: u16 = 3;
 
 /// Computes the effective dashboard header height based on screen height.
+/// A normal 24-row terminal still has room for the mark, tabs, route content,
+/// and command bar; hiding the product identity until 32 rows made the default
+/// terminal experience look unbranded.
 pub fn dashboard_header_height(screen_height: u16) -> u16 {
-    if screen_height >= 32 {
+    if screen_height >= 22 {
         BANNER_HEADER_HEIGHT
     } else {
         COMPACT_HEADER_HEIGHT
@@ -120,13 +123,19 @@ impl Route {
 
 #[cfg(test)]
 mod tests {
-    use super::Route;
+    use super::{dashboard_header_height, Route, BANNER_HEADER_HEIGHT, COMPACT_HEADER_HEIGHT};
 
     #[test]
     fn route_tabs_are_plain_text_and_stable() {
         let labels: Vec<&str> = Route::all().iter().map(Route::tab_label).collect();
         assert_eq!(labels, vec!["NOW", "WORK", "EXPLORE", "GOVERN"]);
         assert!(labels.iter().all(|label| label.is_ascii()));
+    }
+
+    #[test]
+    fn normal_terminal_height_keeps_the_brand_header_visible() {
+        assert_eq!(dashboard_header_height(24), BANNER_HEADER_HEIGHT);
+        assert_eq!(dashboard_header_height(21), COMPACT_HEADER_HEIGHT);
     }
 
     #[test]
