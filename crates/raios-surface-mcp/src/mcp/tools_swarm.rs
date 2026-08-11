@@ -185,3 +185,64 @@ impl McpServer {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    // EdgeRouter::route() always short-circuits to an exact capability-name
+    // match before falling back to semantic (embedding) similarity — see
+    // raios-runtime's edge.rs. Only exact-name queries are asserted on here
+    // so these tests stay deterministic across embedder modes (real
+    // fastembed vs the TF-IDF fallback, see AGENT_CONSTITUTION's
+    // "Embedding-mode blindness" note): a semantic-similarity assertion
+    // would be liable to drift if the active embedder ever changes.
+    #[test]
+    fn route_capability_requires_a_query_field() {
+        let server = super::McpServer::new_for_test();
+        let err = server.tool_route_capability(&json!({})).unwrap_err();
+        assert_eq!(err, "missing query");
+    }
+
+    #[test]
+    fn route_capability_matches_an_exact_capability_name() {
+        let server = super::McpServer::new_for_test();
+        let result = server
+            .tool_route_capability(&json!({ "query": "health_check" }))
+            .unwrap();
+        assert_eq!(result["capability"], "health_check");
+        assert_eq!(
+            result["content"][0]["text"].as_str().unwrap(),
+            "→ health_check"
+        );
+    }
+
+    #[test]
+    fn route_capability_matches_every_advertised_capability_by_exact_name() {
+        // Regression guard: if a capability is ever renamed in the
+        // descriptions list without updating callers, this catches it.
+        let server = super::McpServer::new_for_test();
+        for name in [
+            "health_check",
+            "search_memory",
+            "run_sentinel",
+            "list_projects",
+            "git_status",
+            "git_commit",
+            "git_push",
+            "run_build",
+            "run_tests",
+            "check_deps",
+            "bump_version",
+            "create_swarm_task",
+            "list_swarm_tasks",
+            "create_task_graph",
+            "list_evolution_candidates",
+        ] {
+            let result = server
+                .tool_route_capability(&json!({ "query": name }))
+                .unwrap();
+            assert_eq!(result["capability"], name, "exact-name routing for {name}");
+        }
+    }
+}
