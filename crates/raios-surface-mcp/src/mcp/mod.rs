@@ -256,6 +256,16 @@ pub fn run_stdio() -> Result<()> {
     Ok(())
 }
 
+// `RAIOS_DB_PATH` is process-global. Every test in this crate that reads or
+// writes it (across tools.rs's resolve_git_path_tests and
+// tools_workspace.rs's resolve_search_scope_tests) must serialize on this
+// SAME lock — two separate per-module Mutexes don't actually synchronize
+// with each other and let parallel `cargo test` threads clobber each
+// other's env var (reproduced live in CI: one test's temp DB leaked into
+// another's `open_db()` call, causing a spurious "Project not found").
+#[cfg(test)]
+pub(super) static DB_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
