@@ -496,3 +496,84 @@ mod steer_tool_tests {
         assert!(server.tool_steer_agent(&no_message).is_err());
     }
 }
+
+#[cfg(test)]
+mod resolve_git_path_tests {
+    use serde_json::json;
+    use std::sync::Mutex;
+
+    // `RAIOS_DB_PATH` is process-global; serialize any test in this module
+    // that reads or writes it so parallel `cargo test` threads never race.
+    static DB_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_temp_db<R>(f: impl FnOnce(&rusqlite::Connection) -> R) -> R {
+        let _lock = DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var("RAIOS_DB_PATH").ok();
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        std::env::set_var("RAIOS_DB_PATH", tmp_db.path());
+
+        let conn = raios_core::db::open_db().unwrap();
+        let result = f(&conn);
+        drop(conn);
+
+        match original {
+            Some(v) => std::env::set_var("RAIOS_DB_PATH", v),
+            None => std::env::remove_var("RAIOS_DB_PATH"),
+        }
+        result
+    }
+
+    #[test]
+    fn resolve_git_path_requires_a_project_field() {
+        let server = super::McpServer::new_for_test();
+        let err = server.resolve_git_path(&json!({})).unwrap_err();
+        assert_eq!(err, "missing project");
+    }
+
+    #[test]
+    fn resolve_git_path_accepts_a_direct_existing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = super::McpServer::new_for_test();
+        let resolved = server
+            .resolve_git_path(&json!({ "project": dir.path().to_str().unwrap() }))
+            .unwrap();
+        assert_eq!(resolved, dir.path());
+    }
+
+    #[test]
+    fn resolve_git_path_falls_back_to_a_registered_project_by_case_insensitive_substring() {
+        with_temp_db(|conn| {
+            conn.execute(
+                "INSERT INTO projects (name, path) VALUES (?1, ?2)",
+                rusqlite::params!["R-AI-OS", "/does/not/exist/on/this/machine"],
+            )
+            .unwrap();
+
+            let server = super::McpServer::new_for_test();
+            let resolved = server
+                .resolve_git_path(&json!({ "project": "ai-os" }))
+                .unwrap();
+            assert_eq!(
+                resolved,
+                std::path::PathBuf::from("/does/not/exist/on/this/machine")
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_git_path_errors_when_project_not_found_anywhere() {
+        with_temp_db(|conn| {
+            conn.execute(
+                "INSERT INTO projects (name, path) VALUES (?1, ?2)",
+                rusqlite::params!["some-other-project", "/some/other/path"],
+            )
+            .unwrap();
+
+            let server = super::McpServer::new_for_test();
+            let err = server
+                .resolve_git_path(&json!({ "project": "totally-unregistered-name" }))
+                .unwrap_err();
+            assert_eq!(err, "Project not found: totally-unregistered-name");
+        });
+    }
+}
