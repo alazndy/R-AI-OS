@@ -536,6 +536,38 @@ pub(super) fn cmd_ci(project: Option<String>, dev_ops: &Path, json: bool) {
     }
 }
 
+/// Maps a workflow run's conclusion to a status glyph for `raios ci` output.
+fn run_status_icon(conclusion: Option<&str>) -> &'static str {
+    match conclusion {
+        Some("success") => "✓",
+        Some("failure") => "✗",
+        Some("cancelled") => "○",
+        _ => "…",
+    }
+}
+
+/// Maps a single job's conclusion to a status glyph. Distinct from
+/// `run_status_icon`: jobs can be "skipped" (a normal outcome), which a
+/// workflow run's overall conclusion never reports.
+fn job_status_icon(conclusion: Option<&str>) -> &'static str {
+    match conclusion {
+        Some("success") => "✓",
+        Some("failure") => "✗",
+        Some("skipped") => "-",
+        _ => "…",
+    }
+}
+
+/// Formats a job duration for display: "Xm Ys" past a minute, "Xs" under it,
+/// empty when the duration couldn't be computed (e.g. job still running).
+fn format_job_duration(secs: Option<u64>) -> String {
+    match secs {
+        Some(s) if s >= 60 => format!("{}m {}s", s / 60, s % 60),
+        Some(s) => format!("{}s", s),
+        None => String::new(),
+    }
+}
+
 fn print_ci_report(report: &raios_core::core::ci::CiReport, json: bool) {
     if json {
         let out = serde_json::json!({
@@ -548,12 +580,7 @@ fn print_ci_report(report: &raios_core::core::ci::CiReport, json: bool) {
         }
         return;
     }
-    let status_icon = match report.run.conclusion.as_deref() {
-        Some("success") => "✓",
-        Some("failure") => "✗",
-        Some("cancelled") => "○",
-        _ => "…",
-    };
+    let status_icon = run_status_icon(report.run.conclusion.as_deref());
     println!(
         "CI: {} @ {} — {} {}  ({})",
         report.run.workflow_name,
@@ -571,17 +598,8 @@ fn print_ci_report(report: &raios_core::core::ci::CiReport, json: bool) {
             .unwrap_or(&report.run.created_at)
     );
     for job in &report.jobs {
-        let icon = match job.conclusion.as_deref() {
-            Some("success") => "✓",
-            Some("failure") => "✗",
-            Some("skipped") => "-",
-            _ => "…",
-        };
-        let dur = match job.duration_secs {
-            Some(s) if s >= 60 => format!("{}m {}s", s / 60, s % 60),
-            Some(s) => format!("{}s", s),
-            None => String::new(),
-        };
+        let icon = job_status_icon(job.conclusion.as_deref());
+        let dur = format_job_duration(job.duration_secs);
         if matches!(job.conclusion.as_deref(), Some("failure")) {
             println!("  {} {:<25} {}  ← FAILED", icon, job.name, dur);
         } else {
@@ -590,5 +608,57 @@ fn print_ci_report(report: &raios_core::core::ci::CiReport, json: bool) {
     }
     if !report.run.html_url.is_empty() {
         println!("\n  {}", report.run.html_url);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_job_duration, job_status_icon, run_status_icon};
+
+    #[test]
+    fn run_status_icon_maps_known_conclusions() {
+        assert_eq!(run_status_icon(Some("success")), "✓");
+        assert_eq!(run_status_icon(Some("failure")), "✗");
+        assert_eq!(run_status_icon(Some("cancelled")), "○");
+    }
+
+    #[test]
+    fn run_status_icon_falls_back_for_in_progress_or_unknown() {
+        assert_eq!(run_status_icon(None), "…");
+        assert_eq!(run_status_icon(Some("neutral")), "…");
+    }
+
+    #[test]
+    fn job_status_icon_treats_skipped_as_a_distinct_outcome() {
+        assert_eq!(job_status_icon(Some("skipped")), "-");
+    }
+
+    #[test]
+    fn job_status_icon_maps_known_conclusions() {
+        assert_eq!(job_status_icon(Some("success")), "✓");
+        assert_eq!(job_status_icon(Some("failure")), "✗");
+    }
+
+    #[test]
+    fn job_status_icon_falls_back_for_in_progress_or_unknown() {
+        assert_eq!(job_status_icon(None), "…");
+        assert_eq!(job_status_icon(Some("neutral")), "…");
+    }
+
+    #[test]
+    fn format_job_duration_is_empty_when_unknown() {
+        assert_eq!(format_job_duration(None), "");
+    }
+
+    #[test]
+    fn format_job_duration_shows_seconds_under_a_minute() {
+        assert_eq!(format_job_duration(Some(0)), "0s");
+        assert_eq!(format_job_duration(Some(59)), "59s");
+    }
+
+    #[test]
+    fn format_job_duration_switches_to_minutes_and_seconds_at_a_minute() {
+        assert_eq!(format_job_duration(Some(60)), "1m 0s");
+        assert_eq!(format_job_duration(Some(125)), "2m 5s");
     }
 }
