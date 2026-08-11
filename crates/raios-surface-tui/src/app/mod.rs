@@ -734,3 +734,139 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filtered_palette_empty_query_returns_all_items() {
+        let items = filtered_palette("");
+        assert_eq!(items.len(), PALETTE_ITEMS.len());
+        assert_eq!(items[0].cmd, "/now");
+        assert_eq!(items[items.len() - 1].cmd, "/quit");
+    }
+
+    #[test]
+    fn filtered_palette_matches_command_prefix_without_slash() {
+        for q in ["/now", "now"] {
+            let items = filtered_palette(q);
+            assert!(items.iter().any(|p| p.cmd == "/now"));
+            assert_eq!(items[0].cmd, "/now");
+        }
+    }
+
+    #[test]
+    fn filtered_palette_is_case_insensitive() {
+        let items = filtered_palette("SEARCH");
+        assert!(!items.is_empty());
+        assert!(items
+            .iter()
+            .all(|p| p.cmd.contains("search") || p.desc.to_lowercase().contains("search")));
+    }
+
+    #[test]
+    fn filtered_palette_matches_description_text() {
+        let items = filtered_palette("audit");
+        assert!(items.iter().any(|p| p.cmd == "/audit"));
+    }
+
+    #[test]
+    fn filtered_palette_unknown_query_returns_empty() {
+        assert!(filtered_palette("/zzzz-not-a-command").is_empty());
+    }
+
+    #[test]
+    fn update_search_ignores_empty_query() {
+        let mut app = App::test_instance();
+        app.search.query = "   ".into();
+        app.update_search();
+        assert!(app.search.status.is_none());
+    }
+
+    #[test]
+    fn update_search_rejects_overlong_query() {
+        let mut app = App::test_instance();
+        app.search.query = "x".repeat(241);
+        app.update_search();
+        assert!(app.search.status.as_deref().unwrap().contains("240"));
+    }
+
+    #[test]
+    fn update_search_rejects_secret_like_query() {
+        let mut app = App::test_instance();
+        app.search.query = "sk-abcdef1234567890abcdef1234567890".into();
+        app.update_search();
+        assert!(app.search.status.as_deref().unwrap().contains("secret"));
+    }
+
+    #[test]
+    fn update_search_valid_query_is_silent_when_daemon_disconnected() {
+        let mut app = App::test_instance();
+        app.search.query = "async error handling".into();
+        app.update_search();
+        assert!(app.search.status.is_none());
+    }
+
+    #[test]
+    fn add_activity_appends_and_caps_timeline() {
+        let mut app = App::test_instance();
+        for i in 0..150 {
+            app.add_activity("Test", &format!("msg {i}"), "Info");
+        }
+        assert_eq!(app.timeline.activities.len(), 100);
+        assert_eq!(app.timeline.activities[0].message, "msg 50");
+        assert_eq!(app.timeline.activities[99].message, "msg 149");
+    }
+
+    #[test]
+    fn find_project_path_by_name_is_case_insensitive_substring() {
+        let mut app = App::test_instance();
+        let proj = raios_core::entities::EntityProject {
+            name: "My-Proj".into(),
+            category: String::new(),
+            local_path: PathBuf::from("/tmp/proj"),
+            github: None,
+            status: "active".into(),
+            stars: None,
+            last_commit: None,
+            version: None,
+            version_nickname: None,
+        };
+        app.projects.list.push(proj);
+
+        assert_eq!(
+            app.find_project_path_by_name("my-proj"),
+            Some(PathBuf::from("/tmp/proj"))
+        );
+        assert_eq!(
+            app.find_project_path_by_name("MY-PROJ"),
+            Some(PathBuf::from("/tmp/proj"))
+        );
+        assert_eq!(
+            app.find_project_path_by_name("proj"),
+            Some(PathBuf::from("/tmp/proj"))
+        );
+        assert_eq!(app.find_project_path_by_name("missing"), None);
+    }
+
+    #[test]
+    fn project_at_cursor_respects_cursor() {
+        let mut app = App::test_instance();
+        let make = |name: &str| raios_core::entities::EntityProject {
+            name: name.into(),
+            category: String::new(),
+            local_path: PathBuf::from("/tmp").join(name),
+            github: None,
+            status: "active".into(),
+            stars: None,
+            last_commit: None,
+            version: None,
+            version_nickname: None,
+        };
+        app.projects.list.push(make("alpha"));
+        app.projects.list.push(make("beta"));
+        app.projects.cursor = 1;
+        assert_eq!(app.project_at_cursor().unwrap().name, "beta");
+    }
+}
