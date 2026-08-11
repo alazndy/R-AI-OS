@@ -189,6 +189,7 @@ impl McpServer {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use std::sync::Mutex;
 
     // EdgeRouter::route() always short-circuits to an exact capability-name
     // match before falling back to semantic (embedding) similarity — see
@@ -197,6 +198,17 @@ mod tests {
     // fastembed vs the TF-IDF fallback, see AGENT_CONSTITUTION's
     // "Embedding-mode blindness" note): a semantic-similarity assertion
     // would be liable to drift if the active embedder ever changes.
+    //
+    // Every EdgeRouter::new() call re-embeds the full descriptions list via
+    // fastembed on construction, even for exact-name-only routing, and on a
+    // cold cache that downloads the ONNX model on first use. Two of these
+    // tests racing to download into the same cache file panics with "Failed
+    // to retrieve model.onnx" (reproduced live on Windows CI). Serialize
+    // them with the same Mutex-per-shared-resource pattern used elsewhere
+    // in this codebase (DB_ENV_LOCK, ENV_LOCK) so the download only ever
+    // happens once, sequentially.
+    static EDGE_ROUTER_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn route_capability_requires_a_query_field() {
         let server = super::McpServer::new_for_test();
@@ -206,6 +218,7 @@ mod tests {
 
     #[test]
     fn route_capability_matches_an_exact_capability_name() {
+        let _lock = EDGE_ROUTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let server = super::McpServer::new_for_test();
         let result = server
             .tool_route_capability(&json!({ "query": "health_check" }))
@@ -221,6 +234,7 @@ mod tests {
     fn route_capability_matches_every_advertised_capability_by_exact_name() {
         // Regression guard: if a capability is ever renamed in the
         // descriptions list without updating callers, this catches it.
+        let _lock = EDGE_ROUTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let server = super::McpServer::new_for_test();
         for name in [
             "health_check",
