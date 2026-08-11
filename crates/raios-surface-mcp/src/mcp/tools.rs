@@ -499,12 +499,8 @@ mod steer_tool_tests {
 
 #[cfg(test)]
 mod resolve_git_path_tests {
+    use crate::mcp::DB_ENV_LOCK;
     use serde_json::json;
-    use std::sync::Mutex;
-
-    // `RAIOS_DB_PATH` is process-global; serialize any test in this module
-    // that reads or writes it so parallel `cargo test` threads never race.
-    static DB_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_temp_db<R>(f: impl FnOnce(&rusqlite::Connection) -> R) -> R {
         let _lock = DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
