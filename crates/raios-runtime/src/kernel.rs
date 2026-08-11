@@ -281,3 +281,157 @@ fn mcp_tool_definitions() -> Value {
         }
     ])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session() -> McpTcpSession {
+        McpTcpSession::new(Config::default())
+    }
+
+    fn req(method: &str, id: Option<i64>) -> Value {
+        let mut v = serde_json::json!({ "jsonrpc": "2.0", "method": method });
+        if let Some(id) = id {
+            v["id"] = serde_json::json!(id);
+        }
+        v
+    }
+
+    fn call(s: &mut McpTcpSession, method: &str, id: Option<i64>) -> Option<Value> {
+        s.handle(&req(method, id))
+    }
+
+    #[test]
+    fn initialize_advertises_tcp_transport() {
+        let mut s = session();
+        let res = call(&mut s, "initialize", Some(1)).unwrap();
+        assert_eq!(res["id"], 1);
+        assert_eq!(res["result"]["protocolVersion"], "2024-11-05");
+        assert_eq!(res["result"]["serverInfo"]["name"], "raios-tcp");
+        assert_eq!(res["result"]["serverInfo"]["transport"], "tcp");
+        assert_eq!(
+            res["result"]["serverInfo"]["version"],
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+
+    #[test]
+    fn initialized_notification_returns_none() {
+        let mut s = session();
+        assert!(call(&mut s, "initialized", None).is_none());
+    }
+
+    #[test]
+    fn ping_returns_empty_result() {
+        let mut s = session();
+        let res = call(&mut s, "ping", Some(7)).unwrap();
+        assert_eq!(res["id"], 7);
+        assert_eq!(res["result"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn resources_list_lists_three_standard_uris() {
+        let mut s = session();
+        let res = call(&mut s, "resources/list", Some(2)).unwrap();
+        let uris: Vec<&str> = res["result"]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["uri"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            uris,
+            vec!["raios://memory", "raios://tasks", "raios://master"]
+        );
+    }
+
+    #[test]
+    fn tools_list_advertises_two_tools() {
+        let mut s = session();
+        let res = call(&mut s, "tools/list", Some(3)).unwrap();
+        let names: Vec<&str> = res["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["health_check", "list_projects"]);
+    }
+
+    #[test]
+    fn unknown_method_returns_method_not_found_error() {
+        let mut s = session();
+        let res = call(&mut s, "bogus/method", Some(9)).unwrap();
+        assert_eq!(res["id"], 9);
+        assert_eq!(res["error"]["code"], -32601);
+        assert!(res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("bogus/method"));
+    }
+
+    #[test]
+    fn request_without_id_is_treated_as_notification() {
+        let mut s = session();
+        assert!(call(&mut s, "ping", None).is_none());
+    }
+
+    #[test]
+    fn read_resource_rejects_missing_uri() {
+        let mut s = session();
+        let params = serde_json::json!({});
+        let res = s.handle(&serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "resources/read", "params": params })).unwrap();
+        assert_eq!(res["error"]["code"], -32601);
+        assert!(res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing uri"));
+    }
+
+    #[test]
+    fn read_resource_rejects_unknown_uri_before_touching_fs() {
+        let mut s = session();
+        let params = serde_json::json!({ "uri": "raios://bogus" });
+        let res = s.handle(&serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "resources/read", "params": params })).unwrap();
+        assert_eq!(res["error"]["code"], -32601);
+        assert!(res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown resource"));
+    }
+
+    #[test]
+    fn call_tool_rejects_missing_name() {
+        let mut s = session();
+        let params = serde_json::json!({});
+        let res = s.handle(&serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params })).unwrap();
+        assert_eq!(res["error"]["code"], -32601);
+        assert!(res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing tool name"));
+    }
+
+    #[test]
+    fn call_tool_health_check_is_pure() {
+        let mut s = session();
+        let params =
+            serde_json::json!({ "name": "health_check", "arguments": { "project": "acme" } });
+        let res = s.handle(&serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params })).unwrap();
+        assert_eq!(res["result"]["status"], "ok");
+        assert_eq!(res["result"]["project"], "acme");
+    }
+
+    #[test]
+    fn call_tool_rejects_unknown_tool_before_touching_fs() {
+        let mut s = session();
+        let params = serde_json::json!({ "name": "no_such_tool" });
+        let res = s.handle(&serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params })).unwrap();
+        assert_eq!(res["error"]["code"], -32601);
+        assert!(res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown tool"));
+    }
+}
