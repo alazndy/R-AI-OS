@@ -104,3 +104,69 @@ pub fn open_in_editor(path: &Path) -> anyhow::Result<()> {
     raios_core::core::process::open_in_system_editor(path)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn discover_skills_finds_directories_and_markdown_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("my-skill")).unwrap();
+        fs::create_dir_all(dir.path().join("full-skill")).unwrap();
+        fs::write(dir.path().join("full-skill").join("SKILL.md"), "# skill").unwrap();
+        fs::write(dir.path().join("rules.md"), "# rules").unwrap();
+        fs::write(dir.path().join("notes.txt"), "ignored").unwrap();
+
+        let skills = discover_skills(dir.path());
+        let mut names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["full-skill", "my-skill", "rules"]);
+
+        let full = skills.iter().find(|s| s.name == "full-skill").unwrap();
+        assert_eq!(full.description, "Self-contained agent skill folder");
+        let bare = skills.iter().find(|s| s.name == "my-skill").unwrap();
+        assert_eq!(bare.description, "Custom local skill");
+        let md = skills.iter().find(|s| s.name == "rules").unwrap();
+        assert_eq!(md.description, "Global context/instruction file");
+        assert!(skills.iter().all(|s| s.category == "Local"));
+        assert!(skills.iter().all(|s| s.version == "1.0.0"));
+        assert!(skills.iter().all(|s| s.is_active));
+    }
+
+    #[test]
+    fn discover_skills_ignores_missing_path() {
+        let skills = discover_skills(Path::new("/nonexistent/raios/skills/path"));
+        assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn discover_skills_skips_non_skill_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "readme").unwrap();
+        fs::write(dir.path().join("data.json"), "{}").unwrap();
+        fs::write(dir.path().join("script.sh"), "#!/bin/sh").unwrap();
+        let skills = discover_skills(dir.path());
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "README");
+    }
+
+    #[test]
+    fn discover_skills_treats_nested_subdirs_as_skills() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("nested/skill/sub")).unwrap();
+        let skills = discover_skills(dir.path());
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "nested");
+    }
+
+    #[test]
+    fn discover_agents_returns_three_standard_entries() {
+        let agents = discover_agents();
+        assert_eq!(agents.len(), 3);
+        assert_eq!(agents[0].name, "Claude Code");
+        assert_eq!(agents[1].name, "OpenCode");
+        assert_eq!(agents[2].name, "Antigravity (Cursor)");
+    }
+}
