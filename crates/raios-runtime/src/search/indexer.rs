@@ -45,6 +45,14 @@ pub(crate) const SKIP_DIRS: &[&str] = &[
     ".svelte-kit",
     "out",
     ".fastembed_cache",
+    // PlatformIO's vendored dependency cache (embedded/ESP32 projects). Found
+    // 2026-08-14: 3,362 files under `.pio/libdeps/**` (mostly LVGL's demo
+    // asset .c files, which encode images as thousands of hex-byte tokens
+    // per line) accounted for 9.28M of 24.4M total bm25_postings rows (38%)
+    // in a 4.4GB-over-cap workspace.db — vendored/generated code, not live
+    // workspace source.
+    ".pio",
+    "libdeps",
     // Ephemeral git-worktree checkouts (Claude Code's isolated-worktree
     // feature lands these at <repo>/.claude/worktrees/<id>/, a full
     // duplicate checkout). Found 2026-07-11: raios locate returned every
@@ -451,6 +459,24 @@ mod tests {
         let files = fs_mtimes(&ws);
         assert_eq!(files.len(), 1);
         assert!(files.keys().next().unwrap().ends_with("live.rs"));
+    }
+
+    #[test]
+    fn fs_mtimes_skips_platformio_vendor_trees() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(ws.join("main.cpp"), "void setup() {}").unwrap();
+        fs::create_dir_all(ws.join(".pio/libdeps/esp32/lvgl")).unwrap();
+        fs::write(
+            ws.join(".pio/libdeps/esp32/lvgl/asset.c"),
+            "const uint8_t img[] = {0x00};",
+        )
+        .unwrap();
+
+        let files = fs_mtimes(&ws);
+        assert_eq!(files.len(), 1);
+        assert!(files.keys().next().unwrap().ends_with("main.cpp"));
     }
 
     #[test]
