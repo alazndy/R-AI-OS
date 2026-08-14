@@ -1,4 +1,4 @@
-//! Explore route rendering (search results, tool traces, and daemon logs).
+//! Explore route rendering (read-only workspace search, traces, and daemon logs).
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -10,25 +10,111 @@ use ratatui::{
 
 use crate::app::store::Store;
 
+/// Shared Explore-route rectangles used by rendering and mouse hit testing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ExploreRouteLayout {
+    pub(crate) search: Rect,
+    pub(crate) results: Rect,
+    pub(crate) traces: Rect,
+    pub(crate) logs: Rect,
+}
+
+/// Calculates stable Explore panels for one dashboard content area.
+pub(crate) fn explore_route_layout(area: Rect) -> ExploreRouteLayout {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .split(area);
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(6)])
+        .split(columns[0]);
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(columns[1]);
+
+    ExploreRouteLayout {
+        search: left[0],
+        results: left[1],
+        traces: right[0],
+        logs: right[1],
+    }
+}
+
 /// Renders the Explore route panel view.
 pub fn render_explore_route(f: &mut Frame, area: Rect, store: &Store) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),      // Search bar
-            Constraint::Percentage(50), // Search results / Traces
-            Constraint::Percentage(50), // Live Log Replay
-        ])
-        .split(area);
+    let layout = explore_route_layout(area);
 
     // 1. Search input bar
     let search_block = Block::default()
         .borders(Borders::ALL)
-        .title(" Search Code & Cortex (Trigram / Vector) [Press '/' to edit] ")
-        .border_style(Style::default().fg(Color::Yellow));
+        .title(" Workspace Search [/] edit · Enter run · Esc cancel ")
+        .border_style(Style::default().fg(if store.explore_search.is_editing {
+            Color::Yellow
+        } else {
+            Color::Cyan
+        }));
 
-    let search_p = Paragraph::new(format!("  Query: {}_", store.search_input)).block(search_block);
-    f.render_widget(search_p, chunks[0]);
+    let cursor = if store.explore_search.is_editing {
+        "_"
+    } else {
+        ""
+    };
+    let status = store
+        .explore_search
+        .status
+        .as_deref()
+        .map(|status| format!("  ·  {status}"))
+        .unwrap_or_default();
+    let search_p = Paragraph::new(format!(
+        "  {}{}{}",
+        store.explore_search.query, cursor, status
+    ))
+    .block(search_block);
+    f.render_widget(search_p, layout.search);
+
+    let result_items: Vec<ListItem> = if store.explore_results().is_empty() {
+        let hint = if store.explore_search.query.is_empty() {
+            "  Type / to search the indexed workspace."
+        } else {
+            "  No matching indexed files. Refine the query with /."
+        };
+        vec![ListItem::new(hint)]
+    } else {
+        store
+            .explore_results()
+            .iter()
+            .enumerate()
+            .map(|(index, result)| {
+                let bg = if !store.right_panel_focus && store.cursor == index {
+                    Color::DarkGray
+                } else {
+                    Color::Reset
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{}:{} ", result.file_path, result.line_number),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(&result.snippet, Style::default().fg(Color::Gray)),
+                ]))
+                .style(Style::default().bg(bg))
+            })
+            .collect()
+    };
+
+    let results_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Search Results · Enter opens selected local file ")
+        .border_style(Style::default().fg(if store.right_panel_focus {
+            Color::DarkGray
+        } else {
+            Color::Green
+        }));
+    f.render_widget(List::new(result_items).block(results_block), layout.results);
 
     // 2. Tool Traces Timeline & Results
     let trace_items: Vec<ListItem> = if store.snapshot.explore.recent_traces.is_empty() {
@@ -83,7 +169,7 @@ pub fn render_explore_route(f: &mut Frame, area: Rect, store: &Store) {
         }));
 
     let traces_list = List::new(trace_items).block(traces_block);
-    f.render_widget(traces_list, chunks[1]);
+    f.render_widget(traces_list, layout.traces);
 
     // 3. Live Logs Replay
     let log_items: Vec<ListItem> = if store.snapshot.explore.recent_logs.is_empty() {
@@ -125,5 +211,21 @@ pub fn render_explore_route(f: &mut Frame, area: Rect, store: &Store) {
         }));
 
     let logs_list = List::new(log_items).block(logs_block);
-    f.render_widget(logs_list, chunks[2]);
+    f.render_widget(logs_list, layout.logs);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::explore_route_layout;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn layout_keeps_search_and_results_in_the_left_column() {
+        let layout = explore_route_layout(Rect::new(0, 0, 120, 36));
+        assert!(layout.search.width < 120);
+        assert_eq!(layout.search.x, layout.results.x);
+        assert!(layout.results.y > layout.search.y);
+        assert!(layout.traces.x > layout.results.x);
+        assert!(layout.logs.y >= layout.traces.y);
+    }
 }

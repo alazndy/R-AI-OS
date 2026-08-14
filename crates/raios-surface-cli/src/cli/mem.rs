@@ -185,5 +185,29 @@ pub(super) fn cmd_mem(action: MemAction, json: bool) {
                 true,
             );
         }
+        MemAction::ExportPortable { output } => {
+            match raios_core::db::mem_export_portable(&conn, &output) {
+                Ok(n) => println!(
+                    "  \x1b[32m✓\x1b[0m  {} item(s) exported → {}",
+                    n,
+                    output.display()
+                ),
+                Err(e) => eprintln!("  \x1b[31m✗\x1b[0m  Export error: {e}"),
+            }
+        }
+        MemAction::ImportPortable { input } => {
+            if !input.exists() {
+                eprintln!("  \x1b[31m✗\x1b[0m  File not found: {}", input.display());
+                return;
+            }
+            match raios_core::db::mem_import_portable(&conn, &input) {
+                Ok(n) => println!(
+                    "  \x1b[32m✓\x1b[0m  {} item(s) imported/updated from {}",
+                    n,
+                    input.display()
+                ),
+                Err(e) => eprintln!("  \x1b[31m✗\x1b[0m  Import error: {e}"),
+            }
+        }
     }
 }

@@ -1,5 +1,6 @@
 //! Main UI rendering engine and syntax highlighter for the TUI surface.
 
+pub mod brand;
 pub mod components;
 pub mod filebrowser;
 pub mod health;
@@ -30,17 +31,19 @@ use ratatui::{
 
 use raios_surface_tui::app::{App, AppState};
 
+use brand::{BRAND_BLUE, BRAND_BLUE_DEEP, BRAND_INK, BRAND_ORANGE, BRAND_ORANGE_DEEP, BRAND_PANEL};
+
 // ─── Colour palette ──────────────────────────────────────────────────────────
 
-const GREEN: Color = Color::Rgb(0, 200, 180); // Turquoise (turkuaz)
-const CYAN: Color = Color::Rgb(0, 180, 255); // Cyan (cyan)
+const GREEN: Color = BRAND_BLUE; // Brand electric blue
+const CYAN: Color = BRAND_BLUE_DEEP; // Brand deep blue
 const DIM: Color = Color::Rgb(80, 80, 80);
 const MID: Color = Color::Rgb(170, 170, 170);
-const AMBER: Color = Color::Rgb(255, 100, 20); // Orange (turuncu)
-const RED: Color = Color::Rgb(255, 60, 0); // Orange-Red
-const MAGENTA: Color = Color::Rgb(30, 120, 255); // Blue (mavi)
-const PANEL_BG: Color = Color::Rgb(8, 12, 16);
-const HEADER_BG: Color = Color::Rgb(0, 12, 30);
+const AMBER: Color = BRAND_ORANGE; // Brand hot orange
+const RED: Color = BRAND_ORANGE_DEEP; // Brand orange-red
+const MAGENTA: Color = BRAND_BLUE_DEEP; // Brand deep blue
+const PANEL_BG: Color = BRAND_INK;
+const HEADER_BG: Color = BRAND_PANEL;
 
 // ─── Spinner ─────────────────────────────────────────────────────────────────
 
@@ -50,16 +53,6 @@ const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧
 pub fn spinner_char(tick: u64) -> char {
     SPINNER[(tick as usize) % SPINNER.len()]
 }
-
-// ─── Banner (6 lines) ────────────────────────────────────────────────────────
-
-const BANNER: &str = "\
-  ██████╗       █████╗ ██╗      ██████╗ ███████╗\n\
-  ██╔══██╗     ██╔══██╗██║     ██╔═══██╗██╔════╝\n\
-  ██████╔╝     ███████║██║     ██║   ██║███████╗\n\
-  ██╔══██╗     ██╔══██║██║     ██║   ██║╚════██║\n\
-  ██║  ██║     ██║  ██║██║     ╚██████╔╝███████║\n\
-  ╚═╝  ╚═╝     ╚═╝  ╚═╝╚═╝      ╚═════╝ ╚══════╝";
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
@@ -74,6 +67,12 @@ pub fn render(frame: &mut Frame, app: &App) {
         AppState::FileEdit => render_file_edit(frame, app),
         AppState::ProjectDetail => render_project_detail(frame, app),
         AppState::HealthView => render_health_view(frame, app),
+        AppState::ConstitutionView => render_constitution(frame, frame.area(), app),
+        AppState::ExtensionsView => render_extensions(frame, frame.area(), app),
+        AppState::TasksView => render_tasks_view(frame, app),
+        AppState::SearchView => render_search_panel(frame, frame.area(), app),
+        AppState::ActiveAgentsView => render_logs(frame, frame.area(), app),
+        AppState::TimelineView => render_timeline(frame, frame.area(), app),
         AppState::MemPalaceView => render_mempalace_view(frame, app),
         AppState::GraphReport => render_graph_report(frame, app),
         AppState::GitDiffView => render_git_diff_view(frame, app),
@@ -441,3 +440,66 @@ fn build_preview(app: &App) -> Vec<Line<'static>> {
 // ─── File-changed notification badge ─────────────────────────────────────────
 
 // ─── Agent launcher modal ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod render_dispatch_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn rendered_text(app: &App) -> String {
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<&str>>()
+            .join("")
+    }
+
+    #[test]
+    fn constitution_view_renders_empty_state_hint() {
+        let mut app = App::test_instance();
+        app.state = AppState::ConstitutionView;
+        assert!(rendered_text(&app).contains("empty or unparsed"));
+    }
+
+    #[test]
+    fn extensions_view_renders_loading_state() {
+        let mut app = App::test_instance();
+        app.state = AppState::ExtensionsView;
+        assert!(rendered_text(&app).contains("Loading extensions"));
+    }
+
+    #[test]
+    fn tasks_view_renders_empty_state_hint() {
+        let mut app = App::test_instance();
+        app.state = AppState::TasksView;
+        assert!(rendered_text(&app).contains("No tasks"));
+    }
+
+    #[test]
+    fn search_view_renders_empty_state_hint() {
+        let mut app = App::test_instance();
+        app.state = AppState::SearchView;
+        assert!(rendered_text(&app).contains("No index"));
+    }
+
+    #[test]
+    fn active_agents_view_renders_empty_state_hint() {
+        let mut app = App::test_instance();
+        app.state = AppState::ActiveAgentsView;
+        assert!(rendered_text(&app).contains("No active agents"));
+    }
+
+    #[test]
+    fn timeline_view_renders_empty_state_hint() {
+        let mut app = App::test_instance();
+        app.state = AppState::TimelineView;
+        assert!(rendered_text(&app).contains("No recent activities recorded"));
+    }
+}

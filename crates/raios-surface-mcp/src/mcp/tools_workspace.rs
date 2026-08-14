@@ -631,6 +631,31 @@ mod tests {
     }
 
     #[test]
+    fn extract_validation_errors_rejects_a_non_state_sync_event() {
+        let payload = json!({
+            "event": "AgentStatus",
+            "latest_errors": []
+        });
+
+        let err = extract_validation_errors_from_state_sync(&payload, None).unwrap_err();
+        assert!(err.contains("expected StateSync event"));
+    }
+
+    #[test]
+    fn extract_validation_errors_returns_everything_when_no_filter_given() {
+        let payload = json!({
+            "event": "StateSync",
+            "latest_errors": [
+                { "file": "/workspace/raios/src/main.rs", "message": "a" },
+                { "file": "/workspace/other/lib.rs", "message": "b" }
+            ]
+        });
+
+        let errors = extract_validation_errors_from_state_sync(&payload, None).unwrap();
+        assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
     fn extract_validation_errors_filters_by_project_hint() {
         let payload = json!({
             "event": "StateSync",
@@ -643,5 +668,76 @@ mod tests {
         let errors = extract_validation_errors_from_state_sync(&payload, Some("raios")).unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0]["file"], "/workspace/raios/src/main.rs");
+    }
+}
+
+#[cfg(test)]
+mod resolve_search_scope_tests {
+    use crate::mcp::DB_ENV_LOCK;
+    use serde_json::json;
+
+    fn with_temp_db<R>(f: impl FnOnce(&rusqlite::Connection) -> R) -> R {
+        let _lock = DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var("RAIOS_DB_PATH").ok();
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        std::env::set_var("RAIOS_DB_PATH", tmp_db.path());
+
+        let conn = raios_core::db::open_db().unwrap();
+        let result = f(&conn);
+        drop(conn);
+
+        match original {
+            Some(v) => std::env::set_var("RAIOS_DB_PATH", v),
+            None => std::env::remove_var("RAIOS_DB_PATH"),
+        }
+        result
+    }
+
+    #[test]
+    fn resolve_search_scope_defaults_to_the_current_directory_when_no_path_given() {
+        let server = super::McpServer::new_for_test();
+        let scope = server.resolve_search_scope(&json!({})).unwrap();
+        assert_eq!(scope, std::env::current_dir().unwrap());
+    }
+
+    #[test]
+    fn resolve_search_scope_accepts_a_direct_existing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = super::McpServer::new_for_test();
+        let scope = server
+            .resolve_search_scope(&json!({ "path": dir.path().to_str().unwrap() }))
+            .unwrap();
+        assert_eq!(scope, dir.path());
+    }
+
+    #[test]
+    fn resolve_search_scope_falls_back_to_a_registered_project_by_name() {
+        with_temp_db(|conn| {
+            conn.execute(
+                "INSERT INTO projects (name, path) VALUES (?1, ?2)",
+                rusqlite::params!["R-AI-OS", "/does/not/exist/on/this/machine"],
+            )
+            .unwrap();
+
+            let server = super::McpServer::new_for_test();
+            let scope = server
+                .resolve_search_scope(&json!({ "path": "ai-os" }))
+                .unwrap();
+            assert_eq!(
+                scope,
+                std::path::PathBuf::from("/does/not/exist/on/this/machine")
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_search_scope_errors_when_path_not_found_anywhere() {
+        with_temp_db(|_conn| {
+            let server = super::McpServer::new_for_test();
+            let err = server
+                .resolve_search_scope(&json!({ "path": "totally-unregistered-name" }))
+                .unwrap_err();
+            assert_eq!(err, "Project not found: totally-unregistered-name");
+        });
     }
 }

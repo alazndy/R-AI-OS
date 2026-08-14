@@ -151,7 +151,7 @@ pub fn render_search_panel(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
 
         for (i, result) in app.search.results.iter().enumerate() {
-            let is_selected = app.ui.right_panel_focus && i == app.search.cursor;
+            let is_selected = i == app.search.cursor;
 
             let file_name = result
                 .path

@@ -293,3 +293,228 @@ fn short_path(path: &str) -> String {
         .unwrap_or(path)
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_open_checkbox_with_tags() {
+        let t = parse_task_line("- [ ] Fix the login bug @claude #R-AI-OS").unwrap();
+        assert_eq!(t.text, "Fix the login bug");
+        assert!(!t.completed);
+        assert_eq!(t.agent.as_deref(), Some("claude"));
+        assert_eq!(t.project.as_deref(), Some("R-AI-OS"));
+        assert!(t.id.is_none());
+    }
+
+    #[test]
+    fn parses_done_checkbox_case_insensitive() {
+        let lower = parse_task_line("- [x] Ship it").unwrap();
+        let upper = parse_task_line("- [X] Ship it").unwrap();
+        assert!(lower.completed);
+        assert!(upper.completed);
+        assert_eq!(lower.text, "Ship it");
+        assert_eq!(upper.text, "Ship it");
+    }
+
+    #[test]
+    fn normalizes_cx_agent_alias_to_codex() {
+        let t = parse_task_line("- [ ] Run scan @cx").unwrap();
+        assert_eq!(t.agent.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn unknown_at_tag_stays_in_text() {
+        let t = parse_task_line("- [ ] Fix bug @mystery-agent").unwrap();
+        assert_eq!(t.agent, None);
+        assert_eq!(t.text, "Fix bug @mystery-agent");
+    }
+
+    #[test]
+    fn unknown_agent_case_is_normalized_to_lowercase() {
+        let t = parse_task_line("- [ ] Fix bug @Claude").unwrap();
+        assert_eq!(t.agent.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn ignores_empty_project_tag() {
+        let t = parse_task_line("- [ ] Fix bug #").unwrap();
+        assert_eq!(t.project, None);
+        assert_eq!(t.text, "Fix bug");
+    }
+
+    #[test]
+    fn empty_text_returns_none() {
+        assert!(parse_task_line("- [ ] @claude").is_none());
+        assert!(parse_task_line("- [ ]").is_none());
+        assert!(parse_task_line("").is_none());
+    }
+
+    #[test]
+    fn non_checkbox_lines_return_none() {
+        assert!(parse_task_line("* not a task").is_none());
+        assert!(parse_task_line("- plain list item").is_none());
+        assert!(parse_task_line("  [ ] not a task").is_none());
+    }
+
+    #[test]
+    fn serialize_round_trips_through_parse() {
+        let task = Task {
+            id: None,
+            text: "Write tests".into(),
+            completed: true,
+            agent: Some("opencode".into()),
+            project: Some("raios".into()),
+        };
+        let line = serialize(&task);
+        assert_eq!(line, "- [x] Write tests @opencode #raios");
+        let reparsed = parse_task_line(&line).unwrap();
+        assert_eq!(reparsed.text, task.text);
+        assert_eq!(reparsed.completed, task.completed);
+        assert_eq!(reparsed.agent, task.agent);
+        assert_eq!(reparsed.project, task.project);
+    }
+
+    #[test]
+    fn agent_label_maps_known_harnesses() {
+        let claude = Task {
+            id: None,
+            text: "".into(),
+            completed: false,
+            agent: Some("claude".into()),
+            project: None,
+        };
+        let codex = Task {
+            id: None,
+            text: "".into(),
+            completed: false,
+            agent: Some("codex".into()),
+            project: None,
+        };
+        let opencode = Task {
+            id: None,
+            text: "".into(),
+            completed: false,
+            agent: Some("opencode".into()),
+            project: None,
+        };
+        let antigravity = Task {
+            id: None,
+            text: "".into(),
+            completed: false,
+            agent: Some("antigravity".into()),
+            project: None,
+        };
+        let unknown = Task {
+            id: None,
+            text: "".into(),
+            completed: false,
+            agent: Some("other".into()),
+            project: None,
+        };
+        let none = Task {
+            id: None,
+            text: "".into(),
+            completed: false,
+            agent: None,
+            project: None,
+        };
+
+        assert_eq!(claude.agent_label(), Some("◆C"));
+        assert_eq!(codex.agent_label(), Some("⬣X"));
+        assert_eq!(opencode.agent_label(), Some("◈O"));
+        assert_eq!(antigravity.agent_label(), Some("⬡A"));
+        assert_eq!(unknown.agent_label(), None);
+        assert_eq!(none.agent_label(), None);
+    }
+
+    #[test]
+    fn is_persisted_tracks_db_identity() {
+        let persisted = Task {
+            id: Some("abc".into()),
+            text: "".into(),
+            completed: false,
+            agent: None,
+            project: None,
+        };
+        let draft = Task {
+            id: None,
+            text: "".into(),
+            completed: false,
+            agent: None,
+            project: None,
+        };
+        assert!(persisted.is_persisted());
+        assert!(!draft.is_persisted());
+        assert_eq!(draft.display(), "");
+    }
+
+    #[test]
+    fn from_personal_row_maps_db_fields() {
+        let row = raios_core::db::PersonalTaskRow {
+            id: "row-1".into(),
+            title: "Task title".into(),
+            completed: true,
+            assignee_id: Some("claude".into()),
+            project_name: Some("proj".into()),
+            display_order: 3,
+        };
+        let task = Task::from_personal_row(row);
+        assert_eq!(task.id.as_deref(), Some("row-1"));
+        assert_eq!(task.text, "Task title");
+        assert!(task.completed);
+        assert_eq!(task.agent.as_deref(), Some("claude"));
+        assert_eq!(task.project.as_deref(), Some("proj"));
+    }
+
+    #[test]
+    fn build_prompt_includes_project_context() {
+        let task = Task {
+            id: None,
+            text: "Fix it".into(),
+            completed: false,
+            agent: None,
+            project: Some("acme".into()),
+        };
+        let prompt = build_prompt(&task, "claude", None);
+        assert!(prompt.contains("Project: acme"));
+        assert!(prompt.contains("Agent: claude"));
+        assert!(prompt.contains("Task: Fix it"));
+        assert!(!prompt.contains("SENTINEL ALERT"));
+    }
+
+    #[test]
+    fn build_prompt_appends_sentinel_errors() {
+        let task = Task {
+            id: None,
+            text: "Fix it".into(),
+            completed: false,
+            agent: None,
+            project: None,
+        };
+        let prompt = build_prompt(&task, "codex", Some(vec!["src/a.ts:3: console.log".into()]));
+        assert!(prompt.contains("SENTINEL ALERT"));
+        assert!(prompt.contains("src/a.ts:3: console.log"));
+    }
+
+    #[test]
+    fn build_prompt_ignores_empty_sentinel_list() {
+        let task = Task {
+            id: None,
+            text: "Fix it".into(),
+            completed: false,
+            agent: None,
+            project: None,
+        };
+        let prompt = build_prompt(&task, "codex", Some(vec![]));
+        assert!(!prompt.contains("SENTINEL ALERT"));
+    }
+
+    #[test]
+    fn short_path_keeps_last_component_on_both_separators() {
+        assert_eq!(short_path("/home/user/dev/proj"), "proj");
+        assert_eq!(short_path("C:\\Users\\dev\\proj"), "proj");
+        assert_eq!(short_path("no-separator"), "no-separator");
+    }
+}

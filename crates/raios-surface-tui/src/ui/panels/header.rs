@@ -17,7 +17,7 @@ pub fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         Style::new().fg(DIM),
     );
     let title = Span::styled(
-        "  R-AI-OS — CORE SYSTEM  ",
+        "  R-AI-OS / CONTROL PLANE  ",
         Style::new()
             .fg(GREEN)
             .bg(HEADER_BG)
@@ -85,19 +85,8 @@ pub fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 
     if area.height >= 8 {
         let [banner_area, status_area] =
-            Layout::horizontal([Constraint::Length(52), Constraint::Min(0)]).areas(area);
-        let banner_colors = [AMBER, AMBER, AMBER, CYAN, CYAN, CYAN];
-        let banner_lines: Vec<Line> = BANNER
-            .lines()
-            .enumerate()
-            .map(|(idx, line)| {
-                Line::from(Span::styled(
-                    line,
-                    Style::new().fg(banner_colors[idx % banner_colors.len()]),
-                ))
-            })
-            .collect();
-        let banner = Paragraph::new(banner_lines)
+            Layout::horizontal([Constraint::Length(40), Constraint::Min(0)]).areas(area);
+        let banner = Paragraph::new(brand::brand_logo_lines())
             .block(header_block())
             .alignment(Alignment::Left);
         frame.render_widget(banner, banner_area);

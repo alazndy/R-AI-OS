@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
 pub fn default_db_path() -> PathBuf {
+    if let Ok(path) = std::env::var("RAIOS_DB_PATH") {
+        return PathBuf::from(path);
+    }
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("raios")

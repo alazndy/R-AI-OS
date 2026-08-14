@@ -34,16 +34,23 @@ pub fn simple_diff(old: &str, new: &str) -> Vec<String> {
 
 // ─── Simple line editor ───────────────────────────────────────────────────────
 
+/// In-memory multiline text editor state for TUI forms and constitution editing.
 #[derive(Debug, Default)]
 pub struct Editor {
+    /// Buffer lines of text.
     pub lines: Vec<String>,
+    /// 0-indexed cursor row position.
     pub cursor_row: usize,
+    /// 0-indexed cursor column position (in characters).
     pub cursor_col: usize,
+    /// 0-indexed top row displayed in the visible window.
     pub scroll: usize,
+    /// Height of the visible editor view area in rows.
     pub view_height: usize,
 }
 
 impl Editor {
+    /// Constructs a new `Editor` initialized with text content lines and a view height limit.
     pub fn from_content(content: &str, view_height: usize) -> Self {
         let lines: Vec<String> = content.lines().map(str::to_owned).collect();
         let lines = if lines.is_empty() {
@@ -60,10 +67,12 @@ impl Editor {
         }
     }
 
+    /// Joins all line buffer entries into a single newline-delimited text string.
     pub fn content(&self) -> String {
         self.lines.join("\n")
     }
 
+    /// Processes a keyboard navigation or editing key event, updating cursor and scroll positions.
     pub fn handle_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char(c) => {
@@ -160,6 +169,7 @@ impl Editor {
     }
 }
 
+/// Converts a 0-based character column position into a byte offset within a UTF-8 string.
 pub fn char_to_byte(s: &str, char_pos: usize) -> usize {
     s.char_indices()
         .nth(char_pos)

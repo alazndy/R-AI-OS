@@ -26,8 +26,19 @@ impl App {
                 crate::app::reducer::reduce_event(&mut self.store, evt);
             }
             BgMsg::SearchResults(results) => {
-                self.search.results = results;
+                self.search.results = results.clone();
                 self.search.cursor = 0;
+                self.store.explore_search.set_results(
+                    results
+                        .into_iter()
+                        .map(|result| raios_contracts::SearchResultDto {
+                            file_path: result.path.to_string_lossy().to_string(),
+                            line_number: result.line,
+                            snippet: result.snippet,
+                            score: result.score,
+                        })
+                        .collect(),
+                );
             }
             BgMsg::RecentProjects(p) => {
                 self.projects.recent = p;
@@ -102,7 +113,7 @@ impl App {
             BgMsg::AiAuditReport(report) => {
                 self.system.report = Some(report);
                 self.system.is_scanning = false;
-                self.ui.menu_cursor = 11; // Open Diagnostics/System tab
+                self.system.sync_status = Some("AI audit report is ready.".into());
             }
             BgMsg::HealthReport(report) => {
                 self.health.report = report;

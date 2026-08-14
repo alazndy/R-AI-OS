@@ -2836,6 +2836,7 @@ dependencies = [
  "tokio",
  "toml",
  "tower",
+ "ureq",
  "uuid",
  "walkdir",
  "which",

@@ -1,8 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
-use raios_runtime::filebrowser::FileEntry;
 use raios_surface_tui::app::state::AppState;
-use raios_surface_tui::app::{filtered_palette, App, MENU_ITEMS};
+use raios_surface_tui::app::{filtered_palette, App};
 
 impl App {
     pub(crate) fn handle_command_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -12,15 +11,11 @@ impl App {
                 self.ui.command_buf.clear();
                 self.ui.palette_cursor = 0;
             }
-
             KeyCode::Enter => {
-                // If user typed a command (buf starts with '/'), run it directly.
-                // Otherwise use the palette cursor to pick a command.
-                let cmd = if self.ui.command_buf.starts_with('/') {
+                let command = if self.ui.command_buf.starts_with('/') {
                     self.ui.command_buf.trim().to_string()
                 } else {
-                    let filtered = filtered_palette(&self.ui.command_buf);
-                    filtered
+                    filtered_palette(&self.ui.command_buf)
                         .get(self.ui.palette_cursor)
                         .map(|item| item.cmd.to_string())
                         .unwrap_or_default()
@@ -28,47 +23,34 @@ impl App {
                 self.ui.command_buf.clear();
                 self.ui.command_mode = false;
                 self.ui.palette_cursor = 0;
-                if !cmd.is_empty() {
-                    self.execute_command(&cmd)?;
+                if !command.is_empty() {
+                    self.execute_command(&command)?;
                 }
             }
-
-            // Tab fills the selected palette item into the buffer
             KeyCode::Tab => {
-                let filtered = filtered_palette(&self.ui.command_buf);
-                if let Some(item) = filtered.get(self.ui.palette_cursor) {
+                if let Some(item) =
+                    filtered_palette(&self.ui.command_buf).get(self.ui.palette_cursor)
+                {
                     self.ui.command_buf = format!("{} ", item.cmd);
                     self.ui.palette_cursor = 0;
                 }
             }
-
-            KeyCode::Up if self.ui.palette_cursor > 0 => {
-                self.ui.palette_cursor -= 1;
-            }
-
+            KeyCode::Up if self.ui.palette_cursor > 0 => self.ui.palette_cursor -= 1,
             KeyCode::Down => {
-                let max = filtered_palette(&self.ui.command_buf)
+                let maximum = filtered_palette(&self.ui.command_buf)
                     .len()
                     .saturating_sub(1);
-                if self.ui.palette_cursor < max {
-                    self.ui.palette_cursor += 1;
-                }
+                self.ui.palette_cursor = (self.ui.palette_cursor + 1).min(maximum);
             }
-
+            KeyCode::Backspace if self.ui.command_buf.is_empty() => self.ui.command_mode = false,
             KeyCode::Backspace => {
-                if self.ui.command_buf.is_empty() {
-                    self.ui.command_mode = false;
-                } else {
-                    self.ui.command_buf.pop();
-                    self.ui.palette_cursor = 0;
-                }
-            }
-
-            KeyCode::Char(c) => {
-                self.ui.command_buf.push(c);
+                self.ui.command_buf.pop();
                 self.ui.palette_cursor = 0;
             }
-
+            KeyCode::Char(character) => {
+                self.ui.command_buf.push(character);
+                self.ui.palette_cursor = 0;
+            }
             _ => {}
         }
         Ok(())
@@ -79,498 +61,35 @@ impl App {
             return Ok(());
         }
 
-        // The four control-plane routes own dashboard interaction. Keep only
-        // global dashboard affordances from the legacy surface while its
-        // detailed screens are retired behind the command palette.
-        if !matches!(key.code, KeyCode::Char('q' | '?' | '/')) {
-            return Ok(());
-        }
-
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('?') => {
-                self.state = AppState::HelpView;
-            }
-            KeyCode::Char('i') | KeyCode::Char('I')
-                if !self.system.pending_file_changes.is_empty() => {
-                    let first = &self.system.pending_file_changes[self.system.pending_change_cursor];
-                    self.projects.git_diff_lines = raios_surface_tui::app::editor::simple_diff(
-                        &first.original_content,
-                        &first.new_content,
-                    );
-                    self.state = AppState::GitDiffView;
-                }
-            KeyCode::Char('L')
-                // Uppercase L = launcher (lowercase l = vim right)
-                if self.ui.menu_cursor == 7 && self.ui.right_panel_focus => {
-                    if let Some(proj) = self.project_at_cursor().cloned() {
-                        self.projects.active = Some(proj);
-                        self.ui.show_launcher = true;
-                    }
-                }
-            KeyCode::Char('s')
-                // Cycle sort mode on All Projects view
-                if self.ui.menu_cursor == 7 => {
-                    self.projects.sort = self.projects.sort.next();
-                    self.projects.cursor = 0;
-                }
-            // ── Extensions panel keyboard (menu_cursor == 15) ────────────────
-            // All Extensions-specific keys require right_panel_focus, same as every
-            // other panel — otherwise Up/Down/Tab/etc. hijack the menu-navigation
-            // keys and the user gets stuck unable to move off the panel.
-            KeyCode::Tab if self.ui.menu_cursor == 15 && self.ui.right_panel_focus => {
-                self.ext.focus = if self.ext.focus == raios_surface_tui::app::state::ExtFocus::Commands {
-                    raios_surface_tui::app::state::ExtFocus::Config
-                } else {
-                    raios_surface_tui::app::state::ExtFocus::Commands
-                };
-            }
-            KeyCode::Enter
-                if self.ui.menu_cursor == 15
-                    && self.ui.right_panel_focus
-                    && self.ext.focus == raios_surface_tui::app::state::ExtFocus::Commands
-                    && !self.ext.extensions.is_empty() =>
-            {
-                self.run_ext_cmd();
-            }
-            KeyCode::Char('e')
-                if self.ui.menu_cursor == 15
-                    && self.ui.right_panel_focus
-                    && self.ext.focus == raios_surface_tui::app::state::ExtFocus::Config
-                    && !self.ext.editing =>
-            {
-                if let Some(ext) = self.ext.extensions.get(self.ext.ext_cursor) {
-                    if let Some(field) = ext.config_schema.get(self.ext.cfg_cursor) {
-                        self.ext.input = if field.masked { String::new() } else { field.value.clone() };
-                        self.ext.editing = true;
-                    }
-                }
-            }
-            KeyCode::Enter
-                if self.ui.menu_cursor == 15
-                    && self.ui.right_panel_focus
-                    && self.ext.focus == raios_surface_tui::app::state::ExtFocus::Config
-                    && self.ext.editing =>
-            {
-                self.save_ext_config_field();
-            }
-            KeyCode::Esc if self.ui.menu_cursor == 15 && self.ext.editing => {
-                self.ext.editing = false;
-                self.ext.input.clear();
-            }
-            KeyCode::Char(c) if self.ui.menu_cursor == 15 && self.ext.editing => {
-                self.ext.input.push(c);
-            }
-            KeyCode::Backspace if self.ui.menu_cursor == 15 && self.ext.editing => {
-                self.ext.input.pop();
-            }
-            KeyCode::Left
-                if self.ui.menu_cursor == 15
-                    && self.ui.right_panel_focus
-                    && !self.ext.editing
-                    && self.ext.ext_cursor > 0 =>
-            {
-                self.ext.ext_cursor -= 1;
-                self.ext.cmd_cursor = 0;
-                self.ext.cfg_cursor = 0;
-            }
-            KeyCode::Right
-                if self.ui.menu_cursor == 15
-                    && self.ui.right_panel_focus
-                    && !self.ext.editing
-                    && self.ext.ext_cursor + 1 < self.ext.extensions.len() =>
-            {
-                self.ext.ext_cursor += 1;
-                self.ext.cmd_cursor = 0;
-                self.ext.cfg_cursor = 0;
-            }
-            // Constitution item-editing Esc cancels the inline edit/insert first —
-            // must precede the generic "back out of panel" Esc arm below, same
-            // precedence pattern as the Extensions ext.editing Esc arm above.
-            KeyCode::Esc if self.ui.menu_cursor == 1 && self.constitution.item_editing => {
-                self.constitution.item_editing = false;
-                self.constitution.item_input.clear();
-            }
-            // Creator-mode Esc closes the creator at any step — must precede the generic
-            // "back out of panel" Esc arm below for the same reason as the item-editing Esc
-            // arm just above (same precedence bug/fix Task 7 documented): that catch-all is
-            // guarded only by `right_panel_focus`, which is always true while the creator is
-            // active, so it would otherwise swallow every Esc before this arm is ever reached.
-            KeyCode::Esc if self.ui.menu_cursor == 1 && self.constitution.creator.active => {
-                self.close_creator();
-            }
-            // Esc always backs out of a focused right panel to the menu — universal
-            // "go back" regardless of which panel (Extensions, Tasks, files, ...).
-            KeyCode::Esc if self.ui.right_panel_focus => {
-                self.ui.right_panel_focus = false;
-            }
-            // ── End Extensions ───────────────────────────────────────────────
-            // ── Constitution panel keyboard (menu_cursor == 1) ───────────────
-            KeyCode::Char(n @ '1'..='9')
-                if self.ui.menu_cursor == 1
-                    && self.ui.right_panel_focus
-                    && !self.constitution.item_editing
-                    && !self.constitution.creator.active =>
-            {
-                let idx = (n as usize) - ('1' as usize);
-                if idx < self.constitution.tabs.len() {
-                    self.load_constitution_tab(idx);
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k')
-                if self.ui.menu_cursor == 1
-                    && self.ui.right_panel_focus
-                    && !self.constitution.item_editing
-                    && !self.constitution.creator.active =>
-            {
-                if self.constitution.outline_cursor > 0 {
-                    self.constitution.outline_cursor -= 1;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j')
-                if self.ui.menu_cursor == 1
-                    && self.ui.right_panel_focus
-                    && !self.constitution.item_editing
-                    && !self.constitution.creator.active =>
-            {
-                let max = self.constitution.rows.len().saturating_sub(1);
-                if self.constitution.outline_cursor < max {
-                    self.constitution.outline_cursor += 1;
-                }
-            }
-            KeyCode::Char('r') | KeyCode::Enter
-                if self.ui.menu_cursor == 1
-                    && self.ui.right_panel_focus
-                    && !self.constitution.item_editing
-                    && !self.constitution.creator.active
-                    && !self.constitution.sections.is_empty() =>
-            {
-                self.jump_to_constitution_raw_edit();
-            }
-            KeyCode::Char('i')
-                if self.ui.menu_cursor == 1
-                    && self.ui.right_panel_focus
-                    && !self.constitution.item_editing
-                    && !self.constitution.creator.active =>
-            {
-                self.begin_item_edit();
-            }
-            KeyCode::Char('n')
-                if self.ui.menu_cursor == 1
-                    && self.ui.right_panel_focus
-                    && !self.constitution.item_editing
-                    && !self.constitution.creator.active =>
-            {
-                self.begin_item_insert();
-            }
-            KeyCode::Char('d')
-                if self.ui.menu_cursor == 1
-                    && self.ui.right_panel_focus
-                    && !self.constitution.item_editing
-                    && !self.constitution.creator.active =>
-            {
-                self.delete_item_at_cursor();
-            }
-            KeyCode::Char('c')
-                if self.ui.menu_cursor == 1
-                    && self.ui.right_panel_focus
-                    && !self.constitution.item_editing
-                    && !self.constitution.creator.active =>
-            {
-                self.open_creator();
-            }
-            KeyCode::Char('p')
-                if self.ui.menu_cursor == 1
-                    && self.constitution.creator.active
-                    && self.constitution.creator.step
-                        == raios_surface_tui::app::state::CreatorStep::ChooseTarget =>
-            {
-                self.creator_choose_target(false);
-            }
-            KeyCode::Char('g')
-                if self.ui.menu_cursor == 1
-                    && self.constitution.creator.active
-                    && self.constitution.creator.step
-                        == raios_surface_tui::app::state::CreatorStep::ChooseTarget =>
-            {
-                self.creator_choose_target(true);
-            }
-            KeyCode::Enter
-                if self.ui.menu_cursor == 1
-                    && self.constitution.creator.active
-                    && self.constitution.creator.step
-                        == raios_surface_tui::app::state::CreatorStep::Notes =>
-            {
-                self.constitution.creator.step = raios_surface_tui::app::state::CreatorStep::Preview;
-            }
-            KeyCode::Char(ch)
-                if self.ui.menu_cursor == 1
-                    && self.constitution.creator.active
-                    && self.constitution.creator.step
-                        == raios_surface_tui::app::state::CreatorStep::Notes =>
-            {
-                self.constitution.creator.notes_input.push(ch);
-            }
-            KeyCode::Backspace
-                if self.ui.menu_cursor == 1
-                    && self.constitution.creator.active
-                    && self.constitution.creator.step
-                        == raios_surface_tui::app::state::CreatorStep::Notes =>
-            {
-                self.constitution.creator.notes_input.pop();
-            }
-            KeyCode::Enter
-                if self.ui.menu_cursor == 1
-                    && self.constitution.creator.active
-                    && self.constitution.creator.step
-                        == raios_surface_tui::app::state::CreatorStep::Preview =>
-            {
-                // Global writes get an extra explicit y/N gate below — the design's
-                // "single file every agent reads" deserves more than a plain Enter.
-                if self.constitution.creator.target_is_global {
-                    self.constitution.creator.step =
-                        raios_surface_tui::app::state::CreatorStep::ConfirmGlobal;
-                } else {
-                    self.creator_confirm_save();
-                }
-            }
-            KeyCode::Char('y') | KeyCode::Char('Y')
-                if self.ui.menu_cursor == 1
-                    && self.constitution.creator.active
-                    && self.constitution.creator.step
-                        == raios_surface_tui::app::state::CreatorStep::ConfirmGlobal =>
-            {
-                self.creator_confirm_save();
-            }
-            KeyCode::Char('n') | KeyCode::Char('N')
-                if self.ui.menu_cursor == 1
-                    && self.constitution.creator.active
-                    && self.constitution.creator.step
-                        == raios_surface_tui::app::state::CreatorStep::ConfirmGlobal =>
-            {
-                self.constitution.creator.step = raios_surface_tui::app::state::CreatorStep::Preview;
-            }
-            KeyCode::Enter if self.ui.menu_cursor == 1 && self.constitution.item_editing => {
-                self.commit_item_edit();
-            }
-            KeyCode::Char(c) if self.ui.menu_cursor == 1 && self.constitution.item_editing => {
-                self.constitution.item_input.push(c);
-            }
-            KeyCode::Backspace if self.ui.menu_cursor == 1 && self.constitution.item_editing => {
-                self.constitution.item_input.pop();
-            }
-            // ── End Constitution ──────────────────────────────────────────────
-            KeyCode::Char('/') | KeyCode::Tab => {
+            KeyCode::Char('?') => self.state = AppState::HelpView,
+            KeyCode::Char('/') => {
                 self.ui.command_mode = true;
+                self.ui.command_buf = "/".into();
                 self.ui.palette_cursor = 0;
-                // '/' starts with a slash so typed commands work; Tab shows full palette
-                if key.code == KeyCode::Char('/') {
-                    self.ui.command_buf = "/".into();
-                } else {
-                    self.ui.command_buf.clear();
-                }
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.ui.menu_cursor == 15 && self.ui.right_panel_focus && !self.ext.editing {
-                    if self.ext.focus == raios_surface_tui::app::state::ExtFocus::Commands {
-                        if self.ext.cmd_cursor > 0 { self.ext.cmd_cursor -= 1; }
-                    } else if self.ext.cfg_cursor > 0 {
-                        self.ext.cfg_cursor -= 1;
-                    }
-                } else if self.ui.right_panel_focus {
-                    match self.ui.menu_cursor {
-                        0 => {
-                            if self.tasks.cursor > 0 {
-                                self.tasks.cursor -= 1;
-                            }
-                        }
-                        6 => {
-                            if self.search.cursor > 0 {
-                                self.search.cursor -= 1;
-                            }
-                        }
-                        7 => {
-                            if self.projects.cursor > 0 {
-                                self.projects.cursor -= 1;
-                            }
-                        }
-                        _ => {
-                            if self.ui.right_file_cursor > 0 {
-                                self.ui.right_file_cursor -= 1;
-                            }
-                        }
-                    }
-                } else if self.ui.menu_cursor > 0 {
-                    self.ui.menu_cursor -= 1;
-                    self.ui.right_file_cursor = 0;
-                    self.projects.cursor = 0;
-                    self.search.cursor = 0;
-                    self.ui.right_panel_scroll = 0;
-                    self.ui.right_panel_focus = false;
-                    if self.ui.menu_cursor == 1 && self.constitution.tabs.is_empty() {
-                        self.refresh_constitution_tabs();
-                    }
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.ui.menu_cursor == 15 && self.ui.right_panel_focus && !self.ext.editing {
-                    if self.ext.focus == raios_surface_tui::app::state::ExtFocus::Commands {
-                        let max = self.ext.extensions.get(self.ext.ext_cursor)
-                            .map(|e| e.commands.len().saturating_sub(1))
-                            .unwrap_or(0);
-                        if self.ext.cmd_cursor < max { self.ext.cmd_cursor += 1; }
-                    } else {
-                        let max = self.ext.extensions.get(self.ext.ext_cursor)
-                            .map(|e| e.config_schema.len().saturating_sub(1))
-                            .unwrap_or(0);
-                        if self.ext.cfg_cursor < max { self.ext.cfg_cursor += 1; }
-                    }
-                } else if self.ui.right_panel_focus {
-                    match self.ui.menu_cursor {
-                        0 => {
-                            let max = self.tasks.list.len().saturating_sub(1);
-                            if self.tasks.cursor < max {
-                                self.tasks.cursor += 1;
-                            }
-                        }
-                        6 => {
-                            let max = self.search.results.len().saturating_sub(1);
-                            if self.search.cursor < max {
-                                self.search.cursor += 1;
-                            }
-                        }
-                        7 => {
-                            let max = self.projects.list.len().saturating_sub(1);
-                            if self.projects.cursor < max {
-                                self.projects.cursor += 1;
-                            }
-                        }
-                        _ => {
-                            let max = self.current_menu_files().len().saturating_sub(1);
-                            if self.ui.right_file_cursor < max {
-                                self.ui.right_file_cursor += 1;
-                            }
-                        }
-                    }
-                } else if self.ui.menu_cursor < MENU_ITEMS.len() - 1 {
-                    self.ui.menu_cursor += 1;
-                    self.ui.right_file_cursor = 0;
-                    self.projects.cursor = 0;
-                    self.search.cursor = 0;
-                    self.ui.right_panel_scroll = 0;
-                    self.ui.right_panel_focus = false;
-                    // Lazy-load extensions when navigating to the Extensions panel
-                    if self.ui.menu_cursor == 15 && !self.ext.loaded {
-                        self.load_extensions();
-                    }
-                    if self.ui.menu_cursor == 1 && self.constitution.tabs.is_empty() {
-                        self.refresh_constitution_tabs();
-                    }
-                }
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                let can_focus = !self.current_menu_files().is_empty()
-                    || (self.ui.menu_cursor == 0 && !self.tasks.list.is_empty())
-                    || (self.ui.menu_cursor == 1 && !self.constitution.tabs.is_empty())
-                    || (self.ui.menu_cursor == 6 && !self.search.results.is_empty())
-                    || (self.ui.menu_cursor == 7 && !self.projects.list.is_empty())
-                    || (self.ui.menu_cursor == 15 && !self.ext.extensions.is_empty());
-                if can_focus {
-                    self.ui.right_panel_focus = true;
-                    self.ui.right_file_cursor = 0;
-                    self.ui.right_panel_scroll = 0;
-                }
-            }
-            KeyCode::Left | KeyCode::Char('h') => {
-                self.ui.right_panel_focus = false;
-            }
-            KeyCode::Char(' ') | KeyCode::Char('v') | KeyCode::Char('V')
-                if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
-                    if let Some(task) = self.tasks.list.get_mut(self.tasks.cursor) {
-                        task.completed = !task.completed;
-                        let _ = raios_runtime::tasks::save_tasks(&self.config.dev_ops_path, &self.tasks.list);
-                    }
-                }
-
-            // Task → Agent dispatch  (only active when task panel is focused)
-            KeyCode::Char('c')
-                if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
-                    self.dispatch_task("claude");
-                }
-            KeyCode::Char('x')
-                if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
-                    self.dispatch_task("codex");
-                }
-            KeyCode::Char('o')
-                if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
-                    self.dispatch_task("opencode");
-                }
-            KeyCode::Char('a')
-                if self.ui.menu_cursor == 0 && self.ui.right_panel_focus => {
-                    self.dispatch_task("antigravity");
-                }
-            KeyCode::Enter
-                if self.ui.right_panel_focus => {
-                    match self.ui.menu_cursor {
-                        6 => {
-                            if let Some(result) = self.search.results.get(self.search.cursor) {
-                                let name = result
-                                    .path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .into_owned();
-                                self.open_file_view(FileEntry::new(name, result.path.clone()));
-                            }
-                        }
-                        7 => {
-                            if let Some(proj) = self.project_at_cursor().cloned() {
-                                self.open_project_detail(proj);
-                            }
-                        }
-                        _ => {
-                            let files = self.current_menu_files();
-                            if let Some(entry) = files.into_iter().nth(self.ui.right_file_cursor) {
-                                self.open_file_view(entry);
-                            }
-                        }
-                    }
-                }
-            KeyCode::Char('e')
-                if self.ui.right_panel_focus => {
-                    let files = self.current_menu_files();
-                    if let Some(entry) = files.into_iter().nth(self.ui.right_file_cursor) {
-                        if !entry.read_only {
-                            self.open_file_edit(entry);
-                        }
-                    }
-                }
-            KeyCode::Char('o')
-                if self.ui.right_panel_focus => {
-                    self.open_current_file_in_editor();
-                }
-            KeyCode::Char('C') | KeyCode::Char('O') | KeyCode::Char('A')
-                if self.ui.right_panel_focus => {
-                    let agent = match key.code {
-                        KeyCode::Char('C') => "claude",
-                        KeyCode::Char('O') => "opencode",
-                        _ => "antigravity",
-                    };
-                    self.launch_agent_for_selected_project(agent);
-                }
             _ => {}
         }
         Ok(())
     }
 
-    /// Handles the live control-plane dashboard before legacy dashboard shortcuts.
-    /// Returning `true` consumes the key so the retired 16-item menu cannot mutate
-    /// state behind the four typed routes.
     fn handle_control_dashboard_key(&mut self, key: KeyEvent) -> Result<bool> {
         use crate::app::intent::Intent;
         use crate::app::reducer::reduce_intent;
         use crate::app::route::Route;
+        use crate::app::store::WorkFocus;
         use raios_contracts::{Command, Query};
+
+        if self.store.explore_search.is_editing {
+            self.handle_explore_search_key(key);
+            return Ok(true);
+        }
+
+        if self.store.task_composer.is_open {
+            self.handle_task_composer_key(key)?;
+            return Ok(true);
+        }
 
         match key.code {
             KeyCode::Char('1') => reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Now)),
@@ -585,20 +104,68 @@ impl App {
             KeyCode::BackTab => reduce_intent(&mut self.store, Intent::PrevRoute),
             KeyCode::Up | KeyCode::Char('k') => self.move_control_cursor(false),
             KeyCode::Down | KeyCode::Char('j') => self.move_control_cursor(true),
-            KeyCode::Left | KeyCode::Char('h') => self.set_control_focus(false),
-            KeyCode::Right | KeyCode::Char('l') => self.set_control_focus(true),
+            KeyCode::Left | KeyCode::Char('h') => self.move_work_focus(false),
+            KeyCode::Right | KeyCode::Char('l') => self.move_work_focus(true),
+            KeyCode::Char(' ') if self.store.current_route == Route::Now => {
+                self.cycle_operation_panel()
+            }
+            KeyCode::Char(' ') if self.store.current_route == Route::Work => {
+                self.move_work_focus(true)
+            }
             KeyCode::Char(' ') => self.set_control_focus(!self.store.right_panel_focus),
+            KeyCode::Enter
+                if self.store.current_route == Route::Work
+                    && self.store.work_focus == WorkFocus::Ocak =>
+            {
+                self.open_selected_ocak_command();
+            }
+            KeyCode::Char('s')
+                if self.store.current_route == Route::Work
+                    && self.store.work_focus == WorkFocus::Projects =>
+            {
+                self.store.work_sort = self.store.work_sort.next();
+                self.select_control_row(0, false);
+            }
+            KeyCode::Char('n') if self.store.current_route == Route::Work => {
+                self.begin_task_composer();
+            }
+            KeyCode::Char('/') if self.store.current_route == Route::Explore => {
+                self.store.explore_search.begin();
+            }
+            KeyCode::Char('i')
+                if self.store.current_route == Route::Work
+                    && self.store.work_focus == WorkFocus::Tasks =>
+            {
+                self.update_selected_work_task("in_progress");
+            }
+            KeyCode::Char('b')
+                if self.store.current_route == Route::Work
+                    && self.store.work_focus == WorkFocus::Tasks =>
+            {
+                self.update_selected_work_task("blocked");
+            }
+            KeyCode::Char('c')
+                if self.store.current_route == Route::Work
+                    && self.store.work_focus == WorkFocus::Tasks =>
+            {
+                self.update_selected_work_task("completed");
+            }
+            KeyCode::Enter
+                if self.store.current_route == Route::Now
+                    && self.store.operations.panel
+                        == crate::app::operations::OperationPanel::Actions =>
+            {
+                self.execute_selected_operation_action()?;
+            }
+            KeyCode::Enter
+                if self.store.current_route == Route::Explore && !self.store.right_panel_focus =>
+            {
+                self.open_selected_explore_result();
+            }
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 if self.store.current_route != Route::Now {
                     self.store.last_error = Some("Approvals are available only on NOW.".into());
-                } else if let Some(approval_id) = self
-                    .store
-                    .snapshot
-                    .now
-                    .approvals
-                    .get(self.store.cursor)
-                    .map(|approval| approval.id.clone())
-                {
+                } else if let Some(approval_id) = self.selected_now_approval_id() {
                     let command = Command::ApproveHandoff {
                         idempotency_key: format!("approve-{approval_id}"),
                         approval_id,
@@ -607,38 +174,14 @@ impl App {
                         self.store.last_error = Some(problem.message);
                     }
                 } else {
-                    self.store.last_error = Some("No approval selected.".into());
+                    self.store.last_error = Some("Select an approval in ATTENTION first.".into());
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
-                if self.store.current_route == Route::Govern {
-                    if let Some(job_id) = self
-                        .store
-                        .snapshot
-                        .govern
-                        .cron_jobs
-                        .get(self.store.cursor)
-                        .map(|job| job.id.clone())
-                    {
-                        let command = Command::TriggerCronJob {
-                            idempotency_key: format!("trigger-{job_id}"),
-                            job_id,
-                        };
-                        if let Err(problem) = self.client.send_command(command) {
-                            self.store.last_error = Some(problem.message);
-                        }
-                    } else {
-                        self.store.last_error = Some("No cron job selected.".into());
-                    }
+                if self.store.current_route == Route::Govern && self.store.right_panel_focus {
+                    self.trigger_selected_cron_job();
                 } else if self.store.current_route == Route::Now {
-                    if let Some(approval_id) = self
-                        .store
-                        .snapshot
-                        .now
-                        .approvals
-                        .get(self.store.cursor)
-                        .map(|approval| approval.id.clone())
-                    {
+                    if let Some(approval_id) = self.selected_now_approval_id() {
                         let command = Command::RejectHandoff {
                             idempotency_key: format!("reject-{approval_id}"),
                             approval_id,
@@ -648,11 +191,17 @@ impl App {
                             self.store.last_error = Some(problem.message);
                         }
                     } else {
-                        self.store.last_error = Some("No approval selected.".into());
+                        self.store.last_error =
+                            Some("Select an approval in ATTENTION first.".into());
                     }
                 } else {
                     self.store.last_error = Some("Reject is available only on NOW.".into());
                 }
+            }
+            KeyCode::Char('p') | KeyCode::Char('P')
+                if self.store.current_route == Route::Govern && self.store.right_panel_focus =>
+            {
+                self.toggle_selected_cron_job();
             }
             KeyCode::Char('g') => {
                 if let Err(problem) = self.client.send_query(Query::GetSystemSnapshot) {
@@ -661,12 +210,288 @@ impl App {
             }
             KeyCode::Esc => {
                 if self.store.last_error.take().is_none() {
-                    self.set_control_focus(false);
+                    if self.store.current_route == Route::Now {
+                        self.set_operation_panel(crate::app::operations::OperationPanel::Attention);
+                    } else {
+                        self.set_control_focus(false);
+                    }
                 }
             }
             _ => return Ok(false),
         }
-
         Ok(true)
+    }
+
+    /// Captures only bounded, read-only workspace-search input for EXPLORE.
+    fn handle_explore_search_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.store.explore_search.cancel(),
+            KeyCode::Enter => self.submit_explore_search(),
+            KeyCode::Backspace => {
+                self.store.explore_search.query.pop();
+            }
+            KeyCode::Char(character) if self.store.explore_search.query.chars().count() < 240 => {
+                self.store.explore_search.query.push(character);
+            }
+            _ => {}
+        }
+    }
+
+    /// Sends a safely serialized, read-only daemon search request.
+    fn submit_explore_search(&mut self) {
+        let query = self.store.explore_search.query.trim();
+        if query.is_empty() {
+            self.store.last_error = Some("Enter a workspace search query first.".into());
+            return;
+        }
+        if raios_core::security::looks_like_secret(query).is_some() {
+            self.store.last_error =
+                Some("Search query appears to contain a secret and was not sent.".into());
+            return;
+        }
+        let command = crate::app::daemon_search_command(query);
+        let Some(tx_daemon) = &self.tx_daemon else {
+            self.store.last_error =
+                Some("Daemon is disconnected; workspace search is unavailable.".into());
+            return;
+        };
+        if tx_daemon.send(command).is_err() {
+            self.store.last_error = Some("Daemon search request could not be delivered.".into());
+            return;
+        }
+        self.store.explore_search.is_editing = false;
+        self.store.explore_search.status = Some("Searching indexed workspace…".into());
+    }
+
+    /// Opens a selected Explore match only when it resolves under the local workspace root.
+    fn open_selected_explore_result(&mut self) {
+        if self.is_remote {
+            self.store.last_error =
+                Some("Opening remote search paths from the local TUI is disabled.".into());
+            return;
+        }
+        let Some(result) = self.store.explore_results().get(self.store.cursor) else {
+            self.store.last_error = Some("Select a search result first.".into());
+            return;
+        };
+        let candidate = std::path::PathBuf::from(&result.file_path);
+        let workspace = std::fs::canonicalize(&self.config.dev_ops_path);
+        let path = std::fs::canonicalize(&candidate);
+        let (Ok(workspace), Ok(path)) = (workspace, path) else {
+            self.store.last_error =
+                Some("Selected search result is no longer an accessible local file.".into());
+            return;
+        };
+        if !path.starts_with(&workspace) || !path.is_file() {
+            self.store.last_error =
+                Some("Selected search result is outside the configured workspace.".into());
+            return;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.open_file_view(raios_runtime::filebrowser::FileEntry::new(name, path));
+    }
+
+    /// Schedules one immediate run for the currently selected cron job.
+    pub(crate) fn trigger_selected_cron_job(&mut self) {
+        let Some(job) = self.store.snapshot.govern.cron_jobs.get(self.store.cursor) else {
+            self.store.last_error = Some("No cron job selected.".into());
+            return;
+        };
+        let command = raios_contracts::Command::TriggerCronJob {
+            idempotency_key: format!(
+                "trigger-{}-snapshot-{}",
+                job.id, self.store.snapshot.sequence
+            ),
+            job_id: job.id.clone(),
+        };
+        if let Err(problem) = self.client.send_command(command) {
+            self.store.last_error = Some(problem.message);
+        }
+    }
+
+    /// Pauses or resumes the selected cron job through the audited typed command path.
+    pub(crate) fn toggle_selected_cron_job(&mut self) {
+        let Some(job) = self.store.snapshot.govern.cron_jobs.get(self.store.cursor) else {
+            self.store.last_error = Some("No cron job selected.".into());
+            return;
+        };
+        let paused = job.status.eq_ignore_ascii_case("active");
+        let command = raios_contracts::Command::ToggleCronJob {
+            idempotency_key: format!(
+                "toggle-{}-paused-{}-snapshot-{}",
+                job.id, paused, self.store.snapshot.sequence
+            ),
+            job_id: job.id.clone(),
+            paused,
+        };
+        if let Err(problem) = self.client.send_command(command) {
+            self.store.last_error = Some(problem.message);
+        }
+    }
+
+    fn execute_selected_operation_action(&mut self) -> Result<()> {
+        use crate::app::intent::Intent;
+        use crate::app::operations::OperationActionKind;
+        use crate::app::reducer::reduce_intent;
+        use crate::app::route::Route;
+        use raios_contracts::Query;
+
+        let Some(action) = self.store.operations.selected_action().cloned() else {
+            self.store.last_error = Some("No operation action selected.".into());
+            return Ok(());
+        };
+
+        match action.kind {
+            OperationActionKind::RefreshSnapshot => {
+                if let Err(problem) = self.client.send_query(Query::GetSystemSnapshot) {
+                    self.store.last_error = Some(problem.message);
+                } else {
+                    self.store
+                        .add_log("Requested a fresh control-plane snapshot.");
+                }
+            }
+            OperationActionKind::OpenProjectWorkbench => {
+                let project_path = self
+                    .store
+                    .selected_project()
+                    .map(|project| project.path.clone());
+                if let Some(project_path) = project_path {
+                    self.store.selected_project_path = Some(project_path);
+                    reduce_intent(&mut self.store, Intent::SwitchRoute(Route::Work));
+                } else {
+                    self.store.last_error = Some("No registered project is available.".into());
+                }
+            }
+            OperationActionKind::ReviewApproval => {
+                self.set_operation_panel(crate::app::operations::OperationPanel::Attention);
+                self.store.cursor = 0;
+            }
+            OperationActionKind::ReviewBlockedTask => {
+                self.set_operation_panel(crate::app::operations::OperationPanel::Attention);
+                self.store.cursor = self.store.snapshot.now.approvals.len();
+            }
+            OperationActionKind::LaunchCodexAgent => {
+                let project_path = self
+                    .store
+                    .selected_project()
+                    .map(|project| project.path.clone());
+                let Some(project_path) = project_path else {
+                    self.store.last_error = Some("No registered project is available.".into());
+                    return Ok(());
+                };
+                let command = raios_contracts::Command::LaunchAgent {
+                    agent_name: "codex".into(),
+                    project_path,
+                    prompt: None,
+                    idempotency_key: format!("tui-launch-codex-{}", uuid::Uuid::new_v4()),
+                };
+                if let Err(problem) = self.client.send_command(command) {
+                    self.store.last_error = Some(problem.message);
+                } else {
+                    self.store
+                        .add_log("Requested a tracked Codex session in a separate terminal.");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_task_composer_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.store.task_composer.cancel(),
+            KeyCode::Backspace => {
+                self.store.task_composer.title.pop();
+            }
+            KeyCode::Char('+') => {
+                self.store.task_composer.priority =
+                    self.store.task_composer.priority.saturating_add(10);
+            }
+            KeyCode::Char('-') => {
+                self.store.task_composer.priority =
+                    self.store.task_composer.priority.saturating_sub(10);
+            }
+            KeyCode::Char(character) if self.store.task_composer.title.chars().count() < 240 => {
+                self.store.task_composer.title.push(character);
+            }
+            KeyCode::Enter => self.submit_task_composer(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Opens the personal-task composer only when a trusted project is selected.
+    pub(crate) fn begin_task_composer(&mut self) {
+        if self.store.selected_project().is_some() {
+            self.store.task_composer.begin();
+        } else {
+            self.store.last_error =
+                Some("Select a registered project before creating a task.".into());
+        }
+    }
+
+    /// Sends the current local draft through the authenticated control-plane client.
+    pub(crate) fn submit_task_composer(&mut self) {
+        use raios_contracts::Command;
+
+        let title = self.store.task_composer.title.trim().to_owned();
+        let project_path = self
+            .store
+            .selected_project()
+            .map(|project| project.path.clone());
+        if title.is_empty() {
+            self.store.last_error = Some("Task title is required.".into());
+            return;
+        }
+        let Some(project_path) = project_path else {
+            self.store.last_error = Some("Selected project is no longer available.".into());
+            return;
+        };
+        let command = Command::CreateTask {
+            title,
+            project_path: Some(project_path),
+            priority: self.store.task_composer.priority,
+            idempotency_key: format!("tui-create-task-{}", uuid::Uuid::new_v4()),
+        };
+        if let Err(problem) = self.client.send_command(command) {
+            self.store.last_error = Some(problem.message);
+        } else {
+            self.store.task_composer.cancel();
+            self.store
+                .add_log("Submitted a new personal task to the control plane.");
+        }
+    }
+
+    /// Changes the selected personal task through the authenticated control plane.
+    pub(crate) fn update_selected_work_task(&mut self, status: &str) {
+        use crate::app::store::WorkFocus;
+        use raios_contracts::Command;
+
+        if self.store.work_focus != WorkFocus::Tasks {
+            self.store.last_error = Some("Select a task before changing its status.".into());
+            return;
+        }
+        let task_id = self
+            .store
+            .snapshot
+            .work
+            .tasks
+            .get(self.store.cursor)
+            .map(|task| task.id.clone());
+        let Some(task_id) = task_id else {
+            self.store.last_error = Some("Select a task before changing its status.".into());
+            return;
+        };
+        let command = Command::UpdateTaskStatus {
+            task_id,
+            status: status.into(),
+            idempotency_key: format!("tui-update-task-{}", uuid::Uuid::new_v4()),
+        };
+        if let Err(problem) = self.client.send_command(command) {
+            self.store.last_error = Some(problem.message);
+        }
     }
 }

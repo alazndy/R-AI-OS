@@ -79,6 +79,10 @@ action = "confirm"
 name = "version_bump"
 action = "confirm"
 
+[[tools.rules]]
+name = "steer_agent"
+action = "confirm"
+
 # ─── Daemon WebSocket Commands ────────────────────────────────────────────────
 # These map to v["command"] values in the daemon TCP protocol.
 # default_action = "confirm" blocks anything not listed — ensure all legitimate

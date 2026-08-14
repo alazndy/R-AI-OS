@@ -316,6 +316,129 @@ fn mem_export_groups_by_layer_persona_first() {
 }
 
 #[test]
+fn portable_memory_export_import_round_trips_all_projects() {
+    let source = in_memory();
+    for (project_key, slug, item_type, layer) in [
+        ("-home-alaz-p", "persona", "user", 3),
+        ("-home-alaz-q", "feedback-1", "feedback", 1),
+    ] {
+        mem_upsert(
+            &source,
+            MemUpsert {
+                project_key,
+                item_type,
+                slug,
+                title: slug,
+                description: "portable test item",
+                body: "portable body",
+                session_id: Some("session-1"),
+                layer,
+                provenance: Some(Provenance::UserStated),
+                confidence: Some(0.8),
+                last_used_at: Some("2026-08-01 12:00:00"),
+            },
+        )
+        .unwrap();
+    }
+
+    let export_path = std::env::temp_dir().join(format!(
+        "raios-portable-memory-{}.json",
+        uuid::Uuid::new_v4()
+    ));
+    assert_eq!(mem_export_portable(&source, &export_path).unwrap(), 2);
+
+    let target = in_memory();
+    assert_eq!(mem_import_portable(&target, &export_path).unwrap(), 2);
+    let imported = mem_get(&target, "-home-alaz-q", "feedback-1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(imported.body, "portable body");
+    assert_eq!(imported.provenance, Provenance::UserStated);
+    assert_eq!(imported.confidence, 0.8);
+    let _ = std::fs::remove_file(export_path);
+}
+
+#[test]
+fn portable_memory_import_rolls_back_every_item_on_invalid_input() {
+    let conn = in_memory();
+    let items = vec![
+        MemItemRow {
+            id: "valid-id".into(),
+            project_key: "-home-alaz-p".into(),
+            item_type: "project".into(),
+            slug: "would-be-inserted".into(),
+            title: "Valid before failure".into(),
+            description: "d".into(),
+            body: "b".into(),
+            created_at: "2026-08-01 12:00:00".into(),
+            updated_at: "2026-08-01 12:00:00".into(),
+            session_id: None,
+            layer: 2,
+            provenance: Provenance::Observed,
+            confidence: 1.0,
+            last_used_at: None,
+        },
+        MemItemRow {
+            id: "invalid-id".into(),
+            project_key: "-home-alaz-p".into(),
+            item_type: "not-a-real-type".into(),
+            slug: "invalid".into(),
+            title: "Invalid".into(),
+            description: "d".into(),
+            body: "b".into(),
+            created_at: "2026-08-01 12:00:00".into(),
+            updated_at: "2026-08-01 12:00:00".into(),
+            session_id: None,
+            layer: 2,
+            provenance: Provenance::Observed,
+            confidence: 1.0,
+            last_used_at: None,
+        },
+    ];
+    let import_path = std::env::temp_dir().join(format!(
+        "raios-portable-memory-invalid-{}.json",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(&import_path, serde_json::to_vec(&items).unwrap()).unwrap();
+
+    assert!(mem_import_portable(&conn, &import_path).is_err());
+    assert!(mem_get(&conn, "-home-alaz-p", "would-be-inserted")
+        .unwrap()
+        .is_none());
+    let _ = std::fs::remove_file(import_path);
+}
+
+#[test]
+fn portable_memory_export_refuses_secret_like_content() {
+    let conn = in_memory();
+    let secret_like_body = ["pass", "word", " = 'not-for-export'"].concat();
+    mem_upsert(
+        &conn,
+        MemUpsert {
+            project_key: "-home-alaz-p",
+            item_type: "project",
+            slug: "secret-like",
+            title: "Secret-like content",
+            description: "d",
+            body: &secret_like_body,
+            session_id: None,
+            layer: 2,
+            provenance: None,
+            confidence: None,
+            last_used_at: None,
+        },
+    )
+    .unwrap();
+    let export_path = std::env::temp_dir().join(format!(
+        "raios-portable-memory-secret-{}.json",
+        uuid::Uuid::new_v4()
+    ));
+
+    assert!(mem_export_portable(&conn, &export_path).is_err());
+    assert!(!export_path.exists());
+}
+
+#[test]
 fn mem_provenance_and_decay() {
     let conn = in_memory();
     let key = "-home-alaz-p";

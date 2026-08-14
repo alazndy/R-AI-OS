@@ -1,72 +1,14 @@
 //! File browser and viewer modal panel rendering.
 
-use raios_runtime::filebrowser::FileEntry;
 use raios_surface_tui::app::App;
 use raios_surface_tui::ui::*;
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout},
     style::{Color, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-
-/// Renders the file browser panel for navigating project files.
-pub fn render_file_panel(frame: &mut Frame, area: Rect, app: &App, files: &[FileEntry]) {
-    let block = Block::new()
-        .borders(Borders::TOP)
-        .border_style(Style::new().fg(DIM))
-        .style(Style::new().bg(PANEL_BG));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let mut lines = vec![Line::from(vec![
-        Span::styled(
-            " FILES ",
-            Style::new()
-                .fg(if app.ui.right_panel_focus { GREEN } else { DIM })
-                .bold(),
-        ),
-        Span::styled(
-            if app.ui.right_panel_focus {
-                "[↑↓] nav  [Enter] view  [e] edit  [o] ext  [←] menu"
-            } else {
-                "[→] focus"
-            },
-            Style::new().fg(DIM),
-        ),
-    ])];
-
-    for (i, entry) in files.iter().enumerate() {
-        let exist_mark = if entry.exists() {
-            Span::styled("✓ ", Style::new().fg(GREEN))
-        } else {
-            Span::styled("✗ ", Style::new().fg(DIM))
-        };
-        let ro_tag = if entry.read_only {
-            Span::styled(" [RO]", Style::new().fg(DIM))
-        } else {
-            Span::styled("", Style::new())
-        };
-
-        if app.ui.right_panel_focus && i == app.ui.right_file_cursor {
-            lines.push(Line::from(vec![
-                exist_mark,
-                Span::styled(format!("▶ {}", entry.name), Style::new().fg(GREEN).bold()),
-                ro_tag,
-            ]));
-        } else {
-            lines.push(Line::from(vec![
-                exist_mark,
-                Span::styled(format!("  {}", entry.name), Style::new().fg(MID)),
-                ro_tag,
-            ]));
-        }
-    }
-
-    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
-}
 
 /// Renders the full-screen file view mode.
 pub fn render_file_view(frame: &mut Frame, app: &App) {

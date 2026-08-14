@@ -398,7 +398,7 @@ tools/raios-factory-ui/
 - **Intake & Charter Studio**: Discovery questionnaire runner, versioned Charter editor, and requirement matrix.
 - **Change Control Visualizer**: Network topology graph connecting Change Requests to affected requirements, code modules, and security risk levels.
 - **Execution & Evidence Matrix**: Real-time cycle status controls (`Pause`, `Resume`, `Cancel`), stage task DAG, and content-addressed SHA-256 evidence inspector.
-- **Quality & Release Sign-off Gate**: Closed-testing checklist (React Native Expo check, TypeScript clean, Rust 42% coverage floor), release blockers counter, and release approval workflow.
+- **Quality & Release Sign-off Gate**: Closed-testing checklist (React Native Expo check, TypeScript clean, Rust 50% coverage floor), release blockers counter, and release approval workflow.
 - **Interactive Control-Plane Terminal**: Collapsible live terminal logging typed CLI commands and daemon JSON payload contracts in real time.
 
 ---
@@ -512,6 +512,10 @@ raios
 ```
 
 The dashboard uses four top-level tabs (`NOW`, `WORK`, `EXPLORE`, and `GOVERN`).
+Its shared terminal identity uses the supplied circular ASCII mark: hot orange
+(`#FF8600`) around an electric-blue (`#00ACFF`) core on a near-black navy
+canvas. The responsive six-row mark is rendered from one shared TUI brand
+module in both the dashboard header and the recent-projects surface.
 Use `1`–`4` or `Tab`/`Shift+Tab` from the keyboard, or click a tab with the
 mouse. `Up`/`Down` stays within the focused route list, while `Left`/`Right`
 switches the focused panel. Clicking route content selects an item; the mouse
@@ -519,13 +523,64 @@ wheel navigates the current route. Click the bottom Command Center bar (or
 press `/`) to open the command palette. Safety-sensitive actions remain
 explicit keyboard commands with the existing approval and audit flow.
 
-`NOW` exposes the pending handoff and approval queue with its source, target,
-type, and risk level. `WORK` lists every registered project with lifecycle
-status, Git state, and `memory.md` availability; selecting a project (or one
-of its tasks) keeps it selected and shows a bounded `memory.md` preview with
-the latest known project status. If an older local daemon has not yet been
-restarted, the TUI safely fills a missing preview from a project path only
-after confirming that it is inside the configured workspace root.
+`EXPLORE` has a direct read-only workspace search: press `/`, type a query,
+then press `Enter`. Results arrive from the daemon index, remain selectable by
+keyboard or mouse, and `Enter` opens a selected result only when its canonical
+path is inside the local configured workspace. Remote result paths are never
+opened locally. Queries are bounded to 240 characters, reject secret-like
+content, and are sent as serialized JSON rather than interpolated protocol
+text.
+
+`GOVERN` exposes selected scheduler controls only through the existing audited
+control-plane commands: focus a cron job, press `r` to schedule one immediate
+run, or `p` to pause/resume it. The same two visible actions are clickable with
+the mouse. Their idempotency keys include the current snapshot sequence, so a
+double action in one view is deduplicated while a later refreshed view can
+legitimately schedule another run.
+
+`NOW` is an operational console: it combines the approval/blocker attention
+queue, the selected project's live posture, and context-derived next actions.
+Use `Space` to rotate among those three areas, `Up`/`Down` to select, and
+`Enter` to run the selected read-only navigation or snapshot-refresh action.
+`a` and `r` still resolve only the selected approval through the existing
+owner-checked, idempotent control-plane command path; the console never opens
+a direct shell or bypasses server-side authorization. `WORK` lists every
+registered project with lifecycle status, Git state, and `memory.md`
+availability; selecting a project (or one of its tasks) keeps it selected and
+shows a bounded `memory.md` preview with the latest known project status. If
+an older local daemon has not yet been restarted, the TUI safely fills a
+missing preview from a project path only after confirming that it is inside the
+configured workspace root.
+
+For a registered selected project, `NOW` also offers **Launch Codex session**.
+Choose it and press `Enter` (or select it by mouse, then press `Enter`) to open
+an interactive terminal running the tracked `raios run codex` wrapper. The
+server accepts only registered project paths and allowlisted agent identities,
+keeps command idempotency and audit logging, rejects prompt-shaped CLI flags or
+secret-like content, and launches the wrapper with direct argv boundaries — not
+a client-assembled shell command.
+
+`WORK` can now create canonical personal tasks for the selected project: press
+`n`, type a title, adjust priority with `+`/`-`, then press `Enter`. Select a
+TUI-managed task and use `i`, `b`, or `c` to mark it in progress, blocked, or
+completed. The daemon validates title/path bounds, rejects secret-like titles,
+stores the task and project association atomically, and refuses status changes
+to agent, handoff, swarm, Factory, and legacy-Markdown task records.
+
+The same `WORK` flow is mouse-aware: click a project or task using the visible
+panels, then use the `Task Actions` strip for `New`, `In Progress`, `Block`, or
+`Complete`. The composer exposes explicit `-`, `+`, `Cancel`, and `Create`
+buttons; text input remains keyboard-based. Rendering and hit testing share one
+layout model, so the factory summary above the task list cannot offset task-row
+selection.
+
+The command palette also opens dedicated full-screen views for local markdown
+tasks (`/tasks`), Constitution editing (`/rules`), extensions (`/ext`), local
+index search (`/search`), active daemon agents (`/logs`), and the local
+activity timeline (`/timeline`). `/memory` is an alias for the full MemPalace
+view. In `WORK`, Left/Right moves between Projects, the read-only Ocak summary,
+and Tasks; press `Enter` on an Ocak summary line to draft the relevant `/ocak`
+command in the palette. It never submits a Factory command automatically.
 
 Provision a machine from your own `[bootstrap]` config: `raios bootstrap` prints a plan of whatever global npm tools, Claude Code marketplaces/plugins, rule-sync repos, and plugin-enables you've listed under `[bootstrap]` in `~/.config/raios/config.toml`, then asks for confirmation before running anything. With no `[bootstrap]` section configured it prints an empty plan and exits — a safe no-op, not an automatic sync of any external agent ecosystem. Re-running against an already-provisioned machine is idempotent: steps that are already done (marketplace already added, plugin already installed/enabled) are reported and skipped rather than treated as failures.
 
@@ -581,6 +636,8 @@ targets = ["~/.claude/rules", "~/.antigravity/rules"]
 | `raios handoff --to <agent> --status <SUCCESS\|FAILED\|BLOCKER> --msg "<text>"` | Atomic agent-to-agent handoff via the control plane |
 | `raios trace record/search/forget` | Store, recall, and delete local tool/session trace memory |
 | `raios trace kg-export [query]` | Export trace memory as MemPalace-compatible KG triple JSON |
+| `raios mem export-portable [output.json]` | Export all structured memory items as a portable JSON snapshot; refuses secret-like content |
+| `raios mem import-portable [input.json]` | Atomically merge a portable memory snapshot; rejects secret-like content and inputs over 16 MiB or 50,000 items |
 | `raios evolve from-traces` | Generate pending instinct candidates from successful trace fixes |
 | `raios ocak overview [--json]` (alias: `factory`) | Read the canonical Ocak (Product Factory) snapshot without changing state |
 | `raios ocak execute --file <command.json> [--json]` (alias: `factory`) | Dispatch one bounded local typed `FactoryCommand`; human-only approval, cancellation, stage activation/completion, requirement application, and release approval commands are rejected |

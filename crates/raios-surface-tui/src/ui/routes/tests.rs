@@ -2,8 +2,9 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
 use crate::app::route::Route;
-use crate::app::store::Store;
+use crate::app::store::{Store, WorkFocus};
 use crate::ui::routes::render_route_view;
+use raios_contracts::SearchResultDto;
 
 fn get_rendered_text(terminal: &Terminal<TestBackend>) -> String {
     terminal
@@ -31,9 +32,9 @@ fn golden_render_now_route() {
 
     let rendered = get_rendered_text(&terminal);
     assert!(
-        rendered.contains("Approvals")
-            || rendered.contains("Blockers")
-            || rendered.contains("Active"),
+        rendered.contains("Operational Console")
+            && rendered.contains("Attention Queue")
+            && rendered.contains("Next Actions"),
         "Now route output missing expected titles"
     );
 }
@@ -58,11 +59,56 @@ fn golden_render_work_route() {
 }
 
 #[test]
+fn golden_render_work_route_marks_the_selected_ocak_summary() {
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut store = Store::new();
+    store.current_route = Route::Work;
+    store.work_focus = WorkFocus::Ocak;
+    store.right_panel_focus = true;
+    store.cursor = 2;
+
+    terminal
+        .draw(|f| {
+            render_route_view(f, f.area(), &store);
+        })
+        .unwrap();
+
+    let rendered = get_rendered_text(&terminal);
+    assert!(rendered.contains("▶ Pending changes"));
+    assert!(rendered.contains("Release drafts"));
+}
+
+#[test]
+fn work_route_renders_task_composer_overlay() {
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut store = Store::new();
+    store.current_route = Route::Work;
+    store.task_composer.begin();
+
+    terminal
+        .draw(|f| {
+            render_route_view(f, f.area(), &store);
+        })
+        .unwrap();
+
+    assert!(get_rendered_text(&terminal).contains("Create Personal Task"));
+}
+
+#[test]
 fn golden_render_explore_route() {
     let backend = TestBackend::new(120, 40);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut store = Store::new();
     store.current_route = Route::Explore;
+    store.explore_search.query = "typed search".into();
+    store.explore_search.set_results(vec![SearchResultDto {
+        file_path: "/workspace/raios/src/lib.rs".into(),
+        line_number: 17,
+        snippet: "pub fn typed_search()".into(),
+        score: 0.95,
+    }]);
 
     terminal
         .draw(|f| {
@@ -72,7 +118,9 @@ fn golden_render_explore_route() {
 
     let rendered = get_rendered_text(&terminal);
     assert!(
-        rendered.contains("Search") || rendered.contains("Traces") || rendered.contains("Logs"),
+        rendered.contains("Search Results")
+            && rendered.contains("typed_search")
+            && rendered.contains("Traces"),
         "Explore route output missing expected titles"
     );
 }
@@ -92,7 +140,9 @@ fn golden_render_govern_route() {
 
     let rendered = get_rendered_text(&terminal);
     assert!(
-        rendered.contains("Policy") || rendered.contains("Audit") || rendered.contains("Cron"),
+        rendered.contains("AgentShield")
+            && rendered.contains("Audit")
+            && rendered.contains("Autonomous"),
         "Govern route output missing expected titles"
     );
 }

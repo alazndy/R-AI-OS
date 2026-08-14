@@ -353,6 +353,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_interval_converts_seconds() {
+        assert_eq!(parse_interval("30s"), Ok(30));
+    }
+
+    #[test]
+    fn parse_interval_converts_minutes_to_seconds() {
+        assert_eq!(parse_interval("5m"), Ok(300));
+    }
+
+    #[test]
+    fn parse_interval_converts_hours_to_seconds() {
+        assert_eq!(parse_interval("6h"), Ok(21600));
+    }
+
+    #[test]
+    fn parse_interval_converts_days_to_seconds() {
+        assert_eq!(parse_interval("1d"), Ok(86400));
+    }
+
+    #[test]
+    fn parse_interval_trims_surrounding_whitespace() {
+        assert_eq!(parse_interval("  10m  "), Ok(600));
+    }
+
+    #[test]
+    fn parse_interval_rejects_unknown_unit() {
+        let err = parse_interval("10x").unwrap_err();
+        assert!(err.contains("unknown unit"));
+    }
+
+    #[test]
+    fn parse_interval_rejects_zero() {
+        let err = parse_interval("0s").unwrap_err();
+        assert!(err.contains("must be > 0"));
+    }
+
+    #[test]
+    fn parse_interval_rejects_negative_numbers() {
+        let err = parse_interval("-5m").unwrap_err();
+        assert!(err.contains("must be > 0"));
+    }
+
+    #[test]
+    fn parse_interval_rejects_non_numeric_prefix() {
+        let err = parse_interval("abcs").unwrap_err();
+        assert!(err.contains("not a valid number"));
+    }
+
+    #[test]
+    fn parse_interval_rejects_strings_shorter_than_two_chars() {
+        let err = parse_interval("5").unwrap_err();
+        assert!(err.contains("invalid interval"));
+    }
+
+    #[test]
+    fn parse_interval_rejects_empty_string() {
+        let err = parse_interval("").unwrap_err();
+        assert!(err.contains("invalid interval"));
+    }
+
+    #[test]
     fn leaves_short_titles_untouched() {
         assert_eq!(truncate_title("short title", 28), "short title");
     }

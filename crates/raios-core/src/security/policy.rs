@@ -61,6 +61,9 @@ pub struct HubPolicy {
     /// remote attacker can't spoof this header to impersonate a proxy.
     #[serde(default)]
     pub trusted_proxy: bool,
+    /// Allowed CORS Origins for browser-based API access (default: ["http://localhost:5173", "http://127.0.0.1:5173"])
+    #[serde(default = "HubPolicy::default_cors_allowed_origins")]
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl HubPolicy {
@@ -69,6 +72,12 @@ impl HubPolicy {
     }
     fn default_trusted_cidr() -> String {
         "100.64.0.0/10".into()
+    }
+    fn default_cors_allowed_origins() -> Vec<String> {
+        vec![
+            "http://localhost:5173".into(),
+            "http://127.0.0.1:5173".into(),
+        ]
     }
 }
 
@@ -79,6 +88,7 @@ impl Default for HubPolicy {
             trusted_cidr: Self::default_trusted_cidr(),
             api_key_hash: None,
             trusted_proxy: false,
+            cors_allowed_origins: Self::default_cors_allowed_origins(),
         }
     }
 }

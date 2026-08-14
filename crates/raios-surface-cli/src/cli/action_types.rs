@@ -153,6 +153,20 @@ pub enum MemAction {
         #[arg(short, long)]
         project: Option<String>,
     },
+    /// Export ALL memory items as a single portable JSON file (for cross-PC sync)
+    #[command(name = "export-portable")]
+    ExportPortable {
+        /// Output JSON file path
+        #[arg(default_value = "raios-memory-export.json")]
+        output: std::path::PathBuf,
+    },
+    /// Import memory items from a portable JSON file (merges into local DB)
+    #[command(name = "import-portable")]
+    ImportPortable {
+        /// Input JSON file path
+        #[arg(default_value = "raios-memory-export.json")]
+        input: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]

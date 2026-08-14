@@ -320,3 +320,152 @@ fn print_json(snaps: &[ProjectSnapshot]) {
         .unwrap_or_default()
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{build_recommendations, calculate_score, ProjectSnapshot};
+
+    fn healthy(name: &str) -> ProjectSnapshot {
+        ProjectSnapshot {
+            name: name.into(),
+            dirty_files: 0,
+            last_commit_days: Some(1),
+            has_readme: true,
+            has_memory: true,
+            has_sigmap: true,
+            memory_stale_days: Some(1),
+        }
+    }
+
+    #[test]
+    fn calculate_score_of_empty_snapshot_list_is_perfect() {
+        assert_eq!(calculate_score(&[]), 100);
+    }
+
+    #[test]
+    fn calculate_score_of_all_healthy_projects_is_perfect() {
+        let snaps = vec![healthy("a"), healthy("b"), healthy("c")];
+        assert_eq!(calculate_score(&snaps), 100);
+    }
+
+    #[test]
+    fn calculate_score_deducts_points_for_each_penalty_category() {
+        // total_penalty = 3 (dirty) + 2 (no readme) + 2 (no memory) + 1 (no sigmap)
+        //               + 2 (stale > 14d) + 1 (stale memory > 7d) = 11
+        // raw = 100 - (11 / 1 * 10) = -10 -> clamps to 0
+        let snaps = vec![ProjectSnapshot {
+            name: "broken".into(),
+            dirty_files: 5,
+            last_commit_days: Some(30),
+            has_readme: false,
+            has_memory: false,
+            has_sigmap: false,
+            memory_stale_days: Some(20),
+        }];
+        assert_eq!(calculate_score(&snaps), 0);
+    }
+
+    #[test]
+    fn calculate_score_never_goes_below_zero() {
+        fn broken(name: &str) -> ProjectSnapshot {
+            ProjectSnapshot {
+                name: name.into(),
+                dirty_files: 99,
+                last_commit_days: Some(999),
+                has_readme: false,
+                has_memory: false,
+                has_sigmap: false,
+                memory_stale_days: Some(999),
+            }
+        }
+        let snaps = vec![broken("a"), broken("b")];
+        assert_eq!(calculate_score(&snaps), 0);
+    }
+
+    #[test]
+    fn calculate_score_weighs_dirty_files_by_presence_not_by_count() {
+        // Only the *presence* of dirty files matters, not how many — a project
+        // with 1 dirty file and one with 500 both contribute the same 3.0 penalty.
+        let one_dirty = ProjectSnapshot {
+            dirty_files: 1,
+            ..healthy("one-dirty")
+        };
+        let many_dirty = ProjectSnapshot {
+            dirty_files: 500,
+            ..healthy("many-dirty")
+        };
+        assert_eq!(
+            calculate_score(&[one_dirty]),
+            calculate_score(&[many_dirty])
+        );
+    }
+
+    #[test]
+    fn build_recommendations_of_healthy_projects_is_empty() {
+        let snaps = vec![healthy("a"), healthy("b")];
+        assert!(build_recommendations(&snaps).is_empty());
+    }
+
+    #[test]
+    fn build_recommendations_lists_dirty_projects_by_name() {
+        let snaps = vec![
+            ProjectSnapshot {
+                dirty_files: 2,
+                ..healthy("dirty-one")
+            },
+            healthy("clean-one"),
+        ];
+        let recs = build_recommendations(&snaps);
+        assert_eq!(recs.len(), 1);
+        assert!(recs[0].contains("dirty-one"));
+        assert!(!recs[0].contains("clean-one"));
+    }
+
+    #[test]
+    fn build_recommendations_counts_missing_memory_and_sigmap_files() {
+        let snaps = vec![
+            ProjectSnapshot {
+                has_memory: false,
+                ..healthy("no-memory")
+            },
+            ProjectSnapshot {
+                has_sigmap: false,
+                ..healthy("no-sigmap")
+            },
+        ];
+        let recs = build_recommendations(&snaps);
+        assert!(recs
+            .iter()
+            .any(|r| r.contains("memory.md") && r.contains('1')));
+        assert!(recs
+            .iter()
+            .any(|r| r.contains("SIGMAP.md") && r.contains('1')));
+    }
+
+    #[test]
+    fn build_recommendations_lists_stale_memory_projects_by_name() {
+        let snaps = vec![ProjectSnapshot {
+            memory_stale_days: Some(30),
+            ..healthy("stale-memory")
+        }];
+        let recs = build_recommendations(&snaps);
+        assert_eq!(recs.len(), 1);
+        assert!(recs[0].contains("stale-memory"));
+    }
+
+    #[test]
+    fn build_recommendations_orders_dirty_memory_sigmap_then_stale_memory() {
+        let snaps = vec![ProjectSnapshot {
+            dirty_files: 1,
+            has_memory: false,
+            has_sigmap: false,
+            memory_stale_days: None,
+            ..healthy("everything-wrong")
+        }];
+        let recs = build_recommendations(&snaps);
+        assert_eq!(recs.len(), 3);
+        assert!(recs[0].starts_with("Commit or stash"));
+        assert!(recs[1].starts_with("Create memory.md"));
+        assert!(recs[2].starts_with("Run `sigmap`"));
+    }
+}

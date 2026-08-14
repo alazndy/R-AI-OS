@@ -29,6 +29,7 @@ instant-distance = "0.6"
 axum = { version = "0.7", features = ["ws"] }
 walkdir = "2"
 shlex = "1"
+ureq = "2"
 
 [features]
 default = ["cortex"]

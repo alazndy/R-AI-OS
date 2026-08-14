@@ -10,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+/// Renders the setup wizard action step UI for an individual AI agent harness (Claude Code, Antigravity, OpenCode).
 #[allow(clippy::too_many_arguments)]
 pub fn render_agent(
     frame: &mut Frame,
@@ -77,6 +78,7 @@ pub fn render_agent(
     render_log(frame, right, app);
 }
 
+/// Renders the setup wizard step displaying shared skills and hooks created across agents.
 pub fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
@@ -114,6 +116,7 @@ pub fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
     render_log(frame, right, app);
 }
 
+/// Renders the setup wizard step for configuring shell agent wrappers.
 pub fn render_agent_wrapper(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
@@ -214,6 +217,7 @@ pub fn render_agent_wrapper(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(r)), right);
 }
 
+/// Renders the initialization summary step prior to running setup actions.
 pub fn render_initialize(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
@@ -281,6 +285,7 @@ pub fn render_initialize(frame: &mut Frame, area: Rect, app: &App) {
     render_log(frame, right, app);
 }
 
+/// Renders the setup completion screen showing final installation status and action logs.
 pub fn render_done(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);

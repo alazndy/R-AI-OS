@@ -4,8 +4,6 @@
 pub mod agents;
 /// System constitution sections editor panel.
 pub mod constitution;
-/// Content viewer panel for selected files and items.
-pub mod content;
 /// Main dashboard layout assembly.
 pub mod dashboard_main;
 /// Installed extensions list panel.
@@ -37,7 +35,6 @@ pub mod timeline;
 
 pub use agents::*;
 pub use constitution::*;
-pub use content::*;
 pub use dashboard_main::*;
 pub use extensions::*;
 pub use git_diff::*;

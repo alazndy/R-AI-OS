@@ -9,7 +9,7 @@ use notify::{Config as WatchConfig, RecursiveMode, Watcher};
 use raios_core::config::Config;
 #[allow(unused_imports)]
 use raios_core::safe_io;
-use raios_runtime::filebrowser::{load_file_content, load_recent_projects, FileEntry};
+use raios_runtime::filebrowser::{load_file_content, load_recent_projects};
 
 pub mod state;
 pub use state::*;
@@ -26,6 +26,7 @@ pub mod ipc_support;
 pub mod client;
 pub mod control_navigation;
 pub mod intent;
+pub mod operations;
 pub mod reducer;
 pub mod route;
 pub mod store;
@@ -128,6 +129,10 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     PaletteItem {
         cmd: "/task",
         desc: "Tasks: /task add <text> | /task send <agent>",
+    },
+    PaletteItem {
+        cmd: "/tasks",
+        desc: "Open local Markdown task manager",
     },
     PaletteItem {
         cmd: "/timeline",
@@ -368,6 +373,45 @@ impl App {
         }
     }
 
+    /// Constructs a minimal `App` for unit tests. Unlike `new()`, this does
+    /// not spawn background threads, auto-launch the local daemon, or attempt
+    /// any network/filesystem I/O — those side effects are unsafe to trigger
+    /// inside `cargo test`.
+    #[cfg(test)]
+    pub(crate) fn test_instance() -> Self {
+        let (tx, rx) = mpsc::channel::<BgMsg>();
+        Self {
+            state: AppState::Dashboard,
+            should_quit: false,
+            tick: 0,
+            config: Config::default(),
+            setup: SetupState::default(),
+            search: SearchState::default(),
+            system: SystemState::default(),
+            ui: UIState::default(),
+            inventory: InventoryState::default(),
+            editor: EditorState::default(),
+            health: HealthState::default(),
+            projects: ProjectState::default(),
+            tx,
+            rx,
+            tx_daemon: None,
+            is_remote: false,
+            remote_host: None,
+            width: 80,
+            height: 24,
+            timeline: TimelineState::default(),
+            mempalace: MempalaceState::default(),
+            tasks: TaskState::default(),
+            ext: ExtState::default(),
+            _watcher: None,
+            wizard: WizardState::default(),
+            constitution: ConstitutionState::default(),
+            store: store::Store::new(),
+            client: client::Client::new(None),
+        }
+    }
+
     /// Launch TUI connected to a remote Cortex Hub over Tailscale.
     /// Skips local daemon auto-spawn and embedded workers.
     pub fn new_remote(host: String) -> Self {
@@ -497,17 +541,6 @@ impl App {
             )))
             .ok();
         });
-    }
-
-    /// Returns list of files associated with the active menu item.
-    pub fn current_menu_files(&self) -> Vec<FileEntry> {
-        match self.ui.menu_cursor {
-            1 => vec![],
-            3 => self.inventory.agent_files.clone(),
-            4 => self.inventory.policy_files.clone(),
-            5 => self.inventory.mempalace_files.clone(),
-            _ => vec![],
-        }
     }
 
     /// Discovers and reloads available constitution files into editor tabs.
@@ -646,12 +679,21 @@ impl App {
     }
 
     pub(crate) fn update_search(&mut self) {
+        let query = self.search.query.trim();
+        if query.is_empty() {
+            return;
+        }
+        if query.chars().count() > 240 {
+            self.search.status = Some("Search query must contain at most 240 characters.".into());
+            return;
+        }
+        if raios_core::security::looks_like_secret(query).is_some() {
+            self.search.status =
+                Some("Search query appears to contain a secret and was not sent.".into());
+            return;
+        }
         if let Some(ref tx) = self.tx_daemon {
-            let cmd = format!(
-                "{{\"command\":\"Search\",\"query\":\"{}\"}}",
-                self.search.query
-            );
-            let _ = tx.send(cmd);
+            let _ = tx.send(daemon_search_command(query));
         }
     }
 
@@ -690,5 +732,141 @@ impl App {
             Ok(_) => "Graphify started".to_string(),
             Err(e) => format!("Graphify launch error: {}", e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filtered_palette_empty_query_returns_all_items() {
+        let items = filtered_palette("");
+        assert_eq!(items.len(), PALETTE_ITEMS.len());
+        assert_eq!(items[0].cmd, "/now");
+        assert_eq!(items[items.len() - 1].cmd, "/quit");
+    }
+
+    #[test]
+    fn filtered_palette_matches_command_prefix_without_slash() {
+        for q in ["/now", "now"] {
+            let items = filtered_palette(q);
+            assert!(items.iter().any(|p| p.cmd == "/now"));
+            assert_eq!(items[0].cmd, "/now");
+        }
+    }
+
+    #[test]
+    fn filtered_palette_is_case_insensitive() {
+        let items = filtered_palette("SEARCH");
+        assert!(!items.is_empty());
+        assert!(items
+            .iter()
+            .all(|p| p.cmd.contains("search") || p.desc.to_lowercase().contains("search")));
+    }
+
+    #[test]
+    fn filtered_palette_matches_description_text() {
+        let items = filtered_palette("audit");
+        assert!(items.iter().any(|p| p.cmd == "/audit"));
+    }
+
+    #[test]
+    fn filtered_palette_unknown_query_returns_empty() {
+        assert!(filtered_palette("/zzzz-not-a-command").is_empty());
+    }
+
+    #[test]
+    fn update_search_ignores_empty_query() {
+        let mut app = App::test_instance();
+        app.search.query = "   ".into();
+        app.update_search();
+        assert!(app.search.status.is_none());
+    }
+
+    #[test]
+    fn update_search_rejects_overlong_query() {
+        let mut app = App::test_instance();
+        app.search.query = "x".repeat(241);
+        app.update_search();
+        assert!(app.search.status.as_deref().unwrap().contains("240"));
+    }
+
+    #[test]
+    fn update_search_rejects_secret_like_query() {
+        let mut app = App::test_instance();
+        app.search.query = "sk-abcdef1234567890abcdef1234567890".into();
+        app.update_search();
+        assert!(app.search.status.as_deref().unwrap().contains("secret"));
+    }
+
+    #[test]
+    fn update_search_valid_query_is_silent_when_daemon_disconnected() {
+        let mut app = App::test_instance();
+        app.search.query = "async error handling".into();
+        app.update_search();
+        assert!(app.search.status.is_none());
+    }
+
+    #[test]
+    fn add_activity_appends_and_caps_timeline() {
+        let mut app = App::test_instance();
+        for i in 0..150 {
+            app.add_activity("Test", &format!("msg {i}"), "Info");
+        }
+        assert_eq!(app.timeline.activities.len(), 100);
+        assert_eq!(app.timeline.activities[0].message, "msg 50");
+        assert_eq!(app.timeline.activities[99].message, "msg 149");
+    }
+
+    #[test]
+    fn find_project_path_by_name_is_case_insensitive_substring() {
+        let mut app = App::test_instance();
+        let proj = raios_core::entities::EntityProject {
+            name: "My-Proj".into(),
+            category: String::new(),
+            local_path: PathBuf::from("/tmp/proj"),
+            github: None,
+            status: "active".into(),
+            stars: None,
+            last_commit: None,
+            version: None,
+            version_nickname: None,
+        };
+        app.projects.list.push(proj);
+
+        assert_eq!(
+            app.find_project_path_by_name("my-proj"),
+            Some(PathBuf::from("/tmp/proj"))
+        );
+        assert_eq!(
+            app.find_project_path_by_name("MY-PROJ"),
+            Some(PathBuf::from("/tmp/proj"))
+        );
+        assert_eq!(
+            app.find_project_path_by_name("proj"),
+            Some(PathBuf::from("/tmp/proj"))
+        );
+        assert_eq!(app.find_project_path_by_name("missing"), None);
+    }
+
+    #[test]
+    fn project_at_cursor_respects_cursor() {
+        let mut app = App::test_instance();
+        let make = |name: &str| raios_core::entities::EntityProject {
+            name: name.into(),
+            category: String::new(),
+            local_path: PathBuf::from("/tmp").join(name),
+            github: None,
+            status: "active".into(),
+            stars: None,
+            last_commit: None,
+            version: None,
+            version_nickname: None,
+        };
+        app.projects.list.push(make("alpha"));
+        app.projects.list.push(make("beta"));
+        app.projects.cursor = 1;
+        assert_eq!(app.project_at_cursor().unwrap().name, "beta");
     }
 }

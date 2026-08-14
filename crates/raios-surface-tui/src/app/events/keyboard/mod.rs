@@ -5,16 +5,28 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use raios_surface_tui::app::state::AppState;
 use raios_surface_tui::app::App;
 
+/// Dedicated active-agent view keyboard event handlers.
+pub mod active_agents_view;
+/// Dedicated constitution view keyboard event handlers.
+pub mod constitution_view;
 /// Dashboard keyboard event handlers.
 pub mod dashboard;
 /// File editor keyboard event handlers.
 pub mod editor;
+/// Dedicated extensions view keyboard event handlers.
+pub mod extensions_view;
 /// Health view keyboard event handlers.
 pub mod health;
 /// Project view keyboard event handlers.
 pub mod project;
+/// Dedicated local-search view keyboard event handlers.
+pub mod search_view;
 /// Setup wizard keyboard event handlers.
 pub mod setup;
+/// Dedicated local-task view keyboard event handlers.
+pub mod tasks_view;
+/// Dedicated timeline view keyboard event handlers.
+pub mod timeline_view;
 
 impl App {
     /// Handles an incoming keyboard event based on current application state.
@@ -78,13 +90,6 @@ impl App {
             return Ok(());
         }
 
-        if self.state == AppState::Dashboard
-            && self.ui.menu_cursor == 2
-            && key.code == KeyCode::Char('f')
-        {
-            self.run_compliance_auto_fix();
-        }
-
         match self.state {
             AppState::Search => self.handle_key_search(key),
             AppState::Booting => {
@@ -106,6 +111,30 @@ impl App {
             }
             AppState::HealthView => {
                 self.handle_health_view_key(key);
+                Ok(())
+            }
+            AppState::ConstitutionView => {
+                self.handle_constitution_view_key(key);
+                Ok(())
+            }
+            AppState::ExtensionsView => {
+                self.handle_extensions_view_key(key);
+                Ok(())
+            }
+            AppState::TasksView => {
+                self.handle_tasks_view_key(key);
+                Ok(())
+            }
+            AppState::SearchView => {
+                self.handle_search_view_key(key);
+                Ok(())
+            }
+            AppState::ActiveAgentsView => {
+                self.handle_active_agents_view_key(key);
+                Ok(())
+            }
+            AppState::TimelineView => {
+                self.handle_timeline_view_key(key);
                 Ok(())
             }
             AppState::MemPalaceView => {

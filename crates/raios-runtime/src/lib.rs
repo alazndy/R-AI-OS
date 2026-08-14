@@ -9,6 +9,7 @@ pub mod constitution;
 pub mod control_plane;
 pub mod cortex;
 pub mod daemon;
+pub mod daemon_client;
 pub mod discovery;
 pub mod factory;
 pub mod filebrowser;

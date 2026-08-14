@@ -129,3 +129,168 @@ fn parse_pip_audit(json: &serde_json::Value, issues: &mut Vec<SecurityIssue>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(output: &str, ptype: &ProjectType) -> Vec<SecurityIssue> {
+        let mut issues = Vec::new();
+        parse_audit_issues(output, ptype, &mut issues);
+        issues
+    }
+
+    #[test]
+    fn npm_audit_maps_all_severity_levels() {
+        let output = r#"{
+            "vulnerabilities": {
+                "critical-pkg": { "severity": "critical", "title": "RCE in critical-pkg" },
+                "high-pkg": { "severity": "high", "title": "XSS in high-pkg" },
+                "moderate-pkg": { "severity": "moderate", "title": "CSRF in moderate-pkg" },
+                "low-pkg": { "severity": "low", "title": "DoS in low-pkg" },
+                "unknown-pkg": { "title": "Unlabeled severity" }
+            }
+        }"#;
+        let issues = parse(output, &ProjectType::NodeJs);
+        assert_eq!(issues.len(), 5);
+        let by_title: Vec<_> = issues
+            .iter()
+            .map(|i| (i.severity.clone(), i.snippet.clone().unwrap()))
+            .collect();
+        assert!(by_title.contains(&(
+            Severity::Critical,
+            "critical-pkg: RCE in critical-pkg".into()
+        )));
+        assert!(by_title.contains(&(Severity::High, "high-pkg: XSS in high-pkg".into())));
+        assert!(by_title.contains(&(
+            Severity::Medium,
+            "moderate-pkg: CSRF in moderate-pkg".into()
+        )));
+        assert!(by_title.contains(&(Severity::Low, "low-pkg: DoS in low-pkg".into())));
+        assert!(by_title.contains(&(Severity::Low, "unknown-pkg: Unlabeled severity".into())));
+    }
+
+    #[test]
+    fn npm_audit_falls_back_to_via_title() {
+        let output = r#"{
+            "vulnerabilities": {
+                "lodash": {
+                    "via": [ { "title": "Prototype Pollution in lodash" } ],
+                    "severity": "high"
+                }
+            }
+        }"#;
+        let issues = parse(output, &ProjectType::NodeJs);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0]
+            .snippet
+            .as_deref()
+            .unwrap()
+            .contains("Prototype Pollution in lodash"));
+    }
+
+    #[test]
+    fn npm_audit_truncates_long_titles_to_60_chars() {
+        let long_title = "x".repeat(200);
+        let output = format!(
+            r#"{{ "vulnerabilities": {{ "pkg": {{ "severity": "low", "title": "{}" }} }} }}"#,
+            long_title
+        );
+        let issues = parse(&output, &ProjectType::NodeJs);
+        assert_eq!(issues.len(), 1);
+        let snippet = issues[0].snippet.as_deref().unwrap();
+        assert_eq!(snippet.len(), "pkg: ".len() + 60);
+        assert!(snippet.starts_with("pkg: "));
+    }
+
+    #[test]
+    fn cargo_audit_maps_cvss_score_to_severity() {
+        let output = r#"{
+            "vulnerabilities": {
+                "list": [
+                    { "advisory": { "cvss": "9.8", "title": "Critical advisory" },
+                      "package": { "name": "tough-crate" } },
+                    { "advisory": { "cvss": "7.5", "title": "High advisory" },
+                      "package": { "name": "mid-crate" } },
+                    { "advisory": { "cvss": "5.0", "title": "Medium advisory" },
+                      "package": { "name": "ok-crate" } },
+                    { "advisory": { "cvss": "3.0", "title": "Low advisory" },
+                      "package": { "name": "low-crate" } },
+                    { "advisory": { "title": "No cvss" },
+                      "package": { "name": "nocrv-crate" } }
+                ]
+            }
+        }"#;
+        let issues = parse(output, &ProjectType::Rust);
+        assert_eq!(issues.len(), 5);
+        let severities: Vec<_> = issues.iter().map(|i| i.severity.clone()).collect();
+        assert_eq!(
+            severities,
+            vec![
+                Severity::Critical,
+                Severity::High,
+                Severity::Medium,
+                Severity::Low,
+                Severity::Low,
+            ]
+        );
+        assert!(issues[0]
+            .snippet
+            .as_deref()
+            .unwrap()
+            .starts_with("tough-crate: "));
+    }
+
+    #[test]
+    fn cargo_audit_skips_empty_vuln_list() {
+        let output = r#"{ "vulnerabilities": { "list": [] } }"#;
+        let issues = parse(output, &ProjectType::Rust);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn pip_audit_extracts_fix_version_and_id() {
+        let output = r#"{
+            "dependencies": [
+                {
+                    "name": "requests",
+                    "vulns": [
+                        { "id": "CVE-2026-1234", "fix_versions": ["2.32.1"] }
+                    ]
+                },
+                {
+                    "name": "urllib3",
+                    "vulns": [
+                        { "id": "CVE-2026-5678" }
+                    ]
+                }
+            ]
+        }"#;
+        let issues = parse(output, &ProjectType::Python);
+        assert_eq!(issues.len(), 2);
+        assert_eq!(
+            issues[0].snippet.as_deref(),
+            Some("requests CVE-2026-1234 (fix: 2.32.1)")
+        );
+        assert_eq!(
+            issues[1].snippet.as_deref(),
+            Some("urllib3 CVE-2026-5678 (fix: no fix)")
+        );
+        assert!(issues.iter().all(|i| i.severity == Severity::High));
+    }
+
+    #[test]
+    fn invalid_json_produces_no_issues() {
+        assert!(parse("not json", &ProjectType::NodeJs).is_empty());
+        assert!(parse("", &ProjectType::Rust).is_empty());
+        assert!(parse("[]", &ProjectType::Python).is_empty());
+    }
+
+    #[test]
+    fn unsupported_project_types_are_ignored() {
+        let output = r#"{ "vulnerabilities": { "pkg": { "severity": "critical" } } }"#;
+        assert!(parse(output, &ProjectType::Web).is_empty());
+        assert!(parse(output, &ProjectType::Mixed).is_empty());
+        assert!(parse(output, &ProjectType::Unknown).is_empty());
+    }
+}
