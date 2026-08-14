@@ -250,6 +250,12 @@ impl ProjectIndex {
         for id in &stale_ids {
             let _ = tx.execute("DELETE FROM bm25_files WHERE id = ?1", params![id]);
         }
+        // Drop the token index before a bulk insert of potentially millions of
+        // postings rows — otherwise every single INSERT pays for an incremental
+        // B-tree update. Rebuilt in one shot after the loop, before commit.
+        // (idx_bm25_postings_file is kept: the DELETE above cascades through it
+        // and needs it to stay fast.)
+        let _ = tx.execute("DROP INDEX IF EXISTS idx_bm25_token", []);
 
         let mut id_to_slot: HashMap<i64, usize> = HashMap::new();
         for (path, (file_id, _, doc_len)) in &cached {
@@ -287,28 +293,47 @@ impl ProjectIndex {
                 });
         }
 
-        for (path_str, &fs_mtime) in &fs {
-            if warm_paths.contains(path_str) {
-                continue;
-            }
-            let path = PathBuf::from(path_str);
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let postings = idx.index_file(path.clone(), &content);
-                let doc_len = idx.doc_lengths.last().copied().unwrap_or(1);
+        {
+            // Prepared once and reused for every row instead of re-parsing the
+            // SQL text on every call — the previous per-row tx.execute() calls
+            // were the dominant cost across millions of postings rows.
+            let mut insert_file_stmt = tx.prepare(
+                "INSERT OR REPLACE INTO bm25_files (path, mtime_secs, doc_length) VALUES (?1,?2,?3)",
+            )?;
+            let mut insert_posting_stmt = tx.prepare(
+                "INSERT INTO bm25_postings (token, file_id, line_no, snippet) VALUES (?1,?2,?3,?4)",
+            )?;
 
-                let _ = tx.execute(
-                    "INSERT OR REPLACE INTO bm25_files (path, mtime_secs, doc_length) VALUES (?1,?2,?3)",
-                    params![path_str, fs_mtime as i64, doc_len as i64],
-                );
-                let file_id = tx.last_insert_rowid();
-                for (token, line_no, snippet) in &postings {
-                    let _ = tx.execute(
-                        "INSERT INTO bm25_postings (token, file_id, line_no, snippet) VALUES (?1,?2,?3,?4)",
-                        params![token, file_id, *line_no as i64, snippet],
-                    );
+            for (path_str, &fs_mtime) in &fs {
+                if warm_paths.contains(path_str) {
+                    continue;
+                }
+                let path = PathBuf::from(path_str);
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let postings = idx.index_file(path.clone(), &content);
+                    let doc_len = idx.doc_lengths.last().copied().unwrap_or(1);
+
+                    let _ = insert_file_stmt.execute(params![
+                        path_str,
+                        fs_mtime as i64,
+                        doc_len as i64
+                    ]);
+                    let file_id = tx.last_insert_rowid();
+                    for (token, line_no, snippet) in &postings {
+                        let _ = insert_posting_stmt.execute(params![
+                            token,
+                            file_id,
+                            *line_no as i64,
+                            snippet
+                        ]);
+                    }
                 }
             }
         }
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bm25_token ON bm25_postings(token)",
+            [],
+        )?;
         tx.commit()?;
 
         Ok(idx)
