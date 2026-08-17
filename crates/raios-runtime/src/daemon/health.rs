@@ -10,6 +10,10 @@ use tokio::time::{sleep, Duration};
 /// Prevents parallel `cargo audit` / `pnpm audit` processes from spiking RAM.
 const MAX_CONCURRENT_SCANS: usize = 3;
 
+/// SQLite permits only one writer at a time. Keep expensive project scans
+/// parallel, but serialize their short activity-state transactions.
+const MAX_CONCURRENT_DB_SYNCS: usize = 1;
+
 /// Emit Radar whispers for Critical/High security issues found in a report.
 pub(crate) fn emit_security_whispers(
     project_name: &str,
@@ -112,6 +116,7 @@ pub async fn start_health_worker(
         let tx_clone = tx.clone();
         let state_clone = state.clone();
         let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_SCANS));
+        let db_sem = Arc::new(Semaphore::new(MAX_CONCURRENT_DB_SYNCS));
 
         let mut handles = vec![];
         for proj in active {
@@ -121,25 +126,14 @@ pub async fn start_health_worker(
             let proj_name_clone = proj.name.clone();
             let proj_path_clone = proj.local_path.clone();
             let sem_clone = sem.clone();
+            let db_sem_clone = db_sem.clone();
             handles.push(tokio::spawn(async move {
                 // Acquire permit — blocks until a slot is free
-                let _permit = sem_clone.acquire().await;
-                tokio::task::spawn_blocking(move || {
+                let scan_permit = sem_clone.acquire().await.ok()?;
+                let scan_result = tokio::task::spawn_blocking(move || {
                     let report = check_project_fast(&proj);
                     let sec_report = scan_project_fast(&proj_path_clone);
                     emit_security_whispers(&proj_name_clone, &sec_report, &radar_clone);
-                    match raios_core::db::open_db() {
-                        Ok(mut conn) => {
-                            sync_security_findings_as_activity(
-                                &mut conn,
-                                &proj_name_clone,
-                                &sec_report,
-                            )
-                        }
-                        Err(e) => eprintln!(
-                            "[Daemon] DB open failed for security activity logging ({proj_name_clone}): {e}"
-                        ),
-                    }
                     let log_msg = serde_json::json!({
                         "event": "NewLog",
                         "log": {
@@ -149,10 +143,31 @@ pub async fn start_health_worker(
                         }
                     });
                     let _ = tx_log.send(log_msg.to_string());
+                    (report, proj_name_clone, sec_report)
+                })
+                .await
+                .ok()?;
+                drop(scan_permit);
+
+                let db_permit = db_sem_clone.acquire().await.ok()?;
+                let report = tokio::task::spawn_blocking(move || {
+                    let (report, project_name, sec_report) = scan_result;
+                    match raios_core::db::open_db() {
+                        Ok(mut conn) => sync_security_findings_as_activity(
+                            &mut conn,
+                            &project_name,
+                            &sec_report,
+                        ),
+                        Err(e) => eprintln!(
+                            "[Daemon] DB open failed for security activity logging ({project_name}): {e}"
+                        ),
+                    }
                     report
                 })
                 .await
-                .ok()
+                .ok()?;
+                drop(db_permit);
+                Some(report)
             }));
         }
 
