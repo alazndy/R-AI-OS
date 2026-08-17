@@ -289,22 +289,26 @@ pub async fn start_lifecycle_worker(state: Arc<RwLock<DaemonState>>, tx: broadca
 
 ### crates/raios-runtime/src/daemon/proxy.rs
 ```
-pub struct AgentProcess  :98-104
-pub struct ExecutionProxy  :107-110
-impl ExecutionProxy  :112-325
-pub fn new  :113-113
-pub fn with_event_tx  :120-120
-pub async fn spawn_agent  :137-142
+pub struct ActivityEvent  :38-43
+pub struct DigestWindow  :47-51
+pub fn log_activity_event(conn: &Connection, source: &str, project: Option<&str>, tier: &str, summary: &str, detail_json: Option<&str>,) → rusqlite::Result<()>  :19-34
+pub fn poll_important_events(conn: &Connection, client_id: &str,) → rusqlite::Result<Vec<Activi...  :79-108
+pub fn poll_digest_window(conn: &Connection, client_id: &str, digest_interval_secs: i64,) → rusqlite::Result<Option<Dig...  :114-157
+pub fn prune_activity_events_older_than(conn: &Connection, days: i64) → rusqlite::Result<usize>  :161-166
 ```
 
-### crates/raios-runtime/src/daemon/scheduler.rs
+### crates/raios-core/src/db/mod.rs
 ```
-pub async fn start_scheduler_worker(_state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, check_interval: Duration,)  :8-114
+pub fn open_db() → Result<Connection>  :64-73
+pub fn cp_log_append(conn: &Connection, sender: &str, content: &str) → Result<()>  :90-103
+pub fn cp_logs_replay(conn: &Connection, limit: usize) → Result<Vec<(String, String,...  :106-119
+pub fn migrate_existing(conn: &Connection) → Result<()>  :121-123
+pub fn import_from_json(dev_ops: &Path, conn: &Connection) → usize  :128-191
 ```
 
 ### crates/raios-runtime/src/daemon/sentinel.rs
 ```
-pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration,)  :11-104
+pub async fn start_sentinel_worker  :11-104
 ```
 
 ### crates/raios-runtime/src/daemon/server.rs
