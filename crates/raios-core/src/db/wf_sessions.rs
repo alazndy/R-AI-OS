@@ -296,6 +296,23 @@ mod tests {
     }
 
     #[test]
+    fn cp_session_end_with_summary_does_not_log_activity_when_summary_is_empty_string() {
+        let conn = crate::db::tests::in_memory();
+        let (task_id, run_id) = cp_session_start(&conn, "codex_kaira", None).unwrap();
+
+        // An empty-string summary must be treated the same as no summary —
+        // guards against loosening `.filter(|s| !s.is_empty())` to a bare
+        // `if let Some(text) = summary`, which would log a hollow event
+        // like "agent run completed: ".
+        cp_session_end_with_summary(&conn, &task_id, &run_id, true, Some("")).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
     fn cp_session_end_with_summary_does_not_log_activity_when_run_failed() {
         let conn = crate::db::tests::in_memory();
         let (task_id, run_id) = cp_session_start(&conn, "codex_kaira", None).unwrap();

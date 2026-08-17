@@ -81,6 +81,17 @@ pub fn migrate_existing(conn: &Connection) → Result<()>  :121-123
 pub fn import_from_json(dev_ops: &Path, conn: &Connection) → usize  :128-191
 ```
 
+### crates/raios-core/src/db/wf_sessions.rs
+```
+pub struct SessionRow  :105-113
+pub struct WrapperMemoryNote  :121-125
+pub fn cp_session_start(conn: &Connection, agent_identity: &str, project_id: Option<i64>,) → Result<(String, String)>  :3-50
+pub fn cp_session_end(conn: &Connection, task_id: &str, run_id: &str, success: bool) → Result<()>  :53-55
+pub fn cp_session_end_with_summary(conn: &Connection, task_id: &str, run_id: &str, success: bool, summary: Option<&str>,) → Result<()>  :57-102
+pub fn cp_record_wrapper_memory_note(conn: &Connection, run_id: &str, project_path: &str, note: &str,) → Result<WrapperMemoryNote>  :133-179
+pub fn cp_sessions_list(conn: &Connection, limit: usize) → Result<Vec<SessionRow>>  :181-201
+```
+
 ### crates/raios-runtime/src/daemon/git.rs
 ```
 pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration,)  :8-125
