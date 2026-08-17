@@ -27,6 +27,20 @@ pub struct Kernel {
     state: Arc<RwLock<DaemonState>>,
 }
 
+/// Collapses a spawned task's outcome into a single `Result`.
+///
+/// `tokio::spawn` wraps the task's own `Result<(), E>` inside an outer
+/// `Result<_, JoinError>` (populated on panic/cancellation). Flattening here
+/// means a listener's bind/accept failure — or a panic — always surfaces as
+/// `Err`, instead of being discarded by whichever caller only pattern-matches
+/// the outer `Ok`.
+fn flatten_join_result(res: std::result::Result<Result<()>, tokio::task::JoinError>) -> Result<()> {
+    match res {
+        Ok(inner) => inner,
+        Err(join_err) => Err(anyhow::anyhow!("protocol task terminated abnormally: {join_err}")),
+    }
+}
+
 impl Kernel {
     pub fn new(state: Arc<RwLock<DaemonState>>) -> Self {
         Self { state }
@@ -60,19 +74,22 @@ impl Kernel {
             crate::server::http::start_http_server(http_port, http_state, http_tx).await
         });
 
-        tokio::select! {
+        let outcome = tokio::select! {
             res = daemon_handle => {
                 eprintln!("[Kernel] Daemon TCP exited: {:?}", res);
+                flatten_join_result(res)
             }
             res = mcp_handle => {
                 eprintln!("[Kernel] MCP-over-TCP exited: {:?}", res);
+                flatten_join_result(res)
             }
             res = http_handle => {
                 eprintln!("[Kernel] HTTP API Adapter exited: {:?}", res);
+                flatten_join_result(res)
             }
-        }
+        };
 
-        Ok(())
+        outcome
     }
 }
 
@@ -433,5 +450,28 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Unknown tool"));
+    }
+
+    #[test]
+    fn flatten_join_result_passes_through_ok() {
+        let res: std::result::Result<Result<()>, tokio::task::JoinError> = Ok(Ok(()));
+        assert!(flatten_join_result(res).is_ok());
+    }
+
+    #[test]
+    fn flatten_join_result_propagates_inner_error_instead_of_swallowing_it() {
+        let res: std::result::Result<Result<()>, tokio::task::JoinError> =
+            Ok(Err(anyhow::anyhow!("address already in use")));
+        let outcome = flatten_join_result(res);
+        assert!(outcome.is_err());
+        assert!(outcome.unwrap_err().to_string().contains("address already in use"));
+    }
+
+    #[tokio::test]
+    async fn flatten_join_result_reports_task_panic_as_error() {
+        let handle = tokio::spawn(async { panic!("boom") });
+        let res: std::result::Result<Result<()>, tokio::task::JoinError> = handle.await;
+        let outcome = flatten_join_result(res);
+        assert!(outcome.is_err());
     }
 }
