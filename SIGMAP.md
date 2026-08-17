@@ -42,6 +42,26 @@ crates/raios-runtime/src/search/indexer.rs    +Component
 
 ## crates
 
+### crates/raios-core/src/config.rs
+```
+pub struct DaemonConfig  :7-28
+pub struct Config  :65-93
+pub struct FactoryConfig  :101-106
+pub struct FactoryStorageConfig  :111-118
+pub struct BootstrapConfig  :125-134
+pub struct ClaudeMarketplace  :137-141
+pub struct RuleSyncRepo  :144-148
+pub struct DetectResult  :245-250
+impl DaemonConfig  :30-60
+impl Config  :150-165
+impl Config  :167-243
+  pub fn config_file() → PathBuf  :173-173
+  pub fn load() → Option<Self>  :182-182
+  pub fn save(&self) → Result<()>  :189-189
+  pub fn auto_detect() → DetectResult  :201-201
+  pub fn from_detect_result(detected: DetectResult) → Self  :225-225
+```
+
 ### crates/raios-core/src/db/activity_events.rs
 ```
 pub struct ActivityEvent  :38-43
@@ -94,11 +114,6 @@ pub fn validate_file(path: &Path, proj: &EntityProject) → Vec<ValidationError>
 pub struct ProjectSnapshot  :6-14
 pub fn snapshot(p: &EntityProject) → ProjectSnapshot  :16-37
 pub fn build_recommendations(snaps: &[ProjectSnapshot]) → Vec<String>  :73-117
-```
-
-### crates/raios-runtime/src/system_scan/db_budget.rs
-```
-pub fn check() → DbBudgetReport  :49-54
 ```
 
 ### crates/raios-surface-cli/src/cli/reflect.rs
@@ -822,6 +837,11 @@ pub fn list_worktrees(project_path: &Path) → Result<Vec<String>>  :70-85
 ### crates/raios-runtime/src/sync.rs
 ```
 pub fn sync_universe(dev_ops: &Path, master: &Path) → Result<String>  :5-43
+```
+
+### crates/raios-runtime/src/system_scan/db_budget.rs
+```
+pub fn check() → DbBudgetReport  :49-54
 ```
 
 ### crates/raios-runtime/src/system_scan/doctor.rs
