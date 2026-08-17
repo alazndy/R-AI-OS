@@ -34,7 +34,7 @@ fn snapshot(p: &EntityProject) -> ProjectSnapshot {
     let last_commit_days = git_days_since_last_commit(&p.local_path);
     let has_readme = p.local_path.join("README.md").exists();
     let has_memory = p.local_path.join("memory.md").exists();
-    let has_sigmap = p.local_path.join("SIGMAP.md").exists();
+    let has_sigmap = raios_core::entities::has_sigmap_context(&p.local_path);
     let memory_stale_days = if has_memory {
         file_age_days(&p.local_path.join("memory.md"))
     } else {

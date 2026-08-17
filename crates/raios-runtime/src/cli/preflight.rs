@@ -239,7 +239,7 @@ fn check_memory_md(path: &Path) -> Check {
 }
 
 fn check_sigmap(path: &Path) -> Check {
-    let exists = path.join("SIGMAP.md").exists();
+    let exists = raios_core::entities::has_sigmap_context(path);
     Check {
         label: "SIGMAP.md",
         pass: exists,
