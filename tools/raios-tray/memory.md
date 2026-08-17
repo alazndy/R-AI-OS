@@ -28,9 +28,10 @@
 - **API**: `http://127.0.0.1:42069 (health) / 42071 (agents)` — endpoints: /api/health, /api/projects, /api/usage
 
 ## Current Focus
-- Boot crash + session-end crash fixed. Ready for validation across boots.
+- Validate the desktop-independent Qt tray on Budgie, GNOME, Plasma, macOS, and Windows.
 
 ## Change Log & Agent Trail
+- [2026-07-27] Codex Kaira: Replaced the GTK/AppIndicator event-loop bridge with PySide6's standard tray API, added desktop-session detection with Budgie-specific host guidance, and covered the portable detector with unit tests. The tray now has no GNOME Shell extension or GTK dependency.
 - [2026-06-25] Codex Kaira: Promoted this directory to the canonical raios-tray source of truth. External copies must launch or mirror from here instead of diverging.
 - [2026-06-13] Claude Kaira: Initial implementation — tray with daemon status, CPU/RAM (aiosd+raios), project list, verify-chain status; systemd user service created
 - [2026-06-18] Codex Kaira: Reworked the tray design toward a PySide6-based cross-platform implementation and added Linux/macOS/Windows startup assets in the project workspace draft
