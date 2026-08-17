@@ -5,6 +5,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, RwLock};
 use tokio::time::sleep;
 
+const ACTIVITY_EVENT_RETENTION_DAYS: i64 = 30;
+
 /// Auto-lifecycle worker: transitions project statuses based on git activity.
 ///
 /// Transitions:
@@ -52,6 +54,8 @@ pub async fn start_lifecycle_worker(
                 continue;
             }
         };
+
+        prune_stale_activity_events(&conn);
 
         let mut updated = false;
 
@@ -177,6 +181,14 @@ fn last_commit_timestamp(repo: &std::path::Path) -> Option<u64> {
     ts_str.parse::<u64>().ok()
 }
 
+fn prune_stale_activity_events(conn: &rusqlite::Connection) {
+    match raios_core::db::prune_activity_events_older_than(conn, ACTIVITY_EVENT_RETENTION_DAYS) {
+        Ok(0) => {}
+        Ok(n) => println!("[Lifecycle] Pruned {n} stale activity_events row(s)."),
+        Err(e) => eprintln!("[Lifecycle] activity_events prune failed: {e}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +265,26 @@ mod tests {
         assert_eq!(project.as_deref(), Some("demo-project"));
         assert!(summary.contains("active"));
         assert!(summary.contains("beklemede"));
+    }
+
+    #[test]
+    fn lifecycle_tick_prunes_activity_events_older_than_30_days() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        // Insert a stale row from 2020
+        conn.execute(
+            "INSERT INTO activity_events (ts, source, project, tier, summary)
+             VALUES ('2020-01-01T00:00:00Z', 'git', 'old', 'routine', 'stale')",
+            [],
+        )
+        .unwrap();
+
+        prune_stale_activity_events(&conn);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

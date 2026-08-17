@@ -62,25 +62,6 @@ impl Config  :167-243
   pub fn from_detect_result(detected: DetectResult) → Self  :225-225
 ```
 
-### crates/raios-core/src/db/activity_events.rs
-```
-pub struct ActivityEvent  :38-43
-pub struct DigestWindow  :47-51
-pub fn log_activity_event(conn: &Connection, source: &str, project: Option<&str>, tier: &str, summary: &str, detail_json: Option<&str>,) → rusqlite::Result<()>  :19-34
-pub fn poll_important_events(conn: &Connection, client_id: &str,) → rusqlite::Result<Vec<Activi...  :79-108
-pub fn poll_digest_window(conn: &Connection, client_id: &str, digest_interval_secs: i64,) → rusqlite::Result<Option<Dig...  :114-157
-pub fn prune_activity_events_older_than(conn: &Connection, days: i64) → rusqlite::Result<usize>  :161-166
-```
-
-### crates/raios-core/src/db/mod.rs
-```
-pub fn open_db() → Result<Connection>  :64-73
-pub fn cp_log_append(conn: &Connection, sender: &str, content: &str) → Result<()>  :90-103
-pub fn cp_logs_replay(conn: &Connection, limit: usize) → Result<Vec<(String, String,...  :106-119
-pub fn migrate_existing(conn: &Connection) → Result<()>  :121-123
-pub fn import_from_json(dev_ops: &Path, conn: &Connection) → usize  :128-191
-```
-
 ### crates/raios-core/src/db/wf_sessions.rs
 ```
 pub struct SessionRow  :105-113
@@ -104,7 +85,7 @@ pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast:
 
 ### crates/raios-runtime/src/daemon/lifecycle.rs
 ```
-pub async fn start_lifecycle_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration, standby_days: u64, archive_days: u64,)  :16-123
+pub async fn start_lifecycle_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration, standby_days: u64, archive_days: u64,)  :18-127
 ```
 
 ### crates/raios-runtime/src/daemon/scheduler.rs
