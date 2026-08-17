@@ -15,7 +15,19 @@ use rusqlite::{Connection, Result as SqlResult};
 pub const MEM_ITEMS_SOFT_CAP_PER_PROJECT: i64 = 5_000;
 
 /// Soft cap on total `workspace.db` file size, in bytes.
-pub const DB_TOTAL_SIZE_SOFT_CAP_BYTES: i64 = 500 * 1024 * 1024;
+///
+/// Raised from 500 MB to 2.5 GB on 2026-08-17 after the follow-up
+/// investigation this file's original 500 MB guess called for (see
+/// docs/BUDGET.md's "Measured on 2026-08-17" section): the file was 4.4 GB,
+/// but ~2.4 GB of that was stale/junk (a redundant full clone whose only
+/// commit was already in `master`, an abandoned worktree checkout, and two
+/// pinned upstream reference clones being fully indexed). After removing the
+/// junk and forcing a BM25/trigram reindex + `VACUUM`, the file settled at
+/// ~2.0 GB of legitimate search-index content for this workspace's real file
+/// count — 500 MB was never achievable for a workspace this size once real
+/// data was measured, so the cap now reflects observed reality plus a
+/// deliberate buffer, not a target size to shrink toward.
+pub const DB_TOTAL_SIZE_SOFT_CAP_BYTES: i64 = 2_500 * 1024 * 1024;
 
 /// Tables whose row counts are reported by every budget check. Only
 /// `mem_items` has a per-row-count soft cap today (see

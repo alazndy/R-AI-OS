@@ -497,7 +497,7 @@ impl McpServer {
             || path.join("go.sum").exists();
         let project_type = raios_core::core::build::detect_type(&path);
         let has_memory = path.join("memory.md").exists();
-        let has_sigmap = path.join("SIGMAP.md").exists();
+        let has_sigmap = raios_core::entities::has_sigmap_context(&path);
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

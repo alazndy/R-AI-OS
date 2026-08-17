@@ -404,7 +404,7 @@ impl App {
                 if !p.local_path.join("memory.md").exists() {
                     stats.no_memory += 1;
                 }
-                if !p.local_path.join("SIGMAP.md").exists() {
+                if !raios_core::entities::has_sigmap_context(&p.local_path) {
                     stats.no_sigmap += 1;
                 }
                 if raios_runtime::filebrowser::git_is_dirty(&p.local_path) == Some(true) {

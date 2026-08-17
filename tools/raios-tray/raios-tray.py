@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import platform
 import shlex
@@ -44,37 +43,13 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QSystemTrayIcon,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-logger = logging.getLogger("raios-tray")
-
-# GTK + AyatanaAppIndicator3 (native Wayland tray on GNOME)
-_gi_path = "/usr/lib/python3/dist-packages"
-if _gi_path not in sys.path:
-    sys.path.insert(0, _gi_path)
-os.environ.setdefault("GI_TYPELIB_PATH", "/usr/lib/x86_64-linux-gnu/girepository-1.0")
-
-import gi  # noqa: E402
-gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
-
-try:
-    gi.require_version("AyatanaAppIndicator3", "0.1")
-    from gi.repository import AyatanaAppIndicator3 as AppIndicator3
-except ValueError:
-    gi.require_version("AppIndicator3", "0.1")
-    from gi.repository import AppIndicator3
-
-try:
-    gi.require_version("Notify", "0.7")
-    from gi.repository import Notify as _GtkNotify
-    _GTK_NOTIFY = True
-except ValueError:
-    _GtkNotify = None
-    _GTK_NOTIFY = False
+from desktop_runtime import detect_desktop_session, tray_host_guidance
 
 API_BASE = "http://127.0.0.1:42071"
 REFRESH_SECONDS = 15
@@ -120,13 +95,11 @@ def _is_dark_mode() -> bool:
             out = subprocess.run(args, capture_output=True, text=True, timeout=1).stdout.lower()
             if "dark" in out:
                 return True
-        except Exception as e:
-            logger.debug("Failed to detect dark mode via %s: %s", args[0], e)
+        except Exception:
             pass
     try:
         return QApplication.palette().color(QPalette.Window).lightness() < 128
-    except Exception as e:
-        logger.debug("Failed to detect dark mode via palette: %s", e)
+    except Exception:
         return False
 
 
@@ -246,7 +219,6 @@ TOKEN_CANDIDATES = (
 USAGE_PATH = CONFIG_DIR / "tray-usage.json"
 CACHE_PATH = CONFIG_DIR / "tray-projects-cache.json"
 PROJECTS_CONFIG_PATH = CONFIG_DIR / "tray-projects-config.json"
-LOG_PATH = CONFIG_DIR / "tray.log"
 DIRTY_STATUS_CACHE: dict[str, tuple[float, bool, tuple[float, float]]] = {}
 
 MEM_TYPE_COLORS_DARK = {
@@ -290,8 +262,7 @@ def api_get(path: str, token: str):
     try:
         with urllib.request.urlopen(request, timeout=4) as response:
             return json.loads(response.read())
-    except Exception as e:
-        logger.debug("api_get failed for path %s: %s", path, e)
+    except Exception:
         return None
 
 
@@ -352,8 +323,7 @@ def load_mem_items(project_key: str | None = None, limit: int = 100) -> list[dic
             ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
-    except Exception as e:
-        logger.debug("load_memories failed: %s", e)
+    except Exception:
         return []
 
 
@@ -369,8 +339,7 @@ def load_tasks(limit: int = 50) -> list[dict]:
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
-    except Exception as e:
-        logger.debug("load_tasks failed: %s", e)
+    except Exception:
         return []
 
 
@@ -386,8 +355,7 @@ def add_task(text: str, project: str | None = None) -> bool:
         conn.commit()
         conn.close()
         return True
-    except Exception as e:
-        logger.debug("add_task failed: %s", e)
+    except Exception:
         return False
 
 
@@ -400,8 +368,7 @@ def complete_task(task_id: int) -> bool:
         conn.commit()
         conn.close()
         return True
-    except Exception as e:
-        logger.debug("complete_task failed: %s", e)
+    except Exception:
         return False
 
 
@@ -414,8 +381,7 @@ def delete_task(task_id: int) -> bool:
         conn.commit()
         conn.close()
         return True
-    except Exception as e:
-        logger.debug("delete_task failed: %s", e)
+    except Exception:
         return False
 
 
@@ -453,18 +419,9 @@ def find_existing_command(candidates: tuple[str, ...]) -> str | None:
 
 
 def open_terminal(project_path: str, command: str) -> bool:
-    """Launch a terminal running `command` in `project_path`.
-
-    `command` is the raw, unquoted program invocation (e.g. "claude") — this
-    function is the single place responsible for quoting it correctly for
-    whichever shell/interpreter the target platform actually hands it to.
-    Callers must never pre-quote: each platform branch below embeds it into
-    a different shell (bash, AppleScript, PowerShell) with different escaping
-    rules, so quoting done by a caller for one shell is wrong for the others.
-    """
     system = detect_platform()
     quoted_path = shlex.quote(project_path)
-    quoted_command = f"cd {quoted_path} && exec {shlex.quote(command)}"
+    quoted_command = f"cd {quoted_path} && exec {command}"
 
     try:
         if system == "linux":
@@ -483,26 +440,18 @@ def open_terminal(project_path: str, command: str) -> bool:
             return False
 
         if system == "darwin":
-            # AppleScript double-quoted string literal: backslashes must be
-            # escaped before quotes, or a pre-existing backslash (e.g. from
-            # shlex.quote's '\'' escape for an embedded single quote) would
-            # combine with the next replacement into a bogus escape sequence.
-            escaped_command = quoted_command.replace("\\", "\\\\").replace('"', '\\"')
             apple_script = (
                 'tell application "Terminal"\n'
                 "activate\n"
-                f'do script "{escaped_command}"\n'
+                f'do script "{quoted_command.replace(chr(34), chr(92) + chr(34))}"\n'
                 "end tell\n"
             )
             subprocess.Popen(["osascript", "-e", apple_script])
             return True
 
         if system == "windows":
-            # PowerShell single-quoted string literal: embedded single quotes
-            # are escaped by doubling, not via POSIX shlex rules.
-            ps_command = "'" + command.replace("'", "''") + "'"
             subprocess.Popen(
-                ["cmd", "/c", "start", "R-AI-OS", "powershell", "-NoExit", "-Command", ps_command],
+                ["cmd", "/c", "start", "R-AI-OS", "powershell", "-NoExit", "-Command", command],
                 cwd=project_path,
             )
             return True
@@ -517,7 +466,7 @@ def launch_agent(project_path: str, agent: Agent, project_name: str) -> bool:
     if not command:
         return False
     bump_usage(project_name)
-    return open_terminal(project_path, command)
+    return open_terminal(project_path, shlex.quote(command))
 
 
 def launch_vscode(project_path: str) -> bool:
@@ -1618,23 +1567,11 @@ class RaiosTray(QObject):
         self._task_dialog: TaskListDialog | None = None
         self._fetching = False
 
-        # Native AppIndicator3 icon
-        self._indicator = AppIndicator3.Indicator.new(
-            "raios-tray",
-            "utilities-system-monitor",
-            AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
-        )
-        self._indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
-        self._indicator.set_title(APP_NAME)
-
-        # GTK menu
-        self._gtk_menu = Gtk.Menu()
-        self._indicator.set_menu(self._gtk_menu)
-
-        # Pump GTK events every 50 ms so GTK menu callbacks fire on Qt's main thread
-        self._gtk_pump = QTimer(self)
-        self._gtk_pump.timeout.connect(self._pump_gtk)
-        self._gtk_pump.start(50)
+        self._menu = QMenu()
+        self._tray = QSystemTrayIcon(QIcon.fromTheme("utilities-system-monitor"), app)
+        self._tray.setToolTip(APP_NAME)
+        self._tray.setContextMenu(self._menu)
+        self._tray.show()
 
         # Data refresh
         self.refresh_timer = QTimer(self)
@@ -1645,41 +1582,27 @@ class RaiosTray(QObject):
         self.refresh_timer.start()
         QTimer.singleShot(0, self.refresh)
 
-    # ── GTK helpers ──────────────────────────────────────────────────────────
+    # ── portable tray helpers ─────────────────────────────────────────────────
 
-    def _pump_gtk(self) -> None:
-        ctx = GLib.MainContext.default()
-        while ctx.pending():
-            ctx.iteration(False)
-
-    def _gtk_item(self, label: str, cb=None, sensitive: bool = True) -> Gtk.MenuItem:
-        item = Gtk.MenuItem(label=label)
-        item.set_sensitive(sensitive)
+    def _menu_action(self, label: str, cb=None, sensitive: bool = True) -> QAction:
+        action = QAction(label, self._menu)
+        action.setEnabled(sensitive)
         if cb:
-            item.connect("activate", lambda _: cb())
-        return item
+            action.triggered.connect(cb)
+        return action
 
     def _notify(self, message: str) -> None:
-        if _GTK_NOTIFY:
-            try:
-                n = _GtkNotify.Notification.new(APP_NAME, message, "utilities-system-monitor")
-                n.show()
-            except Exception as e:
-                logger.debug("_notify failed: %s", e)
-                pass
+        self._tray.showMessage(APP_NAME, message, QSystemTrayIcon.Information, 5000)
 
     # ── icon ─────────────────────────────────────────────────────────────────
 
     def _update_icon(self, dirty_count: int) -> None:
         if dirty_count > 0:
-            self._indicator.set_icon_full(
-                "software-update-urgent",
-                f"R-AI-OS – {dirty_count} dirty",
-            )
-            self._indicator.set_title(f"{APP_NAME}  ●{dirty_count}")
+            self._tray.setIcon(QIcon.fromTheme("software-update-urgent"))
+            self._tray.setToolTip(f"{APP_NAME}  ●{dirty_count}")
         else:
-            self._indicator.set_icon_full("utilities-system-monitor", APP_NAME)
-            self._indicator.set_title(APP_NAME)
+            self._tray.setIcon(QIcon.fromTheme("utilities-system-monitor"))
+            self._tray.setToolTip(APP_NAME)
 
     # ── refresh ───────────────────────────────────────────────────────────────
 
@@ -1701,88 +1624,84 @@ class RaiosTray(QObject):
     # ── menu ──────────────────────────────────────────────────────────────────
 
     def rebuild_menu(self) -> None:
-        for child in self._gtk_menu.get_children():
-            self._gtk_menu.remove(child)
-
-        self._gtk_menu.append(self._gtk_item("R-AI-OS / K-AI-RA", sensitive=False))
-        self._gtk_menu.append(Gtk.SeparatorMenuItem())
+        self._menu.clear()
+        self._menu.addAction(self._menu_action("R-AI-OS / K-AI-RA", sensitive=False))
+        self._menu.addSeparator()
 
         if not self.state.projects and not self.state.health:
-            self._gtk_menu.append(self._gtk_item("Loading...", sensitive=False))
+            self._menu.addAction(self._menu_action("Loading...", sensitive=False))
 
         elif not self.state.online:
-            self._gtk_menu.append(self._gtk_item("aiosd offline", sensitive=False))
-            self._gtk_menu.append(self._gtk_item("Start aiosd", self.toggle_daemon))
+            self._menu.addAction(self._menu_action("aiosd offline", sensitive=False))
+            self._menu.addAction(self._menu_action("Start aiosd", self.toggle_daemon))
             cached = self.state.projects or []
             if cached:
-                self._gtk_menu.append(Gtk.SeparatorMenuItem())
-                self._gtk_menu.append(self._gtk_item(f"Cached Projects ({len(cached)})", sensitive=False))
-                self._gtk_menu.append(self._gtk_item("Open Project Manager...", self.open_manage_projects))
+                self._menu.addSeparator()
+                self._menu.addAction(self._menu_action(f"Cached Projects ({len(cached)})", sensitive=False))
+                self._menu.addAction(self._menu_action("Open Project Manager...", self.open_manage_projects))
 
         else:
-            self._gtk_menu.append(self._gtk_item("Daemon", sensitive=False))
-            self._gtk_menu.append(self._gtk_item(
+            self._menu.addAction(self._menu_action("Daemon", sensitive=False))
+            self._menu.addAction(self._menu_action(
                 f"aiosd  CPU {self.state.aiosd_cpu:.1f}%  {self.state.aiosd_ram_mb:.0f} MB",
                 sensitive=False,
             ))
             if (self.state.health or {}).get("needs_human_approval"):
-                self._gtk_menu.append(self._gtk_item("Human approval required", sensitive=False))
-            self._gtk_menu.append(self._gtk_item("Stop aiosd", self.toggle_daemon))
+                self._menu.addAction(self._menu_action("Human approval required", sensitive=False))
+            self._menu.addAction(self._menu_action("Stop aiosd", self.toggle_daemon))
 
             if self.state.dirty_projects:
-                self._gtk_menu.append(self._gtk_item(
+                self._menu.addAction(self._menu_action(
                     f"● {len(self.state.dirty_projects)} dirty projects", sensitive=False,
                 ))
 
-            self._gtk_menu.append(Gtk.SeparatorMenuItem())
+            self._menu.addSeparator()
 
             managed_config = load_projects_config()
             pinned = [p for p in managed_config.get("projects", []) if p.get("pinned")]
             project_count = len(self.state.projects or [])
             lbl = "Cached Projects" if self.state.projects_from_cache else "Projects"
-            self._gtk_menu.append(self._gtk_item(f"{lbl}: {project_count}", self.open_manage_projects))
+            self._menu.addAction(self._menu_action(f"{lbl}: {project_count}", self.open_manage_projects))
             if pinned:
-                self._gtk_menu.append(self._gtk_item(f"Pinned: {len(pinned)}", self.open_manage_projects))
-            self._gtk_menu.append(self._gtk_item("Open Project Manager...", self.open_manage_projects))
+                self._menu.addAction(self._menu_action(f"Pinned: {len(pinned)}", self.open_manage_projects))
+            self._menu.addAction(self._menu_action("Open Project Manager...", self.open_manage_projects))
 
-        self._gtk_menu.append(Gtk.SeparatorMenuItem())
-        self._gtk_menu.append(self._gtk_item("Manage Projects...", self.open_manage_projects))
+        self._menu.addSeparator()
+        self._menu.addAction(self._menu_action("Manage Projects...", self.open_manage_projects))
 
         # ── Memory section ────────────────────────────────────────────────────
-        self._gtk_menu.append(Gtk.SeparatorMenuItem())
+        self._menu.addSeparator()
         mem_items = self.state.mem_items
         if mem_items:
             latest = mem_items[0]
             itype = latest.get("item_type", "?")
             title = latest.get("title", latest.get("slug", "?"))
             label = f"✦ [{itype}] {title[:48]}"
-            self._gtk_menu.append(self._gtk_item(label, sensitive=False))
-            self._gtk_menu.append(
-                self._gtk_item(f"Browse Memory ({len(mem_items)})…", self.open_memory_browser)
+            self._menu.addAction(self._menu_action(label, sensitive=False))
+            self._menu.addAction(
+                self._menu_action(f"Browse Memory ({len(mem_items)})…", self.open_memory_browser)
             )
         else:
-            self._gtk_menu.append(self._gtk_item("Memory (empty)", self.open_memory_browser))
+            self._menu.addAction(self._menu_action("Memory (empty)", self.open_memory_browser))
 
         # ── Tasks section ─────────────────────────────────────────────────────
-        self._gtk_menu.append(Gtk.SeparatorMenuItem())
+        self._menu.addSeparator()
         pending = self.state.tasks
         if pending:
-            self._gtk_menu.append(self._gtk_item(
+            self._menu.addAction(self._menu_action(
                 f"☑ {len(pending)} task(s) pending", self.open_task_list
             ))
         else:
-            self._gtk_menu.append(self._gtk_item("Tasks (empty)", self.open_task_list))
-        self._gtk_menu.append(self._gtk_item("+ Add Task...", self.open_quick_add_task))
+            self._menu.addAction(self._menu_action("Tasks (empty)", self.open_task_list))
+        self._menu.addAction(self._menu_action("+ Add Task...", self.open_quick_add_task))
 
-        self._gtk_menu.append(Gtk.SeparatorMenuItem())
-        self._gtk_menu.append(self._gtk_item("aiosd Settings", self.open_settings))
-        self._gtk_menu.append(self._gtk_item("Open Config Directory", self.open_config_directory))
-        self._gtk_menu.append(self._gtk_item("Open raios", self.open_raios_cli))
-        self._gtk_menu.append(self._gtk_item("Refresh", self.refresh))
-        self._gtk_menu.append(Gtk.SeparatorMenuItem())
-        self._gtk_menu.append(self._gtk_item("Quit", self.app.quit))
-
-        self._gtk_menu.show_all()
+        self._menu.addSeparator()
+        self._menu.addAction(self._menu_action("aiosd Settings", self.open_settings))
+        self._menu.addAction(self._menu_action("Open Config Directory", self.open_config_directory))
+        self._menu.addAction(self._menu_action("Open raios", self.open_raios_cli))
+        self._menu.addAction(self._menu_action("Refresh", self.refresh))
+        self._menu.addSeparator()
+        self._menu.addAction(self._menu_action("Quit", self.app.quit))
 
     # ── dialogs ───────────────────────────────────────────────────────────────
 
@@ -1890,6 +1809,8 @@ class RaiosTray(QObject):
 
 
 def validate_environment() -> str | None:
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        return tray_host_guidance(detect_desktop_session())
     return None
 
 
@@ -1918,21 +1839,15 @@ def _apply_dark_palette(app: QApplication) -> None:
 
 
 def main() -> int:
-    ensure_parent(LOG_PATH)
-    logging.basicConfig(
-        filename=LOG_PATH,
-        level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-    # GTK must be initialized before QApplication grabs the display
-    Gtk.init([])
-    if _GTK_NOTIFY:
-        _GtkNotify.init(APP_NAME)
-
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName(APP_NAME)
     app.setStyle("Fusion")
+
+    environment_error = validate_environment()
+    if environment_error:
+        print(f"{APP_NAME}: {environment_error}", file=sys.stderr)
+        return 1
 
     if _is_dark_mode():
         _apply_dark_palette(app)

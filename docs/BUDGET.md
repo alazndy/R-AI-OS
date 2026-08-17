@@ -12,7 +12,7 @@ This is the ratchet checklist for that growth — read-only today, checked by
 | Table / metric | Soft cap | On exceed |
 |---|---|---|
 | `mem_items` (per `project_key`) | 5,000 rows | **warn** — `raios health` prints the offending project(s); distillation/pruning should be catching this before it does |
-| `workspace.db` total file size | 500 MB | **warn** — `raios health` flags `OVER CAP`; nothing blocks yet |
+| `workspace.db` total file size | 2.5 GB | **warn** — `raios health` flags `OVER CAP`; nothing blocks yet |
 | `cp_tasks` | — (counted only) | none yet — establishing a baseline |
 | `cp_agent_runs` | — (counted only) | none yet — establishing a baseline |
 | `cp_wrapper_events` | — (counted only) | explicit wrapper-note evidence; bounded to 500 characters per row and retained for run auditability |
@@ -52,6 +52,46 @@ provisional until a follow-up task investigates what's actually consuming
 the 2.2 GB (likely candidates: WAL file not checkpointing, Cortex vector
 blobs, or `audit_log`/`tool_traces` growth — out of scope for this
 read-only reporting task).
+
+## Measured on 2026-08-17 — the 2026-07-15 follow-up
+
+`workspace.db` had grown to **4.4 GB**. It was not WAL/Cortex-blob/audit_log
+growth — the dominant consumers were `bm25_postings` (2.2 GB) and four
+trigram tables (~1.5 GB combined), i.e. the BM25/trigram search engines
+indexing more than intended:
+
+- `/home/alaz/dev/core/R-AI-OS-audit` — a full second clone of this repo made
+  for a one-off audit task over a month earlier. Working tree was clean and
+  its only commit was already present in `master`'s history — pure
+  redundancy. 5.2 GB on disk (5.0 GB of that was just an uncleaned `target/`
+  build directory), 390 files indexed.
+- `/home/alaz/dev/core/R-AI-OS-worktrees/raios-tray-desktop-independent` — an
+  orphaned worktree checkout with real uncommitted work (a GTK/AppIndicator3
+  → portable Qt `QSystemTrayIcon` rewrite of `raios-tray.py`) that had never
+  been merged. Recovered into `master` (commit `20e9743`) before deleting the
+  worktree. 1.1 GB, 494 files indexed.
+- `JUCE` and `ghostty` — pinned upstream reference clones (not authored
+  workspace source) sitting directly under `dev/core` and `dev/tools`,
+  contributing ~4,200 indexed files of third-party framework/terminal code.
+  Added to `search::indexer::SKIP_DIRS` (commit `6a59937`) so they no longer
+  get walked at all.
+
+Fix sequence, in order: (1) recover any real uncommitted work out of stale
+worktrees/clones before touching them, (2) delete the redundant/stale
+directories, (3) add the reference clones to `SKIP_DIRS`, (4) force a full
+BM25 + trigram reindex (`raios search "x" --reindex --dir ~/dev`, `raios
+locate "x" --reindex --dir ~/dev`) so already-cached rows for now-gone/now-
+skipped paths get pruned — an incremental (non-forced) reindex only compares
+mtimes and won't evict rows for paths that vanished, (5) stop `aiosd` and run
+`sqlite3 workspace.db "VACUUM;"` — SQLite does not shrink the file on
+`DELETE` without an explicit `VACUUM`, restart `aiosd`.
+
+Result: **4.4 GB → 2.0 GB**. The remaining ~2 GB is legitimate index content
+for this workspace's real file count (~16,000 files across `bm25_postings` +
+trigram tables) — not further junk. The soft cap above was raised from
+500 MB to 2.5 GB accordingly: 500 MB was an initial guess made before any
+real measurement existed, and was never achievable for a workspace this
+size once actual data was in hand.
 
 ## PR review checklist
 

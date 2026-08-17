@@ -6,7 +6,8 @@ Cross-platform system tray for R-AI-OS. The app talks to the local `aiosd` HTTP 
 
 ## Supported Platforms
 
-- Linux desktop sessions with a working system tray / StatusNotifier host
+- Linux desktop sessions with a working StatusNotifier host, including Budgie,
+  GNOME with an indicator host, and Plasma
 - macOS 13+ with a logged-in GUI session
 - Windows 10/11 with a logged-in desktop session
 
@@ -15,6 +16,7 @@ Cross-platform system tray for R-AI-OS. The app talks to the local `aiosd` HTTP 
 - Python 3.10+
 - PySide6 for tray UI and dialogs
 - psutil for cross-platform process inspection
+- Qt's standard system-tray API; no GNOME Shell extension or GTK event loop is required
 
 ## Files
 
@@ -43,6 +45,9 @@ python3 raios-tray.py
 
 ### Linux
 
+- Uses the desktop's StatusNotifier/system-tray host. Budgie needs its
+  StatusNotifier/Indicator applet enabled; GNOME needs an indicator host; Plasma
+  needs its System Tray widget.
 - Prefers `ptyxis`, then `gnome-terminal`, `konsole`, `xfce4-terminal`, and `x-terminal-emulator`
 - `raios-tray.service` is a user service and expects a graphical login session
 

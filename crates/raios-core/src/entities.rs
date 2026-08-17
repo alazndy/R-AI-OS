@@ -197,6 +197,25 @@ fn dedup_nested(mut projects: Vec<EntityProject>) -> Vec<EntityProject> {
     result
 }
 
+/// Whether a project has a live sigmap context map.
+///
+/// Older sigmap versions (and the workflow AGENT_CONSTITUTION.md Sec 7
+/// describes) write a standalone `SIGMAP.md`. The sigmap version installed
+/// as of 2026-08-17 (v8.18.0+) no longer produces that file by default —
+/// it writes multi-adapter signature blocks into `CLAUDE.md`/`AGENTS.md`/
+/// `.github/copilot-instructions.md`/`.github/gemini-context.md` instead,
+/// dropping `gen-context.config.json` as its init marker. Checking only
+/// for `SIGMAP.md` made every project using the current sigmap read as
+/// "missing" across `raios health`/`reflect`/`pre-flight`/the TUI, even
+/// right after a real `sigmap` run. `gen-context.config.json` is the one
+/// file sigmap itself creates that nothing else plausibly would, so it's
+/// the reliable signal for the new output style — checking for
+/// `AGENTS.md`/`CLAUDE.md` presence alone would false-positive on any
+/// project that hand-writes those for unrelated reasons.
+pub fn has_sigmap_context(path: &Path) -> bool {
+    path.join("SIGMAP.md").exists() || path.join("gen-context.config.json").exists()
+}
+
 /// Fallback: read old entities.json (used if SQLite unavailable)
 fn load_entities_json_fallback(dev_ops: &Path) -> Vec<EntityProject> {
     #[derive(Deserialize)]
@@ -259,5 +278,26 @@ mod tests {
             no_status.status, "—",
             "projects without a parseable status line still get returned, not filtered"
         );
+    }
+
+    #[test]
+    fn has_sigmap_context_true_for_legacy_sigmap_md() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("SIGMAP.md"), "# SigMap\n").unwrap();
+        assert!(has_sigmap_context(tmp.path()));
+    }
+
+    #[test]
+    fn has_sigmap_context_true_for_current_sigmap_init_marker() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("gen-context.config.json"), "{}").unwrap();
+        assert!(has_sigmap_context(tmp.path()));
+    }
+
+    #[test]
+    fn has_sigmap_context_false_when_neither_marker_present() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("AGENTS.md"), "# hand-written, not sigmap\n").unwrap();
+        assert!(!has_sigmap_context(tmp.path()));
     }
 }

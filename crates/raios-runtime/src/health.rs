@@ -54,7 +54,7 @@ pub fn check_project_fast(proj: &EntityProject) -> ProjectHealth {
     let git_dirty = crate::filebrowser::git_is_dirty(path);
     let remote_url = crate::filebrowser::git_get_remote_url(path);
     let has_memory = path.join("memory.md").exists();
-    let has_sigmap = path.join("SIGMAP.md").exists();
+    let has_sigmap = raios_core::entities::has_sigmap_context(path);
     let (compliance_score, compliance_grade) = compute_compliance(path);
     let constitution_issues = check_constitution(path);
     let (graphify_done, graph_report) = check_graphify(path);
@@ -125,7 +125,7 @@ pub fn check_project(proj: &EntityProject) -> ProjectHealth {
     let git_dirty = crate::filebrowser::git_is_dirty(path);
     let remote_url = crate::filebrowser::git_get_remote_url(path);
     let has_memory = path.join("memory.md").exists();
-    let has_sigmap = path.join("SIGMAP.md").exists();
+    let has_sigmap = raios_core::entities::has_sigmap_context(path);
     let (compliance_score, compliance_grade) = compute_compliance(path);
     let constitution_issues = check_constitution(path);
     let (graphify_done, graph_report) = check_graphify(path);
