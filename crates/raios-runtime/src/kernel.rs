@@ -37,7 +37,9 @@ pub struct Kernel {
 fn flatten_join_result(res: std::result::Result<Result<()>, tokio::task::JoinError>) -> Result<()> {
     match res {
         Ok(inner) => inner,
-        Err(join_err) => Err(anyhow::anyhow!("protocol task terminated abnormally: {join_err}")),
+        Err(join_err) => Err(anyhow::anyhow!(
+            "protocol task terminated abnormally: {join_err}"
+        )),
     }
 }
 
@@ -464,7 +466,10 @@ mod tests {
             Ok(Err(anyhow::anyhow!("address already in use")));
         let outcome = flatten_join_result(res);
         assert!(outcome.is_err());
-        assert!(outcome.unwrap_err().to_string().contains("address already in use"));
+        assert!(outcome
+            .unwrap_err()
+            .to_string()
+            .contains("address already in use"));
     }
 
     #[tokio::test]
