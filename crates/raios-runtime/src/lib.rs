@@ -24,6 +24,7 @@ pub mod product_factory;
 pub mod proxy_store;
 pub mod radar;
 pub mod refactor_scan;
+pub mod reflect_scoring;
 pub mod search;
 pub mod sentinel;
 pub mod server;

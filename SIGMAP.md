@@ -37,12 +37,29 @@ crates/raios-surface-tui/src/setup_wizard/templates.rs:107  # TODO: implement la
 
 ## changes (last 10 commits — 3 hours ago)
 ```
-tools/raios-tray/desktop_runtime.py           +DesktopKind  +DesktopSession  +detect_desktop_session  +tray_host_guidance
-tools/raios-tray/raios-tray.py                +_menu_action  ~is  ~_pump_gtk  ~_gtk_item
 crates/raios-runtime/src/search/indexer.rs    +Component
 ```
 
 ## crates
+
+### crates/raios-core/src/db/activity_events.rs
+```
+pub struct ActivityEvent  :38-43
+pub struct DigestWindow  :47-51
+pub fn log_activity_event(conn: &Connection, source: &str, project: Option<&str>, tier: &str, summary: &str, detail_json: Option<&str>,) → rusqlite::Result<()>  :19-34
+pub fn poll_important_events(conn: &Connection, client_id: &str,) → rusqlite::Result<Vec<Activi...  :79-108
+pub fn poll_digest_window(conn: &Connection, client_id: &str, digest_interval_secs: i64,) → rusqlite::Result<Option<Dig...  :114-157
+pub fn prune_activity_events_older_than(conn: &Connection, days: i64) → rusqlite::Result<usize>  :161-166
+```
+
+### crates/raios-core/src/db/mod.rs
+```
+pub fn open_db() → Result<Connection>  :64-73
+pub fn cp_log_append(conn: &Connection, sender: &str, content: &str) → Result<()>  :90-103
+pub fn cp_logs_replay(conn: &Connection, limit: usize) → Result<Vec<(String, String,...  :106-119
+pub fn migrate_existing(conn: &Connection) → Result<()>  :121-123
+pub fn import_from_json(dev_ops: &Path, conn: &Connection) → usize  :128-191
+```
 
 ### crates/raios-core/src/entities.rs
 ```
@@ -89,7 +106,7 @@ pub fn check() → DbBudgetReport  :49-54
 
 ### crates/raios-surface-cli/src/cli/reflect.rs
 ```
-pub fn cmd_reflect(dev_ops_path: &Path, json: bool)  :16-30
+pub fn cmd_reflect(dev_ops_path: &Path, json: bool)  :5-19
 ```
 
 ### crates/raios-surface-mcp/src/mcp/tools_workspace.rs
@@ -656,6 +673,13 @@ impl RefactorConfig  :98-122
   pub fn for_ext(&self, ext: &str) → RefactorThresholds  :99-99
 pub fn scan_project(root: &Path) → RefactorReport  :142-144
 pub fn scan_project_with(root: &Path, config: &RefactorConfig) → RefactorReport  :146-183
+```
+
+### crates/raios-runtime/src/reflect_scoring.rs
+```
+pub struct ProjectSnapshot  :6-14
+pub fn snapshot(p: &EntityProject) → ProjectSnapshot  :16-37
+pub fn build_recommendations(snaps: &[ProjectSnapshot]) → Vec<String>  :73-117
 ```
 
 ### crates/raios-runtime/src/search/hybrid.rs
@@ -1532,12 +1556,82 @@ pub fn render_master(frame: &mut Frame, area: Rect, app: &App)  :272-390
 
 ## tools
 
+### tools/raios-factory-ui/index.html
+```
+title: R-AI-OS Product Factory — Visual Control Studio
+div#root
+```
+
+### tools/raios-factory-ui/pnpm-lock.yaml
+```
+keys: [lockfileVersion, settings, importers, packages, snapshots]
+```
+
+### tools/raios-factory-ui/README.md
+```
+h1 R-AI-OS Product Factory — Visual Control Studio
+h2 🚀 Overview
+h2 ⚡ Quick Start
+h3 1. Development Mode
+h3 2. Production Build
+h2 ✨ Features & Architecture
+code-fence plain
+code-fence ---
+code-fence bash
+```
+
+### tools/raios-factory-ui/src/App.css
+```
+.counter
+.hero
+.ticks
+```
+
+### tools/raios-factory-ui/src/index.css
+```
+var --bg-dark
+var --card-bg
+var --border-color
+var --accent-cyan
+var --accent-emerald
+var --accent-amber
+var --accent-rose
+var --accent-violet
+.glass-panel
+.glass-card
+.glass-card
+.glow-cyan
+.glow-emerald
+.glow-amber
+.glow-violet
+.animate-pulse-glow
+```
+
 ### tools/raios-tray/desktop_runtime.py
 ```
 class DesktopKind(str, Enum)  :11-15
 @dataclass DesktopSession(kind, name, is_wayland)  :19-22
 def detect_desktop_session(environ: Mapping[str, str] | None) → DesktopSession  :25-39
 def tray_host_guidance(session: DesktopSession) → str  :42-49
+```
+
+### tools/raios-tray/handoff.md
+```
+h1 raios-tray Codex Handoff Prompt
+h2 Kimlik
+h2 Proje
+h2 Son Mimari Karar
+h2 Mevcut Durum
+h2 Şu An Beklenen UI
+h2 Yakın Zamandaki Önemli Commitler
+h2 Kritik Tespit
+h2 Servis
+h2 Manuel Çalıştırma
+h2 Kullanıcıdan Gelen Son Geri Bildirim
+h2 Bir Sonraki Agent İçin Hedef
+h2 Not
+code-fence bash
+code-fence plain
 ```
 
 ### tools/raios-tray/memory.md
@@ -1592,76 +1686,6 @@ h3 Linux
 h3 macOS
 h3 Windows
 h2 Runtime Expectations
-code-fence bash
-code-fence plain
-```
-
-### tools/raios-factory-ui/index.html
-```
-title: R-AI-OS Product Factory — Visual Control Studio
-div#root
-```
-
-### tools/raios-factory-ui/pnpm-lock.yaml
-```
-keys: [lockfileVersion, settings, importers, packages, snapshots]
-```
-
-### tools/raios-factory-ui/README.md
-```
-h1 R-AI-OS Product Factory — Visual Control Studio
-h2 🚀 Overview
-h2 ⚡ Quick Start
-h3 1. Development Mode
-h3 2. Production Build
-h2 ✨ Features & Architecture
-code-fence plain
-code-fence ---
-code-fence bash
-```
-
-### tools/raios-factory-ui/src/App.css
-```
-.counter
-.hero
-.ticks
-```
-
-### tools/raios-factory-ui/src/index.css
-```
-var --bg-dark
-var --card-bg
-var --border-color
-var --accent-cyan
-var --accent-emerald
-var --accent-amber
-var --accent-rose
-var --accent-violet
-.glass-panel
-.glass-card
-.glass-card
-.glow-cyan
-.glow-emerald
-.glow-amber
-.glow-violet
-.animate-pulse-glow
-```
-
-### tools/raios-tray/handoff.md
-```
-h1 raios-tray Codex Handoff Prompt
-h2 Kimlik
-h2 Proje
-h2 Son Mimari Karar
-h2 Mevcut Durum
-h2 Şu An Beklenen UI
-h2 Yakın Zamandaki Önemli Commitler
-h2 Kritik Tespit
-h2 Servis
-h2 Manuel Çalıştırma
-h2 Kullanıcıdan Gelen Son Geri Bildirim
-h2 Bir Sonraki Agent İçin Hedef
-h2 Not
 code-fence bash
 code-fence plain
 ```
