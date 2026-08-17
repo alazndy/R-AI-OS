@@ -64,6 +64,13 @@ pub(crate) const SKIP_DIRS: &[&str] = &[
     "archives",
     "Gemini_CLI_System_Backup",
     "backups",
+    // Pinned upstream reference clones kept for local lookup, not authored
+    // workspace source. Found 2026-08-17 alongside the workspace.db over-cap
+    // audit: JUCE (juce-framework/JUCE) and ghostty (ghostty-org/ghostty)
+    // together indexed ~4,200 files of third-party framework/terminal source
+    // that never surface anything relevant to this workspace's own search.
+    "JUCE",
+    "ghostty",
 ];
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -480,6 +487,22 @@ mod tests {
         fs::write(ws.join("archives/old.rs"), "fn archived() {}").unwrap();
         fs::create_dir_all(ws.join("Gemini_CLI_System_Backup")).unwrap();
         fs::write(ws.join("Gemini_CLI_System_Backup/old.rs"), "fn backup() {}").unwrap();
+
+        let files = fs_mtimes(&ws);
+        assert_eq!(files.len(), 1);
+        assert!(files.keys().next().unwrap().ends_with("live.rs"));
+    }
+
+    #[test]
+    fn fs_mtimes_skips_pinned_upstream_reference_clones() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(ws.join("live.rs"), "fn live() {}").unwrap();
+        fs::create_dir_all(ws.join("JUCE")).unwrap();
+        fs::write(ws.join("JUCE/juce_Component.cpp"), "class Component {};").unwrap();
+        fs::create_dir_all(ws.join("ghostty")).unwrap();
+        fs::write(ws.join("ghostty/README.md"), "# ghostty terminal").unwrap();
 
         let files = fs_mtimes(&ws);
         assert_eq!(files.len(), 1);
