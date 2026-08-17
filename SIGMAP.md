@@ -89,14 +89,11 @@ pub fn find_graphify_script(dev_ops: &Path) → Option<PathBuf>  :250-261
 pub fn validate_file(path: &Path, proj: &EntityProject) → Vec<ValidationError>  :266-292
 ```
 
-### crates/raios-runtime/src/search/indexer.rs
+### crates/raios-runtime/src/reflect_scoring.rs
 ```
-pub struct SearchResult  :77-83
-pub struct ProjectIndex  :89-96
-impl ProjectIndex  :98-246
-  pub fn build(root: &Path) → Result<Self>  :99-99
-  pub fn search(&self, query: &str) → Vec<SearchResult>  :165-165
-  pub fn load_or_build(root: &Path, db_path: &Path, force: bool) → Result<Self>  :225-225
+pub struct ProjectSnapshot  :6-14
+pub fn snapshot(p: &EntityProject) → ProjectSnapshot  :16-37
+pub fn build_recommendations(snaps: &[ProjectSnapshot]) → Vec<String>  :73-117
 ```
 
 ### crates/raios-runtime/src/system_scan/db_budget.rs
@@ -369,9 +366,9 @@ pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcas
 ```
 pub struct Server  :11-16
 impl Server  :18-143
-  pub fn new(state: Arc<RwLock<DaemonState>>) → Self  :19-19
-  pub async fn run_with_tx(&self, tx: broadcast::Sender<String>) → anyhow::Result<()>  :33-33
-  pub async fn run(&self) → anyhow::Result<()>  :37-37
+pub fn new  :19-19
+pub async fn run_with_tx  :33-33
+pub async fn run  :37-37
 ```
 
 ### crates/raios-runtime/src/daemon/state.rs
@@ -385,17 +382,6 @@ impl DaemonState  :70-112
   pub fn new() → Arc<RwLock<Self>>  :71-71
   pub fn refresh_pending_from_db(&mut self)  :77-77
   pub fn sync_payload(&self) → serde_json::Value  :99-99
-```
-
-### crates/raios-runtime/src/daemon/validation.rs
-```
-pub async fn start_validation_worker(state: Arc<RwLock<DaemonState>>, mut tx_rx: broadcast::Receiver<String>, tx_broadcast: broadcast::Sender<String>,)  :7-70
-```
-
-### crates/raios-runtime/src/daemon_client.rs
-```
-pub fn steer_agent_via_http(agent_id: &str, message: &str, sender: &str) → Result<()>  :42-45
-pub fn steer_agent_at(base_url: &str, token: &str, agent_id: &str, message: &str, sender: &str,) → Result<()>  :54-87
 ```
 
 ### crates/raios-runtime/src/discovery.rs
@@ -675,13 +661,6 @@ pub fn scan_project(root: &Path) → RefactorReport  :142-144
 pub fn scan_project_with(root: &Path, config: &RefactorConfig) → RefactorReport  :146-183
 ```
 
-### crates/raios-runtime/src/reflect_scoring.rs
-```
-pub struct ProjectSnapshot  :6-14
-pub fn snapshot(p: &EntityProject) → ProjectSnapshot  :16-37
-pub fn build_recommendations(snaps: &[ProjectSnapshot]) → Vec<String>  :73-117
-```
-
 ### crates/raios-runtime/src/search/hybrid.rs
 ```
 pub struct HybridResult  :19-32
@@ -689,6 +668,16 @@ pub enum ResultSource  :35-39
 impl ResultSource  :41-49
   pub fn label(&self) → &'static str  :42-42
 pub fn fuse(bm25_results: Vec<BM25Result>, vector_results: Vec<VectorResult>, top_n: usize,) → Vec<HybridResult>  :59-148
+```
+
+### crates/raios-runtime/src/search/indexer.rs
+```
+pub struct SearchResult  :77-83
+pub struct ProjectIndex  :89-96
+impl ProjectIndex  :98-246
+  pub fn build(root: &Path) → Result<Self>  :99-99
+  pub fn search(&self, query: &str) → Vec<SearchResult>  :165-165
+  pub fn load_or_build(root: &Path, db_path: &Path, force: bool) → Result<Self>  :225-225
 ```
 
 ### crates/raios-runtime/src/search/trigram.rs
