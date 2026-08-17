@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 const EPOCH_TS: &str = "1970-01-01T00:00:00Z";
 const TS_FMT: &str = "%Y-%m-%dT%H:%M:%SZ";
@@ -218,7 +218,11 @@ pub fn sync_security_activity_findings(
     project: &str,
     findings: &[(String, String)],
 ) -> rusqlite::Result<usize> {
-    let tx = conn.transaction()?;
+    // Acquire the writer slot before reading the previous finding set. A
+    // deferred transaction can read successfully while another writer holds
+    // the database, then fail immediately when upgrading to a write lock
+    // without honoring the connection's busy timeout.
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let existing: HashSet<String> = {
         let mut stmt =
             tx.prepare("SELECT fingerprint FROM security_notification_state WHERE project = ?1")?;
@@ -494,6 +498,30 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn security_finding_sync_waits_for_an_existing_writer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("activity.db");
+        let mut syncing_conn = Connection::open(&db_path).unwrap();
+        syncing_conn
+            .busy_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        super::super::schema::migrate(&syncing_conn).unwrap();
+
+        let blocker = Connection::open(&db_path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let handle = std::thread::spawn(move || {
+            let finding = vec![("fingerprint-1".to_string(), "critical finding".to_string())];
+            sync_security_activity_findings(&mut syncing_conn, "demo", &finding)
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        blocker.execute_batch("COMMIT").unwrap();
+
+        assert_eq!(handle.join().unwrap().unwrap(), 1);
     }
 
     #[test]
