@@ -64,7 +64,12 @@ pub async fn start_git_worker(
 
                     if proj.status != new_status {
                         if let Some(ref conn) = conn {
-                            log_status_change_as_activity(conn, &proj.name, &proj.status, &new_status);
+                            log_status_change_as_activity(
+                                conn,
+                                &proj.name,
+                                &proj.status,
+                                &new_status,
+                            );
                         }
                         proj.status = new_status;
                         updated = true;
@@ -134,9 +139,14 @@ fn log_status_change_as_activity(
     new_status: &str,
 ) {
     let summary = format!("{project_name}: {old_status} → {new_status}");
-    if let Err(e) =
-        raios_core::db::log_activity_event(conn, "git", Some(project_name), "routine", &summary, None)
-    {
+    if let Err(e) = raios_core::db::log_activity_event(
+        conn,
+        "git",
+        Some(project_name),
+        "routine",
+        &summary,
+        None,
+    ) {
         eprintln!("[Daemon] Failed to log git activity event for {project_name}: {e}");
     }
 }

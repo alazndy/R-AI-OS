@@ -33,36 +33,44 @@ pub(crate) fn emit_security_whispers(
     radar.emit_many(whispers);
 }
 
-/// Persists Critical/High security findings as `activity_events` rows
-/// (tier=important) so notification clients can surface them, independent
-/// of the ephemeral Radar-whisper broadcast `emit_security_whispers`
-/// already does for connected agents.
-pub(crate) fn log_security_whispers_as_activity(
-    conn: &rusqlite::Connection,
+/// Synchronize one project's currently active Critical/High findings and
+/// persist important activity only for findings that are new or reappeared
+/// after being resolved. This is independent of the ephemeral Radar-whisper
+/// broadcast `emit_security_whispers` already provides to connected agents.
+pub(crate) fn sync_security_findings_as_activity(
+    conn: &mut rusqlite::Connection,
     project_name: &str,
     report: &SecurityReport,
 ) {
-    for issue in report
+    let findings: Vec<(String, String)> = report
         .issues
         .iter()
         .filter(|i| matches!(i.severity, SecSev::Critical | SecSev::High))
-    {
-        let summary = format!(
-            "{} [{}] {}",
-            project_name,
-            issue.severity.label(),
-            issue.title
-        );
-        if let Err(e) = raios_core::db::log_activity_event(
-            conn,
-            "audit",
-            Some(project_name),
-            "important",
-            &summary,
-            None,
-        ) {
-            eprintln!("[Daemon] Failed to log security activity event for {project_name}: {e}");
-        }
+        .map(|issue| {
+            let file = issue
+                .file
+                .as_deref()
+                .map(|path| path.to_string_lossy().into_owned());
+            let fingerprint = serde_json::to_string(&(
+                issue.owasp,
+                issue.title,
+                issue.severity.label(),
+                file,
+                issue.line,
+            ))
+            .expect("security finding identity contains only serializable values");
+            let summary = format!(
+                "{} [{}] {}",
+                project_name,
+                issue.severity.label(),
+                issue.title
+            );
+            (fingerprint, summary)
+        })
+        .collect();
+
+    if let Err(e) = raios_core::db::sync_security_activity_findings(conn, project_name, &findings) {
+        eprintln!("[Daemon] Failed to sync security activity for {project_name}: {e}");
     }
 }
 
@@ -121,8 +129,12 @@ pub async fn start_health_worker(
                     let sec_report = scan_project_fast(&proj_path_clone);
                     emit_security_whispers(&proj_name_clone, &sec_report, &radar_clone);
                     match raios_core::db::open_db() {
-                        Ok(conn) => {
-                            log_security_whispers_as_activity(&conn, &proj_name_clone, &sec_report)
+                        Ok(mut conn) => {
+                            sync_security_findings_as_activity(
+                                &mut conn,
+                                &proj_name_clone,
+                                &sec_report,
+                            )
                         }
                         Err(e) => eprintln!(
                             "[Daemon] DB open failed for security activity logging ({proj_name_clone}): {e}"
@@ -234,8 +246,8 @@ mod tests {
     }
 
     #[test]
-    fn log_security_whispers_as_activity_writes_important_row_for_critical() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+    fn sync_security_findings_as_activity_writes_one_event_for_repeated_critical() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap();
 
         let report = SecurityReport {
@@ -254,22 +266,25 @@ mod tests {
             checks_run: 1,
         };
 
-        log_security_whispers_as_activity(&conn, "demo-project", &report);
+        sync_security_findings_as_activity(&mut conn, "demo-project", &report);
+        sync_security_findings_as_activity(&mut conn, "demo-project", &report);
 
-        let (tier, project): (String, Option<String>) = conn
+        let (count, tier, project): (i64, String, Option<String>) = conn
             .query_row(
-                "SELECT tier, project FROM activity_events WHERE source = 'audit'",
+                "SELECT COUNT(*), MIN(tier), MIN(project)
+                 FROM activity_events WHERE source = 'audit'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
+        assert_eq!(count, 1, "an unchanged finding must not notify twice");
         assert_eq!(tier, "important");
         assert_eq!(project.as_deref(), Some("demo-project"));
     }
 
     #[test]
-    fn log_security_whispers_as_activity_ignores_low_and_info_severity() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+    fn sync_security_findings_as_activity_ignores_low_and_info_severity() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap();
 
         let report = SecurityReport {
@@ -288,7 +303,7 @@ mod tests {
             checks_run: 1,
         };
 
-        log_security_whispers_as_activity(&conn, "demo-project", &report);
+        sync_security_findings_as_activity(&mut conn, "demo-project", &report);
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))

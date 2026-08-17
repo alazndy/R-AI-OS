@@ -72,9 +72,9 @@ ask. Two tiers, decided during brainstorming:
 ```sql
 CREATE TABLE activity_events (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts           INTEGER NOT NULL,           -- unix epoch secs
-    source       TEXT NOT NULL,              -- 'health' | 'git' | 'lifecycle'
-                                              -- | 'scheduler' | 'agent_run' | 'audit'
+    ts           TEXT NOT NULL DEFAULT (datetime('now','utc')),
+    source       TEXT NOT NULL,              -- 'git' | 'lifecycle' | 'scheduler'
+                                              -- | 'agent_run' | 'audit'
     project      TEXT,                       -- nullable; NULL = workspace-wide event
     tier         TEXT NOT NULL,              -- 'important' | 'routine'
     summary      TEXT NOT NULL,              -- short human-readable line
@@ -82,32 +82,46 @@ CREATE TABLE activity_events (
 );
 
 CREATE INDEX idx_activity_events_tier_ts ON activity_events(tier, ts);
+CREATE INDEX idx_activity_events_tier_id ON activity_events(tier, id);
 ```
 
 ```sql
 CREATE TABLE notification_cursors (
-    client_id         TEXT PRIMARY KEY,      -- e.g. 'raios-tray', 'kaira-gnome-ext'
-    last_important_ts INTEGER NOT NULL DEFAULT 0,
-    last_digest_ts    INTEGER NOT NULL DEFAULT 0
+    client_id            TEXT PRIMARY KEY,
+    last_important_ts    TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
+    last_digest_ts       TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
+    last_important_id    INTEGER NOT NULL DEFAULT 0,
+    last_digest_event_id INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE security_notification_state (
+    project     TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    summary     TEXT NOT NULL,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now','utc')),
+    PRIMARY KEY(project, fingerprint)
 );
 ```
 
 Cursors live server-side, keyed by a client-supplied `client_id`, so a
 client's poll cadence or restart never causes duplicate or dropped
 notifications — the server always knows exactly what each named client has
-already seen.
+already seen. Event IDs are the delivery boundary; timestamps remain response
+metadata and the digest interval clock. This prevents same-timestamp rows from
+being skipped. `security_notification_state` stores the currently active
+High/Critical finding fingerprints so repeated scans remain quiet while a
+finding persists, but a resolved finding is notified again if it reappears.
 
 ## Producers — trigger rules
 
 | Source | Tier | Trigger | Existing hook point |
 |---|---|---|---|
-| `health` | routine | a project's dirty-file count changed since the last scan | `daemon/health.rs`'s per-project scan loop |
-| `git` | routine | new commit(s) detected on a project's branch | `daemon/git.rs`'s per-project git-status update |
+| `git` | routine | a project's daemon git status changes | `daemon/git.rs`'s per-project git-status update |
 | `lifecycle` | important | status transition (`active`↔`beklemede`↔`archived`) | `daemon/lifecycle.rs`, right after `update_project_status` succeeds |
 | `scheduler` | routine | a cron job fired successfully | `daemon/scheduler.rs`'s fire-success path |
 | `scheduler` | important | a job is overdue by >2× its configured interval | `daemon/scheduler.rs`'s claim/backoff path (same code path fixed 2026-08-17 for the JSON Backup retry-storm bug) |
-| `agent_run` | routine | a `cp_agent_runs` row transitions to `completed`/`failed` with a non-empty diff/commit | `raios-core/src/db/wf_sessions.rs`'s `cp_session_end_with_summary`, right after it writes `run_status`/`task_status` |
-| `audit` | important | a new `audit_log` row is inserted with `severity = CRITICAL` | the existing `record_tool_decision`/audit-insert path |
+| `agent_run` | routine | a run succeeds with a non-empty completion summary | `raios-core/src/db/wf_sessions.rs`'s `cp_session_end_with_summary`, after it writes `run_status`/`task_status` |
+| `audit` | important | a new or reappearing High/Critical security finding is observed | `daemon/health.rs`'s per-project security scan, atomically synchronized with `security_notification_state` |
 
 Each producer writes directly to `activity_events` — no shared "emit event"
 abstraction is introduced in v1 beyond a small `raios_core::db::log_activity_event(...)`
@@ -121,10 +135,10 @@ Two read-only endpoints on the existing HTTP API (Axum, port 42071):
 ```
 GET /api/notifications/important?client_id=<id>
   -> { events: [{ ts, project, summary, source }...], cursor_ts }
-  Server-side: SELECT ... WHERE tier='important' AND ts > cursor.last_important_ts
-  ORDER BY ts. Advances notification_cursors.last_important_ts to the max ts
-  returned (only on a successful client-acknowledged read, i.e. the endpoint
-  itself advances the cursor — no separate ack call).
+  Server-side: SELECT ... WHERE tier='important' AND id > cursor.last_important_id
+  ORDER BY id. Advances notification_cursors.last_important_id to the maximum
+  returned ID and retains the corresponding timestamp in last_important_ts.
+  The endpoint read advances the cursor; there is no separate ack call.
 
 GET /api/notifications/digest?client_id=<id>
   -> { since_ts, until_ts, summary: "<one-paragraph text>",
@@ -132,8 +146,9 @@ GET /api/notifications/digest?client_id=<id>
        event_count } | null (if nothing new)
   Server-side: only fires a non-null digest if now - cursor.last_digest_ts >=
   digest_interval_secs (config-driven, see below); otherwise returns null and
-  does not advance the cursor. When it does fire, groups tier='routine' rows
-  since last_digest_ts into the summary and advances the cursor.
+  does not advance the cursor. When it fires, it snapshots the maximum event
+  ID, groups routine rows in `(last_digest_event_id, snapshot_id]`, then
+  advances both the event-ID boundary and interval timestamp atomically.
 ```
 
 `summary` is built deterministically, no LLM call (the daemon has no model
@@ -153,15 +168,15 @@ Both require the existing session-token auth already used by every other
 
 ## Config
 
-New `[notifications]` section in `config.toml`:
+New field in the existing `[daemon]` section of `config.toml`:
 
 ```toml
-[notifications]
+[daemon]
 digest_interval_secs = 1800   # 30 min default, per brainstorming decision
 ```
 
-Read via `raios_core::config::Config`, same pattern as `[daemon]`'s existing
-interval fields.
+Read via `raios_core::config::Config`, alongside the daemon's existing interval
+fields.
 
 ## Clients
 
@@ -169,7 +184,9 @@ interval fields.
 call to `GET /api/notifications/important`; any returned events are shown via
 the already-working `self._notify()`. A second, independent `QTimer` at
 `digest_interval_secs` polls the digest endpoint and shows one notification
-per non-null response.
+per non-null response. The tray persists a per-install UUID at
+`~/.config/raios/notification-client-id`; if that path cannot be written, it
+uses a deterministic UUID fallback rather than sharing a global cursor.
 
 **`kaira-launcher` GNOME extension**: the existing `fetchRaiosJson` helper
 (already shared between the systray indicator and the Super+Space overlay,
@@ -177,6 +194,10 @@ per the 2026-07-06 work in `memory.md`) is reused to hit the same two
 endpoints on the same cadence pattern, rendering through GNOME's
 `Main.notify()` (or a `MessageTray.Source`, matching how the weather
 indicator's popup already surfaces summary text).
+
+Every client must send a stable ID of 1–128 ASCII characters using only
+letters, digits, `-`, `_`, `.`, or `:`. Invalid IDs receive HTTP 400 before
+any database access.
 
 Both clients use a stable per-install `client_id` (e.g. derived from
 hostname + app name) so server-side cursors don't collide across machines

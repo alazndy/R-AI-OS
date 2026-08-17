@@ -1,5 +1,6 @@
 use axum::{
     extract::{Extension, Query, State},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -458,27 +459,82 @@ pub(super) struct ClientIdQuery {
     client_id: String,
 }
 
+fn validate_notification_client_id(client_id: &str) -> Result<(), &'static str> {
+    if client_id.is_empty() {
+        return Err("client_id must not be empty");
+    }
+    if client_id.len() > 128 {
+        return Err("client_id must be at most 128 bytes");
+    }
+    if !client_id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err("client_id contains unsupported characters");
+    }
+    Ok(())
+}
+
 pub(super) async fn handle_notifications_important(
     Query(params): Query<ClientIdQuery>,
 ) -> impl IntoResponse {
+    if let Err(message) = validate_notification_client_id(&params.client_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "status": "error", "message": message })),
+        );
+    }
+
     match raios_core::db::open_db() {
         Ok(conn) => match raios_core::db::poll_important_events(&conn, &params.client_id) {
-            Ok(events) => Json(json!({ "status": "ok", "events": events })),
-            Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
+            Ok(batch) => (
+                StatusCode::OK,
+                Json(json!({
+                    "status": "ok",
+                    "events": batch.events,
+                    "cursor_ts": batch.cursor_ts,
+                })),
+            ),
+            Err(e) => {
+                eprintln!("[HTTP] Important notification poll failed: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "status": "error", "message": "notification poll failed" })),
+                )
+            }
         },
-        Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
+        Err(e) => {
+            eprintln!("[HTTP] Notification DB open failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "message": "notification storage unavailable" })),
+            )
+        }
     }
 }
 
 pub(super) async fn handle_notifications_digest(
     Query(params): Query<ClientIdQuery>,
 ) -> impl IntoResponse {
+    if let Err(message) = validate_notification_client_id(&params.client_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "status": "error", "message": message })),
+        );
+    }
+
     let config =
         Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
 
     let conn = match raios_core::db::open_db() {
         Ok(c) => c,
-        Err(e) => return Json(json!({ "status": "error", "message": e.to_string() })),
+        Err(e) => {
+            eprintln!("[HTTP] Notification DB open failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "message": "notification storage unavailable" })),
+            );
+        }
     };
 
     let window = match raios_core::db::poll_digest_window(
@@ -487,11 +543,20 @@ pub(super) async fn handle_notifications_digest(
         config.daemon.digest_interval_secs as i64,
     ) {
         Ok(w) => w,
-        Err(e) => return Json(json!({ "status": "error", "message": e.to_string() })),
+        Err(e) => {
+            eprintln!("[HTTP] Digest notification poll failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "message": "notification poll failed" })),
+            );
+        }
     };
 
     let Some(window) = window else {
-        return Json(json!({ "status": "ok", "digest": null }));
+        return (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "digest": null })),
+        );
     };
 
     let projects = raios_core::entities::discover_entities(&config.dev_ops_path);
@@ -505,16 +570,19 @@ pub(super) async fn handle_notifications_digest(
 
     let summary = build_digest_summary(&window.events);
 
-    Json(json!({
-        "status": "ok",
-        "digest": {
-            "since_ts": window.since_ts,
-            "until_ts": window.until_ts,
-            "summary": summary,
-            "top_recommendation": top_recommendation,
-            "event_count": window.events.len(),
-        }
-    }))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "digest": {
+                "since_ts": window.since_ts,
+                "until_ts": window.until_ts,
+                "summary": summary,
+                "top_recommendation": top_recommendation,
+                "event_count": window.events.len(),
+            }
+        })),
+    )
 }
 
 fn build_digest_summary(events: &[raios_core::db::ActivityEvent]) -> String {
@@ -672,5 +740,22 @@ mod notification_tests {
         assert!(!summary.contains("scheduler"));
         assert!(!summary.contains("scheduled"));
         assert!(!summary.contains("agent run"));
+    }
+
+    #[test]
+    fn notification_client_id_validation_accepts_generated_ids() {
+        assert!(
+            validate_notification_client_id("raios-tray-550e8400-e29b-41d4-a716-446655440000")
+                .is_ok()
+        );
+        assert!(validate_notification_client_id("kaira-gnome:office-laptop").is_ok());
+    }
+
+    #[test]
+    fn notification_client_id_validation_rejects_empty_long_or_unsafe_values() {
+        assert!(validate_notification_client_id("").is_err());
+        assert!(validate_notification_client_id(&"a".repeat(129)).is_err());
+        assert!(validate_notification_client_id("tray?client=other").is_err());
+        assert!(validate_notification_client_id("tray/../../other").is_err());
     }
 }

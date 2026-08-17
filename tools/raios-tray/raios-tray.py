@@ -13,7 +13,9 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
@@ -57,7 +59,6 @@ DIGEST_REFRESH_SECONDS = 60
 MAX_PROJECTS = 10
 APP_NAME = "R-AI-OS Tray"
 DIRTY_CACHE_TTL_SECONDS = 90
-NOTIFICATION_CLIENT_ID = "raios-tray"
 
 CONFIG_TOP_LEVEL_KEYS = (
     "dev_ops_path",
@@ -221,6 +222,8 @@ TOKEN_CANDIDATES = (
 USAGE_PATH = CONFIG_DIR / "tray-usage.json"
 CACHE_PATH = CONFIG_DIR / "tray-projects-cache.json"
 PROJECTS_CONFIG_PATH = CONFIG_DIR / "tray-projects-config.json"
+NOTIFICATION_CLIENT_ID_PATH = CONFIG_DIR / "notification-client-id"
+_NOTIFICATION_CLIENT_ID: str | None = None
 DIRTY_STATUS_CACHE: dict[str, tuple[float, bool, tuple[float, float]]] = {}
 
 MEM_TYPE_COLORS_DARK = {
@@ -239,6 +242,53 @@ MEM_TYPE_COLORS_LIGHT = {
 
 def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def valid_notification_client_id(value: str) -> bool:
+    return bool(value) and len(value) <= 128 and all(
+        char.isascii() and (char.isalnum() or char in "-_.:") for char in value
+    )
+
+
+def fallback_notification_client_id() -> str:
+    """Derive a stable safe ID when the config directory is not writable."""
+    host_seed = platform.node() or platform.platform()
+    return f"raios-tray-{uuid.uuid5(uuid.NAMESPACE_DNS, host_seed)}"
+
+
+def notification_client_id() -> str:
+    """Return a stable, non-secret ID unique to this tray installation."""
+    global _NOTIFICATION_CLIENT_ID
+    if _NOTIFICATION_CLIENT_ID:
+        return _NOTIFICATION_CLIENT_ID
+
+    existing = read_text(NOTIFICATION_CLIENT_ID_PATH)
+    if valid_notification_client_id(existing):
+        _NOTIFICATION_CLIENT_ID = existing
+        return existing
+
+    candidate = f"raios-tray-{uuid.uuid4()}"
+    try:
+        ensure_parent(NOTIFICATION_CLIENT_ID_PATH)
+        descriptor = os.open(
+            NOTIFICATION_CLIENT_ID_PATH,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(candidate)
+    except FileExistsError:
+        raced_value = read_text(NOTIFICATION_CLIENT_ID_PATH)
+        if valid_notification_client_id(raced_value):
+            candidate = raced_value
+        else:
+            candidate = fallback_notification_client_id()
+    except OSError:
+        # Keep the fallback stable without persisting host details or secrets.
+        candidate = fallback_notification_client_id()
+
+    _NOTIFICATION_CLIENT_ID = candidate
+    return candidate
 
 
 def read_text(path: Path) -> str:
@@ -1609,7 +1659,8 @@ class RaiosTray(QObject):
 
     def _check_important_notifications(self) -> None:
         token = read_token()
-        data = api_get(f"/api/notifications/important?client_id={NOTIFICATION_CLIENT_ID}", token)
+        query = urllib.parse.urlencode({"client_id": notification_client_id()})
+        data = api_get(f"/api/notifications/important?{query}", token)
         if not data or data.get("status") != "ok":
             return
         for event in data.get("events", []):
@@ -1619,7 +1670,8 @@ class RaiosTray(QObject):
 
     def _check_digest_notification(self) -> None:
         token = read_token()
-        data = api_get(f"/api/notifications/digest?client_id={NOTIFICATION_CLIENT_ID}", token)
+        query = urllib.parse.urlencode({"client_id": notification_client_id()})
+        data = api_get(f"/api/notifications/digest?{query}", token)
         if not data or data.get("status") != "ok":
             return
         digest = data.get("digest")

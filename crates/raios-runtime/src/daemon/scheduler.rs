@@ -19,8 +19,7 @@ fn log_fire_success_as_activity(conn: &rusqlite::Connection, job: &raios_core::d
 /// its own interval overdue (comparing `next_run_at` against now). A no-op
 /// (and silently skipped) if `next_run_at` fails to parse.
 fn log_overdue_activity_if_needed(conn: &rusqlite::Connection, job: &raios_core::db::ScheduledJob) {
-    let Ok(due) =
-        chrono::NaiveDateTime::parse_from_str(&job.next_run_at, "%Y-%m-%dT%H:%M:%SZ")
+    let Ok(due) = chrono::NaiveDateTime::parse_from_str(&job.next_run_at, "%Y-%m-%dT%H:%M:%SZ")
     else {
         return;
     };
@@ -34,9 +33,9 @@ fn log_overdue_activity_if_needed(conn: &rusqlite::Connection, job: &raios_core:
             overdue_secs / 60,
             job.interval_secs / 60
         );
-        if let Err(e) = raios_core::db::log_activity_event(
-            conn, "scheduler", None, "important", &summary, None,
-        ) {
+        if let Err(e) =
+            raios_core::db::log_activity_event(conn, "scheduler", None, "important", &summary, None)
+        {
             eprintln!("[Scheduler] Failed to log overdue activity event: {e}");
         }
     }

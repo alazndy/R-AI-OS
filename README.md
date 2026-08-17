@@ -156,11 +156,15 @@ All three protocols share one event bus and one security kernel:
 | `GET` | `/api/projects` | All tracked projects from DaemonState |
 | `GET` | `/api/tasks` | Tasks from SQLite (grouped by project) |
 | `GET` | `/api/usage` | Local usage/quota signals for Claude, Codex, OpenCode, Antigravity |
+| `GET` | `/api/notifications/important?client_id=<id>` | Newly observed important events plus the server cursor timestamp |
+| `GET` | `/api/notifications/digest?client_id=<id>` | Interval-gated summary of routine background activity |
 | `GET` | `/api/plans` | Plans from `docs/superpowers/plans/*.md` with checkbox progress |
 | `GET` | `/api/git-status?path=<dir>` | Git branch + dirty/staged/modified/untracked for a workspace |
 | `GET` | `/api/swarm` | Active (non-terminal) swarm tasks |
 | `POST` | `/api/approve` | Approve a swarm task (merge branch) or pending diff (write file) |
 | `GET` | `/api/stream` | WebSocket — real-time kernel event stream |
+
+Notification client IDs must be 1–128 ASCII characters from `A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, and `:`. The tray persists a per-install UUID in `~/.config/raios/notification-client-id`. Delivery cursors are stored server-side and advance by monotonic event ID, so distinct events sharing the same timestamp are not dropped. Repeated High/Critical security findings are emitted once while active and become eligible again only after they resolve and reappear.
 
 ---
 

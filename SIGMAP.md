@@ -17,8 +17,8 @@ Always run `sigmap ask` (or `sigmap --query`) before searching for files relevan
 
 ## deps
 ```
-tools/raios-tray/desktop_runtime.py ← __future__
 tools/raios-tray/raios-tray.py ← __future__, PySide6, desktop_runtime, platform, shlex
+tools/raios-tray/desktop_runtime.py ← __future__
 vscode-extension/src/bridge/JumpToCode.ts ← ipc/DaemonClient
 vscode-extension/src/commands/CommandBridge.ts ← ipc/DaemonClient, utils/raiosBinary, providers/DiagnosticProvider
 vscode-extension/src/extension.ts ← ipc/DaemonClient, providers/StatusBarProvider, commands/CommandBridge, providers/DiffInboxProvider, providers/DiagnosticProvider
@@ -55,12 +55,7 @@ pub fn cp_sessions_list(conn: &Connection, limit: usize) → Result<Vec<SessionR
 
 ### crates/raios-runtime/src/daemon/git.rs
 ```
-pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration,)  :8-125
-```
-
-### crates/raios-runtime/src/daemon/health.rs
-```
-pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration,)  :70-171
+pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration,)  :8-130
 ```
 
 ### crates/raios-runtime/src/daemon/lifecycle.rs
@@ -70,7 +65,7 @@ pub async fn start_lifecycle_worker(state: Arc<RwLock<DaemonState>>, tx: broadca
 
 ### crates/raios-runtime/src/daemon/scheduler.rs
 ```
-pub async fn start_scheduler_worker(_state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, check_interval: Duration,)  :45-154
+pub async fn start_scheduler_worker(_state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, check_interval: Duration,)  :44-153
 ```
 
 ### crates/raios-runtime/src/reflect_scoring.rs
@@ -287,12 +282,14 @@ pub async fn start_lifecycle_worker(state: Arc<RwLock<DaemonState>>, tx: broadca
 
 ### crates/raios-runtime/src/daemon/proxy.rs
 ```
-pub struct ActivityEvent  :38-43
-pub struct DigestWindow  :47-51
-pub fn log_activity_event(conn: &Connection, source: &str, project: Option<&str>, tier: &str, summary: &str, detail_json: Option<&str>,) → rusqlite::Result<()>  :19-34
-pub fn poll_important_events(conn: &Connection, client_id: &str,) → rusqlite::Result<Vec<Activi...  :79-108
-pub fn poll_digest_window(conn: &Connection, client_id: &str, digest_interval_secs: i64,) → rusqlite::Result<Option<Dig...  :114-157
-pub fn prune_activity_events_older_than(conn: &Connection, days: i64) → rusqlite::Result<usize>  :161-166
+pub struct ActivityEvent  :40-45
+pub struct ImportantEvents  :50-53
+pub struct DigestWindow  :57-61
+pub fn log_activity_event(conn: &Connection, source: &str, project: Option<&str>, tier: &str, summary: &str, detail_json: Option<&str>,) → rusqlite::Result<()>  :21-36
+pub fn poll_important_events(conn: &Connection, client_id: &str,) → rusqlite::Result<ImportantE...  :111-151
+pub fn poll_digest_window(conn: &Connection, client_id: &str, digest_interval_secs: i64,) → rusqlite::Result<Option<Dig...  :157-210
+pub fn sync_security_activity_findings(conn: &mut Connection, project: &str, findings: &[(String, String) → rusqlite::Result<usize>  :216-262
+pub fn prune_activity_events_older_than(conn: &Connection, days: i64) → rusqlite::Result<usize>  :266-271
 ```
 
 ### crates/raios-core/src/db/mod.rs
@@ -1568,6 +1565,35 @@ pub fn render_master(frame: &mut Frame, area: Rect, app: &App)  :272-390
 
 ## tools
 
+### tools/raios-tray/raios-tray.py
+```
+@dataclass Agent(name, commands)  :132-134
+@dataclass TrayState(online, health?, projects?, projects_from_cache, usage?, aiosd_cpu, aiosd_ram_mb, error, dirty_projects, mem_items, tasks)  :138-149
+class PathInput(QWidget)  :800-835
+  def __init__(initial_value: str, mode: str, parent: QWidget | None)
+  def value() → str
+  def pick_path() → None
+class SettingsDialog(QDialog)  :838-997
+  def __init__(parent: QWidget | None)
+  def build_config() → dict
+  def validate_config(config: dict) → str | None
+  def persist() → bool
+  def save_only() → None
+  def save_and_restart() → None
+  def open_config_dir() → None
+class MemoryBrowserDialog(QDialog)  :1000-1143
+  def __init__(items: list[dict], parent: QWidget | None)
+class QuickAddTaskDialog(QDialog)  :1146-1199
+  def __init__(projects: list[dict], parent: QWidget | None)
+class TaskListDialog(QDialog)  :1202-1322
+  def __init__(tasks: list[dict], projects: list[dict], parent: QWidget | None)
+class ProjectEditDialog(QDialog)  :1325-1347
+  def __init__(parent: QWidget | None, name: str, path: str)
+  def result() → tuple[str, str]
+class ProjectManagerDialog(QDialog)  :1350-1609
+  def filter_rows(text: str) → None
+```
+
 ### tools/raios-factory-ui/index.html
 ```
 title: R-AI-OS Product Factory — Visual Control Studio
@@ -1655,35 +1681,6 @@ h2 Technical Decisions
 h2 Important Links & Paths
 h2 Current Focus
 h2 Change Log & Agent Trail
-```
-
-### tools/raios-tray/raios-tray.py
-```
-@dataclass Agent(name, commands)  :131-133
-@dataclass TrayState(online, health?, projects?, projects_from_cache, usage?, aiosd_cpu, aiosd_ram_mb, error, dirty_projects, mem_items, tasks)  :137-148
-class PathInput(QWidget)  :750-785
-  def __init__(initial_value: str, mode: str, parent: QWidget | None)
-  def value() → str
-  def pick_path() → None
-class SettingsDialog(QDialog)  :788-947
-  def __init__(parent: QWidget | None)
-  def build_config() → dict
-  def validate_config(config: dict) → str | None
-  def persist() → bool
-  def save_only() → None
-  def save_and_restart() → None
-  def open_config_dir() → None
-class MemoryBrowserDialog(QDialog)  :950-1093
-  def __init__(items: list[dict], parent: QWidget | None)
-class QuickAddTaskDialog(QDialog)  :1096-1149
-  def __init__(projects: list[dict], parent: QWidget | None)
-class TaskListDialog(QDialog)  :1152-1272
-  def __init__(tasks: list[dict], projects: list[dict], parent: QWidget | None)
-class ProjectEditDialog(QDialog)  :1275-1297
-  def __init__(parent: QWidget | None, name: str, path: str)
-  def result() → tuple[str, str]
-class ProjectManagerDialog(QDialog)  :1300-1559
-  def filter_rows(text: str) → None
 ```
 
 ### tools/raios-tray/README.md
