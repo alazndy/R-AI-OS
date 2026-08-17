@@ -5,6 +5,43 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 
+/// Log a routine `activity_events` row when a scheduled job fires successfully.
+fn log_fire_success_as_activity(conn: &rusqlite::Connection, job: &raios_core::db::ScheduledJob) {
+    let summary = format!("'{}' fired ({})", job.title, job.agent);
+    if let Err(e) =
+        raios_core::db::log_activity_event(conn, "scheduler", None, "routine", &summary, None)
+    {
+        eprintln!("[Scheduler] Failed to log fire-success activity event: {e}");
+    }
+}
+
+/// Log an important `activity_events` row when a claimed job is more than 2x
+/// its own interval overdue (comparing `next_run_at` against now). A no-op
+/// (and silently skipped) if `next_run_at` fails to parse.
+fn log_overdue_activity_if_needed(conn: &rusqlite::Connection, job: &raios_core::db::ScheduledJob) {
+    let Ok(due) =
+        chrono::NaiveDateTime::parse_from_str(&job.next_run_at, "%Y-%m-%dT%H:%M:%SZ")
+    else {
+        return;
+    };
+    let due = due.and_utc();
+    let overdue_secs = (chrono::Utc::now() - due).num_seconds();
+
+    if overdue_secs > 2 * job.interval_secs {
+        let summary = format!(
+            "'{}' is overdue by {}m (interval {}m)",
+            job.title,
+            overdue_secs / 60,
+            job.interval_secs / 60
+        );
+        if let Err(e) = raios_core::db::log_activity_event(
+            conn, "scheduler", None, "important", &summary, None,
+        ) {
+            eprintln!("[Scheduler] Failed to log overdue activity event: {e}");
+        }
+    }
+}
+
 pub async fn start_scheduler_worker(
     _state: Arc<RwLock<DaemonState>>,
     tx: broadcast::Sender<String>,
@@ -42,6 +79,8 @@ pub async fn start_scheduler_worker(
         };
 
         for job in jobs {
+            log_overdue_activity_if_needed(&conn, &job);
+
             let prompt = format!(
                 "[SCHEDULED TASK]\nTitle: {}\n\n{}",
                 job.title, job.task_description
@@ -76,6 +115,7 @@ pub async fn start_scheduler_worker(
                     Ok(Ok(pid)) => {
                         let _ =
                             raios_core::db::cp_scheduled_job_mark_fired(&conn, &job_id, interval);
+                        log_fire_success_as_activity(&conn, &job);
                         let evt = serde_json::json!({
                             "event": "ScheduledJobFired",
                             "id": job_id,
@@ -110,5 +150,87 @@ pub async fn start_scheduler_worker(
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use raios_core::db::ScheduledJob;
+    use rusqlite::Connection;
+
+    fn job_due_at(next_run_at: &str, interval_secs: i64) -> ScheduledJob {
+        ScheduledJob {
+            id: "job-1".into(),
+            title: "JSON Backup".into(),
+            agent: "claude".into(),
+            task_description: "backup".into(),
+            project_id: None,
+            interval_secs,
+            status: "active".into(),
+            last_run_at: None,
+            next_run_at: next_run_at.into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            run_count: 0,
+        }
+    }
+
+    #[test]
+    fn log_fire_success_as_activity_writes_routine_row() {
+        let conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        log_fire_success_as_activity(&conn, &job_due_at("2026-08-17T12:00:00Z", 3600));
+
+        let tier: String = conn
+            .query_row(
+                "SELECT tier FROM activity_events WHERE source = 'scheduler'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tier, "routine");
+    }
+
+    #[test]
+    fn overdue_important_event_fires_when_job_is_more_than_2x_interval_late() {
+        let conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        // interval=3600s (1h), next_run_at was due 3 hours ago -> overdue by 3x interval
+        let three_hours_ago = (chrono::Utc::now() - chrono::Duration::hours(3))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let job = job_due_at(&three_hours_ago, 3600);
+
+        log_overdue_activity_if_needed(&conn, &job);
+
+        let tier: String = conn
+            .query_row(
+                "SELECT tier FROM activity_events WHERE source = 'scheduler'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tier, "important");
+    }
+
+    #[test]
+    fn overdue_important_event_does_not_fire_when_job_is_only_slightly_late() {
+        let conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        // interval=3600s, due 5 minutes ago -> not overdue by the 2x threshold
+        let five_min_ago = (chrono::Utc::now() - chrono::Duration::minutes(5))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let job = job_due_at(&five_min_ago, 3600);
+
+        log_overdue_activity_if_needed(&conn, &job);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

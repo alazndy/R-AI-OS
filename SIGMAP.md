@@ -91,6 +91,11 @@ pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Se
 pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration,)  :70-171
 ```
 
+### crates/raios-runtime/src/daemon/lifecycle.rs
+```
+pub async fn start_lifecycle_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration, standby_days: u64, archive_days: u64,)  :16-123
+```
+
 ### crates/raios-runtime/src/reflect_scoring.rs
 ```
 pub struct ProjectSnapshot  :6-14
@@ -103,7 +108,7 @@ pub fn build_recommendations(snaps: &[ProjectSnapshot]) → Vec<String>  :73-117
 pub fn cmd_reflect(dev_ops_path: &Path, json: bool)  :5-19
 ```
 
-### crates/raios-runtime/src/daemon/lifecycle.rs
+### crates/raios-runtime/src/daemon/scheduler.rs
 ```
 pub async fn start_lifecycle_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration, standby_days: u64, archive_days: u64,)  :16-123
 ```
