@@ -97,6 +97,11 @@ pub enum PreflightMode  :5-8
 pub fn cmd_preflight(project: Option<String>, dev_ops_path: &Path) → bool  :30-95
 ```
 
+### crates/raios-runtime/src/daemon/health.rs
+```
+pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration,)  :70-171
+```
+
 ### crates/raios-runtime/src/health.rs
 ```
 pub struct ProjectHealth  :6-38
@@ -399,15 +404,10 @@ impl DaemonState  :70-112
   pub fn sync_payload(&self) → serde_json::Value  :99-99
 ```
 
-### crates/raios-runtime/src/discovery.rs
+### crates/raios-runtime/src/daemon_client.rs
 ```
-pub struct AgentInfo  :4-8
-pub struct SkillInfo  :22-31
-impl AgentInfo  :10-14
-  pub fn exists(&self) → bool  :11-11
-pub fn discover_agents() → Vec<AgentInfo>  :33-59
-pub fn discover_skills(skills_path: &Path) → Vec<SkillInfo>  :62-70
-pub fn open_in_editor(path: &Path) → anyhow::Result<()>  :103-106
+pub fn steer_agent_via_http  :42-45
+pub fn steer_agent_at  :54-87
 ```
 
 ### crates/raios-runtime/src/factory.rs
