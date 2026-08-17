@@ -53,9 +53,11 @@ from desktop_runtime import detect_desktop_session, tray_host_guidance
 
 API_BASE = "http://127.0.0.1:42071"
 REFRESH_SECONDS = 15
+DIGEST_REFRESH_SECONDS = 60
 MAX_PROJECTS = 10
 APP_NAME = "R-AI-OS Tray"
 DIRTY_CACHE_TTL_SECONDS = 90
+NOTIFICATION_CLIENT_ID = "raios-tray"
 
 CONFIG_TOP_LEVEL_KEYS = (
     "dev_ops_path",
@@ -1578,8 +1580,17 @@ class RaiosTray(QObject):
         self.refresh_timer.setInterval(REFRESH_SECONDS * 1000)
         self.refresh_timer.timeout.connect(self.refresh)
 
+        # Background-activity digest — polled independently of the main
+        # refresh cycle; the server itself gates how often a digest is
+        # actually produced (config.daemon.digest_interval_secs), so polling
+        # this every 60s client-side is cheap and just picks it up promptly.
+        self.digest_timer = QTimer(self)
+        self.digest_timer.setInterval(DIGEST_REFRESH_SECONDS * 1000)
+        self.digest_timer.timeout.connect(self._check_digest_notification)
+
         self.rebuild_menu()
         self.refresh_timer.start()
+        self.digest_timer.start()
         QTimer.singleShot(0, self.refresh)
 
     # ── portable tray helpers ─────────────────────────────────────────────────
@@ -1593,6 +1604,32 @@ class RaiosTray(QObject):
 
     def _notify(self, message: str) -> None:
         self._tray.showMessage(APP_NAME, message, QSystemTrayIcon.Information, 5000)
+
+    # ── background-activity notifications ───────────────────────────────────
+
+    def _check_important_notifications(self) -> None:
+        token = read_token()
+        data = api_get(f"/api/notifications/important?client_id={NOTIFICATION_CLIENT_ID}", token)
+        if not data or data.get("status") != "ok":
+            return
+        for event in data.get("events", []):
+            summary = event.get("summary", "")
+            if summary:
+                self._notify(summary)
+
+    def _check_digest_notification(self) -> None:
+        token = read_token()
+        data = api_get(f"/api/notifications/digest?client_id={NOTIFICATION_CLIENT_ID}", token)
+        if not data or data.get("status") != "ok":
+            return
+        digest = data.get("digest")
+        if not digest:
+            return
+        message = digest.get("summary", "")
+        rec = digest.get("top_recommendation")
+        if rec:
+            message += f"\nTop recommendation: {rec}"
+        self._notify(message)
 
     # ── icon ─────────────────────────────────────────────────────────────────
 
@@ -1612,6 +1649,7 @@ class RaiosTray(QObject):
         self._fetching = True
         try:
             self._apply_state(fetch_state())
+            self._check_important_notifications()
         finally:
             self._fetching = False
 

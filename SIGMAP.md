@@ -42,26 +42,6 @@ crates/raios-runtime/src/search/indexer.rs    +Component
 
 ## crates
 
-### crates/raios-core/src/config.rs
-```
-pub struct DaemonConfig  :7-28
-pub struct Config  :65-93
-pub struct FactoryConfig  :101-106
-pub struct FactoryStorageConfig  :111-118
-pub struct BootstrapConfig  :125-134
-pub struct ClaudeMarketplace  :137-141
-pub struct RuleSyncRepo  :144-148
-pub struct DetectResult  :245-250
-impl DaemonConfig  :30-60
-impl Config  :150-165
-impl Config  :167-243
-  pub fn config_file() → PathBuf  :173-173
-  pub fn load() → Option<Self>  :182-182
-  pub fn save(&self) → Result<()>  :189-189
-  pub fn auto_detect() → DetectResult  :201-201
-  pub fn from_detect_result(detected: DetectResult) → Self  :225-225
-```
-
 ### crates/raios-core/src/db/wf_sessions.rs
 ```
 pub struct SessionRow  :105-113
@@ -742,13 +722,6 @@ pub fn has_tests(project_path: &Path) → bool  :37-51
 ### crates/raios-runtime/src/server/http/a2a.rs
 ```
 impl A2aResponse  :82-102
-```
-
-### crates/raios-runtime/src/server/http/mod.rs
-```
-pub fn resolve_bind_addr(port: u16) → SocketAddr  :34-54
-pub fn detect_tailscale_ip() → Option<std::net::IpAddr>  :57-63
-pub async fn start_http_server(port: u16, daemon_state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>,) → anyhow::Result<()>  :66-114
 ```
 
 ### crates/raios-runtime/src/session_canvas.rs
@@ -1686,13 +1659,13 @@ h2 Change Log & Agent Trail
 
 ### tools/raios-tray/raios-tray.py
 ```
-@dataclass Agent(name, commands)  :129-131
-@dataclass TrayState(online, health?, projects?, projects_from_cache, usage?, aiosd_cpu, aiosd_ram_mb, error, dirty_projects, mem_items, tasks)  :135-146
-class PathInput(QWidget)  :748-783
+@dataclass Agent(name, commands)  :131-133
+@dataclass TrayState(online, health?, projects?, projects_from_cache, usage?, aiosd_cpu, aiosd_ram_mb, error, dirty_projects, mem_items, tasks)  :137-148
+class PathInput(QWidget)  :750-785
   def __init__(initial_value: str, mode: str, parent: QWidget | None)
   def value() → str
   def pick_path() → None
-class SettingsDialog(QDialog)  :786-945
+class SettingsDialog(QDialog)  :788-947
   def __init__(parent: QWidget | None)
   def build_config() → dict
   def validate_config(config: dict) → str | None
@@ -1700,16 +1673,16 @@ class SettingsDialog(QDialog)  :786-945
   def save_only() → None
   def save_and_restart() → None
   def open_config_dir() → None
-class MemoryBrowserDialog(QDialog)  :948-1091
+class MemoryBrowserDialog(QDialog)  :950-1093
   def __init__(items: list[dict], parent: QWidget | None)
-class QuickAddTaskDialog(QDialog)  :1094-1147
+class QuickAddTaskDialog(QDialog)  :1096-1149
   def __init__(projects: list[dict], parent: QWidget | None)
-class TaskListDialog(QDialog)  :1150-1270
+class TaskListDialog(QDialog)  :1152-1272
   def __init__(tasks: list[dict], projects: list[dict], parent: QWidget | None)
-class ProjectEditDialog(QDialog)  :1273-1295
+class ProjectEditDialog(QDialog)  :1275-1297
   def __init__(parent: QWidget | None, name: str, path: str)
   def result() → tuple[str, str]
-class ProjectManagerDialog(QDialog)  :1298-1557
+class ProjectManagerDialog(QDialog)  :1300-1559
   def filter_rows(text: str) → None
 ```
 
