@@ -82,6 +82,7 @@ pub async fn start_lifecycle_worker(
                 if let Err(e) = raios_core::db::update_project_status(&conn, &path_str, status) {
                     eprintln!("[Lifecycle] Failed to update {}: {e}", proj.name);
                 } else {
+                    log_transition_as_activity(&conn, &proj.name, current, status);
                     println!(
                         "[Lifecycle] {} → {} (age: {}d)",
                         proj.name,
@@ -143,6 +144,25 @@ fn next_lifecycle_status(
         Some("archived")
     } else {
         None
+    }
+}
+
+fn log_transition_as_activity(
+    conn: &rusqlite::Connection,
+    project_name: &str,
+    old_status: &str,
+    new_status: &str,
+) {
+    let summary = format!("{project_name}: {old_status} → {new_status}");
+    if let Err(e) = raios_core::db::log_activity_event(
+        conn,
+        "lifecycle",
+        Some(project_name),
+        "important",
+        &summary,
+        None,
+    ) {
+        eprintln!("[Lifecycle] Failed to log activity event for {project_name}: {e}");
     }
 }
 
@@ -213,5 +233,25 @@ mod tests {
             next_lifecycle_status("active", 90 * DAY, 14 * DAY, 90 * DAY),
             Some("archived")
         );
+    }
+
+    #[test]
+    fn log_transition_as_activity_writes_important_row() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        log_transition_as_activity(&conn, "demo-project", "active", "beklemede");
+
+        let (tier, project, summary): (String, Option<String>, String) = conn
+            .query_row(
+                "SELECT tier, project, summary FROM activity_events WHERE source = 'lifecycle'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(tier, "important");
+        assert_eq!(project.as_deref(), Some("demo-project"));
+        assert!(summary.contains("active"));
+        assert!(summary.contains("beklemede"));
     }
 }

@@ -103,6 +103,11 @@ pub fn build_recommendations(snaps: &[ProjectSnapshot]) → Vec<String>  :73-117
 pub fn cmd_reflect(dev_ops_path: &Path, json: bool)  :5-19
 ```
 
+### crates/raios-runtime/src/daemon/lifecycle.rs
+```
+pub async fn start_lifecycle_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration, standby_days: u64, archive_days: u64,)  :16-123
+```
+
 ### crates/raios-runtime/src/daemon/server.rs
 ```
 impl McpServer  :84-191
@@ -326,9 +331,9 @@ pub async fn start_sentinel_worker  :11-104
 ```
 pub struct Server  :11-16
 impl Server  :18-143
-  pub fn new(state: Arc<RwLock<DaemonState>>) → Self  :19-19
-  pub async fn run_with_tx(&self, tx: broadcast::Sender<String>) → anyhow::Result<()>  :33-33
-  pub async fn run(&self) → anyhow::Result<()>  :37-37
+pub fn new  :19-19
+pub async fn run_with_tx  :33-33
+pub async fn run  :37-37
 ```
 
 ### crates/raios-runtime/src/daemon/state.rs
