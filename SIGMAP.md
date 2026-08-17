@@ -81,37 +81,14 @@ pub fn migrate_existing(conn: &Connection) → Result<()>  :121-123
 pub fn import_from_json(dev_ops: &Path, conn: &Connection) → usize  :128-191
 ```
 
-### crates/raios-core/src/entities.rs
+### crates/raios-runtime/src/daemon/git.rs
 ```
-pub struct EntityProject  :7-17
-pub fn load_entities(dev_ops: &Path) → Vec<EntityProject>  :21-41
-pub fn save_entities(_dev_ops: &Path, projects: Vec<EntityProject>) → std::io::Result<()>  :45-65
-pub fn discover_entities(dev_ops: &Path) → Vec<EntityProject>  :69-123
-pub fn discover_all_entities(dev_ops: &Path) → Vec<EntityProject>  :129-153
-pub fn has_sigmap_context(path: &Path) → bool  :215-217
-```
-
-### crates/raios-runtime/src/cli/preflight.rs
-```
-pub enum PreflightMode  :5-8
-pub fn cmd_preflight(project: Option<String>, dev_ops_path: &Path) → bool  :30-95
+pub async fn start_git_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration,)  :8-125
 ```
 
 ### crates/raios-runtime/src/daemon/health.rs
 ```
 pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration,)  :70-171
-```
-
-### crates/raios-runtime/src/health.rs
-```
-pub struct ProjectHealth  :6-38
-pub fn check_project_fast(proj: &EntityProject) → ProjectHealth  :51-120
-pub fn check_project(proj: &EntityProject) → ProjectHealth  :122-205
-pub fn check_build_test_deps(h: &mut ProjectHealth)  :208-219
-pub fn check_project_with_security(proj: &EntityProject) → ProjectHealth  :222-230
-pub fn check_graphify(path: &Path) → (bool, Option<PathBuf>)  :233-247
-pub fn find_graphify_script(dev_ops: &Path) → Option<PathBuf>  :250-261
-pub fn validate_file(path: &Path, proj: &EntityProject) → Vec<ValidationError>  :266-292
 ```
 
 ### crates/raios-runtime/src/reflect_scoring.rs
@@ -126,7 +103,7 @@ pub fn build_recommendations(snaps: &[ProjectSnapshot]) → Vec<String>  :73-117
 pub fn cmd_reflect(dev_ops_path: &Path, json: bool)  :5-19
 ```
 
-### crates/raios-surface-mcp/src/mcp/tools_workspace.rs
+### crates/raios-runtime/src/daemon/server.rs
 ```
 impl McpServer  :84-191
 ```
@@ -410,6 +387,17 @@ pub fn steer_agent_via_http  :42-45
 pub fn steer_agent_at  :54-87
 ```
 
+### crates/raios-runtime/src/discovery.rs
+```
+pub struct AgentInfo  :4-8
+pub struct SkillInfo  :22-31
+impl AgentInfo  :10-14
+  pub fn exists(&self) → bool  :11-11
+pub fn discover_agents() → Vec<AgentInfo>  :33-59
+pub fn discover_skills(skills_path: &Path) → Vec<SkillInfo>  :62-70
+pub fn open_in_editor(path: &Path) → anyhow::Result<()>  :103-106
+```
+
 ### crates/raios-runtime/src/factory.rs
 ```
 pub struct Job  :43-54
@@ -468,6 +456,18 @@ impl FileEntry  :27-47
 ### crates/raios-runtime/src/git_utils.rs
 ```
 pub fn diff_stat(project_path: &Path) → Option<String>  :6-22
+```
+
+### crates/raios-runtime/src/health.rs
+```
+pub struct ProjectHealth  :6-38
+pub fn check_project_fast(proj: &EntityProject) → ProjectHealth  :51-120
+pub fn check_project(proj: &EntityProject) → ProjectHealth  :122-205
+pub fn check_build_test_deps(h: &mut ProjectHealth)  :208-219
+pub fn check_project_with_security(proj: &EntityProject) → ProjectHealth  :222-230
+pub fn check_graphify(path: &Path) → (bool, Option<PathBuf>)  :233-247
+pub fn find_graphify_script(dev_ops: &Path) → Option<PathBuf>  :250-261
+pub fn validate_file(path: &Path, proj: &EntityProject) → Vec<ValidationError>  :266-292
 ```
 
 ### crates/raios-runtime/src/intelligence/edge.rs
@@ -1068,6 +1068,11 @@ impl McpServer  :23-112
 impl McpServer  :5-129
 ```
 
+### crates/raios-surface-mcp/src/mcp/tools_workspace.rs
+```
+impl McpServer  :84-191
+```
+
 ### crates/raios-surface-mcp/src/mcp/tools.rs
 ```
 impl McpServer  :6-74
@@ -1121,6 +1126,12 @@ pub fn char_to_byte(s: &str, char_pos: usize) → usize  :173-178
 ### crates/raios-surface-tui/src/app/events/actions.rs
 ```
 impl App  :9-135
+```
+
+### crates/raios-surface-tui/src/app/events/bg_messages.rs
+```
+impl App  :18-139
+  pub fn handle_bg_msg(&mut self, msg: BgMsg)  :20-20
 ```
 
 ### crates/raios-surface-tui/src/app/events/commands.rs

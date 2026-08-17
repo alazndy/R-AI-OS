@@ -150,7 +150,7 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap(); // see Task 5 note on locating the real helper name
 
-        log_status_change_as_activity(&conn, "demo-project", "main", "main (dirty)");
+        log_status_change_as_activity(&conn, "demo-project", "active", "beklemede");
 
         let (tier, summary): (String, String) = conn
             .query_row(
@@ -160,7 +160,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tier, "routine");
-        assert!(summary.contains("demo-project"));
-        assert!(summary.contains("main (dirty)"));
+        // Exact-structure assertion: "active" and "beklemede" share no substring
+        // relationship, so this can only pass if the *distinct* old and new
+        // status values both landed in their correct position around the
+        // arrow — it cannot pass under a log-after-mutate bug where both
+        // arguments accidentally carry the new status.
+        assert_eq!(summary, "demo-project: active → beklemede");
     }
 }
