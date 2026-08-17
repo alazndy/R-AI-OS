@@ -156,6 +156,7 @@ pub async fn start_scheduler_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
     use raios_core::db::ScheduledJob;
     use rusqlite::Connection;
 
@@ -232,5 +233,63 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn overdue_important_event_does_not_fire_at_exactly_2x_interval() {
+        let conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        // interval=3600s, threshold is overdue_secs > 7200. Due exactly 7200s ago sits
+        // right ON the boundary and must NOT fire, since the requirement is strictly `>`.
+        //
+        // The reference instant is truncated to a whole second (`with_nanosecond(0)`)
+        // before subtracting, so the fixture's `due` timestamp (formatted with
+        // second-granularity, no fractional part) has zero sub-second error relative to
+        // it. Without this, the function's own `Utc::now()` call — made a few
+        // microseconds later — could occasionally round the computed `overdue_secs` up
+        // by one across the exact boundary, flaking this test at the sub-millisecond
+        // level. Truncating first makes the elapsed whole-second count deterministic.
+        let now_aligned = chrono::Utc::now().with_nanosecond(0).unwrap();
+        let exactly_at_threshold = (now_aligned - chrono::Duration::seconds(7200))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let job = job_due_at(&exactly_at_threshold, 3600);
+
+        log_overdue_activity_if_needed(&conn, &job);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "exactly 2x interval overdue must NOT fire (threshold is strictly '>', not '>=')"
+        );
+    }
+
+    #[test]
+    fn overdue_important_event_fires_one_second_past_2x_interval() {
+        let conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        // interval=3600s, threshold is overdue_secs > 7200. Due 7201s ago is one second
+        // past the boundary and must fire. Same whole-second alignment as the sibling
+        // boundary test above, for the same determinism reason.
+        let now_aligned = chrono::Utc::now().with_nanosecond(0).unwrap();
+        let one_second_past_threshold = (now_aligned - chrono::Duration::seconds(7201))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let job = job_due_at(&one_second_past_threshold, 3600);
+
+        log_overdue_activity_if_needed(&conn, &job);
+
+        let tier: String = conn
+            .query_row(
+                "SELECT tier FROM activity_events WHERE source = 'scheduler'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tier, "important");
     }
 }

@@ -96,6 +96,11 @@ pub async fn start_health_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast:
 pub async fn start_lifecycle_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration, standby_days: u64, archive_days: u64,)  :16-123
 ```
 
+### crates/raios-runtime/src/daemon/scheduler.rs
+```
+pub async fn start_scheduler_worker(_state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, check_interval: Duration,)  :45-154
+```
+
 ### crates/raios-runtime/src/reflect_scoring.rs
 ```
 pub struct ProjectSnapshot  :6-14
