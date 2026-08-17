@@ -80,6 +80,24 @@ pub fn cp_session_end_with_summary(
         "UPDATE cp_tasks SET status=?1, updated_at=?2 WHERE id=?3",
         params![task_status, now, task_id],
     )?;
+
+    if success {
+        if let Some(text) = summary.filter(|s| !s.is_empty()) {
+            let event_summary = format!("agent run completed: {text}");
+            // Best-effort: a missing notification-log row must never fail
+            // the actual session-completion write, which is this
+            // function's real job.
+            let _ = crate::db::log_activity_event(
+                conn,
+                "agent_run",
+                None,
+                "routine",
+                &event_summary,
+                None,
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -238,5 +256,58 @@ mod tests {
             "late note"
         )
         .is_err());
+    }
+
+    #[test]
+    fn cp_session_end_with_summary_logs_a_routine_activity_event_on_success() {
+        let conn = crate::db::tests::in_memory();
+        let (task_id, run_id) = cp_session_start(&conn, "codex_kaira", None).unwrap();
+
+        cp_session_end_with_summary(&conn, &task_id, &run_id, true, Some("committed 3 files"))
+            .unwrap();
+
+        let (source, tier, project, summary): (String, String, Option<String>, String) = conn
+            .query_row(
+                "SELECT source, tier, project, summary FROM activity_events",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(source, "agent_run");
+        assert_eq!(tier, "routine");
+        assert_eq!(project, None);
+        assert!(
+            summary.contains("committed 3 files"),
+            "summary {summary:?} must contain the passed-in text"
+        );
+    }
+
+    #[test]
+    fn cp_session_end_with_summary_does_not_log_activity_when_summary_is_none() {
+        let conn = crate::db::tests::in_memory();
+        let (task_id, run_id) = cp_session_start(&conn, "codex_kaira", None).unwrap();
+
+        cp_session_end_with_summary(&conn, &task_id, &run_id, true, None).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn cp_session_end_with_summary_does_not_log_activity_when_run_failed() {
+        let conn = crate::db::tests::in_memory();
+        let (task_id, run_id) = cp_session_start(&conn, "codex_kaira", None).unwrap();
+
+        // A failed run with a non-empty summary must not be logged as a
+        // routine activity event — guards against dropping the `success`
+        // check and logging on every completion regardless of outcome.
+        cp_session_end_with_summary(&conn, &task_id, &run_id, false, Some("blew up")).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
