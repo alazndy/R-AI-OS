@@ -1,5 +1,6 @@
 use axum::{
     extract::{Extension, Query, State},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -453,6 +454,164 @@ fn decode_base64(s: &str) -> anyhow::Result<Vec<u8>> {
         .map_err(Into::into)
 }
 
+#[derive(Deserialize)]
+pub(super) struct ClientIdQuery {
+    client_id: String,
+}
+
+fn validate_notification_client_id(client_id: &str) -> Result<(), &'static str> {
+    if client_id.is_empty() {
+        return Err("client_id must not be empty");
+    }
+    if client_id.len() > 128 {
+        return Err("client_id must be at most 128 bytes");
+    }
+    if !client_id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err("client_id contains unsupported characters");
+    }
+    Ok(())
+}
+
+pub(super) async fn handle_notifications_important(
+    Query(params): Query<ClientIdQuery>,
+) -> impl IntoResponse {
+    if let Err(message) = validate_notification_client_id(&params.client_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "status": "error", "message": message })),
+        );
+    }
+
+    match raios_core::db::open_db() {
+        Ok(conn) => match raios_core::db::poll_important_events(&conn, &params.client_id) {
+            Ok(batch) => (
+                StatusCode::OK,
+                Json(json!({
+                    "status": "ok",
+                    "events": batch.events,
+                    "cursor_ts": batch.cursor_ts,
+                })),
+            ),
+            Err(e) => {
+                eprintln!("[HTTP] Important notification poll failed: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "status": "error", "message": "notification poll failed" })),
+                )
+            }
+        },
+        Err(e) => {
+            eprintln!("[HTTP] Notification DB open failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "message": "notification storage unavailable" })),
+            )
+        }
+    }
+}
+
+pub(super) async fn handle_notifications_digest(
+    Query(params): Query<ClientIdQuery>,
+) -> impl IntoResponse {
+    if let Err(message) = validate_notification_client_id(&params.client_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "status": "error", "message": message })),
+        );
+    }
+
+    let config =
+        Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
+
+    let conn = match raios_core::db::open_db() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[HTTP] Notification DB open failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "message": "notification storage unavailable" })),
+            );
+        }
+    };
+
+    let window = match raios_core::db::poll_digest_window(
+        &conn,
+        &params.client_id,
+        config.daemon.digest_interval_secs as i64,
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("[HTTP] Digest notification poll failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "message": "notification poll failed" })),
+            );
+        }
+    };
+
+    let Some(window) = window else {
+        return (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "digest": null })),
+        );
+    };
+
+    let projects = raios_core::entities::discover_entities(&config.dev_ops_path);
+    let snapshots: Vec<_> = projects
+        .iter()
+        .map(raios_runtime::reflect_scoring::snapshot)
+        .collect();
+    let top_recommendation = raios_runtime::reflect_scoring::build_recommendations(&snapshots)
+        .into_iter()
+        .next();
+
+    let summary = build_digest_summary(&window.events);
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "digest": {
+                "since_ts": window.since_ts,
+                "until_ts": window.until_ts,
+                "summary": summary,
+                "top_recommendation": top_recommendation,
+                "event_count": window.events.len(),
+            }
+        })),
+    )
+}
+
+fn build_digest_summary(events: &[raios_core::db::ActivityEvent]) -> String {
+    if events.is_empty() {
+        return "No background activity.".to_string();
+    }
+
+    let mut by_source: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for e in events {
+        *by_source.entry(e.source.as_str()).or_insert(0) += 1;
+    }
+
+    let order = ["git", "health", "scheduler", "agent_run"];
+    let clauses: Vec<String> = order
+        .iter()
+        .filter_map(|source| {
+            by_source.get(source).map(|count| match *source {
+                "git" => format!("{count} git status change(s)"),
+                "health" => format!("{count} health scan update(s)"),
+                "scheduler" => format!("{count} scheduled job(s) ran"),
+                "agent_run" => format!("{count} agent run(s) completed"),
+                _ => unreachable!(),
+            })
+        })
+        .collect();
+
+    clauses.join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::resolve_pending_diff_target;
@@ -500,5 +659,103 @@ mod tests {
             idempotency_key: "idem-2".into(),
         };
         assert!(super::http_may_execute(&allowed));
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+
+    #[test]
+    fn build_digest_summary_returns_quiet_message_when_no_events() {
+        assert_eq!(build_digest_summary(&[]), "No background activity.");
+    }
+
+    #[test]
+    fn build_digest_summary_groups_by_source_in_fixed_order() {
+        let events = vec![
+            raios_core::db::ActivityEvent {
+                ts: "t1".into(),
+                source: "scheduler".into(),
+                project: None,
+                summary: "x".into(),
+            },
+            raios_core::db::ActivityEvent {
+                ts: "t2".into(),
+                source: "git".into(),
+                project: Some("a".into()),
+                summary: "y".into(),
+            },
+        ];
+        let summary = build_digest_summary(&events);
+        // git must appear before scheduler, matching the fixed `order` array
+        let git_pos = summary.find("git").unwrap();
+        let sched_pos = summary.find("scheduled").unwrap();
+        assert!(git_pos < sched_pos);
+    }
+
+    #[test]
+    fn build_digest_summary_reports_exact_counts_per_source() {
+        // Regression guard: a subtly wrong count (e.g. off-by-one from mixing
+        // up sources, or double-counting) would still pass a substring-only
+        // check like `contains("git")`. Assert the literal formatted clause.
+        let events = vec![
+            raios_core::db::ActivityEvent {
+                ts: "t1".into(),
+                source: "git".into(),
+                project: Some("a".into()),
+                summary: "a".into(),
+            },
+            raios_core::db::ActivityEvent {
+                ts: "t2".into(),
+                source: "git".into(),
+                project: Some("b".into()),
+                summary: "b".into(),
+            },
+            raios_core::db::ActivityEvent {
+                ts: "t3".into(),
+                source: "agent_run".into(),
+                project: None,
+                summary: "c".into(),
+            },
+        ];
+        let summary = build_digest_summary(&events);
+        assert_eq!(summary, "2 git status change(s); 1 agent run(s) completed");
+    }
+
+    #[test]
+    fn build_digest_summary_omits_sources_with_zero_events() {
+        // Only "health" events present — the other three fixed-order
+        // categories (git, scheduler, agent_run) must not appear at all,
+        // not just appear with a "0" count.
+        let events = vec![raios_core::db::ActivityEvent {
+            ts: "t1".into(),
+            source: "health".into(),
+            project: None,
+            summary: "scan".into(),
+        }];
+        let summary = build_digest_summary(&events);
+        assert_eq!(summary, "1 health scan update(s)");
+        assert!(!summary.contains("git"));
+        assert!(!summary.contains("scheduler"));
+        assert!(!summary.contains("scheduled"));
+        assert!(!summary.contains("agent run"));
+    }
+
+    #[test]
+    fn notification_client_id_validation_accepts_generated_ids() {
+        assert!(
+            validate_notification_client_id("raios-tray-550e8400-e29b-41d4-a716-446655440000")
+                .is_ok()
+        );
+        assert!(validate_notification_client_id("kaira-gnome:office-laptop").is_ok());
+    }
+
+    #[test]
+    fn notification_client_id_validation_rejects_empty_long_or_unsafe_values() {
+        assert!(validate_notification_client_id("").is_err());
+        assert!(validate_notification_client_id(&"a".repeat(129)).is_err());
+        assert!(validate_notification_client_id("tray?client=other").is_err());
+        assert!(validate_notification_client_id("tray/../../other").is_err());
     }
 }

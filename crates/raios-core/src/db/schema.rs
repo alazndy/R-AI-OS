@@ -855,5 +855,133 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
         ",
     )?;
 
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS activity_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts          TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            source      TEXT NOT NULL,
+            project     TEXT,
+            tier        TEXT NOT NULL CHECK(tier IN ('important','routine')),
+            summary     TEXT NOT NULL,
+            detail_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_events_tier_ts ON activity_events(tier, ts);
+
+        CREATE TABLE IF NOT EXISTS notification_cursors (
+            client_id            TEXT PRIMARY KEY,
+            last_important_ts    TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
+            last_digest_ts       TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
+            last_important_id    INTEGER NOT NULL DEFAULT 0,
+            last_digest_event_id INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS security_notification_state (
+            project     TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            summary     TEXT NOT NULL,
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            PRIMARY KEY(project, fingerprint)
+        );
+        ",
+    )?;
+
+    // Upgrade databases created by an earlier version of the notification
+    // feature. Keep these statements separate so one duplicate-column error
+    // cannot prevent the other column from being added.
+    let _ = conn.execute_batch(
+        "ALTER TABLE notification_cursors
+         ADD COLUMN last_important_id INTEGER NOT NULL DEFAULT 0",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE notification_cursors
+         ADD COLUMN last_digest_event_id INTEGER NOT NULL DEFAULT 0",
+    );
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_activity_events_tier_id
+             ON activity_events(tier, id);",
+    )?;
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_upgrades_legacy_notification_cursors_with_id_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notification_cursors (
+                client_id         TEXT PRIMARY KEY,
+                last_important_ts TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
+                last_digest_ts    TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'
+            );",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO notification_cursors (client_id) VALUES ('legacy')",
+            [],
+        )
+        .unwrap();
+        let ids: (i64, i64) = conn
+            .query_row(
+                "SELECT last_important_id, last_digest_event_id
+                 FROM notification_cursors WHERE client_id = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(ids, (0, 0));
+    }
+
+    #[test]
+    fn migrate_creates_activity_events_and_notification_cursors_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO activity_events (ts, source, project, tier, summary, detail_json)
+             VALUES ('2026-08-17T12:00:00Z', 'lifecycle', 'demo-project', 'important', 'demo-project archived', NULL)",
+            [],
+        )
+        .expect("activity_events insert should succeed");
+
+        conn.execute(
+            "INSERT INTO notification_cursors (client_id) VALUES ('raios-tray')",
+            [],
+        )
+        .expect("notification_cursors insert should succeed");
+
+        let cursor_ids: (i64, i64) = conn
+            .query_row(
+                "SELECT last_important_id, last_digest_event_id
+                 FROM notification_cursors WHERE client_id = 'raios-tray'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(cursor_ids, (0, 0));
+
+        conn.execute(
+            "INSERT INTO security_notification_state (project, fingerprint, summary)
+             VALUES ('demo-project', 'finding-1', 'critical finding')",
+            [],
+        )
+        .expect("security notification state insert should succeed");
+
+        let summary: String = conn
+            .query_row(
+                "SELECT summary FROM activity_events WHERE source = 'lifecycle'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(summary, "demo-project archived");
+    }
 }

@@ -33,6 +33,47 @@ pub(crate) fn emit_security_whispers(
     radar.emit_many(whispers);
 }
 
+/// Synchronize one project's currently active Critical/High findings and
+/// persist important activity only for findings that are new or reappeared
+/// after being resolved. This is independent of the ephemeral Radar-whisper
+/// broadcast `emit_security_whispers` already provides to connected agents.
+pub(crate) fn sync_security_findings_as_activity(
+    conn: &mut rusqlite::Connection,
+    project_name: &str,
+    report: &SecurityReport,
+) {
+    let findings: Vec<(String, String)> = report
+        .issues
+        .iter()
+        .filter(|i| matches!(i.severity, SecSev::Critical | SecSev::High))
+        .map(|issue| {
+            let file = issue
+                .file
+                .as_deref()
+                .map(|path| path.to_string_lossy().into_owned());
+            let fingerprint = serde_json::to_string(&(
+                issue.owasp,
+                issue.title,
+                issue.severity.label(),
+                file,
+                issue.line,
+            ))
+            .expect("security finding identity contains only serializable values");
+            let summary = format!(
+                "{} [{}] {}",
+                project_name,
+                issue.severity.label(),
+                issue.title
+            );
+            (fingerprint, summary)
+        })
+        .collect();
+
+    if let Err(e) = raios_core::db::sync_security_activity_findings(conn, project_name, &findings) {
+        eprintln!("[Daemon] Failed to sync security activity for {project_name}: {e}");
+    }
+}
+
 /// Background worker that periodically updates project health reports.
 pub async fn start_health_worker(
     state: Arc<RwLock<DaemonState>>,
@@ -87,6 +128,18 @@ pub async fn start_health_worker(
                     let report = check_project_fast(&proj);
                     let sec_report = scan_project_fast(&proj_path_clone);
                     emit_security_whispers(&proj_name_clone, &sec_report, &radar_clone);
+                    match raios_core::db::open_db() {
+                        Ok(mut conn) => {
+                            sync_security_findings_as_activity(
+                                &mut conn,
+                                &proj_name_clone,
+                                &sec_report,
+                            )
+                        }
+                        Err(e) => eprintln!(
+                            "[Daemon] DB open failed for security activity logging ({proj_name_clone}): {e}"
+                        ),
+                    }
                     let log_msg = serde_json::json!({
                         "event": "NewLog",
                         "log": {
@@ -190,5 +243,71 @@ mod tests {
 
         // No whisper for Low severity
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn sync_security_findings_as_activity_writes_one_event_for_repeated_critical() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        let report = SecurityReport {
+            score: 40,
+            grade: "F",
+            issues: vec![SecurityIssue {
+                owasp: "A02",
+                title: "hardcoded secret",
+                severity: SecSev::Critical,
+                file: Some(std::path::PathBuf::from("src/main.rs")),
+                line: None,
+                snippet: None,
+            }],
+            audit_output: None,
+            project_type: ProjectType::Rust,
+            checks_run: 1,
+        };
+
+        sync_security_findings_as_activity(&mut conn, "demo-project", &report);
+        sync_security_findings_as_activity(&mut conn, "demo-project", &report);
+
+        let (count, tier, project): (i64, String, Option<String>) = conn
+            .query_row(
+                "SELECT COUNT(*), MIN(tier), MIN(project)
+                 FROM activity_events WHERE source = 'audit'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "an unchanged finding must not notify twice");
+        assert_eq!(tier, "important");
+        assert_eq!(project.as_deref(), Some("demo-project"));
+    }
+
+    #[test]
+    fn sync_security_findings_as_activity_ignores_low_and_info_severity() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        let report = SecurityReport {
+            score: 90,
+            grade: "A",
+            issues: vec![SecurityIssue {
+                owasp: "A09",
+                title: "Missing rate limit header",
+                severity: SecSev::Low,
+                file: None,
+                line: None,
+                snippet: None,
+            }],
+            audit_output: None,
+            project_type: ProjectType::Rust,
+            checks_run: 1,
+        };
+
+        sync_security_findings_as_activity(&mut conn, "demo-project", &report);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

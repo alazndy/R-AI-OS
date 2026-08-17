@@ -13,7 +13,9 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
@@ -53,6 +55,7 @@ from desktop_runtime import detect_desktop_session, tray_host_guidance
 
 API_BASE = "http://127.0.0.1:42071"
 REFRESH_SECONDS = 15
+DIGEST_REFRESH_SECONDS = 60
 MAX_PROJECTS = 10
 APP_NAME = "R-AI-OS Tray"
 DIRTY_CACHE_TTL_SECONDS = 90
@@ -219,6 +222,8 @@ TOKEN_CANDIDATES = (
 USAGE_PATH = CONFIG_DIR / "tray-usage.json"
 CACHE_PATH = CONFIG_DIR / "tray-projects-cache.json"
 PROJECTS_CONFIG_PATH = CONFIG_DIR / "tray-projects-config.json"
+NOTIFICATION_CLIENT_ID_PATH = CONFIG_DIR / "notification-client-id"
+_NOTIFICATION_CLIENT_ID: str | None = None
 DIRTY_STATUS_CACHE: dict[str, tuple[float, bool, tuple[float, float]]] = {}
 
 MEM_TYPE_COLORS_DARK = {
@@ -237,6 +242,53 @@ MEM_TYPE_COLORS_LIGHT = {
 
 def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def valid_notification_client_id(value: str) -> bool:
+    return bool(value) and len(value) <= 128 and all(
+        char.isascii() and (char.isalnum() or char in "-_.:") for char in value
+    )
+
+
+def fallback_notification_client_id() -> str:
+    """Derive a stable safe ID when the config directory is not writable."""
+    host_seed = platform.node() or platform.platform()
+    return f"raios-tray-{uuid.uuid5(uuid.NAMESPACE_DNS, host_seed)}"
+
+
+def notification_client_id() -> str:
+    """Return a stable, non-secret ID unique to this tray installation."""
+    global _NOTIFICATION_CLIENT_ID
+    if _NOTIFICATION_CLIENT_ID:
+        return _NOTIFICATION_CLIENT_ID
+
+    existing = read_text(NOTIFICATION_CLIENT_ID_PATH)
+    if valid_notification_client_id(existing):
+        _NOTIFICATION_CLIENT_ID = existing
+        return existing
+
+    candidate = f"raios-tray-{uuid.uuid4()}"
+    try:
+        ensure_parent(NOTIFICATION_CLIENT_ID_PATH)
+        descriptor = os.open(
+            NOTIFICATION_CLIENT_ID_PATH,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(candidate)
+    except FileExistsError:
+        raced_value = read_text(NOTIFICATION_CLIENT_ID_PATH)
+        if valid_notification_client_id(raced_value):
+            candidate = raced_value
+        else:
+            candidate = fallback_notification_client_id()
+    except OSError:
+        # Keep the fallback stable without persisting host details or secrets.
+        candidate = fallback_notification_client_id()
+
+    _NOTIFICATION_CLIENT_ID = candidate
+    return candidate
 
 
 def read_text(path: Path) -> str:
@@ -1578,8 +1630,17 @@ class RaiosTray(QObject):
         self.refresh_timer.setInterval(REFRESH_SECONDS * 1000)
         self.refresh_timer.timeout.connect(self.refresh)
 
+        # Background-activity digest — polled independently of the main
+        # refresh cycle; the server itself gates how often a digest is
+        # actually produced (config.daemon.digest_interval_secs), so polling
+        # this every 60s client-side is cheap and just picks it up promptly.
+        self.digest_timer = QTimer(self)
+        self.digest_timer.setInterval(DIGEST_REFRESH_SECONDS * 1000)
+        self.digest_timer.timeout.connect(self._check_digest_notification)
+
         self.rebuild_menu()
         self.refresh_timer.start()
+        self.digest_timer.start()
         QTimer.singleShot(0, self.refresh)
 
     # ── portable tray helpers ─────────────────────────────────────────────────
@@ -1593,6 +1654,34 @@ class RaiosTray(QObject):
 
     def _notify(self, message: str) -> None:
         self._tray.showMessage(APP_NAME, message, QSystemTrayIcon.Information, 5000)
+
+    # ── background-activity notifications ───────────────────────────────────
+
+    def _check_important_notifications(self) -> None:
+        token = read_token()
+        query = urllib.parse.urlencode({"client_id": notification_client_id()})
+        data = api_get(f"/api/notifications/important?{query}", token)
+        if not data or data.get("status") != "ok":
+            return
+        for event in data.get("events", []):
+            summary = event.get("summary", "")
+            if summary:
+                self._notify(summary)
+
+    def _check_digest_notification(self) -> None:
+        token = read_token()
+        query = urllib.parse.urlencode({"client_id": notification_client_id()})
+        data = api_get(f"/api/notifications/digest?{query}", token)
+        if not data or data.get("status") != "ok":
+            return
+        digest = data.get("digest")
+        if not digest:
+            return
+        message = digest.get("summary", "")
+        rec = digest.get("top_recommendation")
+        if rec:
+            message += f"\nTop recommendation: {rec}"
+        self._notify(message)
 
     # ── icon ─────────────────────────────────────────────────────────────────
 
@@ -1612,6 +1701,7 @@ class RaiosTray(QObject):
         self._fetching = True
         try:
             self._apply_state(fetch_state())
+            self._check_important_notifications()
         finally:
             self._fetching = False
 

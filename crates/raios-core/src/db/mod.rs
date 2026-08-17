@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection, Result};
 use std::path::Path;
 
+pub mod activity_events;
 pub mod agent_stats;
 pub mod budget_gate;
 pub mod control_plane;
@@ -28,6 +29,7 @@ pub mod wf_sessions;
 pub mod wf_swarm;
 pub mod wf_task_graph;
 
+pub use activity_events::*;
 pub use agent_stats::*;
 pub use budget_gate::*;
 pub use control_plane::*;

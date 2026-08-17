@@ -31,6 +31,7 @@ pub async fn start_git_worker(
             projects.len()
         );
 
+        let conn = raios_core::db::open_db().ok();
         let mut updated = false;
         {
             let mut s = state.write().await;
@@ -62,6 +63,14 @@ pub async fn start_git_worker(
                     };
 
                     if proj.status != new_status {
+                        if let Some(ref conn) = conn {
+                            log_status_change_as_activity(
+                                conn,
+                                &proj.name,
+                                &proj.status,
+                                &new_status,
+                            );
+                        }
                         proj.status = new_status;
                         updated = true;
                     }
@@ -117,5 +126,55 @@ pub async fn start_git_worker(
 
         // Wait before next scan (e.g., 2 minutes)
         sleep(interval).await;
+    }
+}
+
+/// Log a routine `activity_events` row for a project's git status change.
+/// Best-effort: a failed write is logged to stderr but never propagated —
+/// this must never break the git-status update itself.
+fn log_status_change_as_activity(
+    conn: &rusqlite::Connection,
+    project_name: &str,
+    old_status: &str,
+    new_status: &str,
+) {
+    let summary = format!("{project_name}: {old_status} → {new_status}");
+    if let Err(e) = raios_core::db::log_activity_event(
+        conn,
+        "git",
+        Some(project_name),
+        "routine",
+        &summary,
+        None,
+    ) {
+        eprintln!("[Daemon] Failed to log git activity event for {project_name}: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_status_change_as_activity_writes_routine_row_with_old_and_new_status() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap(); // see Task 5 note on locating the real helper name
+
+        log_status_change_as_activity(&conn, "demo-project", "active", "beklemede");
+
+        let (tier, summary): (String, String) = conn
+            .query_row(
+                "SELECT tier, summary FROM activity_events WHERE source = 'git'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tier, "routine");
+        // Exact-structure assertion: "active" and "beklemede" share no substring
+        // relationship, so this can only pass if the *distinct* old and new
+        // status values both landed in their correct position around the
+        // arrow — it cannot pass under a log-after-mutate bug where both
+        // arguments accidentally carry the new status.
+        assert_eq!(summary, "demo-project: active → beklemede");
     }
 }

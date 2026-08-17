@@ -23,6 +23,8 @@ pub struct DaemonConfig {
     pub lifecycle_interval_secs: u64,
     pub enable_scheduler_worker: bool,
     pub scheduler_interval_secs: u64,
+    /// How often the routine-activity digest fires (seconds). 0 = every poll.
+    pub digest_interval_secs: u64,
 }
 
 impl Default for DaemonConfig {
@@ -52,6 +54,7 @@ impl Default for DaemonConfig {
             lifecycle_interval_secs: 3600,
             enable_scheduler_worker: true,
             scheduler_interval_secs: 60,
+            digest_interval_secs: 1800,
         }
     }
 }
@@ -435,5 +438,11 @@ targets = ["~/.claude/rules"]
             config.bootstrap.rule_sync_repos[0].targets,
             vec!["~/.claude/rules".to_string()]
         );
+    }
+
+    #[test]
+    fn daemon_config_default_digest_interval_is_thirty_minutes() {
+        let config = DaemonConfig::default();
+        assert_eq!(config.digest_interval_secs, 1800);
     }
 }

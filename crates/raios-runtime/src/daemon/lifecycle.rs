@@ -5,6 +5,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, RwLock};
 use tokio::time::sleep;
 
+const ACTIVITY_EVENT_RETENTION_DAYS: i64 = 30;
+
 /// Auto-lifecycle worker: transitions project statuses based on git activity.
 ///
 /// Transitions:
@@ -53,6 +55,8 @@ pub async fn start_lifecycle_worker(
             }
         };
 
+        prune_stale_activity_events(&conn);
+
         let mut updated = false;
 
         for proj in &projects {
@@ -82,6 +86,7 @@ pub async fn start_lifecycle_worker(
                 if let Err(e) = raios_core::db::update_project_status(&conn, &path_str, status) {
                     eprintln!("[Lifecycle] Failed to update {}: {e}", proj.name);
                 } else {
+                    log_transition_as_activity(&conn, &proj.name, current, status);
                     println!(
                         "[Lifecycle] {} → {} (age: {}d)",
                         proj.name,
@@ -146,6 +151,25 @@ fn next_lifecycle_status(
     }
 }
 
+fn log_transition_as_activity(
+    conn: &rusqlite::Connection,
+    project_name: &str,
+    old_status: &str,
+    new_status: &str,
+) {
+    let summary = format!("{project_name}: {old_status} → {new_status}");
+    if let Err(e) = raios_core::db::log_activity_event(
+        conn,
+        "lifecycle",
+        Some(project_name),
+        "important",
+        &summary,
+        None,
+    ) {
+        eprintln!("[Lifecycle] Failed to log activity event for {project_name}: {e}");
+    }
+}
+
 fn last_commit_timestamp(repo: &std::path::Path) -> Option<u64> {
     let out = Command::new("git")
         .current_dir(repo)
@@ -155,6 +179,14 @@ fn last_commit_timestamp(repo: &std::path::Path) -> Option<u64> {
 
     let ts_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
     ts_str.parse::<u64>().ok()
+}
+
+fn prune_stale_activity_events(conn: &rusqlite::Connection) {
+    match raios_core::db::prune_activity_events_older_than(conn, ACTIVITY_EVENT_RETENTION_DAYS) {
+        Ok(0) => {}
+        Ok(n) => println!("[Lifecycle] Pruned {n} stale activity_events row(s)."),
+        Err(e) => eprintln!("[Lifecycle] activity_events prune failed: {e}"),
+    }
 }
 
 #[cfg(test)]
@@ -213,5 +245,46 @@ mod tests {
             next_lifecycle_status("active", 90 * DAY, 14 * DAY, 90 * DAY),
             Some("archived")
         );
+    }
+
+    #[test]
+    fn log_transition_as_activity_writes_important_row() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        log_transition_as_activity(&conn, "demo-project", "active", "beklemede");
+
+        let (tier, project, summary): (String, Option<String>, String) = conn
+            .query_row(
+                "SELECT tier, project, summary FROM activity_events WHERE source = 'lifecycle'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(tier, "important");
+        assert_eq!(project.as_deref(), Some("demo-project"));
+        assert!(summary.contains("active"));
+        assert!(summary.contains("beklemede"));
+    }
+
+    #[test]
+    fn lifecycle_tick_prunes_activity_events_older_than_30_days() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        // Insert a stale row from 2020
+        conn.execute(
+            "INSERT INTO activity_events (ts, source, project, tier, summary)
+             VALUES ('2020-01-01T00:00:00Z', 'git', 'old', 'routine', 'stale')",
+            [],
+        )
+        .unwrap();
+
+        prune_stale_activity_events(&conn);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
