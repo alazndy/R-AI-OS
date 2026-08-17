@@ -80,7 +80,7 @@ fn probe_port(port: u16) -> bool {
 pub fn cmd_start(json: bool) {
     // If the daemon TCP port is already responding, hub is running regardless of PID file
     if probe_port(DAEMON_PORT) {
-        let pid = read_pid().filter(|&p| is_alive(p));
+        let pid = resolve_running_pid().filter(|&p| is_alive(p));
         if json {
             println!(
                 "{{\"status\":\"already_running\",\"pid\":{}}}",
@@ -303,6 +303,13 @@ pub fn cmd_status(json: bool) {
         }
         None => ipc_up,
     };
+
+    // systemd-managed instances do not write our legacy PID file. Resolve the
+    // listener owner so status output and JSON still identify the real daemon
+    // instead of incorrectly labelling it as orphaned.
+    if running && pid.is_none() {
+        pid = find_pid_by_port(DAEMON_PORT).filter(|&p| is_alive(p));
+    }
 
     if json {
         println!(
@@ -710,6 +717,15 @@ mod libc {
 mod tests {
     use super::{apply_api_key_hash, mask_secret, systemd_unit_content};
     use std::path::Path;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn finds_the_pid_that_owns_a_listening_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        assert_eq!(super::find_pid_by_port(port), Some(std::process::id()));
+    }
 
     #[test]
     fn apply_api_key_hash_replaces_an_existing_hash_in_place() {
