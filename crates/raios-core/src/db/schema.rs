@@ -855,5 +855,60 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
         ",
     )?;
 
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS activity_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts          TEXT NOT NULL DEFAULT (datetime('now','utc')),
+            source      TEXT NOT NULL,
+            project     TEXT,
+            tier        TEXT NOT NULL CHECK(tier IN ('important','routine')),
+            summary     TEXT NOT NULL,
+            detail_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_events_tier_ts ON activity_events(tier, ts);
+
+        CREATE TABLE IF NOT EXISTS notification_cursors (
+            client_id         TEXT PRIMARY KEY,
+            last_important_ts TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
+            last_digest_ts    TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'
+        );
+        ",
+    )?;
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_creates_activity_events_and_notification_cursors_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO activity_events (ts, source, project, tier, summary, detail_json)
+             VALUES ('2026-08-17T12:00:00Z', 'lifecycle', 'demo-project', 'important', 'demo-project archived', NULL)",
+            [],
+        )
+        .expect("activity_events insert should succeed");
+
+        conn.execute(
+            "INSERT INTO notification_cursors (client_id, last_important_ts, last_digest_ts)
+             VALUES ('raios-tray', '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("notification_cursors insert should succeed");
+
+        let summary: String = conn
+            .query_row(
+                "SELECT summary FROM activity_events WHERE source = 'lifecycle'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(summary, "demo-project archived");
+    }
 }

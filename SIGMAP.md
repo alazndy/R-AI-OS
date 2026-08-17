@@ -292,9 +292,46 @@ pub async fn start_lifecycle_worker(state: Arc<RwLock<DaemonState>>, tx: broadca
 pub struct AgentProcess  :98-104
 pub struct ExecutionProxy  :107-110
 impl ExecutionProxy  :112-325
-  pub fn new(state: Arc<RwLock<DaemonState>>) → Self  :113-113
-  pub fn with_event_tx(mut self, tx: tokio::sync::broadcast::Sender<String>) → Self  :120-120
-  pub async fn spawn_agent(&self, agent_name: &str, project_path: &str, timeout_secs: u64,) → Result<String>  :137-142
+pub fn new  :113-113
+pub fn with_event_tx  :120-120
+pub async fn spawn_agent  :137-142
+```
+
+### crates/raios-runtime/src/daemon/scheduler.rs
+```
+pub async fn start_scheduler_worker(_state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, check_interval: Duration,)  :8-114
+```
+
+### crates/raios-runtime/src/daemon/sentinel.rs
+```
+pub async fn start_sentinel_worker(state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>, interval: Duration,)  :11-104
+```
+
+### crates/raios-runtime/src/daemon/server.rs
+```
+pub struct Server  :11-16
+impl Server  :18-143
+  pub fn new(state: Arc<RwLock<DaemonState>>) → Self  :19-19
+  pub async fn run_with_tx(&self, tx: broadcast::Sender<String>) → anyhow::Result<()>  :33-33
+  pub async fn run(&self) → anyhow::Result<()>  :37-37
+```
+
+### crates/raios-runtime/src/daemon/state.rs
+```
+pub struct SentinelFileStatus  :13-17
+pub struct FileChangeApproval  :20-30
+pub struct ValidationError  :33-38
+pub struct PendingDiff  :41-50
+pub struct DaemonState  :54-68
+impl DaemonState  :70-112
+  pub fn new() → Arc<RwLock<Self>>  :71-71
+  pub fn refresh_pending_from_db(&mut self)  :77-77
+  pub fn sync_payload(&self) → serde_json::Value  :99-99
+```
+
+### crates/raios-runtime/src/daemon/validation.rs
+```
+pub async fn start_validation_worker(state: Arc<RwLock<DaemonState>>, mut tx_rx: broadcast::Receiver<String>, tx_broadcast: broadcast::Sender<String>,)  :7-70
 ```
 
 ### crates/raios-runtime/src/daemon/scheduler.rs
