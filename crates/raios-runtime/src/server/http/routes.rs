@@ -453,6 +453,97 @@ fn decode_base64(s: &str) -> anyhow::Result<Vec<u8>> {
         .map_err(Into::into)
 }
 
+#[derive(Deserialize)]
+pub(super) struct ClientIdQuery {
+    client_id: String,
+}
+
+pub(super) async fn handle_notifications_important(
+    Query(params): Query<ClientIdQuery>,
+) -> impl IntoResponse {
+    match raios_core::db::open_db() {
+        Ok(conn) => match raios_core::db::poll_important_events(&conn, &params.client_id) {
+            Ok(events) => Json(json!({ "status": "ok", "events": events })),
+            Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
+        },
+        Err(e) => Json(json!({ "status": "error", "message": e.to_string() })),
+    }
+}
+
+pub(super) async fn handle_notifications_digest(
+    Query(params): Query<ClientIdQuery>,
+) -> impl IntoResponse {
+    let config =
+        Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
+
+    let conn = match raios_core::db::open_db() {
+        Ok(c) => c,
+        Err(e) => return Json(json!({ "status": "error", "message": e.to_string() })),
+    };
+
+    let window = match raios_core::db::poll_digest_window(
+        &conn,
+        &params.client_id,
+        config.daemon.digest_interval_secs as i64,
+    ) {
+        Ok(w) => w,
+        Err(e) => return Json(json!({ "status": "error", "message": e.to_string() })),
+    };
+
+    let Some(window) = window else {
+        return Json(json!({ "status": "ok", "digest": null }));
+    };
+
+    let projects = raios_core::entities::discover_entities(&config.dev_ops_path);
+    let snapshots: Vec<_> = projects
+        .iter()
+        .map(raios_runtime::reflect_scoring::snapshot)
+        .collect();
+    let top_recommendation = raios_runtime::reflect_scoring::build_recommendations(&snapshots)
+        .into_iter()
+        .next();
+
+    let summary = build_digest_summary(&window.events);
+
+    Json(json!({
+        "status": "ok",
+        "digest": {
+            "since_ts": window.since_ts,
+            "until_ts": window.until_ts,
+            "summary": summary,
+            "top_recommendation": top_recommendation,
+            "event_count": window.events.len(),
+        }
+    }))
+}
+
+fn build_digest_summary(events: &[raios_core::db::ActivityEvent]) -> String {
+    if events.is_empty() {
+        return "No background activity.".to_string();
+    }
+
+    let mut by_source: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for e in events {
+        *by_source.entry(e.source.as_str()).or_insert(0) += 1;
+    }
+
+    let order = ["git", "health", "scheduler", "agent_run"];
+    let clauses: Vec<String> = order
+        .iter()
+        .filter_map(|source| {
+            by_source.get(source).map(|count| match *source {
+                "git" => format!("{count} git status change(s)"),
+                "health" => format!("{count} health scan update(s)"),
+                "scheduler" => format!("{count} scheduled job(s) ran"),
+                "agent_run" => format!("{count} agent run(s) completed"),
+                _ => unreachable!(),
+            })
+        })
+        .collect();
+
+    clauses.join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::resolve_pending_diff_target;
@@ -500,5 +591,86 @@ mod tests {
             idempotency_key: "idem-2".into(),
         };
         assert!(super::http_may_execute(&allowed));
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+
+    #[test]
+    fn build_digest_summary_returns_quiet_message_when_no_events() {
+        assert_eq!(build_digest_summary(&[]), "No background activity.");
+    }
+
+    #[test]
+    fn build_digest_summary_groups_by_source_in_fixed_order() {
+        let events = vec![
+            raios_core::db::ActivityEvent {
+                ts: "t1".into(),
+                source: "scheduler".into(),
+                project: None,
+                summary: "x".into(),
+            },
+            raios_core::db::ActivityEvent {
+                ts: "t2".into(),
+                source: "git".into(),
+                project: Some("a".into()),
+                summary: "y".into(),
+            },
+        ];
+        let summary = build_digest_summary(&events);
+        // git must appear before scheduler, matching the fixed `order` array
+        let git_pos = summary.find("git").unwrap();
+        let sched_pos = summary.find("scheduled").unwrap();
+        assert!(git_pos < sched_pos);
+    }
+
+    #[test]
+    fn build_digest_summary_reports_exact_counts_per_source() {
+        // Regression guard: a subtly wrong count (e.g. off-by-one from mixing
+        // up sources, or double-counting) would still pass a substring-only
+        // check like `contains("git")`. Assert the literal formatted clause.
+        let events = vec![
+            raios_core::db::ActivityEvent {
+                ts: "t1".into(),
+                source: "git".into(),
+                project: Some("a".into()),
+                summary: "a".into(),
+            },
+            raios_core::db::ActivityEvent {
+                ts: "t2".into(),
+                source: "git".into(),
+                project: Some("b".into()),
+                summary: "b".into(),
+            },
+            raios_core::db::ActivityEvent {
+                ts: "t3".into(),
+                source: "agent_run".into(),
+                project: None,
+                summary: "c".into(),
+            },
+        ];
+        let summary = build_digest_summary(&events);
+        assert_eq!(summary, "2 git status change(s); 1 agent run(s) completed");
+    }
+
+    #[test]
+    fn build_digest_summary_omits_sources_with_zero_events() {
+        // Only "health" events present — the other three fixed-order
+        // categories (git, scheduler, agent_run) must not appear at all,
+        // not just appear with a "0" count.
+        let events = vec![raios_core::db::ActivityEvent {
+            ts: "t1".into(),
+            source: "health".into(),
+            project: None,
+            summary: "scan".into(),
+        }];
+        let summary = build_digest_summary(&events);
+        assert_eq!(summary, "1 health scan update(s)");
+        assert!(!summary.contains("git"));
+        assert!(!summary.contains("scheduler"));
+        assert!(!summary.contains("scheduled"));
+        assert!(!summary.contains("agent run"));
     }
 }

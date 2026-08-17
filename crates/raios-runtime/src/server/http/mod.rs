@@ -18,8 +18,9 @@ use a2a::{handle_a2a, handle_agent_card};
 use auth::auth_middleware;
 use routes::{
     handle_approve, handle_cp_command, handle_cp_query, handle_factory_command,
-    handle_factory_overview, handle_git_status, handle_health, handle_inbox, handle_plans,
-    handle_projects, handle_steer, handle_swarm, handle_tasks, handle_usage,
+    handle_factory_overview, handle_git_status, handle_health, handle_inbox,
+    handle_notifications_digest, handle_notifications_important, handle_plans, handle_projects,
+    handle_steer, handle_swarm, handle_tasks, handle_usage,
 };
 use websocket::handle_websocket;
 
@@ -76,6 +77,14 @@ pub async fn start_http_server(
         .route("/api/tasks", get(handle_tasks))
         .route("/api/inbox", get(handle_inbox))
         .route("/api/usage", get(handle_usage))
+        .route(
+            "/api/notifications/important",
+            get(handle_notifications_important),
+        )
+        .route(
+            "/api/notifications/digest",
+            get(handle_notifications_digest),
+        )
         .route("/api/plans", get(handle_plans))
         .route("/api/approve", post(handle_approve))
         .route("/api/agents/steer", post(handle_steer))

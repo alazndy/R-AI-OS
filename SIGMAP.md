@@ -683,6 +683,13 @@ pub fn scan_project(root: &Path) → RefactorReport  :142-144
 pub fn scan_project_with(root: &Path, config: &RefactorConfig) → RefactorReport  :146-183
 ```
 
+### crates/raios-runtime/src/reflect_scoring.rs
+```
+pub struct ProjectSnapshot  :6-14
+pub fn snapshot(p: &EntityProject) → ProjectSnapshot  :16-37
+pub fn build_recommendations(snaps: &[ProjectSnapshot]) → Vec<String>  :73-117
+```
+
 ### crates/raios-runtime/src/search/hybrid.rs
 ```
 pub struct HybridResult  :19-32
@@ -739,9 +746,9 @@ impl A2aResponse  :82-102
 
 ### crates/raios-runtime/src/server/http/mod.rs
 ```
-pub fn resolve_bind_addr(port: u16) → SocketAddr  :33-53
-pub fn detect_tailscale_ip() → Option<std::net::IpAddr>  :56-62
-pub async fn start_http_server(port: u16, daemon_state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>,) → anyhow::Result<()>  :65-105
+pub fn resolve_bind_addr(port: u16) → SocketAddr  :34-54
+pub fn detect_tailscale_ip() → Option<std::net::IpAddr>  :57-63
+pub async fn start_http_server(port: u16, daemon_state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>,) → anyhow::Result<()>  :66-114
 ```
 
 ### crates/raios-runtime/src/session_canvas.rs
@@ -995,6 +1002,11 @@ pub fn cmd_api_key_generate(force: bool)  :630-697
 ### crates/raios-surface-cli/src/cli/mod.rs
 ```
 pub fn run(cli: Cli)  :81-221
+```
+
+### crates/raios-surface-cli/src/cli/reflect.rs
+```
+pub fn cmd_reflect(dev_ops_path: &Path, json: bool)  :5-19
 ```
 
 ### crates/raios-surface-cli/src/cli/security/audit.rs
