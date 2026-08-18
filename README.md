@@ -25,11 +25,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.8.0-blue?style=for-the-badge" alt="Version"></a>
+  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.9.0-blue?style=for-the-badge" alt="Version"></a>
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
-  <a href="#-vs-code-extension"><img src="https://img.shields.io/badge/VS%20Code-v0.8.1-blueviolet?style=for-the-badge&logo=visualstudiocode" alt="VS Code"></a>
+  <a href="#-vs-code-extension"><img src="https://img.shields.io/badge/VS%20Code-v0.9.0-blueviolet?style=for-the-badge&logo=visualstudiocode" alt="VS Code"></a>
 </p>
 
 <p align="center">
@@ -112,6 +112,8 @@ Matching is by exact tool `name`, not by a path glob — per-path filesystem acc
 ### Phase 3 — Audit Chain
 
 Every allow/deny decision is written to a tamper-evident, SHA-256 hash-chained SQLite ledger. Each entry links to the previous entry's hash — any tampering is immediately detectable.
+
+Concurrent writers are serialized at the predecessor-read boundary: standalone appends acquire an immediate SQLite write transaction before reading the current tail, while audit rows participating in a larger domain transaction remain atomic with that transaction. Two connections therefore cannot legitimately create separate children of the same predecessor.
 
 ```bash
 raios verify-chain          # verify full chain integrity
@@ -283,7 +285,7 @@ lifecycle_interval_secs = 3600
 
 ---
 
-## 🖥️ VS Code Extension (v0.8.1)
+## 🖥️ VS Code Extension (v0.9.0)
 
 R-AI-OS ships a native VS Code extension that turns the IDE into a **Hybrid UI** — the control panel for your agent swarm directly in your sidebar.
 
@@ -324,7 +326,7 @@ vscode-extension/
 No `.vsix` is committed to the repo. Every [GitHub Release](https://github.com/alazndy/R-AI-OS/releases/latest) attaches a prebuilt `raios-<version>.vsix` as a release asset — download it and install directly, no Node toolchain required:
 
 ```bash
-code --install-extension raios-0.8.1.vsix --force
+code --install-extension raios-0.9.0.vsix --force
 ```
 
 To build from source instead, use the bundled script — it compiles, repackages, **uninstalls any existing `alazndy.raios` install first**, then installs the fresh `.vsix`. This guarantees only one version is ever registered, no matter how many times you re-run it:
@@ -372,7 +374,7 @@ tools/raios-tray/
 - **Project Quick Launcher**: Open a terminal running an agent (`claude`/`codex`/`opencode`/`agy`) in a project's directory, or launch VS Code — auto-detects the first available terminal emulator (`ptyxis`, `gnome-terminal`, `konsole`, `xfce4-terminal`, or `x-terminal-emulator` on Linux; `Terminal.app` on macOS; PowerShell on Windows).
 - **Project Manager**: Add, edit, remove, and pin tracked projects from a dedicated dialog; pinned projects surface at the top of the tray menu.
 - **Memory & Task Panels**: Shows recent `mem_items` and open tasks from the workspace database directly in the tray UI.
-- **Systemd User Integration**: Managed as a user service via `raios-tray.service` pointing to its canonical virtual environment (`tools/raios-tray/.venv/bin/python`).
+- **Systemd User Integration**: Managed as a user service via `raios-tray.service` pointing to its canonical virtual environment (`tools/raios-tray/.venv/bin/python`). The unit is enabled under `graphical-session.target`, preventing Qt from starting before the Wayland/X11 session exists and stopping the tray before the display disappears.
 - **Structured Debug Logging**: Diagnostics written to `~/.config/raios/tray.log`.
 
 ---
@@ -415,7 +417,7 @@ tools/raios-factory-ui/
 curl -fsSL https://raw.githubusercontent.com/alazndy/R-AI-OS/master/scripts/get-raios.sh | sh
 ```
 
-Downloads the latest signed release from [GitHub Releases](https://github.com/alazndy/R-AI-OS/releases), verifies its sha256 checksum, and installs `raios`/`aiosd` to `~/.local/bin` (override with `RAIOS_INSTALL_DIR`). Pin a specific version with `RAIOS_VERSION=v3.8.0 curl ... | sh`. No arm64/Apple Silicon build yet — Apple Silicon Macs and ARM Linux need the build-from-source path below.
+Downloads the latest signed release from [GitHub Releases](https://github.com/alazndy/R-AI-OS/releases), verifies its sha256 checksum, and installs `raios`/`aiosd` to `~/.local/bin` (override with `RAIOS_INSTALL_DIR`). Pin a specific version with `RAIOS_VERSION=v3.9.0 curl ... | sh`. No arm64/Apple Silicon build yet — Apple Silicon Macs and ARM Linux need the build-from-source path below.
 
 ### From source (any platform/architecture)
 
@@ -631,6 +633,9 @@ targets = ["~/.claude/rules", "~/.antigravity/rules"]
 | :--- | :--- |
 | `raios health` | Portfolio health dashboard — scans all projects |
 | `raios health <project>` | Single-project health scan |
+| `raios db check [--full]` | Read-only SQLite quick check (or exhaustive integrity check) plus DB/WAL/free-page/snapshot metrics |
+| `raios db backup [--keep 1..=10]` | Create an online, SHA-256-recorded, integrity-checked private snapshot; retains 3 by default |
+| `raios db checkpoint [--truncate]` | Checkpoint committed WAL frames; passive by default, optionally truncating the WAL file |
 | `raios usage` | Show local usage/quota signals across AI tools |
 | `raios search "<query>"` | Semantic search across portfolio |
 | `raios locate "<pattern>" [--dir <path>] [-i] [--reindex]` | Exhaustive exact/regex search over the trigram index (grep-equivalent) |
@@ -684,6 +689,9 @@ Existing Git repositories can be attached through `FactoryCommand::AttachExistin
 
 `raios usage` intentionally separates exact quota data from local auth metadata. If a provider does not expose remaining/reset counters locally, R-AI-OS prints `unknown` instead of guessing.
 
+Database snapshots and the operator-controlled offline restore procedure are
+documented in [`docs/DATABASE_RECOVERY.md`](docs/DATABASE_RECOVERY.md).
+
 ---
 
 ## 📁 Project Structure
@@ -733,7 +741,7 @@ vscode-extension/
 - [x] **Phase 17:** 4-Agent Matrix & Atomic Handoff — Gemini CLI retired; Claude/Codex/OpenCode/Antigravity (`agy`) as canonical identities; `raios handoff` on the control plane with real per-CLI prompt injection, secret scanning, diff-stat attachment, and stale-handoff supersede; new TUI **Inbox** panel
 - [x] **Phase 18:** `aiosd` systemd user service auto-start on login — `aiosd.service` enabled via `systemctl --user enable aiosd`, `WantedBy=default.target`
 - [x] **Phase 19:** Cortex Real Embeddings — `default = ["cortex"]`, fastembed all-MiniLM-L6-v2, adaptive CPU throttling in embed_batch
-- [x] **Phase 20:** Autonomous Scheduler — `raios cron add/list/remove/pause/resume/run`, `cp_scheduled_jobs` control-plane table, atomic claim worker, `spawn_agent_detached` helper
+- [x] **Phase 20:** Autonomous Scheduler — `raios cron add/list/remove/pause/resume/run`, `cp_scheduled_jobs` control-plane table, atomic claim worker, detached spawn helpers, and a process-wide child reaper that consumes every scheduled child exit status
 - [x] **Phase 21:** Trace Memory — `raios trace`, handoff/runtime recall, session-review auto trace, trace-to-evolution candidates, and MemPalace KG export
 - [x] **Phase 22:** Layered Memory & Lineage (L0→L3) — `mem_nodes`/`mem_lineage` give `mem_items` real traceability; replace-and-archive `mem_upsert` (fixes unbounded body growth); deterministic L1 atomic facts, L2 daily scenes, L3 persona; `raios mem history`/`--layer`; Mermaid `raios sessions --canvas`
 - [x] **Phase 23:** Operational Hardening — pattern-scan self-disclosure in `raios security`/`raios refactor`; `sigmap` config drift fix; `session_memory.rs` split into a focused module; `raios usage` reads live Claude Pro/Max quota via a statusLine cache bridge

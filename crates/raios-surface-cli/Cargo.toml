@@ -1,6 +1,6 @@
 [package]
 name = "raios-surface-cli"
-version = "3.8.0"
+version.workspace = true
 edition = "2021"
 license = "AGPL-3.0-only"
 

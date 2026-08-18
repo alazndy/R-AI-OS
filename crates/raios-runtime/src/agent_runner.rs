@@ -6,10 +6,10 @@ use std::io::{self, BufRead, BufReader};
 #[cfg(unix)]
 use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    mpsc, Arc, LazyLock, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -19,6 +19,128 @@ const MEMORY_SYNC_INTERVAL_SECS: u64 = 90;
 const BUDGET_LIMIT_KB: u64 = 300;
 
 const MAX_WRAPPER_LAUNCH_INPUT_CHARS: usize = 600;
+
+const DETACHED_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+struct DetachedChild {
+    child: Child,
+    completion: Option<mpsc::Sender<ExitStatus>>,
+    poll_error_reported: bool,
+}
+
+static DETACHED_CHILD_REAPER: LazyLock<Mutex<Option<mpsc::Sender<DetachedChild>>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+fn submit_detached_child(child: Child) -> Result<(), String> {
+    submit_detached_child_request(DetachedChild {
+        child,
+        completion: None,
+        poll_error_reported: false,
+    })
+}
+
+#[cfg(test)]
+fn submit_detached_child_for_test(child: Child) -> Result<mpsc::Receiver<ExitStatus>, String> {
+    let (completion_tx, completion_rx) = mpsc::channel();
+    submit_detached_child_request(DetachedChild {
+        child,
+        completion: Some(completion_tx),
+        poll_error_reported: false,
+    })?;
+    Ok(completion_rx)
+}
+
+fn submit_detached_child_request(mut request: DetachedChild) -> Result<(), String> {
+    let sender = {
+        let mut reaper = match DETACHED_CHILD_REAPER.lock() {
+            Ok(reaper) => reaper,
+            Err(_) => {
+                terminate_and_reap(&mut request.child);
+                return Err("Detached child reaper state is poisoned".to_string());
+            }
+        };
+
+        if reaper.is_none() {
+            let (sender, receiver) = mpsc::channel();
+            if let Err(error) = thread::Builder::new()
+                .name("raios-child-reaper".to_string())
+                .spawn(move || detached_child_reaper(receiver))
+            {
+                terminate_and_reap(&mut request.child);
+                return Err(format!("Failed to start detached child reaper: {error}"));
+            }
+            *reaper = Some(sender);
+        }
+
+        match reaper.as_ref() {
+            Some(sender) => sender.clone(),
+            None => {
+                terminate_and_reap(&mut request.child);
+                return Err("Detached child reaper failed to initialize".to_string());
+            }
+        }
+    };
+
+    if let Err(mpsc::SendError(mut rejected)) = sender.send(request) {
+        if let Ok(mut reaper) = DETACHED_CHILD_REAPER.lock() {
+            *reaper = None;
+        }
+        terminate_and_reap(&mut rejected.child);
+        return Err("Detached child reaper stopped before accepting the process".to_string());
+    }
+
+    Ok(())
+}
+
+fn terminate_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn detached_child_reaper(receiver: mpsc::Receiver<DetachedChild>) {
+    let mut children = Vec::new();
+    let mut disconnected = false;
+
+    loop {
+        if !disconnected {
+            match receiver.recv_timeout(DETACHED_CHILD_POLL_INTERVAL) {
+                Ok(child) => children.push(child),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => disconnected = true,
+            }
+            children.extend(receiver.try_iter());
+        } else {
+            thread::sleep(DETACHED_CHILD_POLL_INTERVAL);
+        }
+
+        let mut index = 0;
+        while index < children.len() {
+            match children[index].child.try_wait() {
+                Ok(Some(status)) => {
+                    let mut finished = children.swap_remove(index);
+                    if let Some(completion) = finished.completion.take() {
+                        let _ = completion.send(status);
+                    }
+                }
+                Ok(None) => index += 1,
+                Err(error) => {
+                    if !children[index].poll_error_reported {
+                        eprintln!(
+                            "raios child reaper could not poll PID {}: {error}",
+                            children[index].child.id()
+                        );
+                        children[index].poll_error_reported = true;
+                    }
+                    index += 1;
+                }
+            }
+        }
+
+        if disconnected && children.is_empty() {
+            break;
+        }
+    }
+}
 
 /// Codex's own `workspace-write` sandbox (its default for agentic shell
 /// commands) blocks all outbound sockets, including loopback TCP, unless
@@ -668,8 +790,10 @@ pub fn spawn_agent_detached(
         Ok(c) => c,
         Err(e) => return Err(format!("Failed to spawn agent: {}", e)),
     };
+    let child_pid = child.id();
+    submit_detached_child(child)?;
 
-    Ok(child.id())
+    Ok(child_pid)
 }
 
 /// Inject a RAIOS session block into ~/.claude/CLAUDE.md so the session ID
@@ -755,7 +879,9 @@ pub fn spawn_ext_command_detached(ext_name: &str, command: &str) -> Result<u32, 
         .arg(command)
         .spawn()
         .map_err(|e| format!("Failed to spawn 'raios ext {ext_name} {command}': {e}"))?;
-    Ok(child.id())
+    let child_pid = child.id();
+    submit_detached_child(child)?;
+    Ok(child_pid)
 }
 
 /// Maps a spawnable agent name to its Kaira identity for handoff lookups.
@@ -790,6 +916,28 @@ fn get_dir_size(path: &Path) -> std::io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detached_child_reaper_waits_for_short_lived_processes() {
+        #[cfg(unix)]
+        let child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("short-lived test child should spawn");
+        #[cfg(windows)]
+        let child = Command::new("cmd")
+            .args(["/C", "exit 0"])
+            .spawn()
+            .expect("short-lived test child should spawn");
+
+        let completion = submit_detached_child_for_test(child)
+            .expect("child should be accepted by the detached reaper");
+        let status = completion
+            .recv_timeout(Duration::from_secs(5))
+            .expect("reaper should wait for the child before the timeout");
+
+        assert!(status.success());
+    }
 
     #[test]
     fn codex_command_always_enables_workspace_write_network_access() {

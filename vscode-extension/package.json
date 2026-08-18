@@ -3,7 +3,7 @@
   "publisher": "alazndy",
   "displayName": "R-AI-OS",
   "description": "R-AI-OS Kernel integration for VS Code",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "license": "AGPL-3.0-or-later",
   "icon": "icon128.png",
   "repository": {
