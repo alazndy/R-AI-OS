@@ -431,7 +431,13 @@ fn remove_regular_file_if_present(path: &Path) {
 }
 
 fn sync_file(path: &Path) -> Result<()> {
-    File::open(path)
+    // Windows requires a writable handle for FlushFileBuffers, which is what
+    // std::fs::File::sync_all uses under the hood. Opening read-only works on
+    // Unix but returns ERROR_ACCESS_DENIED on the Windows CI runner.
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
         .with_context(|| format!("failed to reopen {} for sync", path.display()))?
         .sync_all()
         .with_context(|| format!("failed to sync {}", path.display()))
