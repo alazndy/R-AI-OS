@@ -296,7 +296,7 @@ vscode-extension/
 │   ├── ipc/
 │   │   ├── DaemonClient.ts       # TCP :42069 connection
 │   │   ├── TokenBridge.ts        # Session token proxy (XSS-safe)
-│   │   └── DaemonManager.ts      # Auto-spawn aiosd, poll token file
+│   │   └── DaemonManager.ts      # Systemd-first startup, authenticated readiness
 │   └── providers/
 │       ├── SidebarProvider.ts    # Main WebviewView control panel
 │       ├── StatusBarProvider.ts  # Live daemon indicator
@@ -318,7 +318,7 @@ vscode-extension/
 ### Security Properties
 
 - **TokenBridge proxy:** The session token never enters the Webview context — all API calls go through the extension host. XSS in the webview cannot exfiltrate the token.
-- **Auto-spawn:** `DaemonManager` starts `aiosd` automatically if the socket isn't listening. Polls the token file and triggers sidebar refresh when ready.
+- **Daemon startup:** on Linux, `DaemonManager` asks the systemd user service to start `aiosd` and waits for an authenticated TCP handshake. Direct detached spawning is a non-systemd fallback, preventing duplicate daemons during desktop login.
 - **Host validation:** All HTTP calls include the `Host: localhost` header, enforced by the Axum auth middleware.
 
 ### Install

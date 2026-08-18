@@ -208,6 +208,7 @@
   },
   "scripts": {
     "compile": "npx tsc -p ./",
+    "test": "node --test test/*.test.mjs",
     "watch": "npx tsc -watch -p ./",
     "package": "vsce package"
   },
