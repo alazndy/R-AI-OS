@@ -1334,9 +1334,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.15"
+version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb093c84e8bd9b188d4c4a8cb6579fc016968d14c99882163cd3ff402a4f155"
+checksum = "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -2775,7 +2775,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "raios-contracts"
-version = "3.8.0"
+version = "3.9.0"
 dependencies = [
  "chrono",
  "serde",
@@ -2786,7 +2786,7 @@ dependencies = [
 
 [[package]]
 name = "raios-core"
-version = "3.8.0"
+version = "3.9.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2810,7 +2810,7 @@ dependencies = [
 
 [[package]]
 name = "raios-runtime"
-version = "3.8.0"
+version = "3.9.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2844,7 +2844,7 @@ dependencies = [
 
 [[package]]
 name = "raios-surface-cli"
-version = "3.8.0"
+version = "3.9.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2874,7 +2874,7 @@ dependencies = [
 
 [[package]]
 name = "raios-surface-mcp"
-version = "3.8.0"
+version = "3.9.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2891,7 +2891,7 @@ dependencies = [
 
 [[package]]
 name = "raios-surface-tui"
-version = "3.8.0"
+version = "3.9.0"
 dependencies = [
  "anyhow",
  "chrono",

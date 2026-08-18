@@ -60,6 +60,12 @@ fn read_cargo_version(dir: &Path) -> Option<String> {
             }
         }
     }
+    if content.lines().any(|line| {
+        let line = line.trim();
+        line == "version.workspace = true" || line == "version = { workspace = true }"
+    }) {
+        return inherited_workspace_version(dir);
+    }
     if content.contains("[workspace]") {
         if let Some(v) = read_cargo_version(&dir.join("crates").join("raios-surface-cli")) {
             return Some(v);
@@ -81,6 +87,29 @@ fn read_cargo_version(dir: &Path) -> Option<String> {
                     if let Some(v) = read_cargo_version(&path) {
                         return Some(v);
                     }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn inherited_workspace_version(member_dir: &Path) -> Option<String> {
+    for ancestor in member_dir.ancestors().skip(1) {
+        let Ok(content) = std::fs::read_to_string(ancestor.join("Cargo.toml")) else {
+            continue;
+        };
+        let mut in_workspace_package = false;
+        for line in content.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_workspace_package = line == "[workspace.package]";
+                continue;
+            }
+            if in_workspace_package && line.starts_with("version") && line.contains('=') {
+                let version = line.split('=').nth(1)?.trim().trim_matches('"');
+                if looks_like_semver(version) {
+                    return Some(version.to_string());
                 }
             }
         }
@@ -594,6 +623,39 @@ mod tests {
         assert!(!looks_like_semver("not-a-version"));
         assert!(!looks_like_semver("1.2"));
         assert!(!looks_like_semver(""));
+    }
+
+    #[test]
+    fn workspace_package_version_is_the_single_writable_source() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("crates/member")).unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/member\"]\n\n\
+             [workspace.package]\nversion = \"3.8.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("crates/member/Cargo.toml"),
+            "[package]\nname = \"member\"\nversion.workspace = true\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_version(temp.path()),
+            Some(("3.8.0".into(), "Rust".into(), "Cargo.toml".into()))
+        );
+        write_version(&temp.path().join("Cargo.toml"), "Rust", "3.8.0", "3.9.0").unwrap();
+
+        let root = std::fs::read_to_string(temp.path().join("Cargo.toml")).unwrap();
+        let member = std::fs::read_to_string(temp.path().join("crates/member/Cargo.toml")).unwrap();
+        assert!(root.contains("version = \"3.9.0\""));
+        assert!(member.contains("version.workspace = true"));
+        assert_eq!(read_cargo_version(temp.path()), Some("3.9.0".into()));
+        assert_eq!(
+            read_cargo_version(&temp.path().join("crates/member")),
+            Some("3.9.0".into())
+        );
     }
 
     // ─── bump_semver ────────────────────────────────────────────────────────

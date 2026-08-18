@@ -19,8 +19,39 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  preflight:
+    name: Verify signed tag and version contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.96.0
+      - name: Verify release versions
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: ./scripts/check-release-version.sh "$RELEASE_TAG"
+      - name: Verify annotated tag signature through GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{tag}")"
+          verified="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq '.verification.verified')"
+          reason="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq '.verification.reason')"
+          test "$verified" = "true" || {
+            echo "release tag $RELEASE_TAG is not signature-verified by GitHub: $reason" >&2
+            exit 1
+          }
+
   package:
     name: Package (${{ matrix.target_name }})
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -79,6 +110,7 @@ jobs:
 
   extension:
     name: Package VS Code extension
+    needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

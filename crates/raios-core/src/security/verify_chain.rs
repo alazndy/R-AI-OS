@@ -1,7 +1,10 @@
 use anyhow::{anyhow, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::time::Duration;
+
+const AUDIT_WRITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -14,6 +17,26 @@ pub fn record_audit_event(
     actor: &str,
     data: &str,
 ) -> Result<()> {
+    // The previous hash and the new row are one serialization boundary. Without
+    // acquiring SQLite's writer slot before the read, two connections can both
+    // observe the same tail and create a fork whose individual hashes are valid.
+    conn.busy_timeout(AUDIT_WRITE_BUSY_TIMEOUT)?;
+    if conn.is_autocommit() {
+        let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        append_audit_event(&tx, event_type, actor, data)?;
+        tx.commit()?;
+    } else {
+        // Callers such as control-plane and Product Factory services include the
+        // audit row in a larger transaction. A no-op write upgrades a deferred
+        // transaction before the tail read without introducing a nested BEGIN.
+        conn.execute("UPDATE audit_log SET id = id WHERE 0", [])?;
+        append_audit_event(conn, event_type, actor, data)?;
+    }
+
+    Ok(())
+}
+
+fn append_audit_event(conn: &Connection, event_type: &str, actor: &str, data: &str) -> Result<()> {
     // Fetch the most recent hash to build the chain
     let prev_hash: String = conn
         .query_row(
@@ -156,6 +179,8 @@ fn compute_hash(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
+    use std::time::Duration;
 
     fn in_memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -247,6 +272,16 @@ mod tests {
     }
 
     #[test]
+    fn caller_owned_transaction_keeps_audit_entry_atomic() {
+        let conn = in_memory_db();
+        let tx = conn.unchecked_transaction().unwrap();
+        record_audit_event(&tx, "tool_confirm", "codex_kaira", "inside tx").unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(verify_chain(&conn).unwrap(), 1);
+    }
+
+    #[test]
     fn broken_link_between_entries_detected() {
         let conn = in_memory_db();
         record_audit_event(&conn, "event_a", "raios", "first").unwrap();
@@ -259,5 +294,58 @@ mod tests {
         .unwrap();
         let result = verify_chain(&conn);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn concurrent_connections_append_one_linear_chain() {
+        const WRITERS: usize = 8;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("audit.db");
+        let setup = Connection::open(&db_path).unwrap();
+        setup
+            .execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 CREATE TABLE audit_log (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp  TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    actor      TEXT NOT NULL DEFAULT 'raios',
+                    data       TEXT NOT NULL DEFAULT '',
+                    prev_hash  TEXT NOT NULL DEFAULT '',
+                    hash       TEXT NOT NULL
+                 );",
+            )
+            .unwrap();
+        drop(setup);
+
+        let start = Arc::new(Barrier::new(WRITERS));
+        let payload = Arc::new("x".repeat(1024 * 1024));
+        let handles: Vec<_> = (0..WRITERS)
+            .map(|writer| {
+                let db_path = db_path.clone();
+                let start = Arc::clone(&start);
+                let payload = Arc::clone(&payload);
+                std::thread::spawn(move || {
+                    let conn = Connection::open(db_path).unwrap();
+                    conn.busy_timeout(Duration::from_secs(10)).unwrap();
+                    start.wait();
+                    record_audit_event(
+                        &conn,
+                        "concurrent_test",
+                        &format!("writer_{writer}"),
+                        &payload,
+                    )
+                    .unwrap();
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let conn = Connection::open(db_path).unwrap();
+        assert_eq!(verify_chain(&conn).unwrap(), WRITERS);
     }
 }

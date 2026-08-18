@@ -31,14 +31,34 @@ real usage patterns become clear, not to stay fixed forever.
 ## How it's measured
 
 - Row counts: `SELECT COUNT(*) FROM <table>` per table above.
-- Total size: `PRAGMA page_count * PRAGMA page_size` against the open
-  connection — reflects the real on-disk file size, including WAL/free
-  pages, not just live row bytes.
-- Everything here is read-only. No writes, no `VACUUM`, no deletes.
+- Main database size: `PRAGMA page_count * PRAGMA page_size` against the open
+  connection — includes freelist pages but not the separate WAL file.
+  `raios db check` reports the WAL and SHM files independently.
+- The `raios health` budget check is read-only. No writes, no `VACUUM`, no deletes.
 
 Run it yourself: `raios health` (prints a "DB Budget" section after the
 per-project list) or `raios health --json` (adds a top-level `db_budget` key
 alongside `projects`).
+
+## Maintenance and recovery
+
+`raios db check` runs SQLite `quick_check` and reports the main DB, WAL,
+shared-memory, freelist, journal mode, and managed snapshot count. Use
+`raios db check --full` for the substantially slower exhaustive
+`integrity_check`.
+
+`raios db checkpoint` uses a non-blocking passive WAL checkpoint.
+`raios db checkpoint --truncate` requests a complete checkpoint and WAL
+truncation, failing visibly if active readers or writers prevent completion.
+Neither mode deletes logical rows or runs `VACUUM`.
+
+`raios db backup` uses SQLite's online backup API, so `aiosd` may remain live.
+It refuses a source that fails `quick_check`, verifies the finished snapshot
+again, writes a SHA-256 sidecar, uses owner-only permissions (0700 directory,
+0600 files on Unix), fsyncs the snapshot/checksum metadata, and retains three
+managed snapshots by default. `--keep` is bounded to 1..=10 to prevent
+unbounded backup growth. Full offline recovery is intentionally an explicit
+operator action; see `docs/DATABASE_RECOVERY.md`.
 
 ## Measured on 2026-07-15 (this machine, at the time this doc was written)
 

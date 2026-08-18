@@ -7,7 +7,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/alazndy/R-AI-OS/master/scripts/get-raios.sh | sh
 #
 # Env overrides:
-#   RAIOS_VERSION      Release tag to install, e.g. "v3.8.0" (default: latest)
+#   RAIOS_VERSION      Release tag to install, e.g. "v3.9.0" (default: latest)
 #   RAIOS_INSTALL_DIR  Directory to install into (default: "$HOME/.local/bin")
 #
 # This only installs prebuilt release binaries. To build from source instead,

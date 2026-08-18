@@ -9,6 +9,9 @@ members = [
     "crates/raios-surface-cli"
 ]
 
+[workspace.package]
+version = "3.9.0"
+
 [patch.crates-io]
 # hf-hub 0.3.2 (pulled in transitively by fastembed 3.x, which pins hf-hub = "0.3")
 # mishandles HTTP redirects whose `Location` header is a relative URL: it passes

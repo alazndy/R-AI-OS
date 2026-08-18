@@ -147,6 +147,8 @@ jobs:
         run: |
           cargo install cargo-audit --locked
           cargo audit
+      - name: Validate tray service lifecycle
+        run: python3 -m unittest tools/raios-tray/test_service.py
       - name: Build and audit VS Code extension
         working-directory: vscode-extension
         run: |

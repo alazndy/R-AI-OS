@@ -41,6 +41,28 @@ pub enum InstinctCmd {
 }
 
 #[derive(Subcommand)]
+pub enum DbCmd {
+    /// Run a read-only integrity and storage check against workspace.db.
+    Check {
+        /// Run SQLite's exhaustive integrity_check instead of quick_check.
+        #[arg(long)]
+        full: bool,
+    },
+    /// Create an online, integrity-checked snapshot while aiosd remains live.
+    Backup {
+        /// Number of managed snapshots to retain (1..=10).
+        #[arg(long, default_value_t = raios_core::db::DEFAULT_SNAPSHOT_RETENTION)]
+        keep: usize,
+    },
+    /// Checkpoint committed WAL frames into the main database.
+    Checkpoint {
+        /// Also truncate the WAL file after a successful checkpoint.
+        #[arg(long)]
+        truncate: bool,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum Commands {
     /// Print master rule files
     Rules { name: Option<String> },
@@ -64,6 +86,11 @@ pub enum Commands {
     Discover,
     /// Get health report for a project (dirty, compliance, etc.)
     Health { project: Option<String> },
+    /// Check or back up the shared workspace database.
+    Db {
+        #[command(subcommand)]
+        command: DbCmd,
+    },
     /// Tiered health check for a provider or agent
     Doctor {
         /// Provider/agent name (e.g. claude, codex, opencode, agy)

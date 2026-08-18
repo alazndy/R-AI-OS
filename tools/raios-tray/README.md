@@ -49,7 +49,15 @@ python3 raios-tray.py
   StatusNotifier/Indicator applet enabled; GNOME needs an indicator host; Plasma
   needs its System Tray widget.
 - Prefers `ptyxis`, then `gnome-terminal`, `konsole`, `xfce4-terminal`, and `x-terminal-emulator`
-- `raios-tray.service` is a user service and expects a graphical login session
+- `raios-tray.service` is owned by `graphical-session.target`, so it starts only
+  after the desktop session is ready and stops before the display disappears.
+  Install or refresh the user service with:
+
+  ```bash
+  install -Dm644 raios-tray.service ~/.config/systemd/user/raios-tray.service
+  systemctl --user daemon-reload
+  systemctl --user reenable --now raios-tray.service
+  ```
 
 ### macOS
 
