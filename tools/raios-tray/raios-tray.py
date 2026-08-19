@@ -621,6 +621,21 @@ def is_aiosd_running() -> bool:
 
 
 def stop_aiosd() -> tuple[bool, str]:
+    if detect_platform() == "linux":
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "stop", "aiosd.service"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return False, f"failed to stop aiosd.service: {error}"
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            return False, f"failed to stop aiosd.service{(': ' + detail) if detail else ''}"
+        return True, "aiosd stopped"
+
     processes = list(iter_aiosd_processes())
     if not processes:
         return True, "aiosd is not running"
@@ -642,6 +657,21 @@ def stop_aiosd() -> tuple[bool, str]:
 
 
 def start_aiosd() -> tuple[bool, str]:
+    if detect_platform() == "linux":
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "start", "--no-block", "aiosd.service"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return False, f"failed to start aiosd.service: {error}"
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            return False, f"failed to start aiosd.service{(': ' + detail) if detail else ''}"
+        return True, "aiosd start requested"
+
     executable = find_aiosd_executable()
     if not executable:
         return False, "aiosd executable not found"
