@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v3.9.0 — 2026-08-18
 
 - **VS Code daemon ownership:** Linux startup now delegates to `aiosd.service` and requires an authenticated TCP handshake before reporting readiness, preventing detached auto-spawn races with the systemd user service during desktop login.
 - **Audit-ledger concurrency integrity:** standalone audit appends now acquire SQLite's writer slot with `BEGIN IMMEDIATE` before reading the predecessor hash, while callers already inside a larger control-plane or Product Factory transaction upgrade that transaction without opening a nested one. This prevents concurrent connections from selecting the same predecessor and forking the supposedly linear hash chain. A file-backed eight-writer regression test reproduces the old fork and verifies one linear chain; a separate test preserves transactional audit-call compatibility.
@@ -8,7 +8,7 @@
 - **Tray graphical-session startup:** the Linux user service is now enabled by `graphical-session.target` instead of `default.target`. `After=` alone did not pull the graphical target into the same boot transaction, so Qt could start several seconds before the Wayland socket existed, abort once, and recover only through `Restart=on-failure`. The unit remains ordered after and part of the graphical session, while a CI-backed service contract prevents regression to early boot ownership.
 - **Detached child lifecycle:** the daemon's scheduler no longer drops spawned `Child` handles without waiting for them. A single process-wide reaper thread now polls all detached agent and extension children and consumes their exit status, preventing completed cron children from accumulating as zombies under `aiosd`; reaper startup/channel failure terminates and waits for the untracked child instead of leaking it.
 - **SQLite maintenance and recovery:** added `raios db check [--full]`, `raios db checkpoint [--truncate]`, and `raios db backup [--keep 1..=10]`. Online snapshots are source- and destination-checked, SHA-256-recorded, owner-only on Unix, fsynced before success, and pruned to a bounded retention set without touching unrelated files. The recovery guide keeps restore offline and operator-controlled because `workspace.db` is shared by every agent and control-plane surface.
-- **3.9.0 release preparation:** moved all six Rust crates to one inherited `[workspace.package]` version so `raios version-bump` can no longer read a member version and then silently write an unrelated root manifest. Prepared the CLI/daemon as 3.9.0 and the changed VS Code extension as 0.9.0; the changelog remains `Unreleased` until a signed tag is explicitly published.
+- **3.9.0 release:** moved all six Rust crates to one inherited `[workspace.package]` version, prepared the CLI/daemon as 3.9.0 and the VS Code extension as 0.9.0, and finalized the signed release metadata.
 
 ## v3.8.0 — 2026-08-02
 
