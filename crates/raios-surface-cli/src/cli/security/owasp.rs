@@ -365,7 +365,13 @@ mod tests {
         let tmp_db = tempfile::NamedTempFile::new().unwrap();
         std::env::set_var("RAIOS_DB_PATH", tmp_db.path());
         let tmp_project = tempfile::tempdir().unwrap();
-        let project_path = tmp_project.path().to_path_buf();
+        // `projects.path` is always stored canonical (see
+        // entities::discover_all_entities's real registration path), and a
+        // tempdir's raw path can differ from its canonical form on macOS
+        // (symlinked /tmp) and Windows (8.3 short names) — register under
+        // the canonical path here to match real production data instead of
+        // asserting a same-machine coincidence that only holds on Linux.
+        let project_path = tmp_project.path().canonicalize().unwrap();
 
         let conn = raios_core::db::open_db().unwrap();
         raios_core::db::upsert_project(
