@@ -96,21 +96,24 @@ pub fn query_stats(conn: &Connection) -> Result<PortfolioStats> {
     // CLI, which does not enable FK enforcement by default) can delete a
     // `projects` row without cascading, leaving an orphaned `health_cache`
     // row behind. Every health_cache-scoped aggregate below is filtered to
-    // rows whose project still exists so orphans can't inflate counts past
-    // `total` or skew the averages.
-    const LIVE_PROJECT: &str = "project_id IN (SELECT id FROM projects)";
+    // rows whose project still exists (a literal, non-interpolated
+    // sub-select — no dynamic SQL construction) so orphans can't inflate
+    // counts past `total` or skew the averages.
     let dirty: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM health_cache WHERE git_dirty = 1 AND {LIVE_PROJECT}"),
+        "SELECT COUNT(*) FROM health_cache
+         WHERE git_dirty = 1 AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let no_memory: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM health_cache WHERE has_memory = 0 AND {LIVE_PROJECT}"),
+        "SELECT COUNT(*) FROM health_cache
+         WHERE has_memory = 0 AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let no_sigmap: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM health_cache WHERE has_sigmap = 0 AND {LIVE_PROJECT}"),
+        "SELECT COUNT(*) FROM health_cache
+         WHERE has_sigmap = 0 AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
@@ -120,39 +123,42 @@ pub fn query_stats(conn: &Connection) -> Result<PortfolioStats> {
         |r| r.get(0),
     )?;
     let avg_compliance: f64 = conn.query_row(
-        &format!(
-            "SELECT COALESCE(AVG(compliance_score), 0) FROM health_cache WHERE {LIVE_PROJECT}"
-        ),
+        "SELECT COALESCE(AVG(compliance_score), 0) FROM health_cache
+         WHERE project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let avg_security: f64 = conn.query_row(
-        &format!("SELECT COALESCE(AVG(security_score), 0) FROM health_cache WHERE {LIVE_PROJECT}"),
+        "SELECT COALESCE(AVG(security_score), 0) FROM health_cache
+         WHERE project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let grade_a: i64 = conn.query_row(
-        &format!(
-            "SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'A' AND {LIVE_PROJECT}"
-        ),
+        "SELECT COUNT(*) FROM health_cache
+         WHERE compliance_grade = 'A' AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let grade_b: i64 = conn.query_row(
-        &format!(
-            "SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'B' AND {LIVE_PROJECT}"
-        ),
+        "SELECT COUNT(*) FROM health_cache
+         WHERE compliance_grade = 'B' AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let grade_c: i64 = conn.query_row(
-        &format!(
-            "SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'C' AND {LIVE_PROJECT}"
-        ),
+        "SELECT COUNT(*) FROM health_cache
+         WHERE compliance_grade = 'C' AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
-    let grade_d: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM health_cache WHERE compliance_grade NOT IN ('A','B','C') AND compliance_grade != '-' AND {LIVE_PROJECT}"), [], |r| r.get(0))?;
+    let grade_d: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM health_cache
+         WHERE compliance_grade NOT IN ('A','B','C') AND compliance_grade != '-'
+           AND project_id IN (SELECT id FROM projects)",
+        [],
+        |r| r.get(0),
+    )?;
 
     Ok(PortfolioStats {
         total,
