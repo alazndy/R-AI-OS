@@ -45,6 +45,15 @@ mod args;
 pub use action_types::*;
 pub use args::*;
 
+// `RAIOS_DB_PATH` is process-global. Every test in this crate that reads or
+// writes it (task_update.rs, security/owasp.rs) must serialize on this SAME
+// lock — two separate per-module Mutexes don't actually synchronize with
+// each other and let parallel `cargo test` threads clobber each other's env
+// var (same class of bug already fixed once in raios-surface-mcp, see its
+// mcp/mod.rs::DB_ENV_LOCK comment and this repo's memory.md PR #26 entry).
+#[cfg(test)]
+pub(crate) static DB_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // ─── Config helper ────────────────────────────────────────────────────────────
 
 fn load_cfg() -> Config {

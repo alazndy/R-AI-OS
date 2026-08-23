@@ -51,6 +51,14 @@ pub fn cmd_security(target: Option<String>, full: bool, watch: bool, dev_ops: &P
         return;
     }
 
+    // Best-effort: persist each scanned project's score into health_cache so
+    // `raios stats`'s avg_security reflects real data. Only touches
+    // security_* columns (see upsert_security_score) — a scan here has no
+    // fresh compliance/git/refactor data to report, and a path that isn't a
+    // registered project (project_id_for_path returns None) is silently
+    // skipped rather than persisted under a fabricated id.
+    let conn = raios_core::db::open_db().ok();
+
     let mut all_reports = Vec::new();
     for (name, path) in &targets {
         if !json {
@@ -59,6 +67,19 @@ pub fn cmd_security(target: Option<String>, full: bool, watch: bool, dev_ops: &P
         let report = scan_project(path);
         if !json {
             eprintln!(" {} ({}/100)", report.grade, report.score);
+        }
+        if let Some(conn) = &conn {
+            let path_str = path.to_string_lossy().to_string();
+            if let Some(project_id) = raios_core::db::project_id_for_path(conn, &path_str) {
+                let _ = raios_core::db::upsert_security_score(
+                    conn,
+                    project_id,
+                    report.grade,
+                    report.score,
+                    report.issues.len(),
+                    report.critical_count(),
+                );
+            }
         }
         all_reports.push((name.clone(), path.clone(), report));
     }
@@ -318,5 +339,94 @@ fn send_toast(path: &Path, issues: &[raios_core::security::SecurityIssue]) {
         .show()
     {
         eprintln!("[guard] toast failed (non-fatal): {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::DB_ENV_LOCK;
+
+    /// `raios security <path>` must persist the score it computes into
+    /// health_cache for a path that's a registered project — this is what
+    /// makes `raios stats`'s avg_security reflect real scan data instead
+    /// of staying permanently 0/100.
+    #[test]
+    fn cmd_security_persists_score_for_a_registered_project() {
+        let _lock = DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original_db_path = std::env::var("RAIOS_DB_PATH").ok();
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        std::env::set_var("RAIOS_DB_PATH", tmp_db.path());
+        let tmp_project = tempfile::tempdir().unwrap();
+        let project_path = tmp_project.path().to_path_buf();
+
+        let conn = raios_core::db::open_db().unwrap();
+        raios_core::db::upsert_project(
+            &conn,
+            "SecurityCliTestProject",
+            "core",
+            &project_path.to_string_lossy(),
+            None,
+            "active",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        // Pre-existing compliance data from an earlier health-worker scan —
+        // must survive `cmd_security`'s security-only persistence.
+        let project_id =
+            raios_core::db::project_id_for_path(&conn, &project_path.to_string_lossy()).unwrap();
+        raios_core::db::upsert_health(
+            &conn,
+            project_id,
+            "A",
+            Some(90),
+            None,
+            None,
+            0,
+            0,
+            false,
+            true,
+            true,
+            None,
+            "A",
+            90,
+            0,
+        )
+        .unwrap();
+        drop(conn);
+
+        cmd_security(
+            Some(project_path.to_string_lossy().to_string()),
+            false,
+            false,
+            Path::new("."),
+            true,
+        );
+
+        let conn = raios_core::db::open_db().unwrap();
+        let (compliance_grade, security_grade, security_score): (String, Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT compliance_grade, security_grade, security_score FROM health_cache WHERE project_id = ?1",
+                [project_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+
+        match original_db_path {
+            Some(v) => std::env::set_var("RAIOS_DB_PATH", v),
+            None => std::env::remove_var("RAIOS_DB_PATH"),
+        }
+
+        assert!(
+            security_grade.is_some() && security_score.is_some(),
+            "cmd_security scanned the project but never persisted a score to health_cache"
+        );
+        assert_eq!(
+            compliance_grade, "A",
+            "cmd_security must not clobber compliance data it didn't compute"
+        );
     }
 }

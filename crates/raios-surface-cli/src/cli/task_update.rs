@@ -70,11 +70,7 @@ pub fn run_refactor_flag(json: bool) {
 #[cfg(test)]
 mod tests {
     use super::cmd_task_update;
-    use std::sync::Mutex;
-
-    // `RAIOS_DB_PATH` is process-global; serialize any test in this binary
-    // that reads or writes it so parallel `cargo test` threads never race.
-    static DB_ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::cli::DB_ENV_LOCK;
 
     fn with_temp_db<R>(f: impl FnOnce(&rusqlite::Connection) -> R) -> R {
         let _lock = DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
