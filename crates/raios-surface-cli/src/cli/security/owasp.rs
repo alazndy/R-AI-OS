@@ -69,7 +69,14 @@ pub fn cmd_security(target: Option<String>, full: bool, watch: bool, dev_ops: &P
             eprintln!(" {} ({}/100)", report.grade, report.score);
         }
         if let Some(conn) = &conn {
-            let path_str = path.to_string_lossy().to_string();
+            // `projects.path` is stored canonical/absolute (see
+            // raios_core::entities). A target like `.` or a relative path
+            // exists on disk but won't string-match that unless it's
+            // canonicalized first — falls back to the raw path if
+            // canonicalization fails, matching this block's existing
+            // best-effort/silent-skip behavior.
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            let path_str = canonical.to_string_lossy().to_string();
             if let Some(project_id) = raios_core::db::project_id_for_path(conn, &path_str) {
                 let _ = raios_core::db::upsert_security_score(
                     conn,
@@ -427,6 +434,70 @@ mod tests {
         assert_eq!(
             compliance_grade, "A",
             "cmd_security must not clobber compliance data it didn't compute"
+        );
+    }
+
+    /// Reproduces a live bug found while manually verifying the fix above:
+    /// `raios security .` (the natural way to invoke it inside a project
+    /// directory) exists on disk, but its literal string form never matches
+    /// `projects.path`, which is always stored canonical/absolute — so the
+    /// lookup silently found nothing and no score was ever persisted.
+    #[test]
+    fn cmd_security_persists_score_for_a_noncanonical_path() {
+        let _lock = DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original_db_path = std::env::var("RAIOS_DB_PATH").ok();
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        std::env::set_var("RAIOS_DB_PATH", tmp_db.path());
+        let tmp_project = tempfile::tempdir().unwrap();
+        let canonical_path = tmp_project.path().canonicalize().unwrap();
+        // Same directory, non-canonical string form — analogous to how `.`
+        // resolves to the cwd but doesn't string-match its canonical path.
+        let noncanonical_path = canonical_path.join(".");
+
+        let conn = raios_core::db::open_db().unwrap();
+        raios_core::db::upsert_project(
+            &conn,
+            "SecurityCliNoncanonicalTestProject",
+            "core",
+            &canonical_path.to_string_lossy(),
+            None,
+            "active",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let project_id =
+            raios_core::db::project_id_for_path(&conn, &canonical_path.to_string_lossy()).unwrap();
+        drop(conn);
+
+        cmd_security(
+            Some(noncanonical_path.to_string_lossy().to_string()),
+            false,
+            false,
+            Path::new("."),
+            true,
+        );
+
+        let conn = raios_core::db::open_db().unwrap();
+        let security_score: Option<i64> = conn
+            .query_row(
+                "SELECT security_score FROM health_cache WHERE project_id = ?1",
+                [project_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        match original_db_path {
+            Some(v) => std::env::set_var("RAIOS_DB_PATH", v),
+            None => std::env::remove_var("RAIOS_DB_PATH"),
+        }
+
+        assert!(
+            security_score.is_some(),
+            "a non-canonical but on-disk-identical path must still resolve to the \
+             registered project and persist a score"
         );
     }
 }
