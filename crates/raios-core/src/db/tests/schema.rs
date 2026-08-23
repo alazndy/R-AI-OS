@@ -95,6 +95,103 @@ fn health_cache_upsert() {
     assert_eq!(stats.grade_a, 1);
 }
 
+/// Reproduces the `raios stats` denominator bug: `total` is
+/// `COUNT(*) FROM projects`, but `grade_a/b/c/d` are `COUNT(*) FROM
+/// health_cache` with no join back to `projects`. A `health_cache` row
+/// whose `project_id` no longer has a matching `projects` row (the real
+/// workspace.db carries 146 such orphans, left behind by out-of-band
+/// maintenance that ran without `PRAGMA foreign_keys=ON`, so
+/// `ON DELETE CASCADE` never fired) still gets counted into the grade
+/// buckets, so their sum can exceed `total`.
+#[test]
+fn query_stats_grade_totals_never_exceed_project_total() {
+    let conn = in_memory();
+    upsert_project(
+        &conn,
+        "Kept",
+        "c",
+        "/tmp/kept",
+        None,
+        "active",
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let kept_id = project_id_for_path(&conn, "/tmp/kept").unwrap();
+    upsert_health(
+        &conn,
+        kept_id,
+        "A",
+        Some(90),
+        None,
+        None,
+        0,
+        0,
+        false,
+        true,
+        true,
+        None,
+        "A",
+        90,
+        0,
+    )
+    .unwrap();
+
+    upsert_project(
+        &conn,
+        "Removed",
+        "c",
+        "/tmp/removed",
+        None,
+        "active",
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let removed_id = project_id_for_path(&conn, "/tmp/removed").unwrap();
+    upsert_health(
+        &conn,
+        removed_id,
+        "A",
+        Some(80),
+        None,
+        None,
+        0,
+        0,
+        false,
+        true,
+        true,
+        None,
+        "A",
+        80,
+        0,
+    )
+    .unwrap();
+
+    // Simulate the real-world orphaning mechanism: a manual maintenance
+    // session (e.g. the sqlite3 CLI, which does not enable foreign key
+    // enforcement by default) deletes the project row without cascading
+    // to health_cache.
+    conn.execute_batch("PRAGMA foreign_keys=OFF;").unwrap();
+    conn.execute("DELETE FROM projects WHERE id = ?1", params![removed_id])
+        .unwrap();
+    conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+
+    let stats = query_stats(&conn).unwrap();
+    assert_eq!(stats.total, 1, "the deleted project must not be counted");
+    let grade_sum = stats.grade_a + stats.grade_b + stats.grade_c + stats.grade_d;
+    assert!(
+        grade_sum <= stats.total,
+        "grade buckets ({grade_sum}) must not exceed total projects ({}); \
+         an orphaned health_cache row is being counted",
+        stats.total
+    );
+}
+
 #[test]
 fn task_insert_and_toggle() {
     let conn = in_memory();

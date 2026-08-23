@@ -226,6 +226,35 @@ pub fn check_project_with_security(proj: &EntityProject) -> ProjectHealth {
     h.security_grade = Some(report.grade.to_string());
     h.security_issue_count = report.issues.len();
     h.security_critical = report.critical_count();
+
+    // `check_project` already wrote a health_cache row for this project
+    // with security_grade/security_score left NULL (it never runs the
+    // scan). Update just those two columns now that we have them —
+    // `upsert_health`'s ON CONFLICT clause COALESCEs security fields, so
+    // this leaves every other column it wrote untouched.
+    if let Ok(conn) = raios_core::db::open_db() {
+        let path_str = h.path.to_string_lossy().to_string();
+        if let Some(project_id) = raios_core::db::project_id_for_path(&conn, &path_str) {
+            let _ = raios_core::db::upsert_health(
+                &conn,
+                project_id,
+                &h.compliance_grade,
+                h.compliance_score,
+                h.security_grade.as_deref(),
+                h.security_score,
+                h.security_issue_count,
+                h.security_critical,
+                h.git_dirty.unwrap_or(false),
+                h.has_memory,
+                h.has_sigmap,
+                h.remote_url.as_deref(),
+                &h.refactor_grade,
+                h.refactor_score,
+                h.refactor_high_count,
+            );
+        }
+    }
+
     h
 }
 
@@ -378,4 +407,88 @@ fn scan_rules(path: &Path) -> Vec<&'static str> {
         .filter(|(kw, _)| !content.contains(kw))
         .map(|(_, desc)| *desc)
         .collect()
+}
+
+#[cfg(test)]
+mod security_persistence_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // `RAIOS_DB_PATH` is process-global; serialize any test in this binary
+    // that reads or writes it so parallel `cargo test` threads never race.
+    static DB_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Reproduces the `avg_security: 0/100` symptom from `raios stats`:
+    /// `check_project_with_security` computes a real security score but
+    /// never writes it back to `health_cache` (it only calls
+    /// `upsert_health` indirectly via `check_project`, which hardcodes
+    /// `security_score: None`). Nothing else in the codebase ever calls
+    /// `upsert_health` with a non-None security score, so `health_cache
+    /// .security_score` is NULL for every row in production.
+    #[test]
+    fn check_project_with_security_persists_score_to_health_cache() {
+        let _lock = DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original_db_path = std::env::var("RAIOS_DB_PATH").ok();
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        std::env::set_var("RAIOS_DB_PATH", tmp_db.path());
+        let tmp_project = tempfile::tempdir().unwrap();
+        let project_path = tmp_project.path().to_path_buf();
+
+        let conn = raios_core::db::open_db().unwrap();
+        raios_core::db::upsert_project(
+            &conn,
+            "SecurityTestProject",
+            "core",
+            &project_path.to_string_lossy(),
+            None,
+            "active",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        drop(conn);
+
+        let entity = EntityProject {
+            name: "SecurityTestProject".to_string(),
+            category: "core".to_string(),
+            local_path: project_path.clone(),
+            github: None,
+            status: "active".to_string(),
+            stars: None,
+            last_commit: None,
+            version: None,
+            version_nickname: None,
+        };
+
+        let health = check_project_with_security(&entity);
+        assert!(
+            health.security_score.is_some(),
+            "sanity check: the scan itself should produce a score"
+        );
+
+        let conn = raios_core::db::open_db().unwrap();
+        let project_id =
+            raios_core::db::project_id_for_path(&conn, &project_path.to_string_lossy()).unwrap();
+        let persisted_score: Option<i64> = conn
+            .query_row(
+                "SELECT security_score FROM health_cache WHERE project_id = ?1",
+                rusqlite::params![project_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        match original_db_path {
+            Some(v) => std::env::set_var("RAIOS_DB_PATH", v),
+            None => std::env::remove_var("RAIOS_DB_PATH"),
+        }
+
+        assert!(
+            persisted_score.is_some(),
+            "check_project_with_security computed security_score={:?} but never persisted \
+             it to health_cache — this is why `raios stats`' avg_security is always 0",
+            health.security_score
+        );
+    }
 }
