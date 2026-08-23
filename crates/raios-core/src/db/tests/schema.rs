@@ -95,6 +95,181 @@ fn health_cache_upsert() {
     assert_eq!(stats.grade_a, 1);
 }
 
+/// Reproduces the `raios stats` denominator bug: `total` is
+/// `COUNT(*) FROM projects`, but `grade_a/b/c/d` are `COUNT(*) FROM
+/// health_cache` with no join back to `projects`. A `health_cache` row
+/// whose `project_id` no longer has a matching `projects` row (the real
+/// workspace.db carries 146 such orphans, left behind by out-of-band
+/// maintenance that ran without `PRAGMA foreign_keys=ON`, so
+/// `ON DELETE CASCADE` never fired) still gets counted into the grade
+/// buckets, so their sum can exceed `total`.
+#[test]
+fn query_stats_grade_totals_never_exceed_project_total() {
+    let conn = in_memory();
+    upsert_project(
+        &conn,
+        "Kept",
+        "c",
+        "/tmp/kept",
+        None,
+        "active",
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let kept_id = project_id_for_path(&conn, "/tmp/kept").unwrap();
+    upsert_health(
+        &conn,
+        kept_id,
+        "A",
+        Some(90),
+        None,
+        None,
+        0,
+        0,
+        false,
+        true,
+        true,
+        None,
+        "A",
+        90,
+        0,
+    )
+    .unwrap();
+
+    upsert_project(
+        &conn,
+        "Removed",
+        "c",
+        "/tmp/removed",
+        None,
+        "active",
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let removed_id = project_id_for_path(&conn, "/tmp/removed").unwrap();
+    upsert_health(
+        &conn,
+        removed_id,
+        "A",
+        Some(80),
+        None,
+        None,
+        0,
+        0,
+        false,
+        true,
+        true,
+        None,
+        "A",
+        80,
+        0,
+    )
+    .unwrap();
+
+    // Simulate the real-world orphaning mechanism: a manual maintenance
+    // session (e.g. the sqlite3 CLI, which does not enable foreign key
+    // enforcement by default) deletes the project row without cascading
+    // to health_cache.
+    conn.execute_batch("PRAGMA foreign_keys=OFF;").unwrap();
+    conn.execute("DELETE FROM projects WHERE id = ?1", params![removed_id])
+        .unwrap();
+    conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+
+    let stats = query_stats(&conn).unwrap();
+    assert_eq!(stats.total, 1, "the deleted project must not be counted");
+    let grade_sum = stats.grade_a + stats.grade_b + stats.grade_c + stats.grade_d;
+    assert!(
+        grade_sum <= stats.total,
+        "grade buckets ({grade_sum}) must not exceed total projects ({}); \
+         an orphaned health_cache row is being counted",
+        stats.total
+    );
+}
+
+/// `upsert_security_score` must be safe to call from `raios security`,
+/// which only ever has a security report on hand — never fresh
+/// compliance/git/refactor data. It must not clobber whatever the
+/// background health worker already wrote for those other columns.
+#[test]
+fn upsert_security_score_preserves_other_health_columns() {
+    let conn = in_memory();
+    upsert_project(
+        &conn, "P", "c", "/tmp/p", None, "active", None, None, None, None,
+    )
+    .unwrap();
+    let id = project_id_for_path(&conn, "/tmp/p").unwrap();
+    upsert_health(
+        &conn,
+        id,
+        "A",
+        Some(90),
+        None,
+        None,
+        0,
+        0,
+        true,
+        true,
+        true,
+        Some("gh/p"),
+        "B",
+        70,
+        2,
+    )
+    .unwrap();
+
+    upsert_security_score(&conn, id, "C", 55, 3, 1).unwrap();
+
+    let row = conn
+        .query_row(
+            "SELECT compliance_grade, compliance_score, git_dirty, has_memory, has_sigmap,
+                    remote_url, refactor_grade, refactor_score, refactor_high,
+                    security_grade, security_score, security_issues, security_critical
+             FROM health_cache WHERE project_id = ?1",
+            [id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, i64>(8)?,
+                    r.get::<_, Option<String>>(9)?,
+                    r.get::<_, Option<i64>>(10)?,
+                    r.get::<_, i64>(11)?,
+                    r.get::<_, i64>(12)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(row.0, "A", "compliance_grade must be preserved");
+    assert_eq!(row.1, Some(90), "compliance_score must be preserved");
+    assert_eq!(row.2, 1, "git_dirty must be preserved");
+    assert_eq!(row.3, 1, "has_memory must be preserved");
+    assert_eq!(row.4, 1, "has_sigmap must be preserved");
+    assert_eq!(
+        row.5.as_deref(),
+        Some("gh/p"),
+        "remote_url must be preserved"
+    );
+    assert_eq!(row.6, "B", "refactor_grade must be preserved");
+    assert_eq!(row.7, 70, "refactor_score must be preserved");
+    assert_eq!(row.8, 2, "refactor_high must be preserved");
+    assert_eq!(row.9.as_deref(), Some("C"));
+    assert_eq!(row.10, Some(55));
+    assert_eq!(row.11, 3);
+    assert_eq!(row.12, 1);
+}
+
 #[test]
 fn task_insert_and_toggle() {
     let conn = in_memory();

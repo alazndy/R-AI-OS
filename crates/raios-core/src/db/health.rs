@@ -60,6 +60,44 @@ pub fn upsert_health(
     Ok(())
 }
 
+/// Persist a security scan result without touching any other health_cache
+/// column. Callers that only ran a security scan (e.g. `raios security`)
+/// don't have fresh compliance/git/refactor data on hand — routing them
+/// through `upsert_health` with placeholder values would silently
+/// overwrite whatever the background health worker last wrote for those
+/// columns, since `upsert_health`'s ON CONFLICT clause always takes the
+/// caller's value for everything except security_*/remote_url. On first
+/// insert (no existing row for this project) the other columns take their
+/// schema defaults ('-' grades, 0 counts).
+pub fn upsert_security_score(
+    conn: &Connection,
+    project_id: i64,
+    security_grade: &str,
+    security_score: u8,
+    security_issues: usize,
+    security_critical: usize,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO health_cache
+            (project_id, security_grade, security_score, security_issues, security_critical, scanned_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
+         ON CONFLICT(project_id) DO UPDATE SET
+             security_grade=excluded.security_grade,
+             security_score=excluded.security_score,
+             security_issues=excluded.security_issues,
+             security_critical=excluded.security_critical,
+             scanned_at=datetime('now')",
+        params![
+            project_id,
+            security_grade,
+            security_score as i64,
+            security_issues as i64,
+            security_critical as i64,
+        ],
+    )?;
+    Ok(())
+}
+
 // ─── Stats query ─────────────────────────────────────────────────────────────
 
 pub struct PortfolioStats {
@@ -90,18 +128,30 @@ pub fn query_stats(conn: &Connection) -> Result<PortfolioStats> {
         [],
         |r| r.get(0),
     )?;
+    // `health_cache.project_id` is only cascade-cleaned on deletes made
+    // through this app's own `open_db()` connection (which turns on
+    // `PRAGMA foreign_keys`). Out-of-band DB maintenance (e.g. the sqlite3
+    // CLI, which does not enable FK enforcement by default) can delete a
+    // `projects` row without cascading, leaving an orphaned `health_cache`
+    // row behind. Every health_cache-scoped aggregate below is filtered to
+    // rows whose project still exists (a literal, non-interpolated
+    // sub-select — no dynamic SQL construction) so orphans can't inflate
+    // counts past `total` or skew the averages.
     let dirty: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM health_cache WHERE git_dirty = 1",
+        "SELECT COUNT(*) FROM health_cache
+         WHERE git_dirty = 1 AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let no_memory: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM health_cache WHERE has_memory = 0",
+        "SELECT COUNT(*) FROM health_cache
+         WHERE has_memory = 0 AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let no_sigmap: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM health_cache WHERE has_sigmap = 0",
+        "SELECT COUNT(*) FROM health_cache
+         WHERE has_sigmap = 0 AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
@@ -111,31 +161,42 @@ pub fn query_stats(conn: &Connection) -> Result<PortfolioStats> {
         |r| r.get(0),
     )?;
     let avg_compliance: f64 = conn.query_row(
-        "SELECT COALESCE(AVG(compliance_score), 0) FROM health_cache",
+        "SELECT COALESCE(AVG(compliance_score), 0) FROM health_cache
+         WHERE project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let avg_security: f64 = conn.query_row(
-        "SELECT COALESCE(AVG(security_score), 0) FROM health_cache",
+        "SELECT COALESCE(AVG(security_score), 0) FROM health_cache
+         WHERE project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let grade_a: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'A'",
+        "SELECT COUNT(*) FROM health_cache
+         WHERE compliance_grade = 'A' AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let grade_b: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'B'",
+        "SELECT COUNT(*) FROM health_cache
+         WHERE compliance_grade = 'B' AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
     let grade_c: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM health_cache WHERE compliance_grade = 'C'",
+        "SELECT COUNT(*) FROM health_cache
+         WHERE compliance_grade = 'C' AND project_id IN (SELECT id FROM projects)",
         [],
         |r| r.get(0),
     )?;
-    let grade_d: i64 = conn.query_row("SELECT COUNT(*) FROM health_cache WHERE compliance_grade NOT IN ('A','B','C') AND compliance_grade != '-'", [], |r| r.get(0))?;
+    let grade_d: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM health_cache
+         WHERE compliance_grade NOT IN ('A','B','C') AND compliance_grade != '-'
+           AND project_id IN (SELECT id FROM projects)",
+        [],
+        |r| r.get(0),
+    )?;
 
     Ok(PortfolioStats {
         total,
