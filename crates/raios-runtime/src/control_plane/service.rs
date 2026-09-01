@@ -804,7 +804,7 @@ pub fn dispatch_control_command(
                        AND parent_task_id IS NULL
                        AND EXISTS (
                          SELECT 1 FROM cp_task_list_items li
-                         WHERE li.task_id = cp_tasks.id AND li.source_kind = 'tui'
+                         WHERE li.task_id = cp_tasks.id
                        )
                        AND NOT EXISTS (
                          SELECT 1 FROM cp_approvals ap WHERE ap.task_id = cp_tasks.id
@@ -817,7 +817,7 @@ pub fn dispatch_control_command(
                 .map_err(|error| Problem::internal(error.to_string()))?;
             if changed != 1 {
                 return Err(Problem::not_found(
-                    "TUI-managed personal task was not found or cannot be updated",
+                    "Operator-managed personal task was not found or cannot be updated",
                 ));
             }
             Some(serde_json::json!({"task_id": task_id, "status": status}))
@@ -1168,7 +1168,7 @@ mod tests {
     }
 
     #[test]
-    fn task_commands_reject_invalid_or_non_tui_managed_mutations() {
+    fn task_commands_reject_invalid_but_allow_canonical_personal_task_mutations() {
         let mut conn = Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap();
         let invalid_create = Command::CreateTask {
@@ -1200,16 +1200,16 @@ mod tests {
             params![now],
         )
         .unwrap();
-        let protected_update = Command::UpdateTaskStatus {
+        let markdown_update = Command::UpdateTaskStatus {
             task_id: "markdown-task".into(),
             status: "completed".into(),
-            idempotency_key: "protect-legacy-task".into(),
+            idempotency_key: "complete-markdown-task".into(),
         };
         assert_eq!(
-            dispatch_control_command(&mut conn, &ControlActor::test_local(), &protected_update)
-                .unwrap_err()
-                .code,
-            "NOT_FOUND"
+            dispatch_control_command(&mut conn, &ControlActor::test_local(), &markdown_update)
+                .unwrap()
+                .unwrap()["status"],
+            "completed"
         );
     }
 }

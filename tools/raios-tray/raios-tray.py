@@ -6,16 +6,19 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
@@ -31,6 +34,7 @@ from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -56,9 +60,9 @@ from desktop_runtime import detect_desktop_session, tray_host_guidance
 API_BASE = "http://127.0.0.1:42071"
 REFRESH_SECONDS = 15
 DIGEST_REFRESH_SECONDS = 60
-MAX_PROJECTS = 10
 APP_NAME = "R-AI-OS Tray"
-DIRTY_CACHE_TTL_SECONDS = 90
+API_TIMEOUT_SECONDS = 1.5
+MAX_VISIBLE_TASKS = 50
 
 CONFIG_TOP_LEVEL_KEYS = (
     "dev_ops_path",
@@ -147,6 +151,14 @@ class TrayState:
     dirty_projects: set[str] = field(default_factory=set)
     mem_items: list[dict] = field(default_factory=list)
     tasks: list[dict] = field(default_factory=list)
+    task_total: int = 0
+
+
+@dataclass
+class RefreshPayload:
+    state: TrayState
+    important_notifications: list[str] = field(default_factory=list)
+    digest_notification: str | None = None
 
 
 AGENTS: tuple[Agent, ...] = (
@@ -224,7 +236,7 @@ CACHE_PATH = CONFIG_DIR / "tray-projects-cache.json"
 PROJECTS_CONFIG_PATH = CONFIG_DIR / "tray-projects-config.json"
 NOTIFICATION_CLIENT_ID_PATH = CONFIG_DIR / "notification-client-id"
 _NOTIFICATION_CLIENT_ID: str | None = None
-DIRTY_STATUS_CACHE: dict[str, tuple[float, bool, tuple[float, float]]] = {}
+_TOML_ASSIGNMENT = re.compile(r"^(?P<prefix>\s*)(?P<key>[A-Za-z0-9_-]+)(?P<equals>\s*=).*$")
 
 MEM_TYPE_COLORS_DARK = {
     "feedback":  "#f0a500",
@@ -312,9 +324,26 @@ def api_get(path: str, token: str):
         headers={"Authorization": f"Bearer {token}"} if token else {},
     )
     try:
-        with urllib.request.urlopen(request, timeout=4) as response:
+        with urllib.request.urlopen(request, timeout=API_TIMEOUT_SECONDS) as response:
             return json.loads(response.read())
-    except Exception:
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        return None
+
+
+def api_post(path: str, token: str, payload: dict):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(
+        API_BASE + path,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=API_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read())
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
         return None
 
 
@@ -379,62 +408,62 @@ def load_mem_items(project_key: str | None = None, limit: int = 100) -> list[dic
         return []
 
 
-def load_tasks(limit: int = 50) -> list[dict]:
-    if not RAIOS_DB_PATH.exists():
+def load_tasks(token: str | None = None) -> list[dict]:
+    """Read canonical personal tasks through the authenticated daemon API."""
+    data = api_get("/api/tasks", token if token is not None else read_token())
+    if not isinstance(data, dict) or data.get("status") != "ok":
         return []
-    try:
-        conn = sqlite3.connect(f"file:{RAIOS_DB_PATH}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT * FROM tasks WHERE completed = 0 ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-    except Exception:
+    tasks = data.get("tasks")
+    if not isinstance(tasks, list):
         return []
+    return [
+        task
+        for task in tasks
+        if isinstance(task, dict)
+        and isinstance(task.get("text"), str)
+        and not bool(task.get("completed", False))
+    ]
 
 
-def add_task(text: str, project: str | None = None) -> bool:
-    if not RAIOS_DB_PATH.exists():
-        return False
-    try:
-        conn = sqlite3.connect(str(RAIOS_DB_PATH))
-        conn.execute(
-            "INSERT INTO tasks (text, completed, agent, project) VALUES (?, 0, ?, ?)",
-            (text.strip(), "raios-tray", project or None),
-        )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
+def _control_problem_message(response: object, fallback: str) -> str:
+    if not isinstance(response, dict):
+        return fallback
+    problem = response.get("problem")
+    if isinstance(problem, dict):
+        return str(problem.get("message") or problem.get("code") or fallback)
+    return str(response.get("message") or fallback)
 
 
-def complete_task(task_id: int) -> bool:
-    if not RAIOS_DB_PATH.exists():
-        return False
-    try:
-        conn = sqlite3.connect(str(RAIOS_DB_PATH))
-        conn.execute("UPDATE tasks SET completed = 1 WHERE id = ?", (task_id,))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
+def _submit_control_command(command_type: str, payload: dict, token: str | None = None) -> tuple[bool, str]:
+    body = {
+        "command_type": command_type,
+        "payload": {**payload, "idempotency_key": str(uuid.uuid4())},
+    }
+    response = api_post("/api/v1/control/command", token if token is not None else read_token(), body)
+    if isinstance(response, dict) and response.get("status") == "ok":
+        return True, ""
+    return False, _control_problem_message(response, "R-AI-OS control-plane request failed.")
 
 
-def delete_task(task_id: int) -> bool:
-    if not RAIOS_DB_PATH.exists():
-        return False
-    try:
-        conn = sqlite3.connect(str(RAIOS_DB_PATH))
-        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
+def create_task(text: str, project_path: str | None = None, token: str | None = None) -> tuple[bool, str]:
+    title = text.strip()
+    if not title or len(title) > 240:
+        return False, "Task title must contain 1 to 240 characters."
+    if project_path and not Path(project_path).is_absolute():
+        return False, "Project path must be absolute."
+    return _submit_control_command(
+        "CreateTask",
+        {"title": title, "project_path": project_path, "priority": 50},
+        token,
+    )
+
+
+def update_task_status(task_id: str, status: str, token: str | None = None) -> tuple[bool, str]:
+    if not task_id or status not in {"queued", "in_progress", "blocked", "completed", "cancelled"}:
+        return False, "Invalid task status update."
+    return _submit_control_command(
+        "UpdateTaskStatus", {"task_id": task_id, "status": status}, token
+    )
 
 
 def get_pin_logo() -> QIcon:
@@ -539,32 +568,13 @@ def check_git_dirty(project_path: str) -> bool:
     git_dir = repo_path / ".git"
     if not git_dir.exists():
         return False
-    head_path = git_dir / "HEAD"
-    index_path = git_dir / "index"
-    try:
-        signature = (
-            head_path.stat().st_mtime if head_path.exists() else 0.0,
-            index_path.stat().st_mtime if index_path.exists() else 0.0,
-        )
-    except OSError:
-        signature = (0.0, 0.0)
-    now = time.monotonic()
-    cached = DIRTY_STATUS_CACHE.get(project_path)
-    if cached:
-        checked_at, cached_value, cached_signature = cached
-        if cached_signature == signature and (now - checked_at) < DIRTY_CACHE_TTL_SECONDS:
-            return cached_value
     try:
         result = subprocess.run(
             ["git", "-C", project_path, "status", "--porcelain"],
             capture_output=True, text=True, timeout=2,
         )
-        is_dirty = bool(result.stdout.strip())
-        DIRTY_STATUS_CACHE[project_path] = (now, is_dirty, signature)
-        return is_dirty
+        return bool(result.stdout.strip())
     except (OSError, subprocess.TimeoutExpired):
-        if cached:
-            return cached[1]
         return False
 
 
@@ -763,9 +773,71 @@ def serialize_raios_config(config: dict) -> str:
     return "\n".join(lines)
 
 
-def save_raios_config(config: dict) -> None:
-    ensure_parent(CONFIG_PATH)
-    CONFIG_PATH.write_text(serialize_raios_config(config), encoding="utf-8")
+def _toml_upsert(content: str, section: str | None, key: str, value: str) -> str:
+    """Update one simple TOML value without destroying unrelated config domains."""
+    lines = content.splitlines(keepends=True)
+    section_start = 0
+    section_end = len(lines)
+    section_header = f"[{section}]" if section else None
+
+    if section_header:
+        for index, line in enumerate(lines):
+            if line.strip() == section_header:
+                section_start = index + 1
+                break
+        else:
+            suffix = "" if not content or content.endswith("\n") else "\n"
+            return f"{content}{suffix}\n{section_header}\n{key} = {value}\n"
+    else:
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                section_end = index
+                break
+
+    for index in range(section_start, section_end):
+        match = _TOML_ASSIGNMENT.match(lines[index])
+        if match and match.group("key") == key:
+            lines[index] = f"{match.group('prefix')}{key} = {value}\n"
+            return "".join(lines)
+
+    lines.insert(section_end, f"{key} = {value}\n")
+    return "".join(lines)
+
+
+def save_raios_config(config: dict, path: Path = CONFIG_PATH) -> None:
+    """Atomically persist tray-owned keys while retaining every unknown TOML section."""
+    ensure_parent(path)
+    try:
+        content = path.read_text(encoding="utf-8")
+        mode = path.stat().st_mode & 0o777
+    except FileNotFoundError:
+        content = ""
+        mode = 0o600
+
+    for key in CONFIG_TOP_LEVEL_KEYS:
+        content = _toml_upsert(content, None, key, toml_string(str(config.get(key, ""))))
+
+    daemon = config.get("daemon", {})
+    for key, _ in DAEMON_BOOL_FIELDS:
+        content = _toml_upsert(content, "daemon", key, toml_bool(bool(daemon.get(key, False))))
+    for key, _, _, _ in DAEMON_INT_FIELDS:
+        content = _toml_upsert(content, "daemon", key, str(int(daemon.get(key, 0))))
+
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_name, mode)
+        os.replace(temporary_name, path)
+    except BaseException:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def open_in_file_manager(path: Path) -> bool:
@@ -787,8 +859,30 @@ def open_in_file_manager(path: Path) -> bool:
         return False
 
 
-def fetch_state() -> TrayState:
-    token = read_token()
+def _dirty_project_names(projects: list[dict]) -> set[str]:
+    dirty_projects: set[str] = set()
+    candidates = [project for project in projects if project.get("local_path")]
+    if not candidates:
+        return dirty_projects
+    with ThreadPoolExecutor(max_workers=min(4, len(candidates)), thread_name_prefix="raios-dirty") as executor:
+        future_paths = {
+            executor.submit(check_git_dirty, str(project["local_path"])): project
+            for project in candidates
+        }
+        for future, project in future_paths.items():
+            try:
+                is_dirty = future.result()
+            except Exception:
+                is_dirty = False
+            if is_dirty:
+                name = project.get("name", "") or Path(str(project["local_path"])).name
+                if name:
+                    dirty_projects.add(name)
+    return dirty_projects
+
+
+def fetch_state(token: str | None = None) -> TrayState:
+    token = token if token is not None else read_token()
     health = api_get("/api/health", token)
     projects_raw = api_get("/api/projects", token)
     usage = load_usage()
@@ -801,17 +895,11 @@ def fetch_state() -> TrayState:
         projects = sort_projects(load_cache(), usage)
         projects_from_cache = True
 
-    dirty_projects: set[str] = set()
-    for p in (projects or []):
-        path = p.get("local_path", "")
-        if path and check_git_dirty(path):
-            name = p.get("name", "") or Path(path).name
-            if name:
-                dirty_projects.add(name)
+    dirty_projects = _dirty_project_names(projects or [])
 
     aiosd_cpu, aiosd_ram = proc_stats("aiosd")
     mem_items = load_mem_items()
-    tasks = load_tasks()
+    all_tasks = load_tasks(token)
     return TrayState(
         online=health is not None,
         health=health or {},
@@ -823,8 +911,39 @@ def fetch_state() -> TrayState:
         error="" if health is not None else "R-AI-OS API unreachable",
         dirty_projects=dirty_projects,
         mem_items=mem_items,
-        tasks=tasks,
+        tasks=all_tasks[:MAX_VISIBLE_TASKS],
+        task_total=len(all_tasks),
     )
+
+
+def fetch_refresh_payload(check_digest: bool) -> RefreshPayload:
+    token = read_token()
+    state = fetch_state(token)
+    important_notifications: list[str] = []
+    data = api_get(
+        f"/api/notifications/important?{urllib.parse.urlencode({'client_id': notification_client_id()})}",
+        token,
+    )
+    if isinstance(data, dict) and data.get("status") == "ok":
+        important_notifications = [
+            str(event["summary"])
+            for event in data.get("events", [])
+            if isinstance(event, dict) and event.get("summary")
+        ]
+
+    digest_notification = None
+    if check_digest:
+        data = api_get(
+            f"/api/notifications/digest?{urllib.parse.urlencode({'client_id': notification_client_id()})}",
+            token,
+        )
+        if isinstance(data, dict) and data.get("status") == "ok":
+            digest = data.get("digest")
+            if isinstance(digest, dict) and digest.get("summary"):
+                digest_notification = str(digest["summary"])
+                if digest.get("top_recommendation"):
+                    digest_notification += f"\nTop recommendation: {digest['top_recommendation']}"
+    return RefreshPayload(state, important_notifications, digest_notification)
 
 
 class PathInput(QWidget):
@@ -1197,8 +1316,13 @@ class QuickAddTaskDialog(QDialog):
         proj_row = QHBoxLayout()
         proj_lbl = QLabel("Project:", self)
         proj_row.addWidget(proj_lbl)
-        self._project = QLineEdit(self)
-        self._project.setPlaceholderText("(optional)")
+        self._project = QComboBox(self)
+        self._project.addItem("(No project)", None)
+        for project in projects:
+            name = str(project.get("name") or "")
+            path = str(project.get("local_path") or "")
+            if name and Path(path).is_absolute():
+                self._project.addItem(name, path)
         proj_row.addWidget(self._project, stretch=1)
         layout.addLayout(proj_row)
 
@@ -1214,23 +1338,23 @@ class QuickAddTaskDialog(QDialog):
 
         self._text.setFocus()
 
-        # Pre-fill project from pinned/most-used if only one
-        if len(projects) == 1:
-            self._project.setText(projects[0].get("name", ""))
+        if self._project.count() == 2:
+            self._project.setCurrentIndex(1)
+
+    def result(self) -> tuple[str, str | None]:
+        project_path = self._project.currentData()
+        return self._text.text().strip(), str(project_path) if project_path else None
 
     def _submit(self) -> None:
-        text = self._text.text().strip()
+        text, _ = self.result()
         if not text:
             return
-        project = self._project.text().strip() or None
-        if add_task(text, project):
-            self.accept()
-        else:
-            QMessageBox.warning(self, APP_NAME, "Failed to save task to database.")
+        self.accept()
 
 
 class TaskListDialog(QDialog):
-    def __init__(self, tasks: list[dict], projects: list[dict], parent: QWidget | None = None):
+    def __init__(self, tasks: list[dict], projects: list[dict], task_total: int,
+                 parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("Tasks — raios")
         self.setMinimumSize(520, 420)
@@ -1238,6 +1362,7 @@ class TaskListDialog(QDialog):
 
         self._tc = _card_theme()
         self._projects = projects
+        self._task_total = task_total
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
@@ -1269,9 +1394,11 @@ class TaskListDialog(QDialog):
         bottom.addWidget(close_btn)
         outer.addLayout(bottom)
 
-        self._reload(tasks)
+        self._reload(tasks, task_total)
 
-    def _reload(self, tasks: list[dict]) -> None:
+    def _reload(self, tasks: list[dict], task_total: int | None = None) -> None:
+        if task_total is not None:
+            self._task_total = task_total
         while self._cards_layout.count() > 1:
             item = self._cards_layout.takeAt(0)
             if item.widget():
@@ -1282,8 +1409,16 @@ class TaskListDialog(QDialog):
                 self._cards_layout.count() - 1, self._make_card(task)
             )
 
-        n = len(tasks)
-        self._count_lbl.setText(f"{n} pending task(s)" if n else "No pending tasks")
+        visible = len(tasks)
+        total = self._task_total
+        if total > visible:
+            self._count_lbl.setText(f"Showing {visible} of {total} pending task(s)")
+        else:
+            self._count_lbl.setText(f"{total} pending task(s)" if total else "No pending tasks")
+
+    def _reload_from_api(self) -> None:
+        all_tasks = load_tasks()
+        self._reload(all_tasks[:MAX_VISIBLE_TASKS], len(all_tasks))
 
     def _make_card(self, task: dict) -> QWidget:
         tc = self._tc
@@ -1314,7 +1449,7 @@ class TaskListDialog(QDialog):
             text_col.addWidget(meta_lbl)
         row.addLayout(text_col, stretch=1)
 
-        tid: int = task["id"]
+        task_id = task.get("id")
 
         done_btn = QPushButton("✓", card)
         done_btn.setToolTip("Mark as done")
@@ -1323,33 +1458,55 @@ class TaskListDialog(QDialog):
             "QPushButton{color:#4ade80;font-weight:bold;border:1px solid #4ade80;border-radius:4px;}"
             "QPushButton:hover{background:#4ade80;color:#000;}"
         )
-        done_btn.clicked.connect(lambda _c, t=tid: self._on_done(t))
+        done_btn.setEnabled(isinstance(task_id, str) and not task.get("completed", False))
+        done_btn.clicked.connect(lambda _c, t=str(task_id): self._on_done(t))
         row.addWidget(done_btn)
 
         del_btn = QPushButton("✕", card)
-        del_btn.setToolTip("Delete task")
+        del_btn.setToolTip("Cancel task")
         del_btn.setFixedSize(28, 28)
         del_btn.setStyleSheet(
             "QPushButton{color:#f87171;font-weight:bold;border:1px solid #f87171;border-radius:4px;}"
             "QPushButton:hover{background:#f87171;color:#000;}"
         )
-        del_btn.clicked.connect(lambda _c, t=tid: self._on_delete(t))
+        del_btn.setEnabled(isinstance(task_id, str))
+        del_btn.clicked.connect(lambda _c, t=str(task_id): self._on_delete(t))
         row.addWidget(del_btn)
 
         return card
 
-    def _on_done(self, task_id: int) -> None:
-        complete_task(task_id)
-        self._reload(load_tasks())
+    def _on_done(self, task_id: str) -> None:
+        ok, message = update_task_status(task_id, "completed")
+        if not ok:
+            QMessageBox.warning(self, APP_NAME, message)
+            return
+        self._reload_from_api()
 
-    def _on_delete(self, task_id: int) -> None:
-        delete_task(task_id)
-        self._reload(load_tasks())
+    def _on_delete(self, task_id: str) -> None:
+        reply = QMessageBox.question(
+            self,
+            APP_NAME,
+            "Cancel this task? It will remain in the control-plane audit history.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        ok, message = update_task_status(task_id, "cancelled")
+        if not ok:
+            QMessageBox.warning(self, APP_NAME, message)
+            return
+        self._reload_from_api()
 
     def _on_add(self) -> None:
         dlg = QuickAddTaskDialog(self._projects, self)
         if dlg.exec() == QDialog.Accepted:
-            self._reload(load_tasks())
+            text, project_path = dlg.result()
+            ok, message = create_task(text, project_path)
+            if not ok:
+                QMessageBox.warning(self, APP_NAME, message)
+                return
+            self._reload_from_api()
 
 
 class ProjectEditDialog(QDialog):
@@ -1641,13 +1798,19 @@ class ProjectManagerDialog(QDialog):
 
 class RaiosTray(QObject):
     def __init__(self, app: QApplication):
-        super().__init__()
+        # QApplication owns the controller for the entire desktop session.
+        # Without this parent, the temporary `RaiosTray(app)` created in main()
+        # can be garbage-collected after registration, leaving the DBus menu
+        # permanently stuck on its initial "Loading..." state.
+        super().__init__(app)
         self.app = app
         self.state = TrayState(projects=[], usage={}, health={})
         self._manage_dialog: ProjectManagerDialog | None = None
         self._memory_dialog: MemoryBrowserDialog | None = None
         self._task_dialog: TaskListDialog | None = None
-        self._fetching = False
+        self._refresh_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="raios-tray")
+        self._refresh_future: Future[RefreshPayload] | None = None
+        self._next_digest_check_at = 0.0
 
         self._menu = QMenu()
         self._tray = QSystemTrayIcon(QIcon.fromTheme("utilities-system-monitor"), app)
@@ -1660,17 +1823,13 @@ class RaiosTray(QObject):
         self.refresh_timer.setInterval(REFRESH_SECONDS * 1000)
         self.refresh_timer.timeout.connect(self.refresh)
 
-        # Background-activity digest — polled independently of the main
-        # refresh cycle; the server itself gates how often a digest is
-        # actually produced (config.daemon.digest_interval_secs), so polling
-        # this every 60s client-side is cheap and just picks it up promptly.
-        self.digest_timer = QTimer(self)
-        self.digest_timer.setInterval(DIGEST_REFRESH_SECONDS * 1000)
-        self.digest_timer.timeout.connect(self._check_digest_notification)
+        self.refresh_watch_timer = QTimer(self)
+        self.refresh_watch_timer.setInterval(50)
+        self.refresh_watch_timer.timeout.connect(self._collect_refresh_result)
 
         self.rebuild_menu()
         self.refresh_timer.start()
-        self.digest_timer.start()
+        self.app.aboutToQuit.connect(self._shutdown)
         QTimer.singleShot(0, self.refresh)
 
     # ── portable tray helpers ─────────────────────────────────────────────────
@@ -1685,34 +1844,6 @@ class RaiosTray(QObject):
     def _notify(self, message: str) -> None:
         self._tray.showMessage(APP_NAME, message, QSystemTrayIcon.Information, 5000)
 
-    # ── background-activity notifications ───────────────────────────────────
-
-    def _check_important_notifications(self) -> None:
-        token = read_token()
-        query = urllib.parse.urlencode({"client_id": notification_client_id()})
-        data = api_get(f"/api/notifications/important?{query}", token)
-        if not data or data.get("status") != "ok":
-            return
-        for event in data.get("events", []):
-            summary = event.get("summary", "")
-            if summary:
-                self._notify(summary)
-
-    def _check_digest_notification(self) -> None:
-        token = read_token()
-        query = urllib.parse.urlencode({"client_id": notification_client_id()})
-        data = api_get(f"/api/notifications/digest?{query}", token)
-        if not data or data.get("status") != "ok":
-            return
-        digest = data.get("digest")
-        if not digest:
-            return
-        message = digest.get("summary", "")
-        rec = digest.get("top_recommendation")
-        if rec:
-            message += f"\nTop recommendation: {rec}"
-        self._notify(message)
-
     # ── icon ─────────────────────────────────────────────────────────────────
 
     def _update_icon(self, dirty_count: int) -> None:
@@ -1726,14 +1857,36 @@ class RaiosTray(QObject):
     # ── refresh ───────────────────────────────────────────────────────────────
 
     def refresh(self) -> None:
-        if self._fetching:
+        if self._refresh_future and not self._refresh_future.done():
             return
-        self._fetching = True
+        now = time.monotonic()
+        check_digest = now >= self._next_digest_check_at
+        if check_digest:
+            self._next_digest_check_at = now + DIGEST_REFRESH_SECONDS
+        self._refresh_future = self._refresh_executor.submit(fetch_refresh_payload, check_digest)
+        self.refresh_watch_timer.start()
+
+    def _collect_refresh_result(self) -> None:
+        future = self._refresh_future
+        if future is None or not future.done():
+            return
+        self.refresh_watch_timer.stop()
+        self._refresh_future = None
         try:
-            self._apply_state(fetch_state())
-            self._check_important_notifications()
-        finally:
-            self._fetching = False
+            payload = future.result()
+        except Exception as exc:
+            self._notify(f"Refresh failed: {exc}")
+            return
+        self._apply_state(payload.state)
+        for message in payload.important_notifications:
+            self._notify(message)
+        if payload.digest_notification:
+            self._notify(payload.digest_notification)
+
+    def _shutdown(self) -> None:
+        self.refresh_timer.stop()
+        self.refresh_watch_timer.stop()
+        self._refresh_executor.shutdown(wait=False, cancel_futures=True)
 
     def _apply_state(self, state: TrayState) -> None:
         self.state = state
@@ -1807,9 +1960,9 @@ class RaiosTray(QObject):
         # ── Tasks section ─────────────────────────────────────────────────────
         self._menu.addSeparator()
         pending = self.state.tasks
-        if pending:
+        if self.state.task_total:
             self._menu.addAction(self._menu_action(
-                f"☑ {len(pending)} task(s) pending", self.open_task_list
+                f"☑ {self.state.task_total} task(s) pending", self.open_task_list
             ))
         else:
             self._menu.addAction(self._menu_action("Tasks (empty)", self.open_task_list))
@@ -1905,8 +2058,12 @@ class RaiosTray(QObject):
         projects = self.state.projects or []
         dlg = QuickAddTaskDialog(projects, parent=None)
         if dlg.exec() == QDialog.Accepted:
-            self.state.tasks = load_tasks()
-            self.rebuild_menu()
+            text, project_path = dlg.result()
+            ok, message = create_task(text, project_path)
+            if not ok:
+                QMessageBox.warning(None, APP_NAME, message)
+                return
+            self.refresh()
             self._notify("Task added.")
 
     def open_task_list(self) -> None:
@@ -1915,7 +2072,7 @@ class RaiosTray(QObject):
             self._task_dialog.activateWindow()
             return
         projects = self.state.projects or []
-        dialog = TaskListDialog(self.state.tasks, projects, parent=None)
+        dialog = TaskListDialog(self.state.tasks, projects, self.state.task_total, parent=None)
         self._task_dialog = dialog
         dialog.finished.connect(self._on_task_dialog_closed)
         dialog.show()
@@ -1924,8 +2081,7 @@ class RaiosTray(QObject):
 
     def _on_task_dialog_closed(self) -> None:
         self._task_dialog = None
-        self.state.tasks = load_tasks()
-        self.rebuild_menu()
+        self.refresh()
 
 
 def validate_environment() -> str | None:
@@ -1959,6 +2115,7 @@ def _apply_dark_palette(app: QApplication) -> None:
 
 
 def main() -> int:
+    QApplication.setDesktopFileName("raios-tray")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName(APP_NAME)
