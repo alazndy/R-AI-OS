@@ -7,6 +7,8 @@
 
 #![warn(missing_docs)]
 
+pub mod documents;
 pub mod error;
+pub mod project;
 
 pub use error::{AppError, ErrorCode, Result};
