@@ -174,7 +174,7 @@ pub(super) fn cmd_handoff(
         }
         println!("  confidence:  {:.0}%", report.confidence * 100.0);
         println!(
-            "  Next: {to_agent} will receive this as [HANDOVER CONTEXT] on its next `raios run`/`raios task`."
+            "  Queued: the receiving agent has not started. Use `raios run` in this project, or add --run to handoff to start it immediately."
         );
         println!(
             "  If this carries complex context, call mempalace_create_tunnel yourself: {tunnel_hint}"

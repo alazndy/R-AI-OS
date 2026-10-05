@@ -1,8 +1,11 @@
 use crate::instinct::InstinctEngine;
 use raios_core::shield::AgentShield;
+#[cfg(test)]
+use std::io;
 #[cfg(unix)]
 use std::io::Write;
-use std::io::{self, BufRead, BufReader};
+#[cfg(unix)]
+use std::io::{BufRead, BufReader};
 #[cfg(unix)]
 use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
@@ -256,6 +259,62 @@ fn wrapper_launch_input<'a>(agent: &str, extra_args: &'a [String]) -> Option<&'a
     Some(input)
 }
 
+/// Pass handoff context through native CLI arguments without reading stdin.
+fn handoff_agent_command(
+    agent: &str,
+    handover_block: Option<&str>,
+    extra_args: &[String],
+) -> Result<Command, String> {
+    let mut cmd = match agent.to_lowercase().as_str() {
+        "claude" => {
+            let mut c = Command::new("claude");
+            c.env_remove("OPENAI_API_KEY");
+            if let Some(block) = handover_block {
+                c.arg("--append-system-prompt").arg(block);
+                if extra_args.is_empty() {
+                    c.arg(block);
+                }
+            }
+            c
+        }
+        "opencode" => {
+            let mut c = Command::new("opencode");
+            if let Some(block) = handover_block {
+                c.arg("--prompt").arg(block);
+            }
+            c
+        }
+        "cursor" => Command::new("cursor"),
+        "antigravity" | "agy" => {
+            let mut c = Command::new("agy");
+            if let Some(block) = handover_block {
+                c.arg("--prompt-interactive").arg(block);
+            }
+            c
+        }
+        "codex" => {
+            let mut c = codex_command();
+            if let Some(block) = handover_block {
+                c.arg(block);
+            }
+            c
+        }
+        _ => return Err(format!("Unsupported agent: {}", agent)),
+    };
+
+    cmd.args(extra_args);
+    Ok(cmd)
+}
+
+/// Never select another project's handoff when this directory is unregistered.
+fn pending_handoff_for_project(
+    conn: &rusqlite::Connection,
+    project_path: &str,
+    identity: &str,
+) -> rusqlite::Result<Option<raios_core::control_plane::HandoffContext>> {
+    raios_core::db::cp_take_pending_handoff_for_path(conn, project_path, identity)
+}
+
 pub fn run_agent(
     agent: &str,
     project_dir: Option<String>,
@@ -325,6 +384,13 @@ pub fn run_agent(
         }
     }
 
+    // Resolve effective project dir: explicit flag > CWD
+    let project_dir = project_dir.or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    });
+
     // 3. Look up any pending control-plane handoff addressed to this agent identity
     // (see AGENT_CONSTITUTION.md Section 10 — no STATE.json involved). Resolved here,
     // before the Command is built, so each agent's native prompt-injection flag can be
@@ -333,12 +399,20 @@ pub fn run_agent(
         None
     } else {
         canonical_agent_identity(agent).and_then(|identity| {
-            let conn = raios_core::db::open_db().ok()?;
-            let project_id = project_dir
-                .as_deref()
-                .and_then(|dir| raios_core::db::project_id_for_file_path(&conn, dir));
-            let ctx =
-                raios_core::db::cp_take_pending_handoff(&conn, project_id, identity).ok()??;
+            let conn = match raios_core::db::open_db() {
+                Ok(conn) => conn,
+                Err(error) => {
+                    eprintln!("Warning: could not read pending handoffs: {error}");
+                    return None;
+                }
+            };
+            let ctx = match pending_handoff_for_project(&conn, project_dir.as_deref()?, identity) {
+                Ok(ctx) => ctx?,
+                Err(error) => {
+                    eprintln!("Warning: could not select pending handoff: {error}");
+                    return None;
+                }
+            };
             let mut block = format!(
                 "[HANDOVER CONTEXT]\nFrom: {}  Status: {}\n{}",
                 ctx.from_agent, ctx.status, ctx.context_summary
@@ -365,10 +439,7 @@ pub fn run_agent(
         .map(|(_, _, _, block)| block.clone());
 
     // 4. Build the Command, wiring the handover into each agent's native prompt flag.
-    // NOTE: --append-system-prompt on claude only works with --print (non-interactive).
-    // For interactive `raios run claude`, we print the context as a terminal banner
-    // and pause for Enter — the user reads the handoff, then the agent starts.
-    // This ensures the context is visible in the terminal before the agent TUI takes over.
+    // The banner is informational; native prompt delivery below starts immediately.
     if let Some(block) = &handover_block {
         let width = 62usize;
         let border = "═".repeat(width);
@@ -388,49 +459,10 @@ pub fn run_agent(
             );
         }
         println!("\x1b[1;33m╚{border}╝\x1b[0m");
-        println!("\n  \x1b[90mHandoff alındı — devam etmek için \x1b[37m[Enter]\x1b[0m\x1b[90m'a bas...\x1b[0m");
-        let stdin = io::stdin();
-        let _ = stdin.lock().lines().next();
         println!();
     }
 
-    let mut cmd = match agent.to_lowercase().as_str() {
-        "claude" => {
-            let mut c = Command::new("claude");
-            c.env_remove("OPENAI_API_KEY");
-            // No --append-system-prompt here: that flag implies --print mode and breaks
-            // interactive sessions. Context is already printed as a banner above.
-            c
-        }
-        "opencode" => {
-            let mut c = Command::new("opencode");
-            if let Some(block) = &handover_block {
-                c.arg("--prompt").arg(block);
-            }
-            c
-        }
-        "cursor" => Command::new("cursor"),
-        "antigravity" | "agy" => {
-            let mut c = Command::new("agy");
-            if let Some(block) = &handover_block {
-                c.arg("--prompt-interactive").arg(block);
-            }
-            c
-        }
-        "codex" => {
-            let mut c = codex_command();
-            if let Some(block) = &handover_block {
-                c.arg(block);
-            }
-            c
-        }
-        _ => return Err(format!("Unsupported agent: {}", agent)),
-    };
-
-    // 5. Forward extra args verbatim to the agent binary
-    if !extra_args.is_empty() {
-        cmd.args(&extra_args);
-    }
+    let mut cmd = handoff_agent_command(agent, handover_block.as_deref(), &extra_args)?;
 
     // Inject Instincts & Budget Info
     let instinct_prompt = instinct.get_instinct_prompt();
@@ -444,13 +476,6 @@ pub fn run_agent(
     if let Some(block) = &handover_block {
         cmd.env("RAIOS_HANDOVER_CONTEXT", block);
     }
-
-    // Resolve effective project dir: explicit flag > CWD
-    let project_dir = project_dir.or_else(|| {
-        std::env::current_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned())
-    });
 
     if let Some(dir) = &project_dir {
         cmd.current_dir(dir);
@@ -516,7 +541,26 @@ pub fn run_agent(
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return Err(format!("Failed to spawn agent: {}", e)),
+        Err(e) => {
+            if injected_claude_md {
+                strip_session_from_claude_md();
+            }
+            #[cfg(unix)]
+            if let Some(ipc) = wrapper_note_ipc {
+                ipc.stop.store(true, Ordering::Relaxed);
+                let _ = ipc.worker.join();
+            }
+            if let Some((task_id, run_id)) = &session_ids {
+                if let Ok(conn) = raios_core::db::open_db() {
+                    if let Err(error) = raios_core::db::cp_session_end_with_summary(
+                        &conn, task_id, run_id, false, None,
+                    ) {
+                        eprintln!("Warning: failed to close unstarted wrapper session: {error}");
+                    }
+                }
+            }
+            return Err(format!("Failed to spawn agent: {e}"));
+        }
     };
     if let Some((conn, identity, ctx, _)) = &pending_handoff {
         println!(
@@ -990,6 +1034,123 @@ mod tests {
         assert!(!is_informational_invocation(&[
             "implement the feature".to_string()
         ]));
+    }
+
+    #[test]
+    fn claude_handoff_starts_work_without_print_mode_or_stdin_pause() {
+        let cmd = handoff_agent_command("claude", Some("[HANDOVER CONTEXT]\nimplement auth"), &[])
+            .unwrap();
+        let args: Vec<_> = cmd.get_args().map(|arg| arg.to_str().unwrap()).collect();
+        assert_eq!(cmd.get_program(), "claude");
+        assert_eq!(
+            args,
+            [
+                "--append-system-prompt",
+                "[HANDOVER CONTEXT]\nimplement auth",
+                "[HANDOVER CONTEXT]\nimplement auth"
+            ]
+        );
+        assert!(!args.contains(&"--print"));
+    }
+
+    #[test]
+    fn claude_handoff_preserves_an_explicit_user_prompt() {
+        let extra = vec!["--print".to_string(), "review the diff".to_string()];
+        let cmd = handoff_agent_command("claude", Some("handoff context"), &extra).unwrap();
+        let args: Vec<_> = cmd.get_args().map(|arg| arg.to_str().unwrap()).collect();
+        assert_eq!(
+            args,
+            [
+                "--append-system-prompt",
+                "handoff context",
+                "--print",
+                "review the diff"
+            ]
+        );
+    }
+
+    #[test]
+    fn handoff_is_delivered_only_in_the_registered_project() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let project_id = raios_core::db::upsert_project(
+            &conn,
+            "handoff-project",
+            "tools",
+            "/handoff-project",
+            None,
+            "active",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        raios_core::db::create_handoff_workflow(
+            &conn,
+            raios_core::db::HandoffWorkflowInput {
+                project_path: "/handoff-project",
+                from_agent: "codex_kaira",
+                to_agent: "claude_kaira",
+                status: "SUCCESS",
+                msg: "implement auth",
+                diff_stat: None,
+                report: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            pending_handoff_for_project(&conn, "/unregistered", "claude_kaira")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            raios_core::db::cp_take_pending_handoff(&conn, Some(project_id), "claude_kaira")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            pending_handoff_for_project(&conn, "/handoff-project", "claude_kaira")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn handoff_delivery_supports_unregistered_directories_without_global_fallback() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        for project in ["/unregistered-a", "/unregistered-b"] {
+            raios_core::db::create_handoff_workflow(
+                &conn,
+                raios_core::db::HandoffWorkflowInput {
+                    project_path: project,
+                    from_agent: "codex_kaira",
+                    to_agent: "claude_kaira",
+                    status: "SUCCESS",
+                    msg: project,
+                    diff_stat: None,
+                    report: None,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            pending_handoff_for_project(&conn, "/unregistered-a", "claude_kaira")
+                .unwrap()
+                .unwrap()
+                .context_summary,
+            "/unregistered-a"
+        );
+        let ctx = pending_handoff_for_project(&conn, "/unregistered-b", "claude_kaira")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ctx.context_summary, "/unregistered-b");
+        assert!(
+            pending_handoff_for_project(&conn, "/another-project", "claude_kaira")
+                .unwrap()
+                .is_none()
+        );
     }
 
     // ─── canonical_agent_identity ────────────────────────────────────────
