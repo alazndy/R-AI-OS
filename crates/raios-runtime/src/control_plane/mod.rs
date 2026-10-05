@@ -1,4 +1,5 @@
 pub(crate) mod handoff;
+pub(crate) mod project_registry;
 pub mod service;
 
 pub use service::{

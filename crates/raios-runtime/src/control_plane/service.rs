@@ -824,6 +824,9 @@ pub fn dispatch_control_command(
             }
             Some(serde_json::json!({"task_id": task_id, "status": status}))
         }
+        Command::RegisterProject { project_path, .. } => Some(
+            super::project_registry::register_project(&tx, project_path)?,
+        ),
         Command::CreateHandoff {
             project_path,
             from_agent,
