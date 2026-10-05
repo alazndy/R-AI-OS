@@ -37,6 +37,19 @@ pub fn create_handoff_workflow(
     conn: &Connection,
     input: HandoffWorkflowInput<'_>,
 ) -> Result<raios_core::control_plane::HandoffWorkflowIds> {
+    let tx = conn.unchecked_transaction()?;
+    let ids = create_handoff_workflow_in_tx(&tx, input)?;
+    tx.commit()?;
+    Ok(ids)
+}
+
+/// Same workflow as [`create_handoff_workflow`] for callers that already own an open
+/// transaction, such as the control-plane dispatcher, which commits the handoff together
+/// with its idempotency record and audit entry. It never begins or commits a transaction.
+pub fn create_handoff_workflow_in_tx(
+    conn: &Connection,
+    input: HandoffWorkflowInput<'_>,
+) -> Result<raios_core::control_plane::HandoffWorkflowIds> {
     let HandoffWorkflowInput {
         project_path,
         from_agent,
@@ -95,7 +108,8 @@ pub fn create_handoff_workflow(
     }
     let metadata_json = metadata_value.to_string();
 
-    let tx = conn.unchecked_transaction()?;
+    // The caller owns the transaction; `tx` aliases it so the statements below are unchanged.
+    let tx = conn;
 
     // One active handoff per (project, assignee): supersede whatever this one replaces
     // instead of letting stale pending handovers pile up for the same agent.
@@ -183,7 +197,6 @@ pub fn create_handoff_workflow(
          VALUES (?1, ?2, ?3, ?4, ?5, 'handover', ?6, 'pending', ?7)",
         params![approval_id, project_id, task_id, agent_run_id, artifact_id, msg, now],
     )?;
-    tx.commit()?;
 
     Ok(raios_core::control_plane::HandoffWorkflowIds {
         task_id,
