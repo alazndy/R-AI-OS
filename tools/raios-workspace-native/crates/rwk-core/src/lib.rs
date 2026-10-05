@@ -10,5 +10,6 @@
 pub mod documents;
 pub mod error;
 pub mod project;
+pub mod sessions;
 
 pub use error::{AppError, ErrorCode, Result};
