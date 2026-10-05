@@ -1302,12 +1302,10 @@ mod tests {
         use rusqlite::params;
         use std::io::Read;
         use std::net::TcpStream;
-        use std::sync::Mutex;
 
-        // `RAIOS_DB_PATH` is process-global; serialize any test in this
-        // binary that reads or writes it so parallel `cargo test` threads
-        // never race on the same env var.
-        static DB_ENV_LOCK: Mutex<()> = Mutex::new(());
+        // `RAIOS_DB_PATH` is process-global; serialize with the crate-wide
+        // `crate::DB_ENV_LOCK` (see lib.rs) so parallel `cargo test` threads
+        // never race on the same env var with other tests in this binary.
 
         // The listener's accept loop is a non-blocking poll (20ms interval,
         // see start_wrapper_note_ipc), so a connect() can complete at the
@@ -1348,7 +1346,7 @@ mod tests {
 
         #[test]
         fn wrapper_note_ipc_two_projects_parallel_no_cross_leak() {
-            let _lock = DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let original_db_path = std::env::var("RAIOS_DB_PATH").ok();
             let tmp_db = tempfile::NamedTempFile::new().unwrap();
             std::env::set_var("RAIOS_DB_PATH", tmp_db.path());

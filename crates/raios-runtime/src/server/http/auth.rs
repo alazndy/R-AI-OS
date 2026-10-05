@@ -233,20 +233,18 @@ mod tests {
 /// current directory before that) — there's no dependency-injection seam,
 /// so these tests redirect HOME and the working directory to a tempdir for
 /// their duration. That mutates process-global state, which is why every
-/// test here takes the same lock: cargo runs tests in one process by
-/// default, and two of these racing would read each other's fixtures.
+/// test here takes the crate-wide `TEST_ENV_LOCK` (see lib.rs), shared with
+/// the other env-redirecting test modules: cargo runs tests in one process
+/// by default, and two of these racing would read each other's fixtures.
 #[cfg(all(test, unix))]
 mod middleware_integration_tests {
     use super::*;
     use axum::{body::Body, http::Request, middleware, routing::get, Router};
-    use std::sync::Mutex;
     use tower::ServiceExt;
 
     fn peer(ip: &str) -> SocketAddr {
         format!("{ip}:12345").parse().unwrap()
     }
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct IsolatedEnv {
         _lock: std::sync::MutexGuard<'static, ()>,
@@ -258,7 +256,9 @@ mod middleware_integration_tests {
 
     impl IsolatedEnv {
         fn new() -> Self {
-            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let lock = crate::TEST_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::TempDir::new().unwrap();
             let original_cwd = std::env::current_dir().unwrap();
             let original_home = std::env::var("HOME").ok();

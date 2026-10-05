@@ -412,11 +412,10 @@ fn scan_rules(path: &Path) -> Vec<&'static str> {
 #[cfg(test)]
 mod security_persistence_tests {
     use super::*;
-    use std::sync::Mutex;
 
-    // `RAIOS_DB_PATH` is process-global; serialize any test in this binary
-    // that reads or writes it so parallel `cargo test` threads never race.
-    static DB_ENV_LOCK: Mutex<()> = Mutex::new(());
+    // `RAIOS_DB_PATH` is process-global; serialize with the crate-wide
+    // `crate::DB_ENV_LOCK` (see lib.rs) so parallel `cargo test` threads
+    // never race on it with other tests in this binary.
 
     /// Reproduces the `avg_security: 0/100` symptom from `raios stats`:
     /// `check_project_with_security` computes a real security score but
@@ -427,7 +426,7 @@ mod security_persistence_tests {
     /// .security_score` is NULL for every row in production.
     #[test]
     fn check_project_with_security_persists_score_to_health_cache() {
-        let _lock = DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let original_db_path = std::env::var("RAIOS_DB_PATH").ok();
         let tmp_db = tempfile::NamedTempFile::new().unwrap();
         std::env::set_var("RAIOS_DB_PATH", tmp_db.path());

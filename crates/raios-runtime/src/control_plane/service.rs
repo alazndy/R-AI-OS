@@ -421,6 +421,8 @@ fn command_name(cmd: &Command) -> &'static str {
         Command::ToggleCronJob { .. } => "toggle_cron_job",
         Command::ExecuteSearch { .. } => "execute_search",
         Command::UpdatePolicyRule { .. } => "update_policy_rule",
+        Command::RegisterProject { .. } => "register_project",
+        Command::CreateHandoff { .. } => "create_handoff",
     }
 }
 
@@ -439,7 +441,7 @@ fn validate_task_title(title: &str) -> Result<String, Problem> {
     Ok(title.to_owned())
 }
 
-fn validate_project_path(project_path: Option<&str>) -> Result<Option<String>, Problem> {
+pub(super) fn validate_project_path(project_path: Option<&str>) -> Result<Option<String>, Problem> {
     let Some(project_path) = project_path else {
         return Ok(None);
     };
@@ -822,6 +824,19 @@ pub fn dispatch_control_command(
             }
             Some(serde_json::json!({"task_id": task_id, "status": status}))
         }
+        Command::CreateHandoff {
+            project_path,
+            from_agent,
+            to_agent,
+            summary,
+            ..
+        } => Some(super::handoff::create_handoff(
+            &tx,
+            project_path,
+            from_agent,
+            to_agent,
+            summary,
+        )?),
         unhandled => {
             return Err(Problem::not_implemented(format!(
                 "Command '{:?}' is not implemented",
@@ -872,8 +887,48 @@ pub fn dispatch_control_command(
 mod tests {
     use super::*;
 
+    /// Points `dirs::config_dir()` at an empty tempdir for the duration of a
+    /// test, so `Config::load()` inside `load_work_snapshot` never reads the
+    /// live `~/.config/raios/config.toml`. Without this, the
+    /// `factory.enabled` assertion in `snapshot_generation_on_in_memory_db`
+    /// depends on the machine running the tests. Serialized on the crate-wide
+    /// `TEST_ENV_LOCK` (see lib.rs) with the other env-redirecting tests.
+    struct IsolatedConfigDir {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        original_xdg_config_home: Option<String>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl IsolatedConfigDir {
+        fn new() -> Self {
+            let lock = crate::TEST_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let tmp = tempfile::TempDir::new().unwrap();
+            let original_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();
+            // dirs::config_dir() prefers XDG_CONFIG_HOME over HOME and only
+            // accepts absolute paths; TempDir paths are absolute.
+            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+            Self {
+                _lock: lock,
+                original_xdg_config_home,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for IsolatedConfigDir {
+        fn drop(&mut self) {
+            match &self.original_xdg_config_home {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+
     #[test]
     fn snapshot_generation_on_in_memory_db() {
+        let _isolated_config = IsolatedConfigDir::new();
         let conn = Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap();
 

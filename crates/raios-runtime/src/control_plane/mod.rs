@@ -1,3 +1,4 @@
+pub(crate) mod handoff;
 pub mod service;
 
 pub use service::{
