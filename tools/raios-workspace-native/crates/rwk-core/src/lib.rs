@@ -7,10 +7,12 @@
 
 #![warn(missing_docs)]
 
+pub mod consent;
 pub mod control;
 pub mod documents;
 pub mod error;
 pub mod handoff_state;
+pub mod memory;
 pub mod project;
 pub mod sessions;
 
