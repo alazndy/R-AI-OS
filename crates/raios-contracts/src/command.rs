@@ -114,6 +114,26 @@ pub enum Command {
         /// Unique key to prevent duplicate execution.
         idempotency_key: String,
     },
+    /// Register an existing directory as a project so agents can be launched in it.
+    RegisterProject {
+        /// Absolute path to an existing project directory.
+        project_path: String,
+        /// Unique key to prevent duplicate execution.
+        idempotency_key: String,
+    },
+    /// Queue a handoff (recorded as a `BLOCKER` continuation) from one agent identity to another.
+    CreateHandoff {
+        /// Absolute project root the handoff is scoped to.
+        project_path: String,
+        /// Agent identity that is handing off (for example `"claude_kaira"`).
+        from_agent: String,
+        /// Agent identity that should receive the context.
+        to_agent: String,
+        /// Context for the receiving agent, at most 16,000 bytes, without credentials.
+        summary: String,
+        /// Unique key to prevent duplicate execution.
+        idempotency_key: String,
+    },
 }
 
 impl Command {
@@ -154,6 +174,12 @@ impl Command {
                 idempotency_key, ..
             } => idempotency_key,
             Command::UpdatePolicyRule {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::RegisterProject {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::CreateHandoff {
                 idempotency_key, ..
             } => idempotency_key,
         }
