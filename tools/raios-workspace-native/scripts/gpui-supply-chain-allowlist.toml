@@ -1,0 +1,67 @@
+# Files in a published GPUI crate that may differ from upstream, each reviewed by hand against
+# the actual diff on 2026-10-06. An entry is pinned either by the SHA-256 of the reviewed
+# published file (`sha256`) or as a byte-identical copy of an upstream file (`copy_of`), so a new
+# version with different content produces a finding again and must be re-reviewed.
+
+[[allow]]
+crate = "gpui-pre"
+version = "0.3.8"
+path = "src/action.rs"
+sha256 = "78bd18baf94baf08637d99a34a3fd147b5784ccbbfefcad3a4bb9a6577b18c12"
+reason = "actions! derive path gpui::Action became $crate::Action so the crate can be renamed; one comment line added"
+
+[[allow]]
+crate = "gpui-pre-macros"
+version = "0.3.8"
+path = "src/gpui_macros.rs"
+sha256 = "62c50a2b15b39e51623304c3557cc897b5fd77ea84a415e617ceb060b0506663"
+reason = "0 lines removed; every proc-macro entry point is wrapped as rewrite(__gpui_pre_<name>(..)) and the original body is kept unchanged"
+
+[[allow]]
+crate = "gpui-pre-macros"
+version = "0.3.8"
+path = "src/gpui_pre_facade_paths.rs"
+sha256 = "f929a8d8169407fa91e588b2768ad564f2200281e63ccdac775458c3d3bc2a5e"
+reason = "token-stream rewriting of gpui:: and gpui_platform:: paths to the facade crate resolved with proc_macro_crate; no process, network, filesystem or env access"
+
+[[allow]]
+crate = "gpui-pre-apple"
+version = "0.3.8"
+path = "build.rs"
+sha256 = "e68855230185a01ad2355b2139a47b4285ecda44789b4f297356f6c957bd6bbf"
+reason = "only the gpui source directory changed from ../gpui to vendor/gpui so the crate is self-contained; macOS-only, not compiled on Linux"
+
+[[allow]]
+crate = "gpui-pre-apple"
+version = "0.3.8"
+path = "vendor/gpui/src/color.rs"
+copy_of = "crates/gpui/src/color.rs"
+reason = "verbatim copy of the gpui source read by build.rs"
+
+[[allow]]
+crate = "gpui-pre-apple"
+version = "0.3.8"
+path = "vendor/gpui/src/geometry.rs"
+copy_of = "crates/gpui/src/geometry.rs"
+reason = "verbatim copy of the gpui source read by build.rs"
+
+[[allow]]
+crate = "gpui-pre-apple"
+version = "0.3.8"
+path = "vendor/gpui/src/platform.rs"
+copy_of = "crates/gpui/src/platform.rs"
+reason = "verbatim copy of the gpui source read by build.rs"
+
+[[allow]]
+crate = "gpui-pre-apple"
+version = "0.3.8"
+path = "vendor/gpui/src/scene.rs"
+copy_of = "crates/gpui/src/scene.rs"
+reason = "verbatim copy of the gpui source read by build.rs"
+
+[[allow]]
+crate = "gpui-pre-apple"
+version = "0.3.8"
+path = "vendor/gpui/src/window.rs"
+copy_of = "crates/gpui/src/window.rs"
+reason = "verbatim copy of the gpui source read by build.rs"
