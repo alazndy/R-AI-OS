@@ -7,6 +7,7 @@
 
 #![warn(missing_docs)]
 
+pub mod control;
 pub mod documents;
 pub mod error;
 pub mod project;
