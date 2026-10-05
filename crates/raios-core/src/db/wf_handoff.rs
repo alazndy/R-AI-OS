@@ -169,7 +169,7 @@ pub fn create_handoff_workflow_in_tx(
     )?;
 
     let run_contract_id = cp_insert_run_contract(
-        &tx,
+        tx,
         Some(&task_id),
         project_path,
         "[]",

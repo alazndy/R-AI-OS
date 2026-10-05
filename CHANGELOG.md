@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Control-plane handoff and registration contract:** added `Command::CreateHandoff` (queues a `BLOCKER` handoff inside the dispatcher's transaction, so idempotency, owner binding and the hash-chained audit entry apply), `Command::RegisterProject` (canonicalizes the path, never overwrites an existing registry row), `Query::GetHandoffReceipt` (project-scoped; `delivered_by_target` is true only when the addressed agent's own wrapper consumed the handoff, never for a control-plane approval) and `Query::GetCommandPolicy` (read-only view of the policy action a command would receive). `create_handoff_workflow_in_tx` lets callers that already hold a transaction reuse the workflow without a nested `BEGIN`.
+
 ## v3.9.0 — 2026-08-18
 
 - **VS Code daemon ownership:** Linux startup now delegates to `aiosd.service` and requires an authenticated TCP handshake before reporting readiness, preventing detached auto-spawn races with the systemd user service during desktop login.
