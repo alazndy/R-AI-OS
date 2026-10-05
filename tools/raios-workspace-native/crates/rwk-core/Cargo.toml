@@ -1,0 +1,11 @@
+[package]
+name = "rwk-core"
+description = "UI-independent core of RAIOS Workspace Native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+raios-contracts = { path = "../../../../crates/raios-contracts" }
+cap-std = "3"
