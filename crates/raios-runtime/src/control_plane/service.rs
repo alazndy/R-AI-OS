@@ -414,6 +414,7 @@ fn command_name(cmd: &Command) -> &'static str {
         Command::ApproveFileChange { .. } => "approve_file_change",
         Command::RejectFileChange { .. } => "reject_file_change",
         Command::LaunchAgent { .. } => "launch_agent",
+        Command::ValidateAgentLaunch { .. } => "validate_agent_launch",
         Command::CancelAgentRun { .. } => "cancel_agent_run",
         Command::CreateTask { .. } => "create_task",
         Command::UpdateTaskStatus { .. } => "update_task_status",
