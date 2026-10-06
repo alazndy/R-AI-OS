@@ -151,7 +151,10 @@ pub trait ControlPlane: Send + Sync {
         key: &IdempotencyKey,
     ) -> Result<RegistrationOutcome>;
 
-    /// Validates and records an agent launch. Does not start the process.
+    /// Asks the daemon to validate, authorize and audit launching an agent in
+    /// `request.project_root` **without starting any process**: the workspace runs the agent in
+    /// its own PTY. `DaemonClient` fails closed until the daemon has a command that does not
+    /// spawn (the existing `LaunchAgent` opens an external terminal window).
     fn launch_agent(&self, request: &LaunchAgentRequest) -> Result<()>;
 
     /// Queues a handoff.

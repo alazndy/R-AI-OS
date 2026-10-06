@@ -1,9 +1,13 @@
 //! UI-independent core of RAIOS Workspace Native.
 //!
-//! This crate is the P1a **skeleton**: types, traits and `unimplemented!("P1b")` bodies that
-//! the owner reviews before any business logic is written. It must never depend on a UI
-//! toolkit, on `raios-core` or on `raios-runtime`; the control plane is reached only through
-//! the `aiosd` contract in `raios-contracts`.
+//! Project files and git diffs behind a filesystem capability, terminal sessions behind a
+//! host trait, the handoff lifecycle as a pure state machine, a read-only memory projection,
+//! UI-local consent, and the client for the `aiosd` control plane.
+//!
+//! This crate must never depend on a UI toolkit, on `raios-core` or on `raios-runtime`; the
+//! control plane is reached only through the `aiosd` contract in `raios-contracts`, and
+//! anything that needs `raios-core` (the session token file, secret redaction) is injected by
+//! the application crate.
 
 #![warn(missing_docs)]
 
