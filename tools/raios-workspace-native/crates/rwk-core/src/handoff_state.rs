@@ -178,14 +178,98 @@ impl Default for HandoffView {
 }
 
 /// Applies one observation and returns the new view. See the module's transition table.
-pub fn next(_view: &HandoffView, _observation: &Observation) -> HandoffView {
-    unimplemented!("P1b")
+pub fn next(view: &HandoffView, observation: &Observation) -> HandoffView {
+    let mut out = view.clone();
+    match observation {
+        Observation::QueueRequested if view.receipt == ReceiptState::NotQueued => {
+            out.receipt = ReceiptState::Queuing;
+        }
+        Observation::QueueSucceeded { approval_id } if view.receipt == ReceiptState::Queuing => {
+            out.receipt = ReceiptState::Pending {
+                approval_id: approval_id.clone(),
+            };
+            out.receipt_is_fresh = true;
+        }
+        Observation::QueueFailed if view.receipt == ReceiptState::Queuing => {
+            out.receipt = ReceiptState::NotQueued;
+        }
+        Observation::LaunchRequested if can_start_receiver(view) => {
+            out.receiver = ReceiverState::Launching;
+            out.receipt_is_fresh = false;
+        }
+        Observation::ReceiverRunning if view.receiver == ReceiverState::Launching => {
+            out.receiver = ReceiverState::Running;
+        }
+        Observation::LaunchFailed if view.receiver == ReceiverState::Launching => {
+            out.receiver = ReceiverState::Exited;
+            out.receipt_is_fresh = false;
+        }
+        Observation::ReceiverExited
+            if matches!(
+                view.receiver,
+                ReceiverState::Launching | ReceiverState::Running
+            ) =>
+        {
+            out.receiver = ReceiverState::Exited;
+            out.receipt_is_fresh = false;
+        }
+        Observation::Receipt(read) => return apply_receipt(view, read),
+        _ => {}
+    }
+    out
+}
+
+/// Applies one receipt read (row 8 of the transition table). Reads are ignored before an
+/// approval id exists and after the receipt is terminal.
+fn apply_receipt(view: &HandoffView, read: &ReceiptObservation) -> HandoffView {
+    let approval_id = match &view.receipt {
+        ReceiptState::Pending { approval_id }
+        | ReceiptState::Missing { approval_id }
+        | ReceiptState::Unreadable { approval_id, .. } => approval_id.clone(),
+        _ => return view.clone(),
+    };
+    let (receipt, fresh) = match read {
+        ReceiptObservation::Pending => (ReceiptState::Pending { approval_id }, true),
+        ReceiptObservation::DeliveredByTarget => (
+            ReceiptState::Delivered { approval_id },
+            view.receipt_is_fresh,
+        ),
+        ReceiptObservation::ResolvedElsewhere => (
+            ReceiptState::ResolvedElsewhere { approval_id },
+            view.receipt_is_fresh,
+        ),
+        ReceiptObservation::Expired => {
+            (ReceiptState::Expired { approval_id }, view.receipt_is_fresh)
+        }
+        ReceiptObservation::Rejected => (
+            ReceiptState::Rejected { approval_id },
+            view.receipt_is_fresh,
+        ),
+        ReceiptObservation::NotFound => (ReceiptState::Missing { approval_id }, false),
+        ReceiptObservation::ReadFailed { reason } => (
+            ReceiptState::Unreadable {
+                approval_id,
+                reason: reason.clone(),
+            },
+            false,
+        ),
+    };
+    HandoffView {
+        receipt,
+        receiver: view.receiver,
+        receipt_is_fresh: fresh,
+    }
 }
 
 /// True when the receipt is a freshly read `Pending` and no owned receiver is starting or
 /// running. This gates both the first start and every restart.
-pub fn can_start_receiver(_view: &HandoffView) -> bool {
-    unimplemented!("P1b")
+pub fn can_start_receiver(view: &HandoffView) -> bool {
+    matches!(view.receipt, ReceiptState::Pending { .. })
+        && view.receipt_is_fresh
+        && matches!(
+            view.receiver,
+            ReceiverState::NotStarted | ReceiverState::Exited
+        )
 }
 
 #[cfg(test)]
@@ -242,11 +326,10 @@ mod tests {
         assert!(recoverable.iter().all(|state| !state.is_terminal()));
     }
 
-    // The tests below are the executable specification of the transition table. Plan 3 (P1b)
-    // removes the `ignore` attributes when it implements `next` and `can_start_receiver`.
+    // The tests below are the executable specification of the transition table in the module
+    // documentation. They pin every row, the terminal-state rule and the delivery attribution.
 
     #[test]
-    #[ignore = "P1b: executable spec for rows 1-2"]
     fn queueing_reaches_a_fresh_pending_receipt() {
         let view = apply(
             HandoffView::new(),
@@ -259,7 +342,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "P1b: executable spec for row 3"]
     fn a_failed_queue_returns_to_not_queued() {
         let view = apply(
             HandoffView::new(),
@@ -269,7 +351,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "P1b: executable spec for row 4"]
     fn starting_the_receiver_consumes_the_fresh_read() {
         let start = pending();
         assert!(can_start_receiver(&start));
@@ -281,7 +362,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "P1b: executable spec for rows 5-8"]
     fn an_early_exit_blocks_restart_until_a_fresh_pending_read() {
         let exited = apply(
             pending(),
@@ -299,7 +379,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "P1b: executable spec for row 6"]
     fn a_failed_launch_leaves_the_receiver_exited_and_the_read_stale() {
         let failed = apply(
             pending(),
@@ -310,7 +389,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "P1b: executable spec for the terminal-state rule"]
     fn terminal_receipts_cannot_be_undone_by_later_observations() {
         let terminal = [
             ReceiptState::Delivered { approval_id: id() },
@@ -343,7 +421,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "P1b: executable spec for the delivery-attribution rule"]
     fn only_target_delivery_counts_as_delivered() {
         let elsewhere = next(
             &pending(),
@@ -366,7 +443,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "P1b: executable spec for recoverable receipt states"]
     fn missing_and_unreadable_receipts_recover_on_a_pending_read() {
         let missing = next(
             &pending(),
@@ -401,7 +477,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "P1b: executable spec for observations that do not apply"]
     fn observations_that_do_not_apply_change_nothing() {
         let blank = HandoffView::new();
         for observation in [
