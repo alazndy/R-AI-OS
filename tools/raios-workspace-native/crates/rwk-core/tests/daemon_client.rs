@@ -7,6 +7,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use raios_contracts::{GovernSnapshot, WorkSnapshot};
 use rwk_core::control::daemon::{DaemonClient, TokenSource};
@@ -36,15 +37,40 @@ fn reply(status: u16, body: &str) -> Reply {
     }
 }
 
+/// Longest the scripted daemon waits for a connection. A client that never sends the expected
+/// request must fail the test, not hang it.
+const ACCEPT_DEADLINE: Duration = Duration::from_secs(5);
+
+fn accept_within(listener: &TcpListener, deadline: Duration) -> TcpStream {
+    let started = Instant::now();
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    started.elapsed() < deadline,
+                    "the client sent no request within {deadline:?}"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("accept failed: {error}"),
+        }
+    }
+}
+
 /// Serves exactly `replies.len()` connections, one reply each, and returns the captured
 /// requests (request line, headers and body) once they have all been served.
 fn spawn_daemon(replies: Vec<Reply>) -> (String, JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
         let mut requests = Vec::new();
         for reply in replies {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_within(&listener, ACCEPT_DEADLINE);
             requests.push(read_request(&mut stream));
             let reason = match reply.status {
                 200 => "OK",
@@ -249,26 +275,114 @@ fn creating_a_handoff_sends_agent_identities_and_returns_the_queued_receipt() {
     assert_eq!(body["payload"]["idempotency_key"], "h-1");
 }
 
+/// The exact JSON `raios-contracts` documents for `ValidateAgentLaunch`
+/// (`crates/raios-contracts/tests/launch_contract.rs` holds the same literal), so a rename on
+/// either side fails a test.
+const VALIDATE_AGENT_LAUNCH_WIRE_JSON: &str = r#"{"command_type":"ValidateAgentLaunch","payload":{"agent_name":"opencode","project_path":"/work/app","prompt":"inspect the build","idempotency_key":"v-1"}}"#;
+
+fn launch_request(agent: SessionKind, key: &str) -> LaunchAgentRequest {
+    LaunchAgentRequest {
+        project_root: PathBuf::from("/work/app"),
+        agent,
+        prompt: Some("inspect the build".into()),
+        idempotency_key: IdempotencyKey::new(key),
+    }
+}
+
+fn validated(agent_name: &str) -> Reply {
+    ok(json!({"status": "ok", "result": {
+        "agent_name": agent_name, "project_path": "/work/app", "status": "validated"
+    }}))
+}
+
 #[test]
-fn launching_an_agent_fails_closed_and_sends_nothing_because_launchagent_opens_a_terminal() {
-    // `Command::LaunchAgent` makes the daemon open an external terminal window. Until the
-    // daemon has a command that only validates, the client must not send it at all.
-    // A closed port proves no request was attempted: an attempt would be `DaemonUnreachable`.
-    let error = client(&closed_port_url())
-        .launch_agent(&LaunchAgentRequest {
-            project_root: PathBuf::from("/work/app"),
-            agent: SessionKind::Agy,
-            prompt: Some("hello".into()),
-            idempotency_key: IdempotencyKey::new("l-1"),
-        })
+fn launching_an_agent_sends_validate_agent_launch_and_never_launch_agent() {
+    // `Command::LaunchAgent` would make the daemon open an external terminal window; the
+    // workspace runs agents in its own PTYs, so it must send only the validating command.
+    let (url, server) = spawn_daemon(vec![validated("opencode")]);
+
+    client(&url)
+        .launch_agent(&launch_request(SessionKind::Opencode, "v-1"))
+        .unwrap();
+
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert!(
+        request.starts_with("POST /api/v1/control/command "),
+        "{request}"
+    );
+    assert!(has_bearer(request, "test-token"));
+    let body = request.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+    assert_eq!(body, VALIDATE_AGENT_LAUNCH_WIRE_JSON);
+    assert_ne!(json_body(request)["command_type"], "LaunchAgent");
+}
+
+#[test]
+fn a_daemon_refusal_to_validate_is_returned_with_its_error_code() {
+    let (url, server) = spawn_daemon(vec![
+        ok(problem(
+            "NOT_FOUND",
+            "Agent launch requires a registered project path",
+        )),
+        ok(problem(
+            "FORBIDDEN",
+            "Security policy denies control command 'validate_agent_launch'",
+        )),
+    ]);
+    let daemon = client(&url);
+
+    let unregistered = daemon
+        .launch_agent(&launch_request(SessionKind::Claude, "v-2"))
+        .unwrap_err();
+    let denied = daemon
+        .launch_agent(&launch_request(SessionKind::Claude, "v-3"))
         .unwrap_err();
 
+    server.join().unwrap();
+    assert_eq!(unregistered.code, ErrorCode::NotFound);
+    assert_eq!(denied.code, ErrorCode::Forbidden);
+}
+
+#[test]
+fn a_daemon_without_the_command_fails_closed() {
+    // An older daemon cannot decode the unknown `command_type` and answers HTTP 422.
+    let (url, server) = spawn_daemon(vec![reply(422, "unknown variant `ValidateAgentLaunch`")]);
+
+    let error = client(&url)
+        .launch_agent(&launch_request(SessionKind::Codex, "v-4"))
+        .unwrap_err();
+
+    server.join().unwrap();
     assert_eq!(error.code, ErrorCode::Daemon);
+    assert!(error.message.contains("422"), "{}", error.message);
+}
+
+#[test]
+fn any_result_other_than_validated_is_refused() {
+    // `launching` is what `LaunchAgent` reports after it has opened a terminal. Treating it as
+    // success would start a second copy of the agent in the workspace.
+    let (url, server) = spawn_daemon(vec![
+        ok(json!({"status": "ok", "result": {"status": "launching"}})),
+        ok(json!({"status": "ok"})),
+    ]);
+    let daemon = client(&url);
+
+    let launching = daemon
+        .launch_agent(&launch_request(SessionKind::Claude, "v-5"))
+        .unwrap_err();
+    let missing = daemon
+        .launch_agent(&launch_request(SessionKind::Claude, "v-6"))
+        .unwrap_err();
+
+    server.join().unwrap();
+    assert_eq!(launching.code, ErrorCode::Daemon);
     assert!(
-        error.message.contains("ValidateAgentLaunch"),
+        launching.message.contains("launching"),
         "{}",
-        error.message
+        launching.message
     );
+    assert_eq!(missing.code, ErrorCode::Daemon);
 }
 
 #[test]

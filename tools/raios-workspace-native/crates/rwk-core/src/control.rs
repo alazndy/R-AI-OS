@@ -58,7 +58,8 @@ impl PolicyAction {
     }
 }
 
-/// Asks the daemon to validate and record an agent launch. The UI then spawns `raios run`.
+/// Asks the daemon to validate, authorize and audit an agent launch. The UI then spawns
+/// `raios run` in its own PTY.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchAgentRequest {
     /// Registered project root.
@@ -153,8 +154,8 @@ pub trait ControlPlane: Send + Sync {
 
     /// Asks the daemon to validate, authorize and audit launching an agent in
     /// `request.project_root` **without starting any process**: the workspace runs the agent in
-    /// its own PTY. `DaemonClient` fails closed until the daemon has a command that does not
-    /// spawn (the existing `LaunchAgent` opens an external terminal window).
+    /// its own PTY. `DaemonClient` sends `ValidateAgentLaunch`; the daemon's `LaunchAgent`
+    /// opens an external terminal window and is never sent.
     fn launch_agent(&self, request: &LaunchAgentRequest) -> Result<()>;
 
     /// Queues a handoff.

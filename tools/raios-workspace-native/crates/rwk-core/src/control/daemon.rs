@@ -193,20 +193,28 @@ impl ControlPlane for DaemonClient {
         })
     }
 
-    /// Fails closed without sending anything. `Command::LaunchAgent` makes the daemon open the
-    /// agent in an external terminal window, which is not what the workspace wants: it runs
-    /// agents in its own PTYs. A command that only validates, authorizes and audits a launch
-    /// (planned as `ValidateAgentLaunch`) must exist in the daemon before this can be
-    /// implemented; an older daemon answers such an unknown command with `not implemented`.
+    /// Sends `ValidateAgentLaunch`, never `LaunchAgent`: the latter makes the daemon open the
+    /// agent in an external terminal window, while the workspace runs agents in its own PTYs.
+    /// Success needs the daemon to answer `validated`; any other answer, an older daemon that
+    /// does not know the command (HTTP 422) and an unreachable daemon all refuse the launch.
     fn launch_agent(&self, request: &LaunchAgentRequest) -> Result<()> {
-        request
+        let agent = request
             .agent
             .agent()
             .ok_or_else(|| invalid("A shell session is not an agent launch."))?;
-        Err(daemon_error(
-            "Launching agents needs the daemon command ValidateAgentLaunch, which this daemon \
-             does not provide; LaunchAgent would open an external terminal instead.",
-        ))
+        let response = self.command(&Command::ValidateAgentLaunch {
+            agent_name: agent.to_owned(),
+            project_path: path_text(&request.project_root)?,
+            prompt: request.prompt.clone(),
+            idempotency_key: request.idempotency_key.as_str().to_owned(),
+        })?;
+        let result: Value = take(response, "result")?;
+        match text_field(&result, "status")?.as_str() {
+            "validated" => Ok(()),
+            other => Err(daemon_error(format!(
+                "the daemon answered '{other}' instead of 'validated'; the agent was not started"
+            ))),
+        }
     }
 
     fn create_handoff(&self, request: &CreateHandoffRequest) -> Result<QueuedHandoff> {
