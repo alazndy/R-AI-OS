@@ -1,3 +1,4 @@
+pub(crate) mod agent_launch;
 pub(crate) mod command_policy;
 pub(crate) mod handoff;
 pub(crate) mod project_registry;

@@ -427,6 +427,15 @@ fn command_name(cmd: &Command) -> &'static str {
     }
 }
 
+/// Name under which the security policy is consulted. Validating a launch is governed by the
+/// same `launch_agent` rule as launching, so a policy that denies launches also denies it.
+fn policy_name(cmd: &Command) -> &'static str {
+    match cmd {
+        Command::ValidateAgentLaunch { .. } => "launch_agent",
+        other => command_name(other),
+    }
+}
+
 fn validate_task_title(title: &str) -> Result<String, Problem> {
     let title = title.trim();
     if title.is_empty() || title.chars().count() > MAX_TASK_TITLE_CHARS {
@@ -459,13 +468,13 @@ pub(super) fn validate_project_path(project_path: Option<&str>) -> Result<Option
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct AgentLaunchRequest {
-    agent_name: String,
-    project_path: String,
-    prompt: Option<String>,
+pub(super) struct AgentLaunchRequest {
+    pub(super) agent_name: String,
+    pub(super) project_path: String,
+    pub(super) prompt: Option<String>,
 }
 
-fn validate_agent_name(agent_name: &str) -> Result<String, Problem> {
+pub(super) fn validate_agent_name(agent_name: &str) -> Result<String, Problem> {
     match agent_name.trim().to_ascii_lowercase().as_str() {
         "claude" => Ok("claude".into()),
         "codex" => Ok("codex".into()),
@@ -477,7 +486,7 @@ fn validate_agent_name(agent_name: &str) -> Result<String, Problem> {
     }
 }
 
-fn validate_agent_prompt(prompt: Option<&str>) -> Result<Option<String>, Problem> {
+pub(super) fn validate_agent_prompt(prompt: Option<&str>) -> Result<Option<String>, Problem> {
     let Some(prompt) = prompt else {
         return Ok(None);
     };
@@ -533,6 +542,17 @@ pub fn dispatch_control_command(
     actor: &ControlActor,
     cmd: &Command,
 ) -> Result<Option<serde_json::Value>, Problem> {
+    dispatch_with_launcher(conn, actor, cmd, &launch_agent_in_terminal)
+}
+
+/// [`dispatch_control_command`] with the terminal launcher injected, so tests can prove which
+/// commands start a process and which never do.
+pub(super) fn dispatch_with_launcher(
+    conn: &mut Connection,
+    actor: &ControlActor,
+    cmd: &Command,
+    launcher: &dyn Fn(&AgentLaunchRequest) -> Result<(), Problem>,
+) -> Result<Option<serde_json::Value>, Problem> {
     if !actor.may_mutate_control_plane {
         return Err(Problem::unauthorized(
             "This authenticated principal is not authorized to mutate the control plane",
@@ -543,7 +563,7 @@ pub fn dispatch_control_command(
 
     let command_name = command_name(cmd);
     let audit_event_type = match raios_core::security::PolicyConfig::try_load_default()
-        .map(|policy| policy.tool_action(command_name).clone())
+        .map(|policy| policy.tool_action(policy_name(cmd)).clone())
     {
         Some(raios_core::security::policy::PolicyAction::Deny) => {
             let _ = raios_core::security::record_tool_decision(
@@ -707,33 +727,29 @@ pub fn dispatch_control_command(
             prompt,
             ..
         } => {
-            let agent_name = validate_agent_name(agent_name)?;
-            let project_path = validate_project_path(Some(project_path))?
-                .ok_or_else(|| Problem::invalid_input("Project path is required"))?;
-            let project_exists: Option<i64> = tx
-                .query_row(
-                    "SELECT id FROM projects WHERE path = ?1",
-                    params![project_path],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|error| Problem::internal(error.to_string()))?;
-            if project_exists.is_none() {
-                return Err(Problem::not_found(
-                    "Agent launch requires a registered project path",
-                ));
-            }
-            let prompt = validate_agent_prompt(prompt.as_deref())?;
-            launch_request = Some(AgentLaunchRequest {
-                agent_name: agent_name.clone(),
-                project_path: project_path.clone(),
-                prompt,
-            });
-            Some(serde_json::json!({
-                "agent_name": agent_name,
-                "project_path": project_path,
-                "status": "launching",
-            }))
+            let request = super::agent_launch::validate_launch(
+                &tx,
+                agent_name,
+                project_path,
+                prompt.as_deref(),
+            )?;
+            let result = super::agent_launch::launch_result(&request, "launching");
+            launch_request = Some(request);
+            Some(result)
+        }
+        Command::ValidateAgentLaunch {
+            agent_name,
+            project_path,
+            prompt,
+            ..
+        } => {
+            let request = super::agent_launch::validate_launch(
+                &tx,
+                agent_name,
+                project_path,
+                prompt.as_deref(),
+            )?;
+            Some(super::agent_launch::launch_result(&request, "validated"))
         }
         Command::CreateTask {
             title,
@@ -870,7 +886,7 @@ pub fn dispatch_control_command(
         .map_err(|e| Problem::internal(format!("Commit failed: {}", e)))?;
 
     if let Some(request) = launch_request {
-        if let Err(problem) = launch_agent_in_terminal(&request) {
+        if let Err(problem) = launcher(&request) {
             let failed_result = serde_json::json!({
                 "agent_name": request.agent_name,
                 "project_path": request.project_path,
