@@ -4,9 +4,9 @@
 //! never command text. The PTY engine itself sits behind [`TerminalHost`] so hosting can move
 //! to the daemon later.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use crate::error::Result;
+use crate::error::{AppError, ErrorCode, Result};
 use crate::project::{ProjectId, ProjectRoot};
 
 /// Maximum number of concurrent sessions, in the UI and in the backend.
@@ -113,13 +113,20 @@ pub trait TerminalHost: Send + Sync {
     fn is_running(&self, id: &SessionId) -> bool;
 }
 
+#[derive(Debug, Default)]
+struct RegistryState {
+    sessions: Vec<SessionInfo>,
+    closed: bool,
+}
+
 /// Owns the set of sessions, enforces [`MAX_SESSIONS`], and stops everything on shutdown.
+///
+/// The registry lock is held while the host spawns a child, so two callers racing for the last
+/// slot cannot both succeed. A poisoned lock is recovered rather than propagated: the state is
+/// a plain list that stays consistent after a panic elsewhere.
 pub struct SessionRegistry {
-    // Read by the P1b implementation.
-    #[allow(dead_code)]
     host: Box<dyn TerminalHost>,
-    #[allow(dead_code)]
-    sessions: Mutex<Vec<SessionInfo>>,
+    state: Mutex<RegistryState>,
 }
 
 impl SessionRegistry {
@@ -127,34 +134,87 @@ impl SessionRegistry {
     pub fn new(host: Box<dyn TerminalHost>) -> Self {
         Self {
             host,
-            sessions: Mutex::new(Vec::new()),
+            state: Mutex::new(RegistryState::default()),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, RegistryState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Updates every session's `running` flag from the host; a stopped session never revives.
+    fn refresh(&self, state: &mut RegistryState) {
+        for session in &mut state.sessions {
+            session.running = session.running && self.host.is_running(&session.id);
         }
     }
 
     /// Starts a session, refusing when [`MAX_SESSIONS`] are already running or after shutdown.
+    /// Sessions that have exited are dropped from the registry before the limit is checked.
     pub fn start(
         &self,
-        _project: &ProjectRoot,
-        _kind: SessionKind,
-        _prompt: Option<&str>,
-        _size: TerminalSize,
+        project: &ProjectRoot,
+        kind: SessionKind,
+        prompt: Option<&str>,
+        size: TerminalSize,
     ) -> Result<SessionInfo> {
-        unimplemented!("P1b")
+        let mut state = self.lock();
+        if state.closed {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceClosed,
+                "Workspace is closing; no new session can start.",
+            ));
+        }
+        self.refresh(&mut state);
+        state.sessions.retain(|session| session.running);
+        if state.sessions.len() >= MAX_SESSIONS {
+            return Err(AppError::new(
+                ErrorCode::InvalidInput,
+                format!("At most {MAX_SESSIONS} terminal sessions can run at once."),
+            ));
+        }
+        let id = self.host.spawn(project, kind, prompt, size)?;
+        let info = SessionInfo {
+            id,
+            project_id: project.info().id.clone(),
+            kind,
+            running: true,
+        };
+        state.sessions.push(info.clone());
+        Ok(info)
     }
 
-    /// Current sessions in start order.
+    /// Current sessions in start order, including ones that have exited since the last start.
     pub fn list(&self) -> Vec<SessionInfo> {
-        unimplemented!("P1b")
+        let mut state = self.lock();
+        self.refresh(&mut state);
+        state.sessions.clone()
     }
 
     /// Stops one app-owned session.
-    pub fn stop(&self, _id: &SessionId) -> Result<()> {
-        unimplemented!("P1b")
+    pub fn stop(&self, id: &SessionId) -> Result<()> {
+        let mut state = self.lock();
+        let session = state
+            .sessions
+            .iter_mut()
+            .find(|session| &session.id == id)
+            .ok_or_else(|| {
+                AppError::new(ErrorCode::NotFound, "No owned session matches this ID.")
+            })?;
+        self.host.stop(id)?;
+        session.running = false;
+        Ok(())
     }
 
-    /// Stops every session and refuses new ones. Called when the window closes.
+    /// Stops every session and refuses new ones. Called when the window closes. A session that
+    /// fails to stop does not prevent the others from being stopped.
     pub fn stop_all(&self) {
-        unimplemented!("P1b")
+        let mut state = self.lock();
+        state.closed = true;
+        for session in &mut state.sessions {
+            let _ = self.host.stop(&session.id);
+            session.running = false;
+        }
     }
 }
 
