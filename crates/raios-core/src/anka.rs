@@ -63,8 +63,59 @@ pub struct AnkaSearchQuery {
     pub limit: usize,
 }
 
+/// What the cache's own coverage says about its readiness — computed from
+/// [`AnkaIndexStatus::coverage`], never guessed from `last_indexed_at`, so a
+/// harness-specific refresh cannot masquerade as a full one.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnkaCacheState {
+    /// Every harness has a coverage entry: the cache speaks for all of them.
+    Ready,
+    /// Some harness has no coverage entry (a harness-scoped refresh, or a legacy
+    /// cache that predates coverage) — the cache speaks for a subset.
+    Partial,
+    /// Never indexed: no coverage and no records.
+    Empty,
+    /// The cache file exists but this build cannot read it (corrupt bytes or an
+    /// unknown schema version). Recall fails safe against it instead of guessing.
+    Incompatible,
+}
+
+impl AnkaCacheState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AnkaCacheState::Ready => "ready",
+            AnkaCacheState::Partial => "partial",
+            AnkaCacheState::Empty => "empty",
+            AnkaCacheState::Incompatible => "incompatible",
+        }
+    }
+}
+
+/// One harness's slice of the last refresh, persisted in the cache envelope.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnkaHarnessCoverage {
+    pub harness: AnkaHarness,
+    /// Source files discovered for this harness.
+    pub sources: usize,
+    /// Records that survived exclusions and tombstones for this harness.
+    pub records: usize,
+    /// Refresh stamp of the run that wrote this entry; empty means unknown
+    /// (reconstructed from a legacy cache, which carries no per-harness timing).
+    pub indexed_at: String,
+    /// True when the run that wrote this entry refreshed every harness. A
+    /// harness-scoped run writes `false` for its own slice and preserves the
+    /// other harnesses' entries verbatim, so a partial refresh is visible as one.
+    pub full_refresh: bool,
+    /// Entries dropped because a single history line exceeded the byte bound —
+    /// surfaced as its own exclusion reason, distinct from malformed/empty.
+    pub oversized: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AnkaIndexStatus {
+    pub state: AnkaCacheState,
+    pub coverage: Vec<AnkaHarnessCoverage>,
     pub cache_path: PathBuf,
     pub indexed_sources: usize,
     pub indexed_records: usize,
