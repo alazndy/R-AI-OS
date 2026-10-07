@@ -618,19 +618,29 @@ Phase 2 closure — three corrections (verified):
    `an_unconfirmed_tombstone_publish_stops_the_index_and_a_retry_confirms_durability`
    red; restoring the versioned-file skip turns the latter red on its inode
    assertion (the retry must re-publish).
-2. **Migration verifies the event timestamp, not just the prompt.** A rotation
+2. **Migration verifies the event identity, not just the prompt.** A rotation
    can leave another session's event at the line the old cache recorded — same
    prompt text, different event. Text equality cannot tell those apart, and a
    key derived from the wrong event would silently stop hiding the record after
    the next rebuild. `recover_from_line` therefore also compares the line's
    event time against the cache's `occurred_at`: Codex entries must carry `ts`
-   *and* match (no `ts` = undistinguishable = stop), while opencode and
-   antigravity verify a present `timestamp` but tolerate its absence (their
-   legacy caches may predate timestamped entries, where the old importer fell
-   back to the file's mtime). Unverifiable matches stop the migration with
-   nothing published. Red/green proven: reverting to text-only verification
-   turns
-   `a_legacy_migration_stops_when_the_same_prompt_sits_under_another_event` red.
+   *and* match (no `ts` = undistinguishable = stop). OpenCode and antigravity
+   verify a present `timestamp`; when it is absent (legacy caches may predate
+   timestamped entries, where the old importer fell back to the file's mtime —
+   mtime itself is never event evidence), the line may stand for the cached
+   event only when it claims nothing event-specific: without a native
+   `session_id` the derived key is the fixed file-stem namespace plus the
+   prompt group, identical for every line in the file, so no wrong event can be
+   named and the mtime-fallback record migrates instead of being blocked; with
+   a native `session_id` the key would name a session the line cannot be tied
+   back to the cached event, so the migration stops. Unverifiable matches stop
+   with nothing published. Red/green proven: reverting to text-only
+   verification turns
+   `a_legacy_migration_stops_when_the_same_prompt_sits_under_another_event` red;
+   dropping the native-session guard turns
+   `a_legacy_migration_stops_when_a_native_session_cannot_be_tied_to_an_event`
+   red; requiring the timestamp outright turns
+   `a_legacy_tombstone_migrates_through_the_old_cache_record` red.
 3. **The schema gate refuses unreadable caches and invalid version types.**
    `check_cache_schema` passes only `NotFound` as "nothing to lose": an
    existing cache that cannot be read (permissions, I/O) stops the rebuild

@@ -337,16 +337,22 @@ pub(super) struct RecoveredHistoryIdentity {
 /// the same byte bound as the importer, the redacted prompt must still equal the
 /// content the cache stored (a rotated or edited file shifts line numbers, and
 /// identity derived from the wrong line would silently stop hiding the record after
-/// the next rebuild), and the line's event timestamp must match the timestamp the
-/// cache recorded (`expected_occurred_at`) — same prompt, different event is exactly
-/// what a rotation leaves behind. Only then is the native session recovered — or the
-/// file stem when the entry has none, exactly like `discover_history`.
+/// the next rebuild), and the line must be shown to be the *cached event*: a Codex
+/// entry must carry `ts` equal to the timestamp the cache recorded
+/// (`expected_occurred_at`), while an OpenCode/Antigravity entry may omit its
+/// timestamp only when it also omits a native `session_id` — the derived key is
+/// then the fixed file-stem namespace plus the prompt group, identical for every
+/// line of the file, so no wrong event can be named even though the event itself
+/// is unverifiable. A native session with no timestamp cannot be tied back to the
+/// cached event and stops the mapping; mtime is never event evidence. Only then is
+/// the native session recovered — or the file stem when the entry has none,
+/// exactly like `discover_history`.
 ///
 /// `Ok(None)` means the mapping is unverifiable: Claude (never a history source),
 /// a malformed legacy session, a wrong stem, a missing or moved line, an oversized
-/// or unparseable entry, a content mismatch, or a timestamp that does not identify
-/// the cached event. `Err` is a real I/O failure opening the file, which is worth
-/// surfacing on its own.
+/// or unparseable entry, a content mismatch, a timestamp that does not identify
+/// the cached event, or a native session that cannot be tied to it. `Err` is a
+/// real I/O failure opening the file, which is worth surfacing on its own.
 pub(super) fn recover_history_identity(
     roots: &AnkaRoots,
     harness: &AnkaHarness,
@@ -428,10 +434,14 @@ pub(super) fn recover_history_identity(
 /// Verify one history line against the cached record and recover its session.
 ///
 /// Three facts have to hold before a line may stand for the cached event:
-/// the prompt text, the event timestamp, and (implicitly) the line's position —
+/// the prompt text, the event identity, and (implicitly) the line's position —
 /// and text alone is not enough. After a rotation the *same line* can hold
 /// another session's entry with an identical prompt, which would derive a key
 /// for the wrong event and quietly stop hiding the record after the next rebuild.
+/// The event is identified by its timestamp where the harness records one; when
+/// the timestamp is absent the line may still stand for the event only if it
+/// claims nothing event-specific (no native `session_id`), because the derived
+/// key is then the fixed file-stem namespace plus the prompt group either way.
 fn recover_from_line(
     harness: &AnkaHarness,
     source_file: &str,
@@ -461,14 +471,27 @@ fn recover_from_line(
             }
         }
         AnkaHarness::Opencode | AnkaHarness::Antigravity => {
-            if let Some(seconds) = timestamp(&value, "timestamp") {
-                if seconds.to_string() != expected_occurred_at {
-                    return None;
+            match timestamp(&value, "timestamp") {
+                // A present timestamp that disagrees is a *different event* — stop.
+                Some(seconds) if seconds.to_string() == expected_occurred_at => {}
+                Some(_) => return None,
+                None => {
+                    // No timestamp to compare: a legacy cache may predate
+                    // timestamped entries (the old importer fell back to the file's
+                    // mtime), so absence alone is not proof of a different event —
+                    // but only when the line claims nothing event-specific. Without
+                    // a native `session_id` the derived key is the fixed file-stem
+                    // namespace plus the prompt group, identical for every line in
+                    // the file, so no wrong event can be named. With a native
+                    // session the key would name a session this line cannot be tied
+                    // back to the cached event: stop instead of guessing which
+                    // session the old record belongs to. mtime is never event
+                    // evidence either way.
+                    if nonempty(&value, "session_id").is_some() {
+                        return None;
+                    }
                 }
             }
-            // No timestamp to compare: a legacy cache may predate timestamped
-            // entries (the old importer fell back to the file's mtime), so absence
-            // alone is not proof of a different event for these harnesses.
         }
     }
     let session_id = nonempty(&value, "session_id")

@@ -1770,6 +1770,13 @@ mod tests {
     /// The tombstone's record is still in the cache, so it resolves; the key is
     /// re-derived the way the importer derives it; the rebuilt index is filtered by
     /// the translated key.
+    ///
+    /// This is also the acceptance fixture for an mtime-fallback line: the default
+    /// history entry carries no timestamp *and* no native `session_id`, so the
+    /// derived key is the fixed file-stem namespace plus the prompt group —
+    /// identical for every line in the file — and nothing event-specific is
+    /// claimed. The record migrates instead of being blocked on an event the old
+    /// importer never recorded.
     #[test]
     fn a_legacy_tombstone_migrates_through_the_old_cache_record() {
         let fixture = fixture();
@@ -2122,13 +2129,16 @@ mod tests {
     /// The legacy cache stored `"<file-stem>:<line>"` as the session and dropped the
     /// entry's native `session_id`, which the current importer does use. Migration
     /// must recover it from the source line: deriving the stem instead would produce
-    /// a key that misses the rebuilt record — and the prompt would come back.
+    /// a key that misses the rebuilt record — and the prompt would come back. The
+    /// recovery runs through a *verified* event: the line carries the exact
+    /// timestamp the cache recorded, so the session — and with it the forget key —
+    /// is proven to belong to this record's event.
     #[test]
     fn a_legacy_history_tombstone_recovers_the_native_session_id() {
         let fixture = fixture();
         fs::write(
             fixture.roots.opencode_history(),
-            "{\"session_id\":\"SID-9\",\"text\":\"remember this prompt\"}\n",
+            "{\"session_id\":\"SID-9\",\"timestamp\":1700000000,\"text\":\"remember this prompt\"}\n",
         )
         .expect("history");
         let legacy_id = legacy_history_id();
@@ -2161,6 +2171,46 @@ mod tests {
             .expect("search")
             .is_empty(),
             "the record must not reappear after migration"
+        );
+    }
+
+    /// A line without a timestamp but *with* a native `session_id` claims an
+    /// event-specific identity that nothing verifies: after a rotation this line
+    /// can hold **another session's** identical prompt, so the recovered session
+    /// — and the forget key derived from it — may name the wrong event and quietly
+    /// resurrect the forgotten record after the next rebuild. Unlike the
+    /// session-less case (where the key is the fixed file-stem namespace plus the
+    /// prompt group), a wrong guess here is detectable only by refusing: the
+    /// migration stops with nothing published, and mtime is never consulted as
+    /// substitute event evidence.
+    #[test]
+    fn a_legacy_migration_stops_when_a_native_session_cannot_be_tied_to_an_event() {
+        let fixture = fixture();
+        fs::write(
+            fixture.roots.opencode_history(),
+            "{\"session_id\":\"SID-UNVERIFIED\",\"text\":\"remember this prompt\"}\n",
+        )
+        .expect("history");
+        let legacy_id = legacy_history_id();
+        write_legacy_cache(&fixture, &legacy_id);
+        write_v1_tombstones(&fixture, &[&legacy_id]);
+        let tombstone_path = fixture.config.join(TOMBSTONE_FILE);
+        let index_path = fixture.cache.join(INDEX_FILE);
+        let tombstone_before = fs::read(&tombstone_path).expect("tombstone bytes");
+        let index_before = fs::read(&index_path).expect("index bytes");
+
+        let error = index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+            .expect_err("a native session without an event must stop the migration");
+        assert!(error.to_string().contains("migration blocked"), "{error}");
+        assert_eq!(
+            fs::read(&tombstone_path).expect("tombstone bytes"),
+            tombstone_before,
+            "nothing was published while the session is unverifiable"
+        );
+        assert_eq!(
+            fs::read(&index_path).expect("index bytes"),
+            index_before,
+            "the cache is untouched while the migration is blocked"
         );
     }
 

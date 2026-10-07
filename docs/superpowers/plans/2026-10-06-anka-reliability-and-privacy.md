@@ -414,19 +414,23 @@ verified without waiting a day.
   `migrate_tombstones` re-publishes an already-versioned file — byte-identical,
   never re-translated — so a retry re-runs the fsync chain rather than skipping
   it as "already durable".
-- Migration verifies the event timestamp against the cache's `occurred_at`, not
-  just the redacted prompt: Codex requires a matching `ts` (absent = stop),
-  opencode/antigravity verify a present `timestamp` and tolerate its absence
-  (mtime-fallback caches). Same prompt under another session/timestamp stops
-  the migration with nothing published.
+- Migration verifies the event identity against the cache's `occurred_at`, not
+  just the redacted prompt: Codex requires a matching `ts` (absent = stop);
+  opencode/antigravity verify a present `timestamp`, and when it is absent the
+  line must also lack a native `session_id` — the derived key is then the fixed
+  file-stem namespace + prompt group, identical for every line in the file, so
+  no wrong event can be named and the mtime-fallback record migrates; a native
+  session with no timestamp cannot be tied to the cached event (stop). mtime is
+  never event evidence. Same prompt under another session/timestamp stops the
+  migration with nothing published.
 - `check_cache_schema` passes only `NotFound`: an unreadable cache stops the
   rebuild instead of being overwritten. A non-numeric `schema_version` is
   refused with its own message in the gate *and* in `read_index` (never as
   "corrupt, rebuild it"); genuinely corrupt bytes stay rebuildable.
-- 6 new tests; red/green proven for all six revert paths (error swallowed,
+- 7 new tests; red/green proven for all seven revert paths (error swallowed,
   versioned skip, text-only recovery, I/O swallowed, type fall-through, wrong
-  refusal message).
-- Workspace suite: ANKA 68/68, full lib 431/431, workspace 1173/0,
+  refusal message, native-session guard dropped / timestamp made mandatory).
+- Workspace suite: ANKA 69/69, full lib 432/432, workspace 1174/0,
   `cargo fmt --check` clean, `cargo clippy --workspace --all-targets` clean.
 
 ## Implementation boundary
