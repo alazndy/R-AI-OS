@@ -277,24 +277,41 @@ fn index_in(
 }
 
 /// Refuse to build on top of a cache whose `schema_version` this build does not
-/// know. Missing files pass (nothing to lose), and unparsable bytes pass too —
-/// corrupt caches are exactly what `raios anka index` exists to rebuild.
+/// know. Only `NotFound` passes as "nothing to lose": an existing file this build
+/// cannot read (permissions, I/O) must stop the rebuild rather than be mistaken for
+/// an absent one and then overwritten. Unparsable bytes pass too — a corrupt cache
+/// is exactly what `raios anka index` exists to rebuild — but a `schema_version`
+/// field that is present and not a number is refused like an unknown version: that
+/// file was written by something this build does not understand, and destroying it
+/// is the user's explicit move, never a side effect of asking for a rebuild.
 fn check_cache_schema(cache_path: &Path) -> Result<()> {
-    let Ok(content) = fs::read_to_string(cache_path.join(INDEX_FILE)) else {
-        return Ok(());
+    let path = cache_path.join(INDEX_FILE);
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not read {}", path.display()))
+        }
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
         return Ok(());
     };
-    match value
-        .get("schema_version")
-        .and_then(|version| version.as_u64())
-    {
-        Some(version) if version != u64::from(CACHE_SCHEMA_VERSION) => {
-            Err(format_error(unsupported_schema_message(version)))
-        }
-        _ => Ok(()),
+    match value.get("schema_version") {
+        None => Ok(()),
+        Some(version) => match version.as_u64() {
+            Some(version) if version == u64::from(CACHE_SCHEMA_VERSION) => Ok(()),
+            Some(version) => Err(format_error(unsupported_schema_message(version))),
+            None => Err(format_error(invalid_schema_type_message())),
+        },
     }
+}
+
+fn invalid_schema_type_message() -> String {
+    format!(
+        "ANKA cache schema_version is not a number (this build reads and writes version \
+         {CACHE_SCHEMA_VERSION}) — refusing to overwrite it; use the build that wrote the \
+         cache, or remove the file to start over"
+    )
 }
 
 fn unsupported_schema_message(version: u64) -> String {
@@ -477,9 +494,11 @@ fn forget_in(roots: &AnkaRoots, cache_path: &Path, config: &Path, id: &str) -> R
 
 /// Add a `forget_key` to the tombstone set and publish the versioned file.
 ///
-/// Callers hold [`AnkaLock`]. `PublishedUnsynced` counts as success: the entry is
-/// already visible, only crash-durability is unconfirmed, and a retry re-reads the
-/// same set, so it is idempotent.
+/// Callers hold [`AnkaLock`]. The publish error propagates — `PublishedUnsynced`
+/// included: the entry is visible, but `forget_in` stops before it rewrites the
+/// index, because a forget that survives only until the next crash was not what the
+/// caller asked for. A retry re-reads the same set and re-publishes it, so the flow
+/// stays idempotent while the fsync chain gets another chance to land.
 fn add_tombstone(config: &Path, forget_key: &str) -> Result<()> {
     if !is_hash(forget_key) {
         bail!("ANKA refusing to tombstone a value that is not a hash");
@@ -661,11 +680,14 @@ fn read_index(cache_path: &Path) -> Result<AnkaIndex> {
             })
         }
         Some(version) => {
-            let Some(version) = version.as_u64() else {
-                return Err(corrupt());
+            let Some(number) = version.as_u64() else {
+                // Present but not a number: same refusal as an unknown version —
+                // a version field this build cannot interpret may be anything,
+                // and "corrupt, rebuild it" would invite overwriting it.
+                return Err(format_error(invalid_schema_type_message()));
             };
-            if version != u64::from(CACHE_SCHEMA_VERSION) {
-                return Err(format_error(unsupported_schema_message(version)));
+            if number != u64::from(CACHE_SCHEMA_VERSION) {
+                return Err(format_error(unsupported_schema_message(number)));
             }
             let envelope: AnkaIndexV2File = serde_json::from_value(value).map_err(|_| corrupt())?;
             // The combined refresh stamp is derived, not stored: one source of
@@ -893,9 +915,30 @@ fn read_tombstones(config: &Path) -> Result<BTreeSet<TombstoneEntry>> {
 /// on first use — `atomic_write` never creates directories itself, so a permission
 /// failure there stays visible instead of being papered over.
 ///
-/// `PublishedUnsynced` counts as success: the entries are already visible, only
-/// crash-durability is unconfirmed, and re-running produces the same set.
+/// The publish error propagates as it landed, `PublishedUnsynced` included. That
+/// error is not success on this side: the entries are visible, but the callers that
+/// stop here (`index_in`, `forget_in`) are about to publish the replacement index,
+/// and records are hidden by the tombstone's *durability*, not by its visibility —
+/// a crash that reverts an unconfirmed tombstone resurrects whatever the index
+/// publish would have stripped. So the error stops the flow before the index moves,
+/// and the retry re-publishes the same set — [`migrate_tombstones`] never skips that
+/// step just because the file already reads as versioned — re-running the
+/// file+directory fsync chain until it lands.
 fn write_tombstones(config: &Path, entries: &BTreeSet<TombstoneEntry>) -> Result<()> {
+    write_tombstones_with(config, entries, atomic_write)
+}
+
+/// [`write_tombstones`] with the publish supplied by the caller: the seam that makes
+/// an unconfirmed publish observable in a test without needing a real directory fsync
+/// to fail (everything up to and including the rename stays the real code).
+fn write_tombstones_with<F>(
+    config: &Path,
+    entries: &BTreeSet<TombstoneEntry>,
+    publish_write: F,
+) -> Result<()>
+where
+    F: FnOnce(&Path, &[u8]) -> Result<(), publish::PublishError>,
+{
     if !config.as_os_str().is_empty() && !config.exists() {
         ensure_private_dir(config)?;
     }
@@ -903,11 +946,8 @@ fn write_tombstones(config: &Path, entries: &BTreeSet<TombstoneEntry>) -> Result
         schema_version: TOMBSTONE_SCHEMA_VERSION,
         entries: entries.iter().cloned().collect(),
     };
-    match atomic_write(&config.join(TOMBSTONE_FILE), &serde_json::to_vec(&file)?) {
-        Ok(()) => Ok(()),
-        Err(publish::PublishError::PublishedUnsynced(_)) => Ok(()),
-        Err(error) => Err(error.into()),
-    }
+    publish_write(&config.join(TOMBSTONE_FILE), &serde_json::to_vec(&file)?)?;
+    Ok(())
 }
 
 /// Whether a record is covered by the tombstone set, matched **by entry type**: a
@@ -945,12 +985,17 @@ fn tombstoned(record: &AnkaRecord, tombstones: &BTreeSet<TombstoneEntry>) -> boo
 ///    the retained id entries still match them. Against a rebuilt index they are
 ///    inert; against the old cache they are the protection.
 /// 3. A versioned file is never re-translated. A retry after a crash, and every
-///    later `index` run, therefore reads the same set and publishes the same file —
-///    idempotent by construction.
+///    later `index` run, therefore reads the same set — and *re-publishes* it,
+///    byte-identical. The re-publish is not wasted work: an earlier attempt may
+///    have stopped the caller with `PublishedUnsynced` (the file visible, its
+///    crash-durability unconfirmed), and this retry must re-run the fsync chain
+///    rather than treat "already versioned" as "already durable".
 fn migrate_tombstones(roots: &AnkaRoots, cache_path: &Path, config: &Path) -> Result<()> {
     let (format, entries) = read_tombstones_raw(config)?;
-    if format == TombstoneFormat::Versioned || entries.is_empty() {
-        return Ok(());
+    match format {
+        TombstoneFormat::Versioned => return write_tombstones(config, &entries),
+        TombstoneFormat::Legacy if entries.is_empty() => return Ok(()),
+        TombstoneFormat::Legacy => {}
     }
     let index = read_index(cache_path).context(
         "ANKA tombstone migration blocked: the previous cache could not be read; \
@@ -1023,6 +1068,7 @@ fn derive_forget_key(roots: &AnkaRoots, record: &AnkaRecord) -> Result<Option<St
                 harness,
                 &record.source.session_id,
                 &record.content,
+                &record.source.occurred_at,
             )?
             else {
                 return Ok(None);
@@ -1189,21 +1235,61 @@ mod tests {
         ])
     }
 
+    /// The same id shape for a Codex history record: `~/.codex/history.jsonl` stems
+    /// to `history`, and the old importer hashed exactly these five inputs.
+    fn legacy_codex_id() -> String {
+        hash(&[
+            AnkaHarness::Codex.as_str(),
+            "codex-history",
+            "history:1",
+            "1700000000",
+            "remember this prompt",
+        ])
+    }
+
+    /// The key the importer derives for the Codex fixture record — identity
+    /// project is the file stem (`history`), the rest matches
+    /// [`expected_history_forget_key`]'s shape.
+    fn expected_codex_forget_key(session_id: &str) -> String {
+        hash(&[
+            AnkaHarness::Codex.as_str(),
+            "history",
+            session_id,
+            "",
+            "",
+            &hash(&["remember this prompt"]),
+        ])
+    }
+
     /// Write the exact on-disk state a pre-versioned install leaves behind: an index
     /// whose records carry only `id`/`source`/`content`, plus the config directory
     /// for the caller to drop a line-based tombstone file into.
     fn write_legacy_cache(fixture: &Fixture, legacy_id: &str) {
+        write_legacy_cache_with_source(
+            fixture,
+            legacy_id,
+            serde_json::json!({
+                "harness": "Opencode",
+                "project": "opencode-history",
+                "session_id": "prompt-history:1",
+                "occurred_at": "1700000000"
+            }),
+        );
+    }
+
+    /// [`write_legacy_cache`] with the record's `source` supplied by the caller —
+    /// the legacy cache spoke for whichever harness wrote it.
+    fn write_legacy_cache_with_source(
+        fixture: &Fixture,
+        legacy_id: &str,
+        source: serde_json::Value,
+    ) {
         ensure_private_dir(&fixture.cache).expect("cache dir");
         ensure_private_dir(&fixture.config).expect("config dir");
         let index = serde_json::json!({
             "records": [{
                 "id": legacy_id,
-                "source": {
-                    "harness": "Opencode",
-                    "project": "opencode-history",
-                    "session_id": "prompt-history:1",
-                    "occurred_at": "1700000000"
-                },
+                "source": source,
                 "content": "remember this prompt"
             }],
             "indexed_sources": 1,
@@ -1833,8 +1919,9 @@ mod tests {
     /// The migration publishes translated tombstones first and the replacement index
     /// after; a crash in between leaves exactly that state. It must be safe: the old
     /// cache and the new tombstones together keep the record hidden, and retrying
-    /// converges without rewriting the already-published tombstone file — and so does
-    /// every later run, because a versioned file is never re-translated.
+    /// converges on byte-identical tombstones — a versioned file is never
+    /// re-translated, only re-published, so every later run re-runs the fsync chain
+    /// instead of assuming a previous sync landed.
     #[test]
     fn a_crash_between_the_tombstone_and_index_publish_is_safe_and_retries_idempotently() {
         let fixture = fixture();
@@ -1870,13 +1957,14 @@ mod tests {
             "the retained record_id entry must keep the old cache's record hidden"
         );
 
-        // Retry: idempotent — the versioned file is never re-translated.
+        // Retry: idempotent — the versioned file is re-published, never
+        // re-translated, so the entries stay byte-identical.
         index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
             .expect("the retry must succeed");
         assert_eq!(
             fs::read(&tombstone_path).expect("translated bytes"),
             translated,
-            "a retry must not rewrite the published tombstones"
+            "a retry must republish byte-identical tombstones"
         );
         let published = read_index(&fixture.cache).expect("read back").records;
         assert!(
@@ -1901,7 +1989,133 @@ mod tests {
         assert_eq!(
             fs::read(&tombstone_path).expect("translated bytes"),
             translated,
-            "re-running the migration must be a no-op on the tombstones"
+            "re-running the migration must leave the tombstones byte-identical"
+        );
+    }
+
+    /// `PublishedUnsynced` is not success on the tombstone side: the entries are
+    /// visible, but visibility is what the caller is *stopping* over — the
+    /// replacement index may only ride on a tombstone whose crash-durability was
+    /// confirmed. Converting the error to `Ok(())` here would let exactly that
+    /// happen, silently.
+    #[test]
+    fn a_tombstone_publish_that_lands_without_confirmation_is_reported() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = temp.path().join("config");
+        ensure_private_dir(&config).expect("config dir");
+        let key = hash(&["unconfirmed key"]);
+        let entries = BTreeSet::from([TombstoneEntry::forget_key(&key)]);
+
+        let error = write_tombstones_with(&config, &entries, |path, bytes| {
+            publish::atomic_write_with(path, bytes, |_| {
+                anyhow::bail!("injected: directory sync failed")
+            })
+        })
+        .expect_err("an unconfirmed tombstone publish must not read as success");
+        let publish_error = error
+            .downcast_ref::<publish::PublishError>()
+            .expect("the typed publish error must reach the caller");
+        assert!(
+            matches!(publish_error, publish::PublishError::PublishedUnsynced(_)),
+            "{error}"
+        );
+        assert!(
+            publish_error.is_published(),
+            "the entries are visible — only durability is missing"
+        );
+        assert_eq!(
+            read_tombstones(&config).expect("the visible half"),
+            entries,
+            "the destination already holds the new set"
+        );
+    }
+
+    /// A tombstone publish can land without its directory fsync — the file is
+    /// visible, its crash-durability unconfirmed. The index publish must not follow
+    /// it (records are hidden by durability, not visibility), and the retry must
+    /// re-publish the versioned file — re-running the fsync chain — instead of
+    /// treating "already versioned" as "already durable".
+    #[test]
+    fn an_unconfirmed_tombstone_publish_stops_the_index_and_a_retry_confirms_durability() {
+        use std::os::unix::fs::MetadataExt;
+
+        let fixture = fixture();
+        let legacy_id = legacy_history_id();
+        write_legacy_cache(&fixture, &legacy_id);
+        write_v1_tombstones(&fixture, &[&legacy_id]);
+        let tombstone_path = fixture.config.join(TOMBSTONE_FILE);
+        let index_path = fixture.cache.join(INDEX_FILE);
+        let index_before = fs::read(&index_path).expect("index bytes");
+
+        // The owner may create and rename inside the directory but not open it for
+        // reading — precisely where `sync_directory` runs, after the rename.
+        fs::set_permissions(&fixture.config, fs::Permissions::from_mode(0o300))
+            .expect("restrict the config dir");
+
+        let error = index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+            .expect_err("the index must not publish on an unconfirmed tombstone");
+        let publish_error = error
+            .downcast_ref::<publish::PublishError>()
+            .expect("the typed publish error must reach the caller");
+        assert!(
+            matches!(publish_error, publish::PublishError::PublishedUnsynced(_)),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read(&index_path).expect("index bytes"),
+            index_before,
+            "the index publish must not be reached"
+        );
+        // The visible half did land: the old cache plus these tombstones keep the
+        // record hidden across the window.
+        let visible = fs::read_to_string(&tombstone_path).expect("tombstone bytes");
+        assert!(visible.contains("\"schema_version\":2"), "{visible}");
+        assert!(
+            search_in(
+                &fixture.cache,
+                &fixture.config,
+                query("remember this prompt")
+            )
+            .expect("recall")
+            .is_empty(),
+            "the record stays hidden across the window"
+        );
+
+        // Retry with a usable directory: the versioned file must be re-published —
+        // new inode, fsync chain re-run — not skipped as already durable.
+        let inode_before = fs::metadata(&tombstone_path)
+            .expect("tombstone metadata")
+            .ino();
+        fs::set_permissions(&fixture.config, fs::Permissions::from_mode(0o700))
+            .expect("restore the config dir");
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+            .expect("the retry must succeed");
+        let inode_after = fs::metadata(&tombstone_path)
+            .expect("tombstone metadata")
+            .ino();
+        assert_ne!(
+            inode_before, inode_after,
+            "the retry must re-publish the versioned file so its durability is confirmed"
+        );
+        assert_eq!(
+            fs::read_to_string(&tombstone_path).expect("tombstone bytes"),
+            visible,
+            "re-publishing changes nothing about the entries"
+        );
+        assert_ne!(
+            fs::read(&index_path).expect("index bytes"),
+            index_before,
+            "after the retry the replacement index lands"
+        );
+        assert!(
+            search_in(
+                &fixture.cache,
+                &fixture.config,
+                query("remember this prompt")
+            )
+            .expect("search")
+            .is_empty(),
+            "the record stays hidden after the rebuild"
         );
     }
 
@@ -1947,6 +2161,82 @@ mod tests {
             .expect("search")
             .is_empty(),
             "the record must not reappear after migration"
+        );
+    }
+
+    /// A rotation can leave *another session's event* at the line the old cache
+    /// recorded — same prompt text, different timestamp. Text equality cannot tell
+    /// those apart, and deriving a key from the wrong event would silently stop
+    /// hiding the record after the next rebuild, so for Codex the re-read line must
+    /// carry the exact event time the cache stored; an indistinguishable match
+    /// stops the migration with nothing published until the source is resolved.
+    #[test]
+    fn a_legacy_migration_stops_when_the_same_prompt_sits_under_another_event() {
+        let fixture = fixture();
+        let codex_history = fixture.roots.codex_history();
+        fs::create_dir_all(codex_history.parent().expect("codex dir")).expect("codex dir");
+        // The line now holds a different event: rotated in, same prompt, another
+        // session, another timestamp than the cache recorded.
+        fs::write(
+            &codex_history,
+            "{\"ts\":1700000099,\"session_id\":\"SID-ROTATED\",\"text\":\"remember this prompt\"}\n",
+        )
+        .expect("rotated codex history");
+        let legacy_id = legacy_codex_id();
+        write_legacy_cache_with_source(
+            &fixture,
+            &legacy_id,
+            serde_json::json!({
+                "harness": "Codex",
+                "project": "codex-history",
+                "session_id": "history:1",
+                "occurred_at": "1700000000"
+            }),
+        );
+        write_v1_tombstones(&fixture, &[&legacy_id]);
+        let tombstone_path = fixture.config.join(TOMBSTONE_FILE);
+        let index_path = fixture.cache.join(INDEX_FILE);
+        let tombstone_before = fs::read(&tombstone_path).expect("tombstone bytes");
+        let index_before = fs::read(&index_path).expect("index bytes");
+
+        let error = index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+            .expect_err("an indistinguishable match must stop the migration");
+        assert!(error.to_string().contains("migration blocked"), "{error}");
+        assert_eq!(
+            fs::read(&tombstone_path).expect("tombstone bytes"),
+            tombstone_before,
+            "nothing was published while the mapping is unverifiable"
+        );
+        assert_eq!(
+            fs::read(&index_path).expect("index bytes"),
+            index_before,
+            "the cache is untouched while the migration is blocked"
+        );
+
+        // Resolve explicitly: the line *is* the cached event — same prompt, the
+        // event timestamp the cache recorded — and the key is derived from it.
+        fs::write(
+            &codex_history,
+            "{\"ts\":1700000000,\"session_id\":\"SID-CX\",\"text\":\"remember this prompt\"}\n",
+        )
+        .expect("resolved codex history");
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+            .expect("the resolved migration proceeds");
+        assert!(
+            read_tombstones(&fixture.config)
+                .expect("tombstones")
+                .contains(&TombstoneEntry::forget_key(&expected_codex_forget_key(
+                    "SID-CX"
+                ))),
+            "the key is derived from the verified event's session"
+        );
+        assert!(
+            !read_index(&fixture.cache)
+                .expect("read back")
+                .records
+                .iter()
+                .any(|record| record.source.session_id == "SID-CX"),
+            "the rebuilt index excludes the record the verified key covers"
         );
     }
 
@@ -2017,6 +2307,95 @@ mod tests {
             fs::read(&path).expect("cache bytes"),
             future,
             "the newer cache must be untouched"
+        );
+    }
+
+    /// Only `NotFound` reads as "nothing to lose". An existing cache this build
+    /// cannot read must stop the rebuild — otherwise a permission problem would be
+    /// mistaken for an absent cache and the file would be silently replaced, losing
+    /// whatever it held.
+    #[test]
+    fn an_unreadable_cache_blocks_the_rebuild_instead_of_being_replaced() {
+        let fixture = fixture();
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+        let path = fixture.cache.join(INDEX_FILE);
+        let before = fs::read(&path).expect("cache bytes");
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000))
+            .expect("make the cache unreadable");
+        let error = index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+            .expect_err("an unreadable cache must not be mistaken for an absent one");
+        assert!(error.to_string().contains("could not read"), "{error}");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("restore permissions");
+        assert_eq!(
+            fs::read(&path).expect("cache bytes"),
+            before,
+            "the unreadable cache must be untouched"
+        );
+    }
+
+    /// A `schema_version` that is present but not a number is refused with its own
+    /// message, everywhere: recall fails safe, `status` reports the cache as
+    /// `incompatible`, and a rebuild declines rather than overwrite a file this
+    /// build cannot even interpret — unlike corrupt bytes, an identifiable version
+    /// field means *something else wrote this*.
+    #[test]
+    fn an_invalid_schema_version_type_is_refused_described_and_never_overwritten() {
+        let fixture = fixture();
+        ensure_private_dir(&fixture.cache).expect("cache dir");
+        let path = fixture.cache.join(INDEX_FILE);
+        let invalid = br#"{"schema_version":"two","records":[],"indexed_sources":0}"#;
+        fs::write(&path, invalid).expect("invalid cache");
+
+        let recall = search_in(
+            &fixture.cache,
+            &fixture.config,
+            query("remember this prompt"),
+        )
+        .expect_err("recall must fail safe against a version it cannot interpret");
+        assert!(
+            recall
+                .to_string()
+                .contains("schema_version is not a number"),
+            "{recall}"
+        );
+        assert_eq!(
+            fs::read(&path).expect("cache bytes"),
+            invalid,
+            "recall must not migrate or rebuild as a side effect"
+        );
+
+        let status = status_in(&fixture.cache).expect("status describes the cache");
+        assert_eq!(status.state, AnkaCacheState::Incompatible);
+
+        let error = index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+            .expect_err("a rebuild must not overwrite a version it cannot interpret");
+        assert!(
+            error.to_string().contains("schema_version is not a number"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read(&path).expect("cache bytes"),
+            invalid,
+            "the refused cache must be untouched"
+        );
+    }
+
+    /// The unreadable-file and invalid-version refusals must not swallow the
+    /// behavior that motivates `raios anka index` in the first place: bytes that
+    /// parse as nothing at all are corrupt, and a full rebuild fixes them.
+    #[test]
+    fn a_corrupt_index_stays_rebuildable() {
+        let fixture = fixture();
+        ensure_private_dir(&fixture.cache).expect("cache dir");
+        fs::write(fixture.cache.join(INDEX_FILE), b"{definitely not json").expect("corrupt cache");
+
+        let status = index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+            .expect("a corrupt cache is exactly what a rebuild is for");
+        assert_eq!(status.state, AnkaCacheState::Ready);
+        assert!(
+            status.indexed_records > 0,
+            "the rebuilt cache holds the fixture's records"
         );
     }
 

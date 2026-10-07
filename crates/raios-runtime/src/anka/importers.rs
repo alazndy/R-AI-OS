@@ -337,18 +337,22 @@ pub(super) struct RecoveredHistoryIdentity {
 /// the same byte bound as the importer, the redacted prompt must still equal the
 /// content the cache stored (a rotated or edited file shifts line numbers, and
 /// identity derived from the wrong line would silently stop hiding the record after
-/// the next rebuild), and only then is the native session recovered — or the file
-/// stem when the entry has none, exactly like `discover_history`.
+/// the next rebuild), and the line's event timestamp must match the timestamp the
+/// cache recorded (`expected_occurred_at`) — same prompt, different event is exactly
+/// what a rotation leaves behind. Only then is the native session recovered — or the
+/// file stem when the entry has none, exactly like `discover_history`.
 ///
 /// `Ok(None)` means the mapping is unverifiable: Claude (never a history source),
 /// a malformed legacy session, a wrong stem, a missing or moved line, an oversized
-/// or unparseable entry, a content mismatch. `Err` is a real I/O failure opening
-/// the file, which is worth surfacing on its own.
+/// or unparseable entry, a content mismatch, or a timestamp that does not identify
+/// the cached event. `Err` is a real I/O failure opening the file, which is worth
+/// surfacing on its own.
 pub(super) fn recover_history_identity(
     roots: &AnkaRoots,
     harness: &AnkaHarness,
     legacy_session: &str,
     expected_content: &str,
+    expected_occurred_at: &str,
 ) -> Result<Option<RecoveredHistoryIdentity>> {
     if matches!(harness, AnkaHarness::Claude) {
         return Ok(None);
@@ -400,6 +404,7 @@ pub(super) fn recover_history_identity(
                         source_file,
                         &line,
                         expected_content,
+                        expected_occurred_at,
                     ));
                 }
             }
@@ -421,11 +426,18 @@ pub(super) fn recover_history_identity(
 }
 
 /// Verify one history line against the cached record and recover its session.
+///
+/// Three facts have to hold before a line may stand for the cached event:
+/// the prompt text, the event timestamp, and (implicitly) the line's position —
+/// and text alone is not enough. After a rotation the *same line* can hold
+/// another session's entry with an identical prompt, which would derive a key
+/// for the wrong event and quietly stop hiding the record after the next rebuild.
 fn recover_from_line(
     harness: &AnkaHarness,
     source_file: &str,
     line: &str,
     expected_content: &str,
+    expected_occurred_at: &str,
 ) -> Option<RecoveredHistoryIdentity> {
     let value = serde_json::from_str::<Value>(line).ok()?;
     let text = history_text(harness, &value)?;
@@ -434,6 +446,30 @@ fn recover_from_line(
     }
     if redact_secrets(text) != expected_content {
         return None;
+    }
+    // Event-timestamp verification: the cache stored this line's event time as
+    // `occurred_at` (`discover_history` prefers it over the file's mtime), so a
+    // line that disagrees is a *different event* — stop, never derive from it.
+    match harness {
+        AnkaHarness::Claude => return None, // never a history source; guarded by the caller
+        AnkaHarness::Codex => {
+            // Codex history entries always carry `ts`, so a line without one cannot
+            // be shown to be the cached event either: undistinguishable, stop.
+            let seconds = timestamp(&value, "ts")?;
+            if seconds.to_string() != expected_occurred_at {
+                return None;
+            }
+        }
+        AnkaHarness::Opencode | AnkaHarness::Antigravity => {
+            if let Some(seconds) = timestamp(&value, "timestamp") {
+                if seconds.to_string() != expected_occurred_at {
+                    return None;
+                }
+            }
+            // No timestamp to compare: a legacy cache may predate timestamped
+            // entries (the old importer fell back to the file's mtime), so absence
+            // alone is not proof of a different event for these harnesses.
+        }
     }
     let session_id = nonempty(&value, "session_id")
         .map(str::to_string)

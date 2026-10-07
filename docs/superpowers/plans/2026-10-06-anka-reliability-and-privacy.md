@@ -406,6 +406,29 @@ verified without waiting a day.
   `control_plane` test passed here — still a separate tracked finding, not fixed),
   `cargo fmt --check` clean, `cargo clippy --workspace --all-targets` clean.
 
+### Phase 2 closure — three corrections (complete)
+
+- `write_tombstones`/`add_tombstone` propagate `PublishedUnsynced` instead of
+  counting it as success: the index publish is never reached on an unconfirmed
+  tombstone (records hide by durability, not visibility), and
+  `migrate_tombstones` re-publishes an already-versioned file — byte-identical,
+  never re-translated — so a retry re-runs the fsync chain rather than skipping
+  it as "already durable".
+- Migration verifies the event timestamp against the cache's `occurred_at`, not
+  just the redacted prompt: Codex requires a matching `ts` (absent = stop),
+  opencode/antigravity verify a present `timestamp` and tolerate its absence
+  (mtime-fallback caches). Same prompt under another session/timestamp stops
+  the migration with nothing published.
+- `check_cache_schema` passes only `NotFound`: an unreadable cache stops the
+  rebuild instead of being overwritten. A non-numeric `schema_version` is
+  refused with its own message in the gate *and* in `read_index` (never as
+  "corrupt, rebuild it"); genuinely corrupt bytes stay rebuildable.
+- 6 new tests; red/green proven for all six revert paths (error swallowed,
+  versioned skip, text-only recovery, I/O swallowed, type fall-through, wrong
+  refusal message).
+- Workspace suite: ANKA 68/68, full lib 431/431, workspace 1173/0,
+  `cargo fmt --check` clean, `cargo clippy --workspace --all-targets` clean.
+
 ## Implementation boundary
 
 Primary implementation: `crates/raios-runtime/src/anka.rs` and its tests. Use small

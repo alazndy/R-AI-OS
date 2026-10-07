@@ -524,8 +524,11 @@ Phase 2 step 3 — tombstone migration (verified):
 2. **Translation runs under `AnkaLock` inside `index_in`/`forget_in` only.**
    `migrate_tombstones` reads the old cache, resolves every legacy id to a
    record, re-derives its `forget_key`, and publishes translated tombstones
-   *before* the rebuilt index; `PublishedUnsynced` on that publish counts as
-   success. Recall never migrates or rebuilds as a side effect.
+   *before* the rebuilt index. A tombstone publish that lands without its
+   directory fsync (`PublishedUnsynced`) does **not** count as success — the
+   error stops the caller before the index publish, and a retry re-publishes
+   the versioned file instead of skipping it as already durable (closure fix
+   1 below). Recall never migrates or rebuilds as a side effect.
 3. **One unresolvable legacy id blocks the whole migration before any write.**
    Old `forget` deleted records from the cache, so tombstones with no matching
    record are expected — and they are exactly why the migration must stop rather
@@ -595,3 +598,51 @@ Phase 2 step 4 — v2 envelope and coverage (verified):
    (contracts), which now carries `state` and `coverage`. Red/green proven:
    reverting to the timestamp guess turns
    `a_legacy_cache_reports_partial_status_with_reconstructed_coverage` red.
+
+Phase 2 closure — three corrections (verified):
+
+1. **An unconfirmed tombstone publish is an error, not success.**
+   `write_tombstones`/`add_tombstone` propagate `PublishedUnsynced` like any
+   other publish failure: the entries are visible, but visibility is what the
+   caller stops over. `index_in`/`forget_in` therefore never reach the index
+   publish on that path — records are hidden by the tombstone's *durability*,
+   not its visibility, and a crash that reverts an unconfirmed tombstone would
+   resurrect exactly what the index publish was about to strip. The retry does
+   not skip the missing sync either: `migrate_tombstones` re-publishes an
+   already-versioned file (byte-identical, never re-translated), re-running the
+   file+directory fsync chain until it lands. The index-side publish may still
+   report `PublishedUnsynced` as success — the tombstones are durable by then
+   and the retained entries hide a reverted index either way. Red/green
+   proven: restoring the `Ok(())` conversion turns
+   `a_tombstone_publish_that_lands_without_confirmation_is_reported` and
+   `an_unconfirmed_tombstone_publish_stops_the_index_and_a_retry_confirms_durability`
+   red; restoring the versioned-file skip turns the latter red on its inode
+   assertion (the retry must re-publish).
+2. **Migration verifies the event timestamp, not just the prompt.** A rotation
+   can leave another session's event at the line the old cache recorded — same
+   prompt text, different event. Text equality cannot tell those apart, and a
+   key derived from the wrong event would silently stop hiding the record after
+   the next rebuild. `recover_from_line` therefore also compares the line's
+   event time against the cache's `occurred_at`: Codex entries must carry `ts`
+   *and* match (no `ts` = undistinguishable = stop), while opencode and
+   antigravity verify a present `timestamp` but tolerate its absence (their
+   legacy caches may predate timestamped entries, where the old importer fell
+   back to the file's mtime). Unverifiable matches stop the migration with
+   nothing published. Red/green proven: reverting to text-only verification
+   turns
+   `a_legacy_migration_stops_when_the_same_prompt_sits_under_another_event` red.
+3. **The schema gate refuses unreadable caches and invalid version types.**
+   `check_cache_schema` passes only `NotFound` as "nothing to lose": an
+   existing cache that cannot be read (permissions, I/O) stops the rebuild
+   instead of being mistaken for an absent one and silently overwritten. A
+   `schema_version` that is present but not a number is refused with its own
+   message — in the gate *and* in `read_index` (recall fails safe, `status`
+   reports `incompatible`) — never as "corrupt, rebuild it", because that
+   message would invite overwriting a file this build cannot even interpret.
+   Genuinely corrupt bytes (no parseable version field) stay rebuildable.
+   Red/green proven: restoring the swallow-everything read turns
+   `an_unreadable_cache_blocks_the_rebuild_instead_of_being_replaced` red;
+   restoring the fall-through or the corrupt-index message turns
+   `an_invalid_schema_version_type_is_refused_described_and_never_overwritten`
+   red. `a_corrupt_index_stays_rebuildable` pins the behavior that must not
+   regress.

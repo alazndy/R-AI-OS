@@ -105,7 +105,14 @@ pub(super) fn atomic_write(path: &Path, content: &[u8]) -> Result<(), PublishErr
 /// [`atomic_write`] with the directory sync supplied by the caller, which is the only
 /// seam tests need: everything up to and including the `rename` is the real code, and
 /// the injected failure lands precisely where a crash-durability failure lands.
-fn atomic_write_with<F>(path: &Path, content: &[u8], sync_dir: F) -> Result<(), PublishError>
+///
+/// `pub(super)` so the tombstone publisher's own tests can drive the same seam and
+/// prove that an unconfirmed tombstone publish reaches its caller as an error.
+pub(super) fn atomic_write_with<F>(
+    path: &Path,
+    content: &[u8],
+    sync_dir: F,
+) -> Result<(), PublishError>
 where
     F: FnOnce(&Path) -> Result<()>,
 {
