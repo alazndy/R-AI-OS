@@ -214,7 +214,10 @@ fn create_temporary(path: &Path) -> Result<(PathBuf, File)> {
     )
 }
 
-fn sync_directory(directory: &Path) -> Result<()> {
+/// fsync a directory so a just-created or just-renamed entry inside it is
+/// durable. `pub(super)` so the policy initializer can confirm its
+/// `create_new`+write lands the same way the publish chain confirms a rename.
+pub(super) fn sync_directory(directory: &Path) -> Result<()> {
     let handle =
         File::open(directory).with_context(|| format!("could not open {}", directory.display()))?;
     handle

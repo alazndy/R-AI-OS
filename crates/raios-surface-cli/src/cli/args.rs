@@ -490,3 +490,35 @@ pub enum Commands {
         args: Vec<String>,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn policy_init_requires_an_explicit_home_choice() {
+        let error = Cli::try_parse_from(["raios", "anka", "policy-init"])
+            .err()
+            .expect("a missing --home is a usage error, never an inferred default");
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn policy_init_accepts_exactly_the_two_documented_home_choices() {
+        for choice in ["keep", "exclude"] {
+            Cli::try_parse_from(["raios", "anka", "policy-init", "--home", choice])
+                .expect("both documented choices parse");
+        }
+        let error =
+            Cli::try_parse_from(["raios", "anka", "policy-init", "--home", "silently-keep"])
+                .err()
+                .expect("no invented choices are accepted");
+        assert_eq!(error.kind(), ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn policy_show_parses_as_a_read_only_command() {
+        Cli::try_parse_from(["raios", "anka", "policy-show"]).expect("`show` takes no arguments");
+    }
+}

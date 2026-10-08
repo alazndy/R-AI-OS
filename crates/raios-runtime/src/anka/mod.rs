@@ -4,6 +4,7 @@ pub mod provenance;
 
 mod importers;
 pub mod lock;
+pub mod policy;
 mod publish;
 
 use anyhow::{bail, Context, Result};
@@ -11,11 +12,12 @@ use lock::AnkaLock;
 use provenance::{AnkaRoots, Provenance};
 // Re-exported so the CLI and MCP surfaces read provenance through one path instead of
 // reaching into the module layout; the shared output types are part of the contract.
+pub use policy::{HomeChoice, PolicyInitView, PolicyShowView};
 pub use provenance::{ProjectScope, ProvenanceQuality, TimeSource};
 use publish::{atomic_write, ensure_private_dir};
 use raios_core::anka::{
     default_cache_path, AnkaCacheState, AnkaConfidence, AnkaHarness, AnkaHarnessCoverage, AnkaHit,
-    AnkaIndexStatus, AnkaSearchQuery, AnkaSourceRef,
+    AnkaIndexStatus, AnkaPolicySummary, AnkaSearchQuery, AnkaSourceRef,
 };
 use raios_core::security::redact_secrets;
 use serde::{Deserialize, Serialize};
@@ -182,6 +184,10 @@ fn index_in(
     config: &Path,
     harness: Option<AnkaHarness>,
 ) -> Result<AnkaIndexStatus> {
+    // Consent first: nothing — not even tombstone migration — runs against a
+    // machine whose policy is missing, malformed, or unreadable. Fail closed
+    // before the lock and before any write.
+    let policy = policy::AnkaPolicy::load(config)?;
     ensure_private_dir(cache_path)?;
     let _lock = AnkaLock::acquire(cache_path)?;
     // Never write over a cache this build cannot read. A *corrupt* cache stays
@@ -190,7 +196,6 @@ fn index_in(
     // build understands.
     check_cache_schema(cache_path)?;
     migrate_tombstones(roots, cache_path, config)?;
-    let exclusions = read_lines(&config.join(EXCLUDE_FILE))?;
     let tombstones = read_tombstones(config)?;
     let full_refresh = harness.is_none();
     let target = harness;
@@ -242,13 +247,9 @@ fn index_in(
     }
     // One filter over *every* record — carried-forward ones included — so a
     // scoped rebuild cannot resurrect a record hidden or excluded since the
-    // previous refresh.
-    records.retain(|record| {
-        !tombstoned(record, &tombstones)
-            && !exclusions
-                .iter()
-                .any(|pattern| contains(&record.source.project, pattern))
-    });
+    // previous refresh. Tombstones and the policy share this gate, so what the
+    // index publishes is exactly the set recall would admit.
+    records.retain(|record| !tombstoned(record, &tombstones) && policy.admit(record).is_none());
     records.sort_by(|left, right| left.id.cmp(&right.id));
     records.dedup_by(|left, right| left.id == right.id);
     // Stable envelope order regardless of which refresh wrote the entries.
@@ -273,7 +274,11 @@ fn index_in(
         last_indexed_at: Some(refreshed_at),
     };
     write_index(cache_path, &index)?;
-    Ok(status_from_index(cache_path.to_path_buf(), &index))
+    Ok(status_from_index(
+        cache_path.to_path_buf(),
+        &index,
+        policy.own_summary(),
+    ))
 }
 
 /// Refuse to build on top of a cache whose `schema_version` this build does not
@@ -323,17 +328,20 @@ fn unsupported_schema_message(version: u64) -> String {
 }
 
 pub fn status() -> Result<AnkaIndexStatus> {
-    status_in(&default_cache_path())
+    status_in(&default_cache_path(), &config_dir())
 }
 
 /// Status, with the cache's *readability* handled explicitly: a cache whose
 /// format this build cannot follow is reported as [`AnkaCacheState::Incompatible`]
 /// rather than as an error, because describing the cache is exactly what `status`
 /// is for. Recall keeps propagating the same failure — it must fail safe, not
-/// describe.
-fn status_in(cache_path: &Path) -> Result<AnkaIndexStatus> {
+/// describe. The policy summary follows the same rule in reverse: it never
+/// fails the status, because "no policy" is a state to report, not a reason to
+/// stop describing the cache.
+fn status_in(cache_path: &Path, config: &Path) -> Result<AnkaIndexStatus> {
+    let policy = policy::AnkaPolicy::summary(config);
     match read_index(cache_path) {
-        Ok(index) => Ok(status_from_index(cache_path.to_path_buf(), &index)),
+        Ok(index) => Ok(status_from_index(cache_path.to_path_buf(), &index, policy)),
         Err(error) if error.downcast_ref::<AnkaCacheFormatError>().is_some() => {
             Ok(AnkaIndexStatus {
                 state: AnkaCacheState::Incompatible,
@@ -342,6 +350,7 @@ fn status_in(cache_path: &Path) -> Result<AnkaIndexStatus> {
                 indexed_sources: 0,
                 indexed_records: 0,
                 last_indexed_at: None,
+                policy,
             })
         }
         Err(error) => Err(error),
@@ -358,6 +367,11 @@ pub fn status_dto(status: AnkaIndexStatus) -> raios_contracts::anka::AnkaIndexSt
         indexed_sources: status.indexed_sources,
         indexed_records: status.indexed_records,
         last_indexed_at: status.last_indexed_at,
+        policy: raios_contracts::anka::AnkaPolicySummaryDto {
+            initialized: status.policy.initialized,
+            home: status.policy.home,
+            exclude_rules: status.policy.exclude_rules,
+        },
         coverage: status
             .coverage
             .into_iter()
@@ -375,6 +389,22 @@ pub fn status_dto(status: AnkaIndexStatus) -> raios_contracts::anka::AnkaIndexSt
 
 pub fn search(query: AnkaSearchQuery) -> Result<Vec<AnkaHit>> {
     search_in(&default_cache_path(), &config_dir(), query)
+}
+
+/// Create the privacy policy — explicit consent only. `home` has no default
+/// and no inference, an existing policy is never overwritten, and creating one
+/// has no side effect beyond the file itself: no indexing, no cache, no timer,
+/// and `anka-exclude`/`anka-tombstones` are never rewritten.
+pub fn policy_init(home: HomeChoice) -> Result<PolicyInitView> {
+    policy::AnkaPolicy::init(&config_dir(), home, &AnkaRoots::live())
+}
+
+/// Read-only policy view: resolved rules, effective HOME behaviour, the
+/// tombstone count, and — against the current cache — the kept/excluded
+/// breakdown that documents what a rule change will drop before any rebuild
+/// publishes it. Never writes, never migrates, never indexes.
+pub fn policy_show() -> Result<PolicyShowView> {
+    policy::AnkaPolicy::show_view(&config_dir(), &default_cache_path())
 }
 
 /// Recall, with the tombstone check that keeps `forget` honest between rebuilds.
@@ -395,6 +425,10 @@ fn search_in(cache_path: &Path, config: &Path, query: AnkaSearchQuery) -> Result
     if query_text.is_empty() {
         bail!("ANKA search query cannot be empty");
     }
+    // Consent gate first, before any cache read: a machine without a policy
+    // gets the same refusal from recall as from rebuild — never an empty
+    // allow, never an unrestricted fallback.
+    let policy = policy::AnkaPolicy::load(config)?;
     let terms = terms(query_text);
     let index = read_index(cache_path)?;
     let tombstones = read_tombstones(config)?;
@@ -402,11 +436,20 @@ fn search_in(cache_path: &Path, config: &Path, query: AnkaSearchQuery) -> Result
         .records
         .iter()
         .filter(|record| !tombstoned(record, &tombstones))
+        // Policy on the read path, not only at index time: a rule change moves
+        // recall immediately — "excluded" must not survive until the next
+        // rebuild, in either direction.
+        .filter(|record| policy.admit(record).is_none())
         .filter(|record| {
             query
                 .project
                 .as_deref()
-                .map(|project| contains(&record.source.project, project))
+                .map(|project| {
+                    // A record speaking for HOME itself — retained by consent —
+                    // carries an unscoped label, not a project: it must never
+                    // satisfy a project filter.
+                    !policy.is_home_label(record) && contains(&record.source.project, project)
+                })
                 .unwrap_or(true)
         })
         .filter(|record| {
@@ -471,6 +514,12 @@ fn forget_in(roots: &AnkaRoots, cache_path: &Path, config: &Path, id: &str) -> R
     if id.is_empty() {
         bail!("ANKA record id cannot be empty");
     }
+    // Same consent gate as recall and rebuild, and equally fail-closed: `forget`
+    // rewrites the index, so it never runs against an absent or malformed
+    // policy. The rewrite itself only removes the tombstoned record — it does
+    // not re-admit others; recall filters those and the next rebuild applies
+    // the policy properly.
+    let _policy = policy::AnkaPolicy::load(config)?;
     ensure_private_dir(cache_path)?;
     let _lock = AnkaLock::acquire(cache_path)?;
     migrate_tombstones(roots, cache_path, config)?;
@@ -625,7 +674,11 @@ fn terms(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn status_from_index(cache_path: PathBuf, index: &AnkaIndex) -> AnkaIndexStatus {
+fn status_from_index(
+    cache_path: PathBuf,
+    index: &AnkaIndex,
+    policy: AnkaPolicySummary,
+) -> AnkaIndexStatus {
     // `Ready` requires an entry for *every* harness: only then does the cache
     // speak for all of them. Coverage with a gap — a harness-scoped refresh, or
     // a legacy cache whose coverage was reconstructed from its records — is
@@ -649,6 +702,7 @@ fn status_from_index(cache_path: PathBuf, index: &AnkaIndex) -> AnkaIndexStatus 
         indexed_sources: index.indexed_sources,
         indexed_records: index.records.len(),
         last_indexed_at: index.last_indexed_at.clone(),
+        policy,
     }
 }
 
@@ -1186,13 +1240,26 @@ mod tests {
             .join("opencode")
             .join("prompt-history.jsonl");
         fs::create_dir_all(history.parent().expect("history parent")).expect("history dir");
-        fs::write(&history, "{\"text\":\"remember this prompt\"}\n").expect("history");
+        // Real provenance on the fixture line: the default policy admits known
+        // provenance only, so a metadata-less line would be dropped from the
+        // index by default and every "the record exists" assertion would then
+        // pass vacuously.
+        fs::write(
+            &history,
+            "{\"project\":\"/srv/anka-fixture\",\"text\":\"remember this prompt\"}\n",
+        )
+        .expect("history");
+        let roots = AnkaRoots {
+            home: home.clone(),
+            config: config.clone(),
+            cache: cache.clone(),
+        };
+        // Explicit consent for these temp roots, written exactly the way
+        // `policy-init` writes it: nothing may recall, rebuild, or forget
+        // without one.
+        policy::AnkaPolicy::init(&config, HomeChoice::Keep, &roots).expect("fixture policy");
         Fixture {
-            roots: AnkaRoots {
-                home: home.clone(),
-                config: config.clone(),
-                cache: cache.clone(),
-            },
+            roots,
             cache,
             config,
             _temp: temp,
@@ -2136,9 +2203,12 @@ mod tests {
     #[test]
     fn a_legacy_history_tombstone_recovers_the_native_session_id() {
         let fixture = fixture();
+        // Known provenance on the line so the record survives the default
+        // policy — the assertion below must prove the *tombstone* filtered it,
+        // not the provenance rule.
         fs::write(
             fixture.roots.opencode_history(),
-            "{\"session_id\":\"SID-9\",\"timestamp\":1700000000,\"text\":\"remember this prompt\"}\n",
+            "{\"project\":\"/srv/anka-fixture\",\"session_id\":\"SID-9\",\"timestamp\":1700000000,\"text\":\"remember this prompt\"}\n",
         )
         .expect("history");
         let legacy_id = legacy_history_id();
@@ -2345,7 +2415,8 @@ mod tests {
             "recall must not migrate or rebuild as a side effect"
         );
 
-        let status = status_in(&fixture.cache).expect("status describes the cache");
+        let status =
+            status_in(&fixture.cache, &fixture.config).expect("status describes the cache");
         assert_eq!(status.state, AnkaCacheState::Incompatible);
         assert_eq!(status.indexed_records, 0);
         assert_eq!(status_dto(status).state, "incompatible");
@@ -2415,7 +2486,8 @@ mod tests {
             "recall must not migrate or rebuild as a side effect"
         );
 
-        let status = status_in(&fixture.cache).expect("status describes the cache");
+        let status =
+            status_in(&fixture.cache, &fixture.config).expect("status describes the cache");
         assert_eq!(status.state, AnkaCacheState::Incompatible);
 
         let error = index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
@@ -2457,14 +2529,20 @@ mod tests {
     #[test]
     fn a_harness_scoped_refresh_preserves_the_other_harnesses_and_their_coverage() {
         let fixture = fixture();
-        // A second harness, with two prompts of its own.
-        let codex_history = fixture.roots.codex_history();
-        fs::create_dir_all(codex_history.parent().expect("codex dir")).expect("codex dir");
+        // A second harness, with two prompts of its own. Antigravity rather
+        // than Codex: its records carry inline `workspace` provenance, while a
+        // Codex history line without session metadata has unknown provenance
+        // and the default policy keeps it out of the index entirely — which
+        // would make "records carry forward" impossible to observe here.
+        let antigravity_history = fixture.roots.antigravity_history();
+        fs::create_dir_all(antigravity_history.parent().expect("antigravity dir"))
+            .expect("antigravity dir");
         fs::write(
-            &codex_history,
-            "{\"text\":\"first codex prompt\"}\n{\"text\":\"second codex prompt\"}\n",
+            &antigravity_history,
+            "{\"workspace\":\"/srv/anka-fixture\",\"display\":\"first antigravity prompt\"}\n\
+             {\"workspace\":\"/srv/anka-fixture\",\"display\":\"second antigravity prompt\"}\n",
         )
-        .expect("codex history");
+        .expect("antigravity history");
 
         let full =
             index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("full build");
@@ -2482,20 +2560,21 @@ mod tests {
             full.coverage.iter().all(|entry| entry.full_refresh),
             "a full run refreshes every harness"
         );
-        assert_eq!(coverage_of(&full, AnkaHarness::Codex).records, 2);
+        assert_eq!(coverage_of(&full, AnkaHarness::Antigravity).records, 2);
         assert_eq!(coverage_of(&full, AnkaHarness::Opencode).records, 1);
 
-        // Scoped: the codex history turns over — one line leaves, one arrives.
+        // Scoped: the antigravity history turns over — one line leaves, one arrives.
         fs::write(
-            &codex_history,
-            "{\"text\":\"second codex prompt\"}\n{\"text\":\"third codex prompt\"}\n",
+            &antigravity_history,
+            "{\"workspace\":\"/srv/anka-fixture\",\"display\":\"second antigravity prompt\"}\n\
+             {\"workspace\":\"/srv/anka-fixture\",\"display\":\"third antigravity prompt\"}\n",
         )
-        .expect("codex history updated");
+        .expect("antigravity history updated");
         let scoped = index_in(
             &fixture.roots,
             &fixture.cache,
             &fixture.config,
-            Some(AnkaHarness::Codex),
+            Some(AnkaHarness::Antigravity),
         )
         .expect("scoped refresh");
 
@@ -2505,12 +2584,12 @@ mod tests {
             "the cache still speaks for every harness"
         );
         assert_eq!(
-            coverage_of(&scoped, AnkaHarness::Codex).records,
+            coverage_of(&scoped, AnkaHarness::Antigravity).records,
             2,
             "the scoped slice was rebuilt"
         );
         assert!(
-            !coverage_of(&scoped, AnkaHarness::Codex).full_refresh,
+            !coverage_of(&scoped, AnkaHarness::Antigravity).full_refresh,
             "a scoped run must not claim to be a full refresh"
         );
         assert_eq!(
@@ -2533,13 +2612,13 @@ mod tests {
         assert!(
             published
                 .iter()
-                .any(|record| record.content == "third codex prompt"),
+                .any(|record| record.content == "third antigravity prompt"),
             "the refreshed slice must carry the new line"
         );
         assert!(
             !published
                 .iter()
-                .any(|record| record.content == "first codex prompt"),
+                .any(|record| record.content == "first antigravity prompt"),
             "the line that left the source must leave the cache"
         );
     }
@@ -2553,7 +2632,9 @@ mod tests {
         let oversized_line = "a".repeat(provenance::HISTORY_LINE_MAX_BYTES + 1);
         fs::write(
             fixture.roots.opencode_history(),
-            format!("{{\"text\":\"remember this prompt\"}}\n{oversized_line}\n"),
+            format!(
+                "{{\"project\":\"/srv/anka-fixture\",\"text\":\"remember this prompt\"}}\n{oversized_line}\n"
+            ),
         )
         .expect("history with an oversized line");
 
@@ -2580,9 +2661,13 @@ mod tests {
     #[test]
     fn status_is_empty_before_the_first_index() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let status = status_in(&temp.path().join("cache")).expect("status");
+        let status =
+            status_in(&temp.path().join("cache"), &temp.path().join("config")).expect("status");
         assert_eq!(status.state, AnkaCacheState::Empty);
         assert!(status.coverage.is_empty());
+        // No policy either — and that is reported, not propagated: `status`
+        // describes policy state instead of failing the way recall does.
+        assert!(!status.policy.initialized);
         assert_eq!(
             status_dto(status).state,
             "empty",
@@ -2601,7 +2686,7 @@ mod tests {
         let fixture = fixture();
         write_legacy_cache(&fixture, &legacy_history_id());
 
-        let status = status_in(&fixture.cache).expect("status");
+        let status = status_in(&fixture.cache, &fixture.config).expect("status");
         assert_eq!(status.state, AnkaCacheState::Partial);
         assert_eq!(status.indexed_records, 1);
         assert_eq!(
@@ -2630,5 +2715,553 @@ mod tests {
         );
         assert!(!entry.full_refresh, "the refresh scope was never persisted");
         assert_eq!(entry.oversized, 0, "nor were the old exclusion counts");
+    }
+
+    // ─── Phase 3: privacy policy — init/show, recall exclusions, breakdown ───
+
+    /// Drop the fixture's consent and write a fresh one with the requested
+    /// choice — `init` refuses an existing policy, by design.
+    fn reinit_policy(fixture: &Fixture, home: HomeChoice) {
+        fs::remove_file(fixture.config.join(policy::POLICY_FILE)).expect("drop fixture policy");
+        policy::AnkaPolicy::init(&fixture.config, home, &fixture.roots).expect("policy-init");
+    }
+
+    #[test]
+    fn policy_init_writes_a_versioned_consent_and_refuses_to_overwrite_it() {
+        let fixture = fixture();
+        fs::remove_file(fixture.config.join(policy::POLICY_FILE)).expect("drop fixture policy");
+
+        let view = policy::AnkaPolicy::init(&fixture.config, HomeChoice::Exclude, &fixture.roots)
+            .expect("the first init succeeds");
+        assert!(view.created);
+        assert_eq!(view.home, "exclude");
+        assert_eq!(
+            view.home_path,
+            fixture.roots.home.display().to_string(),
+            "the consent records which home the choice was made for"
+        );
+
+        let written =
+            fs::read_to_string(fixture.config.join(policy::POLICY_FILE)).expect("policy bytes");
+        assert!(
+            written.starts_with("# anka-policy v1"),
+            "the versioned header identifies what this build wrote: {written:?}"
+        );
+        assert!(written.contains("home = exclude"), "{written:?}");
+        assert!(written.contains("home_path = "), "{written:?}");
+
+        let error = policy::AnkaPolicy::init(&fixture.config, HomeChoice::Keep, &fixture.roots)
+            .expect_err("a second init must refuse");
+        assert!(error.to_string().contains("already exists"), "{error}");
+        let after = fs::read_to_string(fixture.config.join(policy::POLICY_FILE)).expect("bytes");
+        assert!(
+            after.contains("home = exclude"),
+            "the refusal must leave the original consent untouched"
+        );
+    }
+
+    #[test]
+    fn policy_init_creates_nothing_but_the_policy_file() {
+        let fixture = fixture();
+        fs::remove_file(fixture.config.join(policy::POLICY_FILE)).expect("drop fixture policy");
+        fs::write(fixture.config.join(EXCLUDE_FILE), "Personal\n").expect("rule file");
+        write_v1_tombstones(&fixture, &["legacy-id"]);
+        let exclude_before = fs::read(fixture.config.join(EXCLUDE_FILE)).expect("exclude bytes");
+        let tombstone_before =
+            fs::read(fixture.config.join(TOMBSTONE_FILE)).expect("tombstone bytes");
+
+        policy::AnkaPolicy::init(&fixture.config, HomeChoice::Keep, &fixture.roots)
+            .expect("init is allowed to create its own file");
+
+        assert_eq!(
+            fs::read(fixture.config.join(EXCLUDE_FILE)).expect("exclude bytes"),
+            exclude_before,
+            "init never rewrites the operator's rule file"
+        );
+        assert_eq!(
+            fs::read(fixture.config.join(TOMBSTONE_FILE)).expect("tombstone bytes"),
+            tombstone_before,
+            "init never rewrites tombstones"
+        );
+        assert!(
+            !fixture.cache.exists(),
+            "init never touches the cache — no indexing, no migration, no timer"
+        );
+        let mut entries: Vec<String> = fs::read_dir(&fixture.config)
+            .expect("config dir")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        entries.sort();
+        let mut expected = vec![
+            policy::POLICY_FILE.to_string(),
+            TOMBSTONE_FILE.to_string(),
+            EXCLUDE_FILE.to_string(),
+        ];
+        expected.sort();
+        assert_eq!(
+            entries, expected,
+            "exactly the policy, the rules, and the tombstones — nothing else appears"
+        );
+    }
+
+    #[test]
+    fn recall_index_and_forget_refuse_to_run_without_an_initialized_policy() {
+        let fixture = fixture();
+        fs::remove_file(fixture.config.join(policy::POLICY_FILE)).expect("drop fixture policy");
+
+        for error in [
+            index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+                .expect_err("index refuses")
+                .to_string(),
+            search_in(
+                &fixture.cache,
+                &fixture.config,
+                query("remember this prompt"),
+            )
+            .expect_err("search refuses")
+            .to_string(),
+            blame_in(
+                &fixture.cache,
+                &fixture.config,
+                "crates/raios-core/src/anka.rs",
+                5,
+            )
+            .expect_err("blame refuses")
+            .to_string(),
+            forget_in(&fixture.roots, &fixture.cache, &fixture.config, "some-id")
+                .expect_err("forget refuses")
+                .to_string(),
+        ] {
+            assert!(
+                error.contains("not initialized"),
+                "every path fails closed on the same reason: {error}"
+            );
+        }
+        assert!(
+            !fixture.cache.exists(),
+            "a refused index run writes nothing at all"
+        );
+        assert!(
+            !fixture.config.join(TOMBSTONE_FILE).exists(),
+            "a refused forget writes no tombstone"
+        );
+
+        // `status` keeps describing the state instead of failing like recall.
+        let status = status_in(&fixture.cache, &fixture.config).expect("status reports");
+        assert!(!status.policy.initialized);
+        assert!(status_dto(status).policy.home.is_none());
+    }
+
+    #[test]
+    fn a_malformed_policy_is_refused_rather_than_fallback() {
+        let fixture = fixture();
+        let path = fixture.config.join(policy::POLICY_FILE);
+
+        fs::write(&path, "home = keep\n").expect("headerless policy");
+        let error = search_in(
+            &fixture.cache,
+            &fixture.config,
+            query("remember this prompt"),
+        )
+        .expect_err("recall refuses a policy it cannot parse");
+        assert!(error.to_string().contains("malformed"), "{error}");
+        // Status still works — reporting `initialized: false`, not guessing.
+        let status = status_in(&fixture.cache, &fixture.config).expect("status reports");
+        assert!(!status.policy.initialized);
+
+        fs::write(&path, "# anka-policy v1\nhome = keep\nsurprise = 1\n").expect("unknown key");
+        let error = index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+            .expect_err("an unknown key is not silently ignored");
+        assert!(error.to_string().contains("unknown key"), "{error}");
+    }
+
+    #[test]
+    fn exclusion_rules_take_effect_at_recall_before_any_rebuild() {
+        let fixture = fixture();
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+        assert_eq!(
+            search_in(
+                &fixture.cache,
+                &fixture.config,
+                query("remember this prompt")
+            )
+            .expect("search")
+            .len(),
+            1,
+            "the record is recallable before the rule exists"
+        );
+
+        // The rule lands after the index — no rebuild, no migration, no write.
+        fs::write(fixture.config.join(EXCLUDE_FILE), "srv\n").expect("rule");
+
+        assert!(
+            search_in(
+                &fixture.cache,
+                &fixture.config,
+                query("remember this prompt")
+            )
+            .expect("search")
+            .is_empty(),
+            "the rule applies on the very next query"
+        );
+        assert!(
+            blame_in(&fixture.cache, &fixture.config, "whatever/path.rs", 5)
+                .expect("blame")
+                .is_empty(),
+            "blame reads through the same predicate"
+        );
+        assert_eq!(
+            read_index(&fixture.cache).expect("index").records.len(),
+            1,
+            "the cache itself is untouched — recall moved without a rebuild"
+        );
+
+        // The next rebuild applies the rule at index time too.
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("rebuild");
+        assert!(
+            read_index(&fixture.cache)
+                .expect("index")
+                .records
+                .is_empty(),
+            "the rebuilt index applies the rule as well"
+        );
+
+        // And `status` carries the policy summary alongside the cache state.
+        let status = status_in(&fixture.cache, &fixture.config).expect("status");
+        assert!(status.policy.initialized);
+        assert_eq!(status.policy.home.as_deref(), Some("keep"));
+        assert_eq!(status.policy.exclude_rules, 1);
+    }
+
+    #[test]
+    fn unknown_provenance_is_excluded_by_default_at_index_and_recall() {
+        let fixture = fixture();
+        fs::write(
+            fixture.roots.opencode_history(),
+            "{\"text\":\"no provenance prompt\"}\n",
+        )
+        .expect("history");
+
+        // (a) Index path: the metadata-less line never reaches the cache.
+        let status =
+            index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+        assert_eq!(
+            coverage_of(&status, AnkaHarness::Opencode).records,
+            0,
+            "unknown provenance is not published"
+        );
+        assert!(search_in(
+            &fixture.cache,
+            &fixture.config,
+            query("no provenance prompt")
+        )
+        .expect("search")
+        .is_empty());
+
+        // (b) Recall path: a cache that already holds an unknown record — one
+        // written before this policy existed, say — is filtered on read,
+        // without waiting for a rebuild.
+        ensure_private_dir(&fixture.cache).expect("cache dir");
+        let mut legacy = spec("legacy unknown prompt");
+        legacy.provenance = Provenance::unknown();
+        write_index(
+            &fixture.cache,
+            &AnkaIndex {
+                records: vec![record(legacy)],
+                indexed_sources: 1,
+                coverage: Vec::new(),
+                last_indexed_at: Some(now()),
+            },
+        )
+        .expect("hand-built cache");
+        assert_eq!(
+            read_index(&fixture.cache).expect("index").records.len(),
+            1,
+            "the record really is in the cache…"
+        );
+        assert!(
+            search_in(
+                &fixture.cache,
+                &fixture.config,
+                query("legacy unknown prompt")
+            )
+            .expect("search")
+            .is_empty(),
+            "…and recall still refuses it"
+        );
+    }
+
+    #[test]
+    fn home_exclude_drops_the_exact_home_record_but_keeps_child_projects() {
+        let fixture = fixture();
+        reinit_policy(&fixture, HomeChoice::Exclude);
+        let home = fixture.roots.home.display().to_string();
+        fs::write(
+            fixture.roots.opencode_history(),
+            format!(
+                "{{\"project\":\"{home}\",\"text\":\"zebra quantum\"}}\n\
+                 {{\"project\":\"{home}/child-project\",\"text\":\"mango orchard\"}}\n"
+            ),
+        )
+        .expect("history");
+
+        let status =
+            index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+        assert_eq!(
+            coverage_of(&status, AnkaHarness::Opencode).records,
+            1,
+            "only the child project is published"
+        );
+        assert!(
+            search_in(&fixture.cache, &fixture.config, query("zebra quantum"))
+                .expect("search")
+                .is_empty(),
+            "the HOME record is gone"
+        );
+        assert_eq!(
+            search_in(&fixture.cache, &fixture.config, query("mango orchard"))
+                .expect("search")
+                .len(),
+            1,
+            "child projects are never touched by the typed rule"
+        );
+    }
+
+    #[test]
+    fn home_exclude_also_drops_the_exact_encoded_home_slug() {
+        let fixture = fixture();
+        reinit_policy(&fixture, HomeChoice::Exclude);
+        let slug = policy::encoded_home_slug(&fixture.roots.home.display().to_string());
+
+        let mut home_slug = spec("onyx lighthouse");
+        home_slug.provenance = Provenance::from_slug(&slug);
+        home_slug.project = slug.clone();
+        let child_slug_value = format!("{slug}-x");
+        let mut child_slug = spec("saffron meadow");
+        child_slug.provenance = Provenance::from_slug(&child_slug_value);
+        child_slug.project = child_slug_value.clone();
+
+        ensure_private_dir(&fixture.cache).expect("cache dir");
+        write_index(
+            &fixture.cache,
+            &AnkaIndex {
+                records: vec![record(home_slug), record(child_slug)],
+                indexed_sources: 2,
+                coverage: Vec::new(),
+                last_indexed_at: Some(now()),
+            },
+        )
+        .expect("hand-built cache");
+
+        assert!(
+            search_in(&fixture.cache, &fixture.config, query("onyx lighthouse"))
+                .expect("search")
+                .is_empty(),
+            "the exact encoded home slug matches HOME"
+        );
+        assert_eq!(
+            search_in(&fixture.cache, &fixture.config, query("saffron meadow"))
+                .expect("search")
+                .len(),
+            1,
+            "a longer slug that merely starts with the home slug is a different directory"
+        );
+    }
+
+    #[test]
+    fn home_keep_retains_unscoped_records_but_never_matches_a_project_filter() {
+        let fixture = fixture(); // the fixture inits `keep`
+        let home = fixture.roots.home.display().to_string();
+        fs::write(
+            fixture.roots.opencode_history(),
+            format!("{{\"project\":\"{home}\",\"text\":\"home prompt content\"}}\n"),
+        )
+        .expect("history");
+
+        let status =
+            index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+        assert_eq!(
+            coverage_of(&status, AnkaHarness::Opencode).records,
+            1,
+            "kept by explicit consent"
+        );
+        assert_eq!(
+            search_in(
+                &fixture.cache,
+                &fixture.config,
+                query("home prompt content")
+            )
+            .expect("search")
+            .len(),
+            1,
+            "a kept HOME record stays recallable without a project filter"
+        );
+
+        let filtered = AnkaSearchQuery {
+            text: "home prompt content".to_string(),
+            project: Some("$HOME".to_string()),
+            harness: None,
+            limit: 10,
+        };
+        assert!(
+            search_in(&fixture.cache, &fixture.config, filtered)
+                .expect("search")
+                .is_empty(),
+            "an unscoped label never satisfies a project filter — HOME is not a project"
+        );
+
+        // Conflicting provenance under `keep`: the slug says HOME while the
+        // resolved path says otherwise. Ambiguous evidence is rejected, not
+        // guessed at in either direction.
+        let mut conflict = spec("nebula cartographer");
+        conflict.provenance = Provenance::direct(&format!("{home}/elsewhere"), &fixture.roots)
+            .with_slug(&policy::encoded_home_slug(&home));
+        conflict.project = format!("{home}/elsewhere");
+        let mut index = read_index(&fixture.cache).expect("index");
+        index.records.push(record(conflict));
+        write_index(&fixture.cache, &index).expect("extend cache");
+        assert!(
+            search_in(
+                &fixture.cache,
+                &fixture.config,
+                query("nebula cartographer")
+            )
+            .expect("search")
+            .is_empty(),
+            "conflicting provenance is rejected even where HOME is kept"
+        );
+    }
+
+    #[test]
+    fn substring_rules_are_case_insensitive_and_literal() {
+        let fixture = fixture();
+        fs::write(
+            fixture.roots.opencode_history(),
+            "{\"project\":\"/srv/anka-fixture\",\"text\":\"remember this prompt\"}\n\
+             {\"project\":\"/data/keeper\",\"text\":\"saffron meadowlark\"}\n",
+        )
+        .expect("history");
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+
+        // Case-insensitive: the rule is written in a different case than the
+        // project it matches.
+        fs::write(fixture.config.join(EXCLUDE_FILE), "KEEPER\n").expect("rule");
+        assert!(
+            search_in(&fixture.cache, &fixture.config, query("saffron meadowlark"))
+                .expect("search")
+                .is_empty(),
+            "matching folds case on both sides"
+        );
+        assert_eq!(
+            search_in(
+                &fixture.cache,
+                &fixture.config,
+                query("remember this prompt")
+            )
+            .expect("search")
+            .len(),
+            1,
+            "the unrelated project is untouched"
+        );
+
+        // Literal: `*` is a character in the rule, not a wildcard.
+        fs::write(fixture.config.join(EXCLUDE_FILE), "keeper*\n").expect("rule");
+        assert_eq!(
+            search_in(&fixture.cache, &fixture.config, query("saffron meadowlark"))
+                .expect("search")
+                .len(),
+            1,
+            "`keeper*` is a literal substring — `/data/keeper` does not contain an asterisk"
+        );
+    }
+
+    #[test]
+    fn policy_show_reports_rules_tombstones_and_the_kept_excluded_breakdown() {
+        let fixture = fixture();
+        let home = fixture.roots.home.display().to_string();
+        fs::write(
+            fixture.roots.opencode_history(),
+            format!(
+                "{{\"project\":\"/srv/anka-fixture\",\"text\":\"remember this prompt\"}}\n\
+                 {{\"project\":\"/data/keeper\",\"text\":\"keeper prompt content\"}}\n\
+                 {{\"project\":\"/data/other\",\"text\":\"other prompt content\"}}\n\
+                 {{\"project\":\"{home}\",\"text\":\"home prompt content\"}}\n"
+            ),
+        )
+        .expect("history");
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+
+        // Forget one record, then land a rule that would drop two more —
+        // without rebuilding, so the breakdown documents the pending loss.
+        let forgotten = read_index(&fixture.cache)
+            .expect("index")
+            .records
+            .iter()
+            .find(|record| record.content == "remember this prompt")
+            .expect("the fixture record")
+            .id
+            .clone();
+        assert!(
+            forget_in(&fixture.roots, &fixture.cache, &fixture.config, &forgotten).expect("forget")
+        );
+        fs::write(fixture.config.join(EXCLUDE_FILE), "data\n").expect("rule");
+
+        let view = policy::AnkaPolicy::show_view(&fixture.config, &fixture.cache)
+            .expect("show is read-only and never fails on a healthy policy");
+        assert!(view.initialized);
+        assert_eq!(view.home.as_deref(), Some("keep"));
+        assert_eq!(view.exclude_rules, vec!["data".to_string()]);
+        assert_eq!(view.tombstones, 1);
+
+        let cache = view.cache.expect("the policy is initialized");
+        assert_eq!(cache.state, "ok");
+        assert_eq!(
+            cache.kept, 1,
+            "the kept HOME record is the only one still admitted"
+        );
+        assert_eq!(cache.excluded.substring, 2, "both /data projects");
+        assert_eq!(cache.excluded.tombstone, 0, "forget already removed it");
+        assert_eq!(cache.excluded.total(), 2);
+        let opencode = cache
+            .per_harness
+            .iter()
+            .find(|entry| entry.harness == "opencode")
+            .expect("opencode slot");
+        assert_eq!((opencode.kept, opencode.excluded), (1, 2));
+        assert!(
+            cache
+                .per_harness
+                .iter()
+                .filter(|entry| entry.harness != "opencode")
+                .all(|entry| entry.kept == 0 && entry.excluded == 0),
+            "the other harnesses saw no records"
+        );
+    }
+
+    #[test]
+    fn policy_show_reports_the_missing_state_without_failing() {
+        let fixture = fixture();
+        fs::remove_file(fixture.config.join(policy::POLICY_FILE)).expect("drop fixture policy");
+        fs::write(fixture.config.join(EXCLUDE_FILE), "personal\n").expect("rule file");
+
+        let view = policy::AnkaPolicy::show_view(&fixture.config, &fixture.cache)
+            .expect("`show` diagnoses the gap instead of erroring like recall");
+        assert!(!view.initialized);
+        assert!(view.home.is_none());
+        assert!(
+            view.cache.is_none(),
+            "no admission decision to report without a policy"
+        );
+        assert_eq!(
+            view.exclude_rules,
+            vec!["personal".to_string()],
+            "the operator's own rules are still readable"
+        );
     }
 }

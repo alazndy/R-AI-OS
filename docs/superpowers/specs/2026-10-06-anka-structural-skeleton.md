@@ -656,3 +656,90 @@ Phase 2 closure — three corrections (verified):
    `an_invalid_schema_version_type_is_refused_described_and_never_overwritten`
    red. `a_corrupt_index_stays_rebuildable` pins the behavior that must not
    regress.
+
+Phase 3 — privacy policy, recall exclusions, breakdown (verified):
+
+1. **Consent is explicit, versioned, and refuse-if-exists.** `policy-init` writes
+   `anka-policy` as `# anka-policy v1` + `home = keep|exclude` + the normalized
+   `home_path` the choice was made for — the typed HOME comparison and the
+   encoded Claude slug derive from the consent itself, not from whatever
+   environment reads it later. The file is created with `create_new` +
+   `mode(0600)` (refusal is atomic: existence *is* the consent), fsync'd file
+   and directory; a failed write removes our own partial file so the next init
+   can retry. A second init refuses with an error and leaves the original
+   untouched. `--home` is mandatory (clap `ValueEnum`): missing flag =
+   `MissingRequiredArgument` (exit 2), invented value = `InvalidValue` — no
+   default, no inference. `init` touches nothing else: `anka-exclude` and
+   `anka-tombstones` stay byte-identical, no cache is created, no timer, no
+   indexing. Tests: `policy_init_writes_a_versioned_consent_and_refuses_to_overwrite_it`,
+   `policy_init_creates_nothing_but_the_policy_file`, three parse tests in
+   `raios-surface-cli`.
+2. **`load` fails closed; `status` reports the state instead of failing.**
+   Missing file → "run `raios anka policy-init …` first"; wrong header,
+   unknown/duplicate/missing keys → a `malformed:` message naming the file.
+   There is no empty-allow path (`try_load`'s `Ok(None)` exists only to let
+   `status` and `show` describe the gap). `index_in`, `search_in` (and through
+   it `blame_in` and MCP `anka_recall`), and `forget_in` all load the policy
+   before the lock and before any write, so nothing — not even tombstone
+   migration — runs without consent. `AnkaIndexStatus.policy`
+   (`AnkaPolicySummaryDto`, `#[serde(default)]` for older payloads) carries
+   `initialized`/`home`/`exclude_rules` on every status. Red/green proven:
+   turning NotFound into an empty policy makes
+   `recall_index_and_forget_refuse_to_run_without_an_initialized_policy` red;
+   swallowing the parse error makes
+   `a_malformed_policy_is_refused_rather_than_fallback` red.
+3. **Policy is evaluated at recall time, not only at index time (defect C3
+   closed).** The same `admit` predicate runs in the `search_in` read path, so
+   a rule written after the index lands takes effect on the very next query;
+   the index itself is untouched until the next rebuild, and the rebuild
+   applies the same predicate to carried-forward records. Red/green proven:
+   removing the recall-side filter makes
+   `exclusion_rules_take_effect_at_recall_before_any_rebuild` red.
+4. **One admission predicate, precedence substring → HOME → unknown.** Any
+   match excludes; the precedence only picks the reported reason, so the
+   breakdown counts every record under exactly one bucket. Substrings are
+   case-insensitive literal text — never glob or regex (`keeper*` does not
+   match `/data/keeper`). Unknown provenance is excluded always, every
+   harness, independent of the HOME choice, at index *and* at recall. The
+   typed HOME rule matches the exact `home_path` or the exact encoded slug
+   (`[A-Za-z0-9]` kept, every other character one `-`), so `/home/alaz` drops
+   neither `/home/alaz/child` nor a different slug sharing its prefix; a slug
+   that says HOME while the resolved path says otherwise (a session that
+   started under HOME and moved) is rejected regardless of the HOME choice.
+   Red/green proven (four reverts): prefix-instead-of-exact makes
+   `home_exclude_drops_the_exact_home_record_but_keeps_child_projects` red;
+   dropping the unknown check makes
+   `unknown_provenance_is_excluded_by_default_at_index_and_recall` red;
+   case-sensitive matching makes
+   `substring_rules_are_case_insensitive_and_literal` red; removing the
+   conflict check or the slug-form match makes the `home_keep…` / `…encoded_home_slug`
+   tests red.
+5. **HOME retention never leaks into project-filtered recall.** With
+   `home = keep`, home records stay recallable without a filter but
+   `is_home_label` records never satisfy `--project` — an unscoped label is
+   not a project. Red/green proven: dropping the suppression from the
+   project-filter closure makes
+   `home_keep_retains_unscoped_records_but_never_matches_a_project_filter` red.
+6. **`policy-show` is the diagnostic surface: rules, tombstones, and the
+   kept/excluded breakdown of the current cache.** Sorted resolved
+   `anka-exclude` rules, the `anka-tombstones` entry count, and — evaluated
+   read-only against the cache as it exists *now* — kept vs excluded with the
+   reason counts (substring/home/unknown_provenance/tombstone) plus a
+   per-harness split and a cache state of `absent|ok|unreadable`. A rule
+   written but not yet rebuilt shows its losses here before any publication;
+   an uninitialized policy reports `initialized:false` with `cache: null`
+   instead of erroring (recall keeps erroring). Tests:
+   `policy_show_reports_rules_tombstones_and_the_kept_excluded_breakdown`,
+   `policy_show_reports_the_missing_state_without_failing`.
+7. **Fixture honesty.** The default fixture line now carries
+   `"project":"/srv/anka-fixture"`: under the default policy a metadata-less
+   line is excluded, which would make every "the record exists" assertion
+   vacuously true. The scoped-refresh test uses antigravity instead of codex
+   for the second harness, because a codex line without session metadata has
+   unknown provenance and is excluded by default (codex-fixture indirectness
+   was accepted in review; tombstone translation carries the migration
+   proofs). 12 new runtime tests → ANKA 81/81, CLI 67/67;
+   `cargo fmt --check` and `cargo clippy --workspace --all-targets` clean.
+   The env-dependent `control_plane::snapshot_generation_on_in_memory_db`
+   test fails on this machine (live config sets `factory.enabled = true`) —
+   separate tracked finding, not fixed, unrelated to this diff.

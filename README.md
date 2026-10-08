@@ -255,9 +255,13 @@ raios anka index --harness codex
 raios anka search "JWT refresh rotation" --project R-AI-OS
 raios anka blame crates/raios-core/src/db/mem.rs
 raios anka forget <record-id>
+raios anka policy-init --home keep|exclude
+raios anka policy-show
 ```
 
 - Only local history is indexed; recognized secret-shaped values are redacted before cache writes.
+- Recall, indexing, and forget require an initialized privacy policy (`policy-init`, explicit `--home keep|exclude`, never overwritten); a missing or malformed policy fails closed.
+- Exclusion rules apply at recall time as well as at index time, so a rule change takes effect on the next query; `policy-show` reports the kept/excluded breakdown before any rebuild.
 - Cache records are owner-only, support project exclusions and local tombstones, and can be rebuilt from sources.
 - No automatic context injection, synchronization, sharing, or curated-memory promotion occurs.
 - MCP exposes only read-only `anka_recall`, capped at eight results and framed as untrusted historical evidence.

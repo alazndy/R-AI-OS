@@ -112,6 +112,20 @@ pub struct AnkaHarnessCoverage {
     pub oversized: usize,
 }
 
+/// Whether the privacy policy is initialized — carried on every status so a
+/// fail-closed recall surface is explainable without a second call. Never
+/// fails: `initialized: false` is a state `status` reports, while the
+/// diagnostic details belong to `policy-show`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnkaPolicySummary {
+    /// False when `anka-policy` is absent or does not parse.
+    pub initialized: bool,
+    /// `keep` | `exclude`; `None` until initialized.
+    pub home: Option<String>,
+    /// Number of literal substring rules resolved from `anka-exclude`.
+    pub exclude_rules: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AnkaIndexStatus {
     pub state: AnkaCacheState,
@@ -120,6 +134,8 @@ pub struct AnkaIndexStatus {
     pub indexed_sources: usize,
     pub indexed_records: usize,
     pub last_indexed_at: Option<String>,
+    /// Privacy-policy state as seen by the same reader that saw this status.
+    pub policy: AnkaPolicySummary,
 }
 
 pub trait AnkaRecallStore {

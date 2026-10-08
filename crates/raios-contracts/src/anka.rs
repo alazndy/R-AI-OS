@@ -55,6 +55,17 @@ pub struct AnkaHarnessCoverageDto {
     pub oversized: usize,
 }
 
+/// Privacy-policy state as reported alongside the status.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnkaPolicySummaryDto {
+    /// False when `anka-policy` is absent or does not parse.
+    pub initialized: bool,
+    /// `keep` | `exclude`; `None` until initialized.
+    pub home: Option<String>,
+    /// Number of literal substring rules resolved from `anka-exclude`.
+    pub exclude_rules: usize,
+}
+
 /// Status report summarizing the ANKA transcript indexer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AnkaIndexStatusDto {
@@ -71,4 +82,7 @@ pub struct AnkaIndexStatusDto {
     pub last_indexed_at: Option<String>,
     /// Per-harness coverage of the last refresh(es).
     pub coverage: Vec<AnkaHarnessCoverageDto>,
+    /// Privacy-policy state; absent on payloads from older builds.
+    #[serde(default)]
+    pub policy: AnkaPolicySummaryDto,
 }

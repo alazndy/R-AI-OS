@@ -433,6 +433,65 @@ verified without waiting a day.
 - Workspace suite: ANKA 69/69, full lib 432/432, workspace 1174/0,
   `cargo fmt --check` clean, `cargo clippy --workspace --all-targets` clean.
 
+### Phase 3 — Privacy policy, recall exclusions, kept/excluded breakdown (complete)
+
+- New module `crates/raios-runtime/src/anka/policy.rs`. Consent file
+  `anka-policy` = `# anka-policy v1` header + `home = keep|exclude` + `home_path`
+  recorded at init (the typed HOME comparison and the encoded Claude slug derive
+  from the consent itself, not from a later environment). `init` is
+  refuse-if-exists (`create_new`, owner-only from instant of existence, fsync
+  file + directory) and touches nothing else: no cache, no indexing, no timer;
+  `anka-exclude`/`anka-tombstones` stay byte-identical. `--home` has no default
+  (clap `ValueEnum`; missing flag = usage error, invented values = invalid value).
+- `AnkaPolicy::load` fails closed: missing → "run `policy-init` first", and
+  malformed/unreadable files (wrong header, unknown key, duplicate key, missing
+  key) are refused as malformed — never an empty allow. `try_load` distinguishes
+  NotFound (`Ok(None)`) from real failures. Loaded at the top of `index_in`,
+  `search_in` (so `blame_in` and MCP `anka_recall` inherit it), and `forget_in` —
+  before the lock and before any write.
+- One admission predicate shared by index and recall, precedence
+  substring → HOME → unknown (precedence only picks the reported reason, any
+  match excludes): case-insensitive literal substrings from `anka-exclude`;
+  the typed HOME rule matching the exact `home_path`, the exact encoded home
+  slug (`[A-Za-z0-9]` kept, everything else `-`), with slug/path conflicts
+  rejected regardless of the HOME choice; unknown provenance excluded always,
+  every harness, independent of HOME.
+- HOME=keep: unscoped records stay recallable unfiltered but `is_home_label`
+  records never satisfy a `--project` filter. Rule changes take effect on the
+  very next query — no rebuild required — and the rebuild filter applies the
+  same predicate to carried-forward records.
+- `AnkaIndexStatus` carries `AnkaPolicySummary { initialized, home,
+  exclude_rules }` (core type; `AnkaPolicySummaryDto` with `#[serde(default)]`
+  for older payloads). `status` never fails on policy — it reports the state;
+  `policy-show` is the diagnostic surface: sorted resolved rules, tombstone
+  count, and the kept/excluded breakdown of the *current* cache (reason counts
+  substring/home/unknown_provenance/tombstone, per-harness kept/excluded,
+  cache state absent|ok|unreadable) so pending losses are documented before any
+  rebuild publishes them; reports `initialized:false` instead of erroring.
+- CLI: `raios anka policy-init --home keep|exclude`, `raios anka policy-show`.
+- Fixture migration: policy starts as `home = keep`, default history line gains
+  `"project":"/srv/anka-fixture"` (the default policy drops a metadata-less line,
+  which would make every "the record exists" assertion vacuous), SID-9 migration
+  line likewise; the scoped-refresh test switched codex → antigravity because
+  codex lines without session metadata have unknown provenance and are excluded
+  by default — the codex-fixture indirectness (D6) was accepted in review, with
+  tombstone translation carrying the migration proofs.
+- 12 new runtime tests (ANKA 81/81) + 3 CLI parse tests (CLI 67/67). Red/green
+  proven for all 9 revert paths: recall admit filter, fail-closed load, typed
+  HOME exactness, unknown-provenance default, no-fallback on malformed policy,
+  project-filter suppression, substring case folding, conflict rejection,
+  exact-slug match.
+- `cargo fmt --check` clean, `cargo clippy --workspace --all-targets` clean.
+  The env-dependent `control_plane::snapshot_generation_on_in_memory_db` test
+  fails on this machine because the live `~/.config/raios/config.toml` sets
+  `factory.enabled = true` (separate tracked finding, unrelated to this diff,
+  not fixed).
+- Deferred, not done here: the operator's HOME keep/exclude choice (blocks only
+  the live `policy-init` + cache rebuild — code takes it as a mandatory
+  argument), TOCTOU `O_NOFOLLOW` on provenance file opens (mandatory before any
+  live policy/cache transition, separate commit), systemd timer (final gate
+  after manual rollout).
+
 ## Implementation boundary
 
 Primary implementation: `crates/raios-runtime/src/anka.rs` and its tests. Use small

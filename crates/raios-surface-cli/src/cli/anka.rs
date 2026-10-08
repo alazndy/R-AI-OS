@@ -43,6 +43,13 @@ pub(super) fn cmd_anka(action: AnkaAction, json: bool) {
         }
         AnkaAction::Forget { id } => raios_runtime::anka::forget(&id)
             .map(|forgotten| serde_json::json!({"forgotten": forgotten, "id": id})),
+        // Consent and diagnostics: `policy-init` returns the view of what it
+        // wrote (it never reads the cache), `policy-show` the resolved rules,
+        // tombstone count, and the kept/excluded breakdown of the current one.
+        AnkaAction::PolicyInit { home } => raios_runtime::anka::policy_init(home.into())
+            .and_then(|view| serde_json::to_value(view).map_err(Into::into)),
+        AnkaAction::PolicyShow => raios_runtime::anka::policy_show()
+            .and_then(|view| serde_json::to_value(view).map_err(Into::into)),
     };
 
     match result {
