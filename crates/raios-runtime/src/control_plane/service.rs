@@ -542,16 +542,25 @@ pub fn dispatch_control_command(
     actor: &ControlActor,
     cmd: &Command,
 ) -> Result<Option<serde_json::Value>, Problem> {
-    dispatch_with_launcher(conn, actor, cmd, &launch_agent_in_terminal)
+    dispatch_with_seams(
+        conn,
+        actor,
+        cmd,
+        &launch_agent_in_terminal,
+        &raios_core::security::PolicyConfig::try_load_default,
+    )
 }
 
-/// [`dispatch_control_command`] with the terminal launcher injected, so tests can prove which
-/// commands start a process and which never do.
-pub(super) fn dispatch_with_launcher(
+/// [`dispatch_control_command`] with its two outside effects injected: the terminal launcher and
+/// the security policy loader. Tests use this to prove which commands start a process and which
+/// never do, and to apply a policy without touching process-wide state (the working directory or
+/// `XDG_CONFIG_HOME`), which other tests share.
+pub(super) fn dispatch_with_seams(
     conn: &mut Connection,
     actor: &ControlActor,
     cmd: &Command,
     launcher: &dyn Fn(&AgentLaunchRequest) -> Result<(), Problem>,
+    load_policy: &dyn Fn() -> Option<raios_core::security::PolicyConfig>,
 ) -> Result<Option<serde_json::Value>, Problem> {
     if !actor.may_mutate_control_plane {
         return Err(Problem::unauthorized(
@@ -562,27 +571,26 @@ pub(super) fn dispatch_with_launcher(
     init_idempotency_table(conn).map_err(Problem::internal)?;
 
     let command_name = command_name(cmd);
-    let audit_event_type = match raios_core::security::PolicyConfig::try_load_default()
-        .map(|policy| policy.tool_action(policy_name(cmd)).clone())
-    {
-        Some(raios_core::security::policy::PolicyAction::Deny) => {
-            let _ = raios_core::security::record_tool_decision(
-                conn,
-                command_name,
-                &format!("{:x}", Sha256::digest(command_name.as_bytes())),
-                "control_plane",
-                "tool_deny",
-                actor.subject(),
-            );
-            return Err(Problem::forbidden(format!(
-                "Security policy denies control command '{command_name}'"
-            )));
-        }
-        Some(raios_core::security::policy::PolicyAction::Allow) => "tool_allow",
-        // The authenticated human gesture that submitted this command is the
-        // confirmation required by the policy; it remains distinct in audit.
-        Some(raios_core::security::policy::PolicyAction::Confirm) | None => "tool_confirm",
-    };
+    let audit_event_type =
+        match load_policy().map(|policy| policy.tool_action(policy_name(cmd)).clone()) {
+            Some(raios_core::security::policy::PolicyAction::Deny) => {
+                let _ = raios_core::security::record_tool_decision(
+                    conn,
+                    command_name,
+                    &format!("{:x}", Sha256::digest(command_name.as_bytes())),
+                    "control_plane",
+                    "tool_deny",
+                    actor.subject(),
+                );
+                return Err(Problem::forbidden(format!(
+                    "Security policy denies control command '{command_name}'"
+                )));
+            }
+            Some(raios_core::security::policy::PolicyAction::Allow) => "tool_allow",
+            // The authenticated human gesture that submitted this command is the
+            // confirmation required by the policy; it remains distinct in audit.
+            Some(raios_core::security::policy::PolicyAction::Confirm) | None => "tool_confirm",
+        };
 
     let key = cmd.idempotency_key();
     let payload_json = serde_json::to_string(cmd).map_err(|e| {

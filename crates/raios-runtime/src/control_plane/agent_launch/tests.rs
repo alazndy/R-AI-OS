@@ -1,10 +1,11 @@
 use std::cell::Cell;
 
 use raios_contracts::{Command, Problem};
+use raios_core::security::PolicyConfig;
 use rusqlite::{params, Connection};
 use serde_json::Value;
 
-use crate::control_plane::service::{dispatch_with_launcher, ControlActor};
+use crate::control_plane::service::{dispatch_with_seams, ControlActor};
 
 const PROJECT: &str = "/workspace/registered-app";
 
@@ -37,17 +38,51 @@ fn launch(key: &str, agent: &str, path: &str, prompt: Option<&str>) -> Command {
     }
 }
 
-/// Runs `command` with a launcher that only counts how often it is called.
+/// Runs `command` with a launcher that only counts how often it is called, and no policy file:
+/// the dispatcher's default (`confirm`) applies, whatever the machine running the test holds.
 fn run(
     conn: &mut Connection,
     actor: &ControlActor,
     command: &Command,
     launches: &Cell<u32>,
 ) -> Result<Option<Value>, Problem> {
-    dispatch_with_launcher(conn, actor, command, &|_request| {
-        launches.set(launches.get() + 1);
-        Ok(())
-    })
+    run_with_policy(conn, actor, command, launches, &|| None)
+}
+
+/// A policy whose only rule sets `launch_agent` to `action`, parsed from a temporary file.
+fn policy_with_launch_agent(action: &str) -> PolicyConfig {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("raios-policy.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "[server]\nhttp_port = 42071\n\n[filesystem]\nenforce_sandbox = true\n\
+             allowed_paths = []\nblocked_paths = []\n\n[tools]\n\
+             default_action = \"confirm\"\n\n[[tools.rules]]\nname = \"launch_agent\"\n\
+             action = \"{action}\"\n"
+        ),
+    )
+    .unwrap();
+    PolicyConfig::load_from_file(&path).unwrap()
+}
+
+fn run_with_policy(
+    conn: &mut Connection,
+    actor: &ControlActor,
+    command: &Command,
+    launches: &Cell<u32>,
+    load_policy: &dyn Fn() -> Option<PolicyConfig>,
+) -> Result<Option<Value>, Problem> {
+    dispatch_with_seams(
+        conn,
+        actor,
+        command,
+        &|_request| {
+            launches.set(launches.get() + 1);
+            Ok(())
+        },
+        load_policy,
+    )
 }
 
 fn row_count(conn: &Connection, table: &str) -> i64 {
@@ -59,7 +94,6 @@ fn row_count(conn: &Connection, table: &str) -> i64 {
 
 #[test]
 fn validating_a_launch_reports_the_normalized_agent_and_starts_nothing() {
-    let _config = ConfigDir::without_policy();
     let mut conn = db();
     let launches = Cell::new(0);
 
@@ -90,7 +124,6 @@ fn validating_a_launch_reports_the_normalized_agent_and_starts_nothing() {
 
 #[test]
 fn launch_agent_still_starts_the_launcher_exactly_once() {
-    let _config = ConfigDir::without_policy();
     // Control for the test above: the same harness does see a launch when one happens.
     let mut conn = db();
     let launches = Cell::new(0);
@@ -111,7 +144,6 @@ fn launch_agent_still_starts_the_launcher_exactly_once() {
 
 #[test]
 fn both_commands_reject_the_same_bad_input_with_the_same_code() {
-    let _config = ConfigDir::without_policy();
     let long_prompt = "x".repeat(601);
     let cases: [(&str, &str, Option<&str>, &str); 7] = [
         ("codex; touch /tmp/pwned", PROJECT, None, "INVALID_INPUT"),
@@ -162,7 +194,6 @@ fn both_commands_reject_the_same_bad_input_with_the_same_code() {
 
 #[test]
 fn a_retry_with_the_same_key_returns_the_first_result() {
-    let _config = ConfigDir::without_policy();
     let mut conn = db();
     let launches = Cell::new(0);
     let command = validate("v-retry", "opencode", PROJECT, None);
@@ -178,7 +209,6 @@ fn a_retry_with_the_same_key_returns_the_first_result() {
 
 #[test]
 fn the_same_key_with_a_different_payload_is_a_collision() {
-    let _config = ConfigDir::without_policy();
     let mut conn = db();
     let launches = Cell::new(0);
     let actor = ControlActor::local_session();
@@ -204,7 +234,6 @@ fn the_same_key_with_a_different_payload_is_a_collision() {
 
 #[test]
 fn a_principal_that_cannot_mutate_is_refused() {
-    let _config = ConfigDir::without_policy();
     let mut conn = db();
     let launches = Cell::new(0);
 
@@ -219,75 +248,17 @@ fn a_principal_that_cannot_mutate_is_refused() {
     assert_eq!(error.code, "UNAUTHORIZED");
 }
 
-/// Points the user config directory at a tempdir for one test, optionally holding a
-/// `raios-policy.toml` with one `launch_agent` rule. Without it a test would read the real
-/// `~/.config/raios/raios-policy.toml` of whoever runs it. Serialized on the crate-wide
-/// environment lock.
-struct ConfigDir {
-    _lock: std::sync::MutexGuard<'static, ()>,
-    original: Option<String>,
-    _dir: tempfile::TempDir,
-}
-
-impl ConfigDir {
-    fn without_policy() -> Self {
-        Self::new(None)
-    }
-
-    fn with_launch_agent_action(action: &str) -> Self {
-        Self::new(Some(action))
-    }
-
-    fn new(launch_agent_action: Option<&str>) -> Self {
-        let lock = crate::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let dir = tempfile::TempDir::new().unwrap();
-        if let Some(action) = launch_agent_action {
-            let policy_dir = dir.path().join("raios");
-            std::fs::create_dir_all(&policy_dir).unwrap();
-            std::fs::write(
-                policy_dir.join("raios-policy.toml"),
-                format!(
-                    "[server]\nhttp_port = 42071\n\n[filesystem]\nenforce_sandbox = true\n\
-                     allowed_paths = []\nblocked_paths = []\n\n[tools]\n\
-                     default_action = \"confirm\"\n\n[[tools.rules]]\nname = \"launch_agent\"\n\
-                     action = \"{action}\"\n"
-                ),
-            )
-            .unwrap();
-        }
-        let original = std::env::var("XDG_CONFIG_HOME").ok();
-        std::env::set_var("XDG_CONFIG_HOME", dir.path());
-        Self {
-            _lock: lock,
-            original,
-            _dir: dir,
-        }
-    }
-}
-
-impl Drop for ConfigDir {
-    fn drop(&mut self) {
-        match &self.original {
-            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
 #[test]
 fn denying_launch_agent_in_the_policy_also_denies_validating_a_launch() {
-    let _config = ConfigDir::with_launch_agent_action("deny");
     let mut conn = db();
     let launches = Cell::new(0);
 
-    let error = run(
+    let error = run_with_policy(
         &mut conn,
         &ControlActor::local_session(),
         &validate("v-deny", "claude", PROJECT, None),
         &launches,
+        &|| Some(policy_with_launch_agent("deny")),
     )
     .unwrap_err();
 
@@ -304,18 +275,17 @@ fn denying_launch_agent_in_the_policy_also_denies_validating_a_launch() {
     assert_eq!(denied, 1, "the denial is audited");
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn an_allow_rule_for_launch_agent_is_recorded_as_tool_allow_for_validation() {
-    let _config = ConfigDir::with_launch_agent_action("allow");
     let mut conn = db();
     let launches = Cell::new(0);
 
-    run(
+    run_with_policy(
         &mut conn,
         &ControlActor::local_session(),
         &validate("v-allow", "claude", PROJECT, None),
         &launches,
+        &|| Some(policy_with_launch_agent("allow")),
     )
     .unwrap();
 
