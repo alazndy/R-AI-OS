@@ -6,6 +6,7 @@ PartOf=graphical-session.target
 [Service]
 Type=simple
 WorkingDirectory=%h/dev/core/R-AI-OS/tools/raios-tray
+ExecStartPre=/usr/bin/install -Dm644 %h/dev/core/R-AI-OS/tools/raios-tray/raios-tray.desktop %h/.local/share/applications/raios-tray.desktop
 ExecStart=%h/dev/core/R-AI-OS/tools/raios-tray/.venv/bin/python %h/dev/core/R-AI-OS/tools/raios-tray/raios-tray.py
 Restart=on-failure
 RestartSec=5

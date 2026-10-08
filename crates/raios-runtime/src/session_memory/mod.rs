@@ -5,7 +5,9 @@ use distillation::{rebuild_persona, upsert_scene_block};
 pub use heuristics::decision_lines_from_transcript;
 use heuristics::{fact_slug, first_n_words, heuristic_extract_facts};
 use transcript_io::{claude_project_dir_name, find_latest_conversation};
-pub use transcript_io::{collect_scoped_transcript, collect_transcript, extract_transcript};
+pub use transcript_io::{
+    collect_scoped_transcript, collect_transcript, extract_transcript, extract_transcript_content,
+};
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};

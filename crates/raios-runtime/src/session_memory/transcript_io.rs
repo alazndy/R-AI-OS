@@ -101,7 +101,13 @@ pub fn extract_transcript(jsonl_path: &Path) -> String {
     let Ok(content) = std::fs::read_to_string(jsonl_path) else {
         return String::new();
     };
+    extract_transcript_content(&content)
+}
 
+/// Body extraction over transcript bytes the caller has already read. ANKA's
+/// `discover_claude` uses this so content and `cwd` provenance are derived
+/// from one verified descriptor instead of two independent path reads.
+pub fn extract_transcript_content(content: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     for line in content.lines() {

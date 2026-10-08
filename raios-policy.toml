@@ -232,3 +232,17 @@ blocked_domains = [
     "webhook.site",
     "burpcollaborator.net",
 ]
+
+# ─── Rate Limiting ────────────────────────────────────────────────────────────
+# Tool call rate limiter (fixed-window counter).
+[rate_limits]
+enabled = true
+window_secs = 60
+default_max = 120
+rules = [
+    { tool = "run_build", max_calls = 30 },
+    { tool = "run_tests", max_calls = 30 },
+    { tool = "git_commit", max_calls = 15 },
+    { tool = "version_bump", max_calls = 10 },
+]
+

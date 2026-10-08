@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=R-AI-OS Tray
+Comment=R-AI-OS desktop tray control
+Exec=/home/alaz/dev/core/R-AI-OS/tools/raios-tray/.venv/bin/python /home/alaz/dev/core/R-AI-OS/tools/raios-tray/raios-tray.py
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Utility;
+StartupNotify=false

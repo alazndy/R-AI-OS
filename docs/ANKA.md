@@ -24,12 +24,35 @@ authority channel.
 
 Privacy controls live beside the normal R-AI-OS configuration:
 
-- `$XDG_CONFIG_HOME/raios/anka-exclude`: one case-insensitive project pattern
-  per line; matching records are skipped at indexing time.
+- `$XDG_CONFIG_HOME/raios/anka-policy`: the consent record written by
+  `raios anka policy-init --home keep|exclude` — a versioned header plus the
+  mandatory HOME retention choice and the home path it was made for. Recall,
+  indexing, and forget all refuse to run until it exists and parses; there is
+  no empty-allow fallback.
+- `$XDG_CONFIG_HOME/raios/anka-exclude`: one case-insensitive **literal**
+  project substring per line (never globs, never regexes), matched against
+  every project claim a record carries — the resolved provenance path, the raw
+  harness slug, and the display label; matching records are skipped both at
+  indexing time and on every recall, so a rule change takes effect on the next
+  query without waiting for a rebuild.
 - `$XDG_CONFIG_HOME/raios/anka-tombstones`: record IDs created by
   `raios anka forget`; tombstoned records stay excluded on later rebuilds.
 
-The original harness transcript is never modified by either control.
+Records whose provenance cannot name a project are excluded by default, and
+HOME records follow the typed choice in `anka-policy` — an exact match against
+the consent's recorded `home_path` (absolute and already normalized; interior
+`//` collapses first) or its exact encoded slug, never a substring, so child
+projects stay eligible. The decision stays bound to that recorded path even if
+the process `$HOME` changes later. The original harness transcript is never
+modified by any of these controls, and discovery reads each Claude
+transcript through **one verified descriptor** (`O_NOFOLLOW` open plus
+`fstat` device+inode identity against the pre-open path check): the
+extracted content and the `cwd` provenance come from that single read, so a
+file swapped in mid-scan is refused wholesale — never half-read, never
+relabelled. That same open yields the size used to refuse any transcript
+past a 32 MiB whole-file ceiling (`TRANSCRIPT_MAX_BYTES`, counted as
+`oversized` and never read): the import path's only whole-file read stays
+bounded even for hostile input.
 
 ## Public Surface
 
@@ -39,11 +62,57 @@ raios anka index [--harness <name>]
 raios anka search <query> [--project <path>] [--harness <name>]
 raios anka blame <path>
 raios anka forget <record-id>
+raios anka policy-init --home keep|exclude
+raios anka policy-show
+raios anka timer-install
+raios anka timer-uninstall
 ```
+
+`policy-init` creates the privacy consent file and nothing else — no
+indexing, no cache, no timer, and it never overwrites an existing policy.
+`policy-show` is read-only: resolved exclusion rules, tombstone count, the
+kept/excluded breakdown of the current cache (`absent|ok|unreadable` — an
+uninspectable cache reports `unreadable` with the I/O detail, never a
+zero-record `absent`), and a **pre-publication count**: freshly discovered
+sources evaluated against the same policy and tombstones the next rebuild
+applies, so a rule change's losses are countable before any rebuild publishes
+them.
+`status` carries a `policy` summary (`initialized`, `home`, `exclude_rules`)
+alongside the cache state.
 
 `index` currently discovers local Claude Code JSONL sessions plus the existing
 Codex, OpenCode, and Antigravity history files. The index is lexical and local;
 automatic context injection is intentionally not part of this phase.
+
+## Daily Refresh Timer
+
+`raios anka timer-install` generates the user-level pair
+(`raios-anka-index.service` + `raios-anka-index.timer` under
+`$XDG_CONFIG_HOME/systemd/user`) from live values — including the absolute
+path of the running binary, never a PATH lookup — and enables it. Units are
+generated at install time, never checked into the repository (the
+`hub install` generator convention).
+
+- The service is `Type=oneshot`, `UMask=0077`, runs only `anka index`, and
+  reuses the ANKA lock, so a scheduled run and a manual rebuild can never
+  interleave. Bounds come from the measured Phase 4 baseline
+  (11.16s / ~115 MiB): `TimeoutStartSec=300s`, `MemoryMax=512M`.
+- The timer fires daily at 04:00 local time with `Persistent=true` (a missed
+  day runs at the next opportunity) and `RandomizedDelaySec=15min`.
+- Fail-closed gates: `timer-install` refuses to schedule anything until the
+  policy is initialized, so no unattended index run can start without
+  consent; if a privacy error appears later, the run fails visibly through
+  `systemctl --user status raios-anka-index.service` and
+  `journalctl --user -u raios-anka-index.service` with path/count diagnostics
+  only — never transcript content.
+- A user timer runs only while the user's systemd manager is active;
+  enabling lingering so it also runs without a login session
+  (`loginctl enable-linger`) is a separate system choice, never made
+  automatically by `timer-install`.
+- Rollback: `raios anka timer-uninstall` stops and removes the timer pair and
+  retains the privacy policy, tombstones, and cache by construction. Never
+  revert to a binary that ignores the privacy/schema protections or restore
+  an unfiltered old cache; an incompatible rollback leaves recall disabled.
 
 ## MCP
 
@@ -59,3 +128,8 @@ text cannot be treated as current instructions.
 3. Limit recall output and frame it as untrusted historical text.
 4. Preserve harness, project, session, and timestamp provenance on every hit.
 5. Keep automatic context injection disabled until explicit review.
+6. Require an initialized `anka-policy` for recall, indexing, and forget —
+   missing, malformed, or unreadable policies fail closed with an error, and
+   unknown-provenance records are excluded by default under every policy. A
+   `home_path` that is not an absolute, already-normalized path counts as
+   malformed: formatting must never decide what HOME means.
