@@ -550,6 +550,41 @@ four are fixed, each with a regression fixture and a verified red/green revert:
   `a_different_regular_file_swapped_in_between_the_checks_is_not_returned` red
   (the old code returned `Ok` carrying the attacker's file). ANKA 90/90.
 
+### Phase 4 — Verification and manual rollout (complete)
+
+- Scenario table: every synthetic-root row is carried by the 90-test ANKA
+  suite plus the 67 CLI tests; focused suites, fmt, and clippy were run
+  green on the exact revision before the live steps.
+- Live inventory: no prior `anka-*` policy files existed; the live cache
+  (3.0 MB, 2026-10-06, pre-policy/unfiltered, legacy — no `schema_version`
+  marker, which `check_cache_schema` accepts as legacy) already carried
+  0700/0600 permissions. Backed up to
+  `~/.cache/raios/anka.backup-20261008` (kept; it is not a rollback target —
+  rollback rules forbid restoring an unfiltered cache).
+- Tested binary built from this revision (release, 12m44s). Policy
+  preflight: `policy-init --home keep` created `/home/alaz/.config/raios/anka-policy`
+  (0600, `home_path=/home/alaz`); a second init refused to overwrite it;
+  the first `policy-show` showed the old cache's 2315 records all excluded
+  as `unknown_provenance` and the pre-publication discovery count:
+  2461 discovered → 2405 kept, 56 excluded (6 codex, 50 opencode —
+  unknown provenance; `home: 0` under `keep`).
+- One manual full rebuild: **11.16s, peak RSS ~115 MiB, cache 4.0 MB,
+  oversized 0**, per-harness claude 125 / codex 2184 / opencode 0 /
+  antigravity 96 → `indexed_records = 2405`, exactly the pre-publication
+  discovery count. Post-rebuild `policy-show`: cache `ok`, kept 2405,
+  excluded 0 (nothing in the cache fails admission); discovery unchanged.
+  Smoke search returns live hits, including a `$HOME` record (retained by
+  `keep`, invisible to project filters).
+- Reinstall: `cargo install --path crates/raios-surface-cli --locked
+  --force --root ~/.local` — the active `~/.local/bin/raios` (and `aiosd`)
+  now carries this revision; from PATH, `anka policy-init --help` resolves
+  and `policy-show` reads the live initialized policy. (A default-root
+  install had landed in `~/.cargo/bin`, which PATH never reaches — the
+  `--root ~/.local` install is the one that satisfies acceptance.)
+- Baseline for Phase 5 limits: 11.16s / ~115 MiB / 4.0 MB → candidate
+  `RuntimeMaxSec=300`, `MemoryMax=512M` (unit syntax to be verified at
+  timer install).
+
 ## Implementation boundary
 
 Primary implementation: `crates/raios-runtime/src/anka.rs` and its tests. Use small
