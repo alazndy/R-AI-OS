@@ -1,0 +1,16 @@
+[package]
+name = "rwk-bench"
+description = "Performance gates of the RAIOS Workspace Native terminal engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "term-bench"
+path = "src/main.rs"
+
+[dependencies]
+rwk-core = { path = "../rwk-core" }
+tempfile = "3"
+portable-pty = "0.9"
