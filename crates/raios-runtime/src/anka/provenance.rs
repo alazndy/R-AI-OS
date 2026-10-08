@@ -165,6 +165,16 @@ pub struct Provenance {
     /// resolved [`ProjectScope::Scoped`] so policy can match either without the slug
     /// being mistaken for a path.
     pub slug: Option<String>,
+    /// The normalized path the harness metadata asserted, whenever it provided one:
+    /// `Some` for path-scoped records — including ones classified
+    /// [`ProjectScope::HomeUnscoped`] — and `None` for slug-only or unknown
+    /// provenance. Policy compares *this* against the consent's `home_path` and
+    /// against substring rules, because the import-time `ProjectScope` label alone
+    /// cannot say *which* home it spoke for: it was computed against whatever `$HOME`
+    /// the indexing process saw. `default` keeps caches written before this field
+    /// existed readable.
+    #[serde(default)]
+    pub path: Option<String>,
     pub quality: ProvenanceQuality,
     /// Field that produced the scope, e.g. `"cwd"`, `"workspace"`, `"directory_slug"`.
     /// `"none"` when no metadata existed. Never prompt content.
@@ -177,6 +187,7 @@ impl Default for Provenance {
         Self {
             scope: ProjectScope::Unknown,
             slug: None,
+            path: None,
             quality: ProvenanceQuality::Unknown,
             observed_via: "none".to_string(),
             time_source: TimeSource::Unavailable,
@@ -192,6 +203,7 @@ impl Provenance {
             observed_via: "cwd".to_string(),
             time_source: TimeSource::Unavailable,
             slug: None,
+            path: normalize_path(path),
         }
     }
 
@@ -204,6 +216,7 @@ impl Provenance {
             observed_via: observed_via.to_string(),
             time_source: TimeSource::Unavailable,
             slug: None,
+            path: normalize_path(cwd),
         }
     }
 
@@ -222,6 +235,7 @@ impl Provenance {
         Self {
             scope: ProjectScope::Slug(slug.to_string()),
             slug: Some(slug.to_string()),
+            path: None,
             quality: ProvenanceQuality::SlugEncoded,
             observed_via: "directory_slug".to_string(),
             time_source: TimeSource::Unavailable,
@@ -242,7 +256,10 @@ impl Provenance {
 /// Normalization contract — deliberately narrow and entirely filesystem-free:
 ///
 /// 1. surrounding whitespace is trimmed;
-/// 2. exactly one trailing `/` is removed, unless the path *is* `/`;
+/// 2. every run of `/` collapses to a single separator and a trailing separator is
+///    removed, unless the path *is* `/` — POSIX resolves `/home//alaz` exactly like
+///    `/home/alaz`, so an interior `//` must not dodge an exact-path privacy
+///    comparison;
 /// 3. nothing else is rewritten: no symlink resolution, no `.`/`..` collapsing,
 ///    no case folding, no `~` expansion, no locale tricks;
 /// 4. the filesystem is never consulted, so classification cannot be redirected by
@@ -255,8 +272,20 @@ pub fn normalize_path(raw: &str) -> Option<String> {
     if trimmed.is_empty() || !trimmed.starts_with('/') {
         return None;
     }
-    let mut normalized = trimmed.to_string();
-    while normalized.len() > 1 && normalized.ends_with('/') {
+    let mut normalized = String::with_capacity(trimmed.len());
+    let mut previous_was_slash = false;
+    for ch in trimmed.chars() {
+        if ch == '/' {
+            if !previous_was_slash {
+                normalized.push(ch);
+            }
+            previous_was_slash = true;
+        } else {
+            normalized.push(ch);
+            previous_was_slash = false;
+        }
+    }
+    if normalized.len() > 1 && normalized.ends_with('/') {
         normalized.pop();
     }
     if normalized
@@ -882,6 +911,22 @@ mod tests {
             classify_asserted_path(&format!("  {home}/dev/ai  "), &roots),
             ProjectScope::Scoped(format!("{home}/dev/ai"))
         );
+    }
+
+    #[test]
+    fn interior_double_slashes_collapse_because_posix_resolves_them_as_one() {
+        assert_eq!(
+            normalize_path("/home//alaz"),
+            Some("/home/alaz".to_string())
+        );
+        assert_eq!(
+            normalize_path("/home/alaz//dev/"),
+            Some("/home/alaz/dev".to_string())
+        );
+        assert_eq!(normalize_path("//"), Some("/".to_string()));
+        assert_eq!(normalize_path("/"), Some("/".to_string()));
+        // Collapsing runs never resurrects a component the contract rejects.
+        assert_eq!(normalize_path("/home//../alaz"), None);
     }
 
     #[test]

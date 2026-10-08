@@ -400,11 +400,12 @@ pub fn policy_init(home: HomeChoice) -> Result<PolicyInitView> {
 }
 
 /// Read-only policy view: resolved rules, effective HOME behaviour, the
-/// tombstone count, and — against the current cache — the kept/excluded
-/// breakdown that documents what a rule change will drop before any rebuild
-/// publishes it. Never writes, never migrates, never indexes.
+/// tombstone count, the kept/excluded breakdown of the current cache — and the
+/// pre-publication count of what freshly discovered sources would publish under
+/// this policy, so a rule change's loss is countable before any rebuild makes
+/// it real. Never writes, never migrates; discovery only reads the sources.
 pub fn policy_show() -> Result<PolicyShowView> {
-    policy::AnkaPolicy::show_view(&config_dir(), &default_cache_path())
+    policy::AnkaPolicy::show_view(&config_dir(), &default_cache_path(), &AnkaRoots::live())
 }
 
 /// Recall, with the tombstone check that keeps `forget` honest between rebuilds.
@@ -445,10 +446,11 @@ fn search_in(cache_path: &Path, config: &Path, query: AnkaSearchQuery) -> Result
                 .project
                 .as_deref()
                 .map(|project| {
-                    // A record speaking for HOME itself — retained by consent —
-                    // carries an unscoped label, not a project: it must never
-                    // satisfy a project filter.
-                    !policy.is_home_label(record) && contains(&record.source.project, project)
+                    // A record speaking for HOME itself — consent-bound or
+                    // import-time unscoped — carries a home label, not a
+                    // project: it must never satisfy a project filter.
+                    !policy.suppressed_from_project_filter(record)
+                        && contains(&record.source.project, project)
                 })
                 .unwrap_or(true)
         })
@@ -3212,12 +3214,30 @@ mod tests {
         );
         fs::write(fixture.config.join(EXCLUDE_FILE), "data\n").expect("rule");
 
-        let view = policy::AnkaPolicy::show_view(&fixture.config, &fixture.cache)
+        let view = policy::AnkaPolicy::show_view(&fixture.config, &fixture.cache, &fixture.roots)
             .expect("show is read-only and never fails on a healthy policy");
         assert!(view.initialized);
         assert_eq!(view.home.as_deref(), Some("keep"));
         assert_eq!(view.exclude_rules, vec!["data".to_string()]);
         assert_eq!(view.tombstones, 1);
+
+        // The pre-publication count runs the same policy over freshly discovered
+        // sources: the forgotten record is hidden here too, and the pending rule
+        // has not dropped anything yet because no rebuild has run.
+        let discovery = view
+            .discovery
+            .expect("an initialized policy reports discovery");
+        assert_eq!(discovery.state, "ok");
+        assert_eq!(discovery.discovered, 4, "all four source lines, read fresh");
+        assert_eq!(
+            discovery.kept, 1,
+            "the kept HOME record, as in the cache view"
+        );
+        assert_eq!(discovery.excluded.substring, 2, "both /data projects");
+        assert_eq!(
+            discovery.excluded.tombstone, 1,
+            "the forgotten record is counted before publication"
+        );
 
         let cache = view.cache.expect("the policy is initialized");
         assert_eq!(cache.state, "ok");
@@ -3250,7 +3270,7 @@ mod tests {
         fs::remove_file(fixture.config.join(policy::POLICY_FILE)).expect("drop fixture policy");
         fs::write(fixture.config.join(EXCLUDE_FILE), "personal\n").expect("rule file");
 
-        let view = policy::AnkaPolicy::show_view(&fixture.config, &fixture.cache)
+        let view = policy::AnkaPolicy::show_view(&fixture.config, &fixture.cache, &fixture.roots)
             .expect("`show` diagnoses the gap instead of erroring like recall");
         assert!(!view.initialized);
         assert!(view.home.is_none());
@@ -3258,10 +3278,310 @@ mod tests {
             view.cache.is_none(),
             "no admission decision to report without a policy"
         );
+        assert!(
+            view.discovery.is_none(),
+            "nor a pre-publication count — there is no policy to count against"
+        );
         assert_eq!(
             view.exclude_rules,
             vec!["personal".to_string()],
             "the operator's own rules are still readable"
         );
+    }
+
+    // ─── Phase 3 corrections: consent-bound HOME, fail-closed diagnostics ───
+
+    /// Claude stores its project as a directory slug: `source.project` is the
+    /// slug while the trustworthy directory exists only in the provenance. An
+    /// exclusion naming that directory must still exclude the record — the
+    /// display label alone is not the whole project claim.
+    #[test]
+    fn substring_rules_match_the_resolved_path_and_the_raw_slug_not_only_the_display() {
+        let fixture = fixture();
+        let claude = fixture
+            .roots
+            .claude_projects()
+            .join("-srv-private")
+            .join("sess-p.jsonl");
+        fs::create_dir_all(claude.parent().expect("claude project dir")).expect("claude dir");
+        fs::write(
+            &claude,
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "type": "assistant",
+                    "cwd": "/srv/private",
+                    "message": {"content": "velvet semaphore"}
+                })
+            ),
+        )
+        .expect("claude transcript");
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+        assert_eq!(
+            search_in(&fixture.cache, &fixture.config, query("velvet semaphore"))
+                .expect("search")
+                .len(),
+            1,
+            "baseline: the record recalls while no rule names it"
+        );
+
+        // The raw slug is a match candidate in its own right.
+        fs::write(fixture.config.join(EXCLUDE_FILE), "-srv-private\n").expect("rule");
+        assert!(
+            search_in(&fixture.cache, &fixture.config, query("velvet semaphore"))
+                .expect("search")
+                .is_empty(),
+            "a rule matching the raw slug must exclude the record"
+        );
+
+        // The exclusion names the resolved directory; the display is only the
+        // slug, so pre-fix this rule matched nothing.
+        fs::write(fixture.config.join(EXCLUDE_FILE), "/srv/private\n").expect("rule");
+        assert!(
+            search_in(&fixture.cache, &fixture.config, query("velvet semaphore"))
+                .expect("search")
+                .is_empty(),
+            "the provenance path must be a match candidate"
+        );
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("rebuild");
+        assert_eq!(
+            read_index(&fixture.cache).expect("index").records.len(),
+            1,
+            "the rebuild applies the same predicate: only the fixture record survives"
+        );
+    }
+
+    /// The consent names *which* home the decision was made for. When the
+    /// process later runs with a different `$HOME`, the record at the consented
+    /// home must still be excluded — and the new process home is simply not the
+    /// consented subject.
+    #[test]
+    fn the_home_decision_follows_the_consent_path_not_the_process_home() {
+        let fixture = fixture();
+        let old_home = fixture
+            .roots
+            .home
+            .parent()
+            .expect("temp root")
+            .join("old-home");
+        fs::create_dir_all(&old_home).expect("old home dir");
+        fs::remove_file(fixture.config.join(policy::POLICY_FILE)).expect("drop fixture consent");
+        let consent_roots = AnkaRoots {
+            home: old_home.clone(),
+            config: fixture.roots.config.clone(),
+            cache: fixture.roots.cache.clone(),
+        };
+        policy::AnkaPolicy::init(&fixture.config, HomeChoice::Exclude, &consent_roots)
+            .expect("consent recorded for the old home");
+
+        let old_path = old_home.to_string_lossy().into_owned();
+        let process_home = fixture.roots.home.to_string_lossy().into_owned();
+        fs::write(
+            fixture.roots.opencode_history(),
+            format!(
+                "{{\"project\":\"{old_path}\",\"text\":\"ember archipelago\"}}\n\
+                 {{\"project\":\"{process_home}\",\"text\":\"copper tidepool\"}}\n"
+            ),
+        )
+        .expect("history");
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+
+        let index = read_index(&fixture.cache).expect("index");
+        assert_eq!(
+            index.records.len(),
+            1,
+            "the consented home is excluded wherever the process home now lives"
+        );
+        assert_eq!(
+            index.records[0].content, "copper tidepool",
+            "only the process-home record — which the consent never names — survives"
+        );
+        assert!(
+            search_in(&fixture.cache, &fixture.config, query("ember archipelago"))
+                .expect("search")
+                .is_empty(),
+            "recall must agree with the rebuild"
+        );
+
+        // The surviving record's unscoped home label is still not a project.
+        let mut project_query = query("copper tidepool");
+        project_query.project = Some("$HOME".to_string());
+        assert!(
+            search_in(&fixture.cache, &fixture.config, project_query)
+                .expect("search")
+                .is_empty(),
+            "an unscoped home label never satisfies a project filter"
+        );
+    }
+
+    /// `/tmp/x//home` names `/tmp/x/home` — POSIX resolves an interior `//`
+    /// exactly like a single `/`. Such a spelling must not slip past the exact
+    /// home comparison as an ordinary scoped project.
+    #[test]
+    fn an_asserted_home_with_interior_double_slashes_is_normalized_before_the_home_comparison() {
+        let fixture = fixture();
+        reinit_policy(&fixture, HomeChoice::Exclude);
+        let base = fixture.roots.home.parent().expect("temp root");
+        let double = format!(
+            "{}//{}",
+            base.display(),
+            fixture
+                .roots
+                .home
+                .file_name()
+                .expect("home name")
+                .to_string_lossy()
+        );
+        let home = fixture.roots.home.to_string_lossy().into_owned();
+        assert_ne!(double, home, "the spelling must carry an interior `//`");
+        assert_eq!(
+            provenance::normalize_path(&double).as_deref(),
+            Some(home.as_str()),
+            "normalization collapses the run to the canonical form"
+        );
+        fs::write(
+            fixture.roots.opencode_history(),
+            format!("{{\"project\":\"{double}\",\"text\":\"linen monsoon\"}}\n"),
+        )
+        .expect("history");
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+
+        assert_eq!(
+            read_index(&fixture.cache).expect("index").records.len(),
+            0,
+            "the double-slashed home is the consented home, not a scoped project"
+        );
+        assert!(
+            search_in(&fixture.cache, &fixture.config, query("linen monsoon"))
+                .expect("search")
+                .is_empty(),
+            "recall must agree"
+        );
+    }
+
+    /// The consent's subject feeds exact comparisons, so it must arrive in the
+    /// canonical form `init` writes: a relative path or a non-normalized
+    /// spelling would let formatting decide what HOME means.
+    #[test]
+    fn a_policy_home_path_that_is_not_already_normalized_is_malformed() {
+        let fixture = fixture();
+        let path = fixture.config.join(policy::POLICY_FILE);
+
+        for bad in ["relative/path", "/srv/home/", "/srv//home"] {
+            fs::write(
+                &path,
+                format!("# anka-policy v1\nhome = keep\nhome_path = {bad}\n"),
+            )
+            .expect("policy");
+            let error = search_in(
+                &fixture.cache,
+                &fixture.config,
+                query("remember this prompt"),
+            )
+            .expect_err("recall refuses a policy whose subject is not canonical");
+            assert!(error.to_string().contains("malformed"), "{error}");
+            assert!(
+                error.to_string().contains("already-normalized"),
+                "the message says what is wrong: {error}"
+            );
+        }
+
+        // Rebuild refuses the same file — no surface honors it.
+        fs::write(
+            &path,
+            "# anka-policy v1\nhome = keep\nhome_path = relative/path\n",
+        )
+        .expect("policy");
+        let error = index_in(&fixture.roots, &fixture.cache, &fixture.config, None)
+            .expect_err("rebuild refuses a non-canonical consent subject too");
+        assert!(error.to_string().contains("malformed"), "{error}");
+    }
+
+    /// An unreadable cache is not an empty one: reporting `absent` with zero
+    /// records would claim a total loss that never happened.
+    #[test]
+    fn policy_show_reports_an_unreadable_cache_as_unreadable_not_as_absent() {
+        let fixture = fixture();
+        let view = policy::AnkaPolicy::show_view(&fixture.config, &fixture.cache, &fixture.roots)
+            .expect("show");
+        assert_eq!(
+            view.cache.expect("cache").state,
+            "absent",
+            "before the first build there genuinely is no cache"
+        );
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+
+        let mut permissions = fs::metadata(&fixture.cache)
+            .expect("cache dir")
+            .permissions();
+        permissions.set_mode(0o000);
+        fs::set_permissions(&fixture.cache, permissions.clone()).expect("lock the cache dir");
+        let view = policy::AnkaPolicy::show_view(&fixture.config, &fixture.cache, &fixture.roots)
+            .expect("show stays diagnostic");
+        // Restore before asserting: the tempdir cleanup needs the directory back,
+        // and a failing assertion must not leave permissions changed behind it.
+        permissions.set_mode(0o700);
+        fs::set_permissions(&fixture.cache, permissions).expect("unlock the cache dir");
+
+        let cache = view.cache.expect("cache");
+        assert_eq!(
+            cache.state, "unreadable",
+            "an inspection failure is not an absence"
+        );
+        assert!(
+            cache.detail.is_some(),
+            "the detail carries the I/O failure: {cache:?}"
+        );
+        assert_eq!(cache.kept, 0);
+    }
+
+    /// The cache breakdown can only measure what the cache *holds* — a record
+    /// the policy filtered out at its first index left no trace there. The
+    /// discovery breakdown applies the same policy to the sources themselves,
+    /// so what a rebuild would drop is countable before publication.
+    #[test]
+    fn policy_show_counts_discovery_against_the_policy_before_publication() {
+        let fixture = fixture();
+        fs::write(fixture.config.join(EXCLUDE_FILE), "keeper\n").expect("rule");
+        fs::write(
+            fixture.roots.opencode_history(),
+            "{\"project\":\"/srv/anka-fixture\",\"text\":\"remember this prompt\"}\n\
+             {\"project\":\"/data/keeper\",\"text\":\"saffron meadowlark\"}\n",
+        )
+        .expect("history");
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+
+        let view = policy::AnkaPolicy::show_view(&fixture.config, &fixture.cache, &fixture.roots)
+            .expect("show");
+
+        let cache = view.cache.expect("cache");
+        assert_eq!(cache.state, "ok");
+        assert_eq!(
+            cache.kept, 1,
+            "the cache never held the keeper: the policy filtered it at index time"
+        );
+        assert_eq!(
+            cache.excluded.substring, 0,
+            "the cache breakdown cannot see a record the policy never let in"
+        );
+
+        let discovery = view.discovery.expect("pre-publication count");
+        assert_eq!(discovery.state, "ok");
+        assert_eq!(discovery.discovered, 2, "both source lines, read fresh");
+        assert_eq!(
+            discovery.kept, 1,
+            "the same admission a rebuild would apply"
+        );
+        assert_eq!(
+            discovery.excluded.substring, 1,
+            "the keeper is counted against the policy before any publication"
+        );
+        assert_eq!(discovery.excluded.total(), 1);
+        let opencode = discovery
+            .per_harness
+            .iter()
+            .find(|entry| entry.harness == "opencode")
+            .expect("opencode slot");
+        assert_eq!((opencode.kept, opencode.excluded), (1, 1));
     }
 }

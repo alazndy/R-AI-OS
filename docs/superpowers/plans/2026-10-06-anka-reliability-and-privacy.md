@@ -492,6 +492,45 @@ verified without waiting a day.
   live policy/cache transition, separate commit), systemd timer (final gate
   after manual rollout).
 
+### Phase 3 corrections — review probes closed (complete)
+
+Review with synthetic probes found four defects after the Phase 3 commit; all
+four are fixed, each with a regression fixture and a verified red/green revert:
+
+- **P1 — substring rules now evaluate every project claim.** `admit` matches
+  `anka-exclude` patterns against the display project, the provenance path
+  (`Provenance.path`), the raw harness slug, and the legacy in-scope path —
+  Claude records put only the directory slug in `source.project`, so a rule
+  naming the real directory (e.g. `/srv/private`) previously matched nothing.
+- **P1 — the HOME decision is bound to the consent's recorded `home_path`.**
+  `Provenance` gained `#[serde(default)] path: Option<String>` (the normalized
+  asserted path, set by `direct`/`session_cwd`); `is_home_label` compares that
+  path to `home_path` (and the slug to `home_slug`) instead of trusting the
+  import-time `HomeUnscoped` label, which was computed against whatever `$HOME`
+  the indexing process saw. Legacy records without the field fall back to their
+  scope (conservative either way). Project-filter suppression is a separate
+  predicate (`suppressed_from_project_filter`) so an unscoped label can never
+  satisfy `--project` even when the consent names a different home.
+- **P1 — `normalize_path` collapses interior runs of `/`.** POSIX resolves
+  `/home//alaz` as `/home/alaz`, so the double-slashed spelling of the
+  consented home must not slip past the exact comparison as a scoped project.
+- **P2 — a non-canonical `home_path` in the consent is malformed at load.**
+  `parse_policy` requires absolute and already-normalized (rejects
+  `relative/path`, trailing `/`, interior `//`) — formatting must not decide
+  what HOME means.
+- **P2 — an uninspectable cache reports `unreadable`, not `absent`.**
+  `try_exists()` errors carry `state:"unreadable"` + detail instead of
+  collapsing to a zero-record `absent` claim.
+- **Pre-publication count:** `policy-show` now also evaluates freshly
+  discovered sources against the same policy + tombstones the next rebuild
+  applies (`discovery: {state, detail, discovered, kept, excluded,
+  per_harness}`), because the cache breakdown can only measure records the
+  cache actually holds — a record the policy filtered at its first index left
+  no trace there.
+- 7 new tests (ANKA 88/88; CLI unchanged 67/67); all 6 reverts verified RED
+  with byte-identical restores; workspace 1195/1196 (sole failure remains the
+  known env-dependent `snapshot_generation_on_in_memory_db`).
+
 ## Implementation boundary
 
 Primary implementation: `crates/raios-runtime/src/anka.rs` and its tests. Use small

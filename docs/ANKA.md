@@ -30,16 +30,21 @@ Privacy controls live beside the normal R-AI-OS configuration:
   indexing, and forget all refuse to run until it exists and parses; there is
   no empty-allow fallback.
 - `$XDG_CONFIG_HOME/raios/anka-exclude`: one case-insensitive **literal**
-  project substring per line (never globs, never regexes); matching records
-  are skipped both at indexing time and on every recall, so a rule change
-  takes effect on the next query without waiting for a rebuild.
+  project substring per line (never globs, never regexes), matched against
+  every project claim a record carries — the resolved provenance path, the raw
+  harness slug, and the display label; matching records are skipped both at
+  indexing time and on every recall, so a rule change takes effect on the next
+  query without waiting for a rebuild.
 - `$XDG_CONFIG_HOME/raios/anka-tombstones`: record IDs created by
   `raios anka forget`; tombstoned records stay excluded on later rebuilds.
 
 Records whose provenance cannot name a project are excluded by default, and
-HOME records follow the typed choice in `anka-policy` — an exact-path /
-exact-encoded-slug rule, never a substring, so child projects stay eligible.
-The original harness transcript is never modified by any of these controls.
+HOME records follow the typed choice in `anka-policy` — an exact match against
+the consent's recorded `home_path` (absolute and already normalized; interior
+`//` collapses first) or its exact encoded slug, never a substring, so child
+projects stay eligible. The decision stays bound to that recorded path even if
+the process `$HOME` changes later. The original harness transcript is never
+modified by any of these controls.
 
 ## Public Surface
 
@@ -55,9 +60,13 @@ raios anka policy-show
 
 `policy-init` creates the privacy consent file and nothing else — no
 indexing, no cache, no timer, and it never overwrites an existing policy.
-`policy-show` is read-only: resolved exclusion rules, tombstone count, and
-the kept/excluded breakdown of the current cache (with per-record reasons),
-so a policy change documents its losses before any rebuild publishes them.
+`policy-show` is read-only: resolved exclusion rules, tombstone count, the
+kept/excluded breakdown of the current cache (`absent|ok|unreadable` — an
+uninspectable cache reports `unreadable` with the I/O detail, never a
+zero-record `absent`), and a **pre-publication count**: freshly discovered
+sources evaluated against the same policy and tombstones the next rebuild
+applies, so a rule change's losses are countable before any rebuild publishes
+them.
 `status` carries a `policy` summary (`initialized`, `home`, `exclude_rules`)
 alongside the cache state.
 
@@ -81,4 +90,6 @@ text cannot be treated as current instructions.
 5. Keep automatic context injection disabled until explicit review.
 6. Require an initialized `anka-policy` for recall, indexing, and forget —
    missing, malformed, or unreadable policies fail closed with an error, and
-   unknown-provenance records are excluded by default under every policy.
+   unknown-provenance records are excluded by default under every policy. A
+   `home_path` that is not an absolute, already-normalized path counts as
+   malformed: formatting must never decide what HOME means.

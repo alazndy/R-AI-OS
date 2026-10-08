@@ -83,7 +83,9 @@ impl HomeChoice {
 /// counts every record under exactly one reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exclusion {
-    /// A literal substring rule in `anka-exclude` matched the display project.
+    /// A literal substring rule in `anka-exclude` matched one of the record's
+    /// project claims: the resolved path, the raw harness slug, or the display
+    /// label — a harness may store any of the three as its project.
     Substring,
     /// The typed HOME rule matched — or the provenance conflicted with itself
     /// (slug says HOME, resolved path says otherwise) and was rejected.
@@ -207,10 +209,16 @@ impl AnkaPolicy {
     }
 
     /// The read-only view behind `policy-show`: resolved rules, effective HOME
-    /// behaviour, the tombstone count, and — against the *current* cache —
-    /// the kept/excluded breakdown that documents what a policy change will
-    /// drop before any rebuild publishes it.
-    pub(super) fn show_view(config: &Path, cache_path: &Path) -> Result<PolicyShowView> {
+    /// behaviour, the tombstone count, the kept/excluded breakdown of the
+    /// *current* cache — and the pre-publication count: the same policy
+    /// evaluated against freshly discovered sources, so a pending change's loss
+    /// is countable before any rebuild publishes it. Never writes, never
+    /// migrates; discovery here only reads the sources.
+    pub(super) fn show_view(
+        config: &Path,
+        cache_path: &Path,
+        roots: &AnkaRoots,
+    ) -> Result<PolicyShowView> {
         let mut exclude_rules: Vec<String> = read_lines(&config.join(EXCLUDE_FILE))?
             .into_iter()
             .collect();
@@ -229,9 +237,11 @@ impl AnkaPolicy {
                 exclude_rules,
                 tombstones: tombstones.len(),
                 cache: None,
+                discovery: None,
             });
         };
         let cache = cache_breakdown(&policy, cache_path, &tombstones);
+        let discovery = discovery_breakdown(&policy, roots, &tombstones);
         Ok(PolicyShowView {
             initialized: true,
             policy_path,
@@ -240,6 +250,7 @@ impl AnkaPolicy {
             exclude_rules,
             tombstones: tombstones.len(),
             cache: Some(cache),
+            discovery: Some(discovery),
         })
     }
 
@@ -248,12 +259,30 @@ impl AnkaPolicy {
     /// waiting for a rebuild and a rebuild cannot publish what recall hides.
     pub(super) fn admit(&self, record: &AnkaRecord) -> Option<Exclusion> {
         // User-authored rules first: an explicit substring is the most specific
-        // intent on the page.
-        if self
-            .exclude_patterns
-            .iter()
-            .any(|pattern| contains(&record.source.project, pattern))
-        {
+        // intent on the page. They match every project claim the record carries —
+        // the resolved provenance path, the raw harness slug, and the display
+        // label — because a harness may store any of the three: Claude records
+        // the directory slug in `source.project` while the trustworthy path
+        // exists only in the provenance.
+        if self.exclude_patterns.iter().any(|pattern| {
+            contains(&record.source.project, pattern)
+                || record
+                    .provenance
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| contains(path, pattern))
+                || record
+                    .provenance
+                    .slug
+                    .as_deref()
+                    .is_some_and(|slug| contains(slug, pattern))
+                // A cache written before `Provenance::path` existed still carries
+                // the resolved path inside the scope itself.
+                || matches!(
+                    &record.provenance.scope,
+                    ProjectScope::Scoped(path) if contains(path, pattern)
+                )
+        }) {
             return Some(Exclusion::Substring);
         }
         // Conflicting provenance: the slug still says HOME while a resolved
@@ -274,7 +303,8 @@ impl AnkaPolicy {
             match self.home {
                 HomeChoice::Exclude => return Some(Exclusion::Home),
                 // Retained by explicit consent; the project-filter
-                // suppression lives in `search_in` (see `is_home_label`).
+                // suppression lives in `search_in` (see
+                // `suppressed_from_project_filter`).
                 HomeChoice::Keep => {}
             }
         }
@@ -284,14 +314,42 @@ impl AnkaPolicy {
         None
     }
 
-    /// True when a record speaks for HOME itself rather than a project: the
-    /// asserted path resolved to exactly `$HOME`, or the harness slug is the
-    /// exact encoded home slug. Both forms are matched; children and other
-    /// slugs never are (exact equality, never substring — that is the whole
-    /// point of the typed rule).
+    /// True when a record speaks for the *consented* HOME itself rather than a
+    /// project: its resolved path equals the `home_path` recorded at `init`, or
+    /// its harness slug is that path's exact encoded form. Both forms are
+    /// matched; children and other slugs never are (exact equality, never
+    /// substring — that is the whole point of the typed rule).
+    ///
+    /// The consent's recorded path decides — not the import-time
+    /// [`ProjectScope::HomeUnscoped`] label, which was computed against whatever
+    /// `$HOME` the indexing process saw. When the process home moves, the home
+    /// named in the consent must keep being the one this rule speaks for.
     pub(super) fn is_home_label(&self, record: &AnkaRecord) -> bool {
-        record.provenance.scope == ProjectScope::HomeUnscoped
-            || record.provenance.slug.as_deref() == Some(self.home_slug.as_str())
+        let provenance = &record.provenance;
+        let resolved_path = match provenance.path.as_deref() {
+            Some(path) => Some(path),
+            // Records written before `Provenance::path` existed: the import-time
+            // scope is all the evidence there is. `HomeUnscoped` carries no path
+            // at all, so its label is honored conservatively (a home claim we
+            // cannot re-check is still a home claim); a legacy `Scoped` path is
+            // compared to the consent exactly like a fresh one.
+            None => match &provenance.scope {
+                ProjectScope::HomeUnscoped => return true,
+                ProjectScope::Scoped(path) => Some(path.as_str()),
+                ProjectScope::Slug(_) | ProjectScope::Unknown => None,
+            },
+        };
+        resolved_path == Some(self.home_path.as_str())
+            || provenance.slug.as_deref() == Some(self.home_slug.as_str())
+    }
+
+    /// True when a record must never satisfy a project filter: it speaks for a
+    /// home directory itself — consent-bound or import-time unscoped — because
+    /// an unscoped home label is not a project, whichever home the consent
+    /// names. Independent of the HOME choice: this governs filters, not
+    /// admission.
+    pub(super) fn suppressed_from_project_filter(&self, record: &AnkaRecord) -> bool {
+        self.is_home_label(record) || record.provenance.scope == ProjectScope::HomeUnscoped
     }
 
     /// The summary `status` carries so a fail-closed recall surface is
@@ -352,6 +410,10 @@ pub struct PolicyShowView {
     /// Kept/excluded breakdown of the current cache — `None` while the policy
     /// is not initialized, because there is no admission decision to report.
     pub cache: Option<CacheBreakdown>,
+    /// Pre-publication count: discovery output evaluated against the same
+    /// tombstones and policy the next rebuild applies — `None` while the policy
+    /// is not initialized.
+    pub discovery: Option<DiscoveryBreakdown>,
 }
 
 /// What the current cache holds under the current policy. Computed read-only:
@@ -359,10 +421,30 @@ pub struct PolicyShowView {
 /// rebuild publishes that loss.
 #[derive(Debug, Clone, Serialize)]
 pub struct CacheBreakdown {
-    /// "absent" (no cache yet) | "ok" | "unreadable" (corrupt or unknown schema).
+    /// "absent" (no cache yet) | "ok" | "unreadable" (corrupt, unknown schema,
+    /// or could not be inspected).
     pub state: String,
     /// Present only when `state` is "unreadable": the reader's own message.
     pub detail: Option<String>,
+    pub kept: usize,
+    pub excluded: ReasonCounts,
+    /// Per-harness kept/excluded, all four harnesses in stable order.
+    pub per_harness: Vec<HarnessCounts>,
+}
+
+/// What the *next* rebuild would publish: discovery output — every source read
+/// fresh, nothing written — evaluated against the same tombstones and policy
+/// that rebuild applies. [`CacheBreakdown`] reports what is published today;
+/// this reports what publication would become, so a rule change's loss is
+/// countable without running the rebuild.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveryBreakdown {
+    /// "ok" | "error" (the sources could not be read).
+    pub state: String,
+    /// Present only when `state` is "error": the reader's own message.
+    pub detail: Option<String>,
+    /// Records discovery produced, before tombstone or policy filtering.
+    pub discovered: usize,
     pub kept: usize,
     pub excluded: ReasonCounts,
     /// Per-harness kept/excluded, all four harnesses in stable order.
@@ -405,14 +487,33 @@ fn cache_breakdown(
     tombstones: &std::collections::BTreeSet<TombstoneEntry>,
 ) -> CacheBreakdown {
     let index_path = cache_path.join(super::INDEX_FILE);
-    if !index_path.try_exists().unwrap_or(false) {
-        return CacheBreakdown {
-            state: "absent".to_string(),
-            detail: None,
-            kept: 0,
-            excluded: ReasonCounts::default(),
-            per_harness: Vec::new(),
-        };
+    // An inspection failure (permissions, I/O) is *not* an absent cache:
+    // reporting `absent` with zero records would claim a total loss when the
+    // file simply could not be seen. Only a definitive "does not exist" is
+    // `absent`.
+    match index_path.try_exists() {
+        Ok(false) => {
+            return CacheBreakdown {
+                state: "absent".to_string(),
+                detail: None,
+                kept: 0,
+                excluded: ReasonCounts::default(),
+                per_harness: Vec::new(),
+            };
+        }
+        Err(error) => {
+            return CacheBreakdown {
+                state: "unreadable".to_string(),
+                detail: Some(format!(
+                    "could not inspect {}: {error}",
+                    index_path.display()
+                )),
+                kept: 0,
+                excluded: ReasonCounts::default(),
+                per_harness: Vec::new(),
+            };
+        }
+        Ok(true) => {}
     }
     let index: AnkaIndex = match read_index(cache_path) {
         Ok(index) => index,
@@ -426,6 +527,62 @@ fn cache_breakdown(
             }
         }
     };
+    let (kept, excluded, per_harness) = count_records(policy, &index.records, tombstones);
+    CacheBreakdown {
+        state: "ok".to_string(),
+        detail: None,
+        kept,
+        excluded,
+        per_harness,
+    }
+}
+
+/// Evaluate freshly discovered sources against `policy` without writing
+/// anything: the pre-publication half of `policy-show`. Runs the same discovery
+/// `index_in` would run, then applies the same tombstones and admission
+/// predicate — so the count is what a rebuild *would* publish and drop.
+fn discovery_breakdown(
+    policy: &AnkaPolicy,
+    roots: &AnkaRoots,
+    tombstones: &std::collections::BTreeSet<TombstoneEntry>,
+) -> DiscoveryBreakdown {
+    let mut records = Vec::new();
+    for harness in AnkaHarness::ALL.iter() {
+        match super::discover_harness(roots, harness) {
+            Ok((found, _report)) => records.extend(found),
+            Err(error) => {
+                return DiscoveryBreakdown {
+                    state: "error".to_string(),
+                    detail: Some(error.to_string()),
+                    discovered: 0,
+                    kept: 0,
+                    excluded: ReasonCounts::default(),
+                    per_harness: Vec::new(),
+                };
+            }
+        }
+    }
+    let discovered = records.len();
+    let (kept, excluded, per_harness) = count_records(policy, &records, tombstones);
+    DiscoveryBreakdown {
+        state: "ok".to_string(),
+        detail: None,
+        discovered,
+        kept,
+        excluded,
+        per_harness,
+    }
+}
+
+/// Count records under `policy`, tombstones first. Shared by the cache view and
+/// the pre-publication discovery view so both report the identical admission
+/// decision for every record — a difference between the two is then a real
+/// difference in inputs, never in rules.
+fn count_records(
+    policy: &AnkaPolicy,
+    records: &[AnkaRecord],
+    tombstones: &std::collections::BTreeSet<TombstoneEntry>,
+) -> (usize, ReasonCounts, Vec<HarnessCounts>) {
     let mut kept = 0usize;
     let mut excluded = ReasonCounts::default();
     let mut per_harness: Vec<HarnessCounts> = AnkaHarness::ALL
@@ -436,7 +593,7 @@ fn cache_breakdown(
             excluded: 0,
         })
         .collect();
-    for record in &index.records {
+    for record in records {
         let slot = per_harness
             .iter_mut()
             .find(|entry| entry.harness == record.source.harness.as_str())
@@ -459,13 +616,7 @@ fn cache_breakdown(
             }
         }
     }
-    CacheBreakdown {
-        state: "ok".to_string(),
-        detail: None,
-        kept,
-        excluded,
-        per_harness,
-    }
+    (kept, excluded, per_harness)
 }
 
 /// Parse an initialized policy file: exact versioned header, then
@@ -522,7 +673,22 @@ fn parse_policy(content: &str, path: &Path) -> Result<(HomeChoice, String)> {
                         path.display()
                     );
                 }
-                home_path = Some(value.to_string());
+                // The consent's subject feeds exact path comparisons, so it must
+                // arrive in the canonical form `init` writes: absolute and
+                // already normalized. A relative path, a trailing `/`, or an
+                // interior `//` would let formatting — not the operator's
+                // decision — decide whether a record is HOME.
+                match normalize_path(value) {
+                    Some(normalized) if normalized == value => {
+                        home_path = Some(value.to_string());
+                    }
+                    _ => bail!(
+                        "ANKA policy {} line {} is malformed: `home_path` must be an \
+                         absolute, already-normalized path (got `{value}`)",
+                        path.display(),
+                        index + 1
+                    ),
+                }
             }
             other => {
                 bail!(

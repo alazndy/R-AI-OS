@@ -743,3 +743,43 @@ Phase 3 — privacy policy, recall exclusions, breakdown (verified):
    The env-dependent `control_plane::snapshot_generation_on_in_memory_db`
    test fails on this machine (live config sets `factory.enabled = true`) —
    separate tracked finding, not fixed, unrelated to this diff.
+8. **Substring rules match every project claim, not only the display.**
+   Correction after review: Claude records put the directory slug in
+   `source.project` while the trustworthy directory exists only in the
+   provenance, so an exclusion naming `/srv/private` matched nothing. `admit`
+   now matches the display project, `Provenance.path` (new `#[serde(default)]`
+   field carrying the normalized asserted path), the raw slug, and the legacy
+   in-scope path. Red/green: dropping the provenance candidates makes
+   `substring_rules_match_the_resolved_path_and_the_raw_slug_not_only_the_display`
+   red.
+9. **The HOME decision follows the consent's `home_path`, not the
+   import-time label.** `is_home_label` compares the record's resolved path to
+   the consented `home_path` (and the slug to `home_slug`); the
+   `ProjectScope::HomeUnscoped` label — computed against whatever `$HOME` the
+   indexing process saw — no longer decides, so moving the process home cannot
+   stop excluding the home the consent names. Records without the path field
+   (pre-correction caches) fall back to their scope, conservatively either
+   way. `normalize_path` collapses interior runs of `/` (POSIX: `/home//alaz`
+   *is* `/home/alaz`) so a double-slashed spelling cannot dodge the exact
+   comparison, and `parse_policy` rejects any `home_path` that is not absolute
+   and already normalized. Project-filter suppression is its own predicate
+   (`suppressed_from_project_filter`): a home label never satisfies `--project`
+   even when the consent names a different home. Red/green (three reverts):
+   `the_home_decision_follows_the_consent_path_not_the_process_home`,
+   `an_asserted_home_with_interior_double_slashes_is_normalized_before_the_home_comparison`,
+   `a_policy_home_path_that_is_not_already_normalized_is_malformed`.
+10. **An uninspectable cache is `unreadable`, not `absent`.** A `try_exists`
+    failure now reports `state:"unreadable"` with the I/O detail; only a
+    definitive "does not exist" is `absent`, because `absent` with zero
+    records would claim a total loss that never happened. Red/green:
+    restoring `unwrap_or(false)` makes
+    `policy_show_reports_an_unreadable_cache_as_unreadable_not_as_absent` red.
+11. **`policy-show` adds a pre-publication count.** The cache breakdown can
+    only measure records the cache holds; a record the policy filtered at its
+    first index left no trace there. `discovery` re-runs discovery read-only
+    and applies the same tombstones + admission predicate, reporting
+    `{state: ok|error, detail, discovered, kept, excluded, per_harness}` —
+    what the *next* rebuild would publish and drop, countable before it runs.
+    Both views share one `count_records` so any difference between them is a
+    difference in inputs, never in rules. Red/green: removing the section makes
+    `policy_show_counts_discovery_against_the_policy_before_publication` red.
