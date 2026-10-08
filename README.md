@@ -579,7 +579,9 @@ a client-assembled shell command.
 TUI-managed task and use `i`, `b`, or `c` to mark it in progress, blocked, or
 completed. The daemon validates title/path bounds, rejects secret-like titles,
 stores the task and project association atomically, and refuses status changes
-to agent, handoff, swarm, Factory, and legacy-Markdown task records.
+to agent, handoff, swarm, and Factory task records — or to any personal task
+with pending approvals or agent runs. Both TUI- and Markdown-sourced
+list-backed personal tasks are operator-mutable.
 
 The same `WORK` flow is mouse-aware: click a project or task using the visible
 panels, then use the `Task Actions` strip for `New`, `In Progress`, `Block`, or

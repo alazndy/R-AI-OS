@@ -665,6 +665,66 @@ four are fixed, each with a regression fixture and a verified red/green revert:
   O_NOFOLLOW mechanism itself is already pinned by the message-assert
   tests from `d504c51`.
 
+### Merge-review fix set (complete)
+
+- Full-diff review of PR #43 (12 commits / 37 files / ~16.8K diff lines)
+  via four parallel reviewers plus a first-party pass over the timer,
+  CLI, and dependency slice: **0 blockers, 2 majors, ~24 minors, ~13
+  nits**; consent gates, lock/publish/tombstone ordering, the TOCTOU
+  contract, all 7 bounded call sites, and zero non-test unwraps were
+  verified sound. Decision-needed items (forget_key vs `record_id` spec
+  contradiction, dead `AnkaHitDto`/`AnkaSearchRequestDto` vs the
+  spec's `AnkaHitView`, `home=keep` under a moved `$HOME`, the
+  spec-sanctioned in-place policy write, intermediate-directory
+  symlink threat model, legacy 4-harness `ready` semantics, dead
+  `try_acquire`) were surfaced to the user rather than silently picked.
+- Fixed in this round, each red/green-proven with sha256-verified
+  restores:
+  - **Whole-file transcript cap** (`TRANSCRIPT_MAX_BYTES = 32 MiB` in
+    `discover_claude`): the size is read from the verified
+    descriptor's own `metadata()` before the read — the import path's
+    only whole-file read now refuses past the ceiling, counts
+    `oversized`, and never materializes content (the daily timer's
+    `MemoryMax=512M` can no longer be OOM-killed by hostile input).
+  - **Snippet char-boundary clamping** (`hit_for`): byte offsets landing
+    mid-character clamp via `floor_char_boundary`/`ceil_char_boundary`
+    instead of falling back to the whole record, so the ~1KB snippet
+    window holds for non-ASCII content.
+  - **`recount_coverage` shared by `index_in` and `forget_in`**: a
+    forget can no longer leave its tombstoned record numerically
+    present in `coverage[].records` until the next full refresh.
+  - **systemd `ExecStart` quoting** (`systemd_path`): spaces, quotes,
+    backslashes, and `%` → `%%` survive the unit parser as one token.
+  - **Tray `_toml_upsert` section bounds**: a section ends at the next
+    header (not EOF), commented `[section] # x` headers match without
+    duplicating the table, section-less keys insert before the first
+    header — a missing daemon key can no longer land in another
+    section. 3 tests added to `test_tray.py`.
+  - **README `UpdateTaskStatus` scope** corrected to list-backed
+    personal tasks (tui + markdown; approvals/agent-runs still
+    refused) — the legacy-Markdown claim was invalidated by `5c9632f`.
+  - **`.env.example` honesty**: only `RAIOS_DB_PATH` (the one variable
+    real code reads) remains, with an explicit no-auto-load note; the
+    five fictional vars had zero consumers.
+- Red/green: R1 cap removal, R2 raw snippet slice, R3 forget recount
+  drop, R4 quoting drop — each makes exactly its own test fail; the
+  Python proof runs the ast-extracted `_toml_upsert` (PySide6-free):
+  old source fails T1 missing-key placement, T3 commented header, T4
+  global insert (T2 = in-place-update regression guard).
+- Gates: ANKA 95/95, CLI 72/72, **workspace 1208/1208** (env
+  neutralizations required on this machine and documented, neither
+  related to the diff: `commit.gpgsign=false` for temp-repo git
+  fixtures — global GPG signing otherwise stalls them 60s on an
+  unanswered pinentry; empty `XDG_CONFIG_HOME` for master's
+  `snapshot_generation_on_in_memory_db`, which reads the live config's
+  `[factory] enabled = true` — proven config-driven: it passes with an
+  empty config dir), fmt + clippy clean, py_compile + `test_service.py`
+  OK.
+- Follow-ups recorded, not merge-blocking: token-rotation atomic write
+  + failure retry (`6becca6`), tray 401 visibility + UI-thread
+  mutations, a CI step for `test_tray.py`, `.desktop` venv
+  provisioning.
+
 ## Implementation boundary
 
 Primary implementation: `crates/raios-runtime/src/anka.rs` and its tests. Use small

@@ -23,6 +23,20 @@ const RANDOMIZED_DELAY: &str = "15min";
 const TIME_LIMIT: &str = "300s";
 const MEMORY_LIMIT: &str = "512M";
 
+/// systemd's `ExecStart=` parser splits the first token on unquoted
+/// whitespace and expands `%` specifiers: a binary path containing a space,
+/// a quote, or a literal `%` would otherwise be parsed as a different
+/// program (or a specifier) instead of the binary that installed the unit.
+fn systemd_path(path: &Path) -> String {
+    let raw = path.display().to_string();
+    format!(
+        "\"{}\"",
+        raw.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%")
+    )
+}
+
 /// Pure generator — pinned by tests, not by a checked-in file. `binary` must
 /// be the absolute path of the tested build (`current_exe()` at install).
 fn service_unit(binary: &Path) -> String {
@@ -39,7 +53,7 @@ MemoryMax={memory_limit}
 StandardOutput=journal
 StandardError=journal
 ",
-        binary = binary.display(),
+        binary = systemd_path(binary),
         time_limit = TIME_LIMIT,
         memory_limit = MEMORY_LIMIT,
     )
@@ -178,8 +192,8 @@ mod tests {
     fn service_unit_pins_the_absolute_binary_umask_and_measured_bounds() {
         let content = service_unit(Path::new("/home/alaz/.local/bin/raios"));
         assert!(
-            content.contains("ExecStart=/home/alaz/.local/bin/raios anka index"),
-            "the unit must point at an absolute binary path, not a PATH lookup"
+            content.contains("ExecStart=\"/home/alaz/.local/bin/raios\" anka index"),
+            "the unit must point at an absolute binary path, quoted as one token"
         );
         assert!(content.contains("Type=oneshot"));
         assert!(content.contains("UMask=0077"));
@@ -188,6 +202,24 @@ mod tests {
         assert!(
             content.contains("StandardError=journal"),
             "failures must land in the journal for status/journalctl visibility"
+        );
+    }
+
+    /// Paths the unit parser would otherwise split or expand must survive
+    /// verbatim: spaces stay one token, `%` becomes `%%` so systemd does not
+    /// treat it as a specifier, and quotes/backslashes are escaped.
+    #[test]
+    fn exec_start_quotes_paths_that_the_unit_parser_would_otherwise_split() {
+        let content = service_unit(Path::new("/home/John Smith/raios 100%"));
+        assert!(
+            content.contains("ExecStart=\"/home/John Smith/raios 100%%\" anka index"),
+            "the binary path must be one quoted token with specifiers escaped"
+        );
+
+        let tricky = service_unit(Path::new("/opt/we\"ird\\path/raios"));
+        assert!(
+            tricky.contains("ExecStart=\"/opt/we\\\"ird\\\\path/raios\" anka index"),
+            "embedded quotes and backslashes must be escaped, not truncate the token"
         );
     }
 

@@ -261,18 +261,13 @@ fn index_in(
     });
     // Report each harness's coverage from the records actually being published —
     // the count is only trustworthy if it is the same set the index will contain.
-    for entry in &mut coverage {
-        entry.records = records
-            .iter()
-            .filter(|record| record.source.harness == entry.harness)
-            .count();
-    }
-    let index = AnkaIndex {
+    let mut index = AnkaIndex {
         records,
         indexed_sources: coverage.iter().map(|entry| entry.sources).sum(),
         coverage,
         last_indexed_at: Some(refreshed_at),
     };
+    recount_coverage(&mut index);
     write_index(cache_path, &index)?;
     Ok(status_from_index(
         cache_path.to_path_buf(),
@@ -539,8 +534,26 @@ fn forget_in(roots: &AnkaRoots, cache_path: &Path, config: &Path, id: &str) -> R
     })?;
     add_tombstone(config, &forget_key)?;
     index.records.retain(|record| record.id != id);
+    recount_coverage(&mut index);
     write_index(cache_path, &index)?;
     Ok(true)
+}
+
+/// Recount `coverage[].records` from the records the index actually holds.
+///
+/// Every operation that changes the record set (`index_in`'s publish and
+/// `forget_in`'s retain) routes through this before writing: the coverage
+/// numbers only mean something when they count exactly the records the status
+/// output will sum over — a forget that left a tombstoned record in the
+/// coverage would keep reporting it as present until the next full refresh.
+fn recount_coverage(index: &mut AnkaIndex) {
+    for entry in &mut index.coverage {
+        entry.records = index
+            .records
+            .iter()
+            .filter(|record| record.source.harness == entry.harness)
+            .count();
+    }
 }
 
 /// Add a `forget_key` to the tombstone set and publish the versioned file.
@@ -622,6 +635,24 @@ fn record(spec: RecordSpec) -> AnkaRecord {
     }
 }
 
+/// Largest byte index `<= index` that starts a UTF-8 character.
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// Smallest byte index `>= index` that starts a UTF-8 character (or the end).
+fn ceil_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while index < text.len() && !text.is_char_boundary(index) {
+        index += 1;
+    }
+    index
+}
+
 fn hit_for(record: &AnkaRecord, full_query: &str, terms: &[String]) -> Option<AnkaHit> {
     let haystack = record.content.to_ascii_lowercase();
     let exact = haystack.contains(&full_query.to_ascii_lowercase());
@@ -636,13 +667,12 @@ fn hit_for(record: &AnkaRecord, full_query: &str, terms: &[String]) -> Option<An
         .iter()
         .find_map(|term| haystack.find(term))
         .unwrap_or(0);
-    let start = offset.saturating_sub(180);
-    let end = (offset + 820).min(record.content.len());
-    let mut snippet = record
-        .content
-        .get(start..end)
-        .unwrap_or(&record.content)
-        .to_string();
+    // Byte offsets routinely land mid-character on non-ASCII content; clamp to
+    // the enclosing boundaries instead of falling back to the whole record —
+    // a boundary miss must never turn a ~1KB snippet into an unbounded one.
+    let start = floor_char_boundary(&record.content, offset.saturating_sub(180));
+    let end = ceil_char_boundary(&record.content, offset + 820);
+    let mut snippet = record.content[start..end].to_string();
     if start > 0 {
         snippet.insert(0, '…');
     }
@@ -1583,6 +1613,73 @@ mod tests {
         assert!(
             !tombstones.iter().any(|entry| entry.value == record_id),
             "the tombstone must not reference the volatile record id"
+        );
+    }
+
+    /// The coverage numbers must count the records the index actually holds:
+    /// a forget that shrinks the record set shrinks its harness coverage too,
+    /// instead of leaving the tombstoned record numerically present until the
+    /// next full refresh.
+    #[test]
+    fn forget_recounts_the_harness_coverage_of_the_record_set_it_shrinks() {
+        let fixture = fixture();
+        index_in(&fixture.roots, &fixture.cache, &fixture.config, None).expect("build");
+        let forgotten = only_record_id(&fixture);
+
+        forget_in(&fixture.roots, &fixture.cache, &fixture.config, &forgotten).expect("forget");
+
+        let index = read_index(&fixture.cache).expect("read index");
+        assert!(
+            index.records.is_empty(),
+            "the fixture has a single record and it was forgotten"
+        );
+        for entry in &index.coverage {
+            let counted = index
+                .records
+                .iter()
+                .filter(|record| record.source.harness == entry.harness)
+                .count();
+            assert_eq!(
+                entry.records, counted,
+                "coverage for {:?} must count the records the index holds",
+                entry.harness
+            );
+        }
+    }
+
+    /// A byte offset landing mid-character (routine for non-ASCII content) must
+    /// clamp to the enclosing boundary — never fall back to handing out the
+    /// whole record as the snippet, which would defeat the ~1KB output bound on
+    /// the CLI and MCP surfaces.
+    #[test]
+    fn a_snippet_boundary_miss_clamps_instead_of_returning_the_whole_record() {
+        // Bytes 178..184 are two 3-byte `€`; the raw start (359 - 180 = 179)
+        // lands inside the first one, so the old `.get(start..end)` returned None.
+        let content = format!(
+            "{}€€{}target{}",
+            "a".repeat(178),
+            "a".repeat(175),
+            "a".repeat(2000)
+        );
+        let hit = hit_for(&record(spec(&content)), "target", &["target".to_string()])
+            .expect("the content contains the term");
+
+        assert!(
+            hit.snippet.len() < content.len(),
+            "a boundary miss must never produce the whole record"
+        );
+        assert!(
+            hit.snippet.len() <= 1010,
+            "the snippet stays within its ~1KB window, got {} bytes",
+            hit.snippet.len()
+        );
+        assert!(
+            hit.snippet.starts_with('…'),
+            "the offset window keeps its prefix marker"
+        );
+        assert!(
+            hit.snippet.contains("target"),
+            "the matched term stays visible"
         );
     }
 

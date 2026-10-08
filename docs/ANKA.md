@@ -49,7 +49,10 @@ transcript through **one verified descriptor** (`O_NOFOLLOW` open plus
 `fstat` device+inode identity against the pre-open path check): the
 extracted content and the `cwd` provenance come from that single read, so a
 file swapped in mid-scan is refused wholesale — never half-read, never
-relabelled.
+relabelled. That same open yields the size used to refuse any transcript
+past a 32 MiB whole-file ceiling (`TRANSCRIPT_MAX_BYTES`, counted as
+`oversized` and never read): the import path's only whole-file read stays
+bounded even for hostile input.
 
 ## Public Surface
 

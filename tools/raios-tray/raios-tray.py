@@ -780,18 +780,29 @@ def _toml_upsert(content: str, section: str | None, key: str, value: str) -> str
     section_end = len(lines)
     section_header = f"[{section}]" if section else None
 
+    def is_header(line: str) -> bool:
+        # A table header is the only line whose (comment-stripped) first
+        # non-space character is `[`; trailing comments must not hide it.
+        return line.strip().split("#", 1)[0].strip().startswith("[")
+
     if section_header:
         for index, line in enumerate(lines):
-            if line.strip() == section_header:
+            if line.strip().split("#", 1)[0].strip() == section_header:
                 section_start = index + 1
                 break
         else:
             suffix = "" if not content or content.endswith("\n") else "\n"
             return f"{content}{suffix}\n{section_header}\n{key} = {value}\n"
+        # The section ends at the *next header*, never at the end of the file:
+        # otherwise a missing key is appended inside whatever section happens
+        # to be last, and a same-named key in a later section is matched first.
+        for index in range(section_start, len(lines)):
+            if is_header(lines[index]):
+                section_end = index
+                break
     else:
         for index, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped.startswith("[") and stripped.endswith("]"):
+            if is_header(line):
                 section_end = index
                 break
 

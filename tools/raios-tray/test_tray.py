@@ -40,6 +40,29 @@ class TrayConfigTests(unittest.TestCase):
             self.assertIn('system_name = "after"', saved)
             self.assertIn("health_interval_secs = 60", saved)
 
+    def test_missing_key_lands_in_its_own_section_not_the_last_one(self) -> None:
+        tray = load_tray_module()
+        result = tray._toml_upsert(
+            "[daemon]\nport = 1\n\n[factory]\nenabled = true\n",
+            "daemon",
+            "refresh_secs",
+            "15",
+        )
+        head, _, tail = result.partition("[factory]")
+        self.assertIn("refresh_secs = 15", head)
+        self.assertNotIn("refresh_secs", tail)
+
+    def test_a_commented_section_header_is_found_without_duplicating_the_table(self) -> None:
+        tray = load_tray_module()
+        result = tray._toml_upsert("[daemon] # local\nport = 1\n", "daemon", "port", "2")
+        self.assertEqual(result.count("[daemon]"), 1, "a commented header must not duplicate")
+        self.assertIn("port = 2", result)
+
+    def test_a_global_key_is_inserted_before_the_first_section(self) -> None:
+        tray = load_tray_module()
+        result = tray._toml_upsert("[daemon] # c\nport = 1\n", None, "db_path", '"x"')
+        self.assertLess(result.find("db_path"), result.find("[daemon]"))
+
     def test_desktop_identity_is_set_before_application_creation(self) -> None:
         source = TRAY_FILE.read_text(encoding="utf-8")
         self.assertLess(

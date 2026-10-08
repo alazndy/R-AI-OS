@@ -30,11 +30,21 @@ pub struct ImportReport {
     /// Entries skipped because they are not regular files (symlinked transcripts).
     /// Never resolved through, so a link planted in a history tree cannot redirect a read.
     pub skipped_non_regular: usize,
-    /// Entries whose source line exceeded [`HISTORY_LINE_MAX_BYTES`]. The line is
-    /// skipped through a fixed buffer and never parsed, so its content cannot
-    /// materialize; it counts as its own outcome rather than as malformed.
+    /// Entries whose source line exceeded [`HISTORY_LINE_MAX_BYTES`], or whose
+    /// whole file exceeded [`TRANSCRIPT_MAX_BYTES`]. The content is skipped
+    /// through a fixed bound and never materialized, so it counts as its own
+    /// outcome rather than as malformed or empty.
     pub oversized: usize,
 }
+
+/// Hard ceiling for one transcript's whole-file read in [`discover_claude`].
+/// Every other read in the import path is line-bounded; this is the only
+/// whole-file read and it runs on the least-validated input (any `.jsonl` the
+/// walk accepted), so a hostile or corrupt multi-gigabyte transcript would
+/// otherwise be fully materialized — and the daily refresh timer runs under
+/// `MemoryMax=512M`, turning such a file into a silent OOM-kill. Past the cap
+/// the file counts as [`ImportReport::oversized`]: refused whole, never read.
+pub const TRANSCRIPT_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 pub fn discover_claude(roots: &AnkaRoots) -> Result<(Vec<AnkaRecord>, ImportReport)> {
     let root = roots.claude_projects();
@@ -115,6 +125,20 @@ pub fn discover_claude(roots: &AnkaRoots) -> Result<(Vec<AnkaRecord>, ImportRepo
                 continue;
             }
         };
+        // The ceiling comes from the verified descriptor itself — the same open
+        // that feeds the read below — so the size check and the read share one
+        // file and there is no window between them.
+        match raw.metadata() {
+            Ok(metadata) if metadata.len() > TRANSCRIPT_MAX_BYTES => {
+                report.oversized += 1;
+                continue;
+            }
+            Ok(_) => {}
+            Err(_) => {
+                report.skipped_non_regular += 1;
+                continue;
+            }
+        }
         let mut bytes = String::new();
         if raw.read_to_string(&mut bytes).is_err() {
             report.empty += 1;
@@ -1109,5 +1133,31 @@ mod tests {
             records.is_empty(),
             "swapped-in content must never be indexed"
         );
+    }
+
+    /// The whole-file ceiling refuses before reading: a transcript past
+    /// `TRANSCRIPT_MAX_BYTES` must count as `oversized` with its bytes never
+    /// materialized — not as `empty`, not as a record.
+    #[test]
+    fn a_transcript_past_the_whole_file_cap_is_never_materialized() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let roots = roots_in(temp.path());
+        let root = roots.claude_projects();
+        let session = root.join("-home-alaz-dev-demo").join("sess-huge.jsonl");
+
+        // Content is irrelevant on purpose: if the cap works, none of it is read.
+        let mut bytes = vec![b'x'; TRANSCRIPT_MAX_BYTES as usize + 1];
+        bytes.push(b'\n');
+        fs::create_dir_all(session.parent().expect("fixture parent")).expect("fixture dir");
+        fs::write(&session, bytes).expect("huge fixture");
+
+        let (records, report) = discover_claude(&roots).expect("claude import");
+
+        assert_eq!(
+            report.oversized, 1,
+            "an over-ceiling transcript is its own outcome, not malformed or empty"
+        );
+        assert_eq!(report.empty, 0, "the file was refused, not read as empty");
+        assert!(records.is_empty(), "nothing past the cap may be indexed");
     }
 }
