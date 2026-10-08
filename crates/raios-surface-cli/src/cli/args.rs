@@ -521,4 +521,12 @@ mod tests {
     fn policy_show_parses_as_a_read_only_command() {
         Cli::try_parse_from(["raios", "anka", "policy-show"]).expect("`show` takes no arguments");
     }
+
+    #[test]
+    fn timer_install_and_uninstall_parse_without_arguments() {
+        Cli::try_parse_from(["raios", "anka", "timer-install"])
+            .expect("`timer-install` takes no arguments");
+        Cli::try_parse_from(["raios", "anka", "timer-uninstall"])
+            .expect("`timer-uninstall` takes no arguments");
+    }
 }

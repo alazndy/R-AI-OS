@@ -257,6 +257,8 @@ raios anka blame crates/raios-core/src/db/mem.rs
 raios anka forget <record-id>
 raios anka policy-init --home keep|exclude
 raios anka policy-show
+raios anka timer-install
+raios anka timer-uninstall
 ```
 
 - Only local history is indexed; recognized secret-shaped values are redacted before cache writes.
@@ -264,6 +266,7 @@ raios anka policy-show
 - Exclusion rules apply at recall time as well as at index time, so a rule change takes effect on the next query; they match every project claim a record carries (resolved path, raw slug, display label), and the HOME decision stays bound to the consent's recorded path even if the process `$HOME` changes.
 - `policy-show` reports the kept/excluded breakdown of the current cache plus a pre-publication count — discovered sources evaluated against the same policy — so a rule change's losses are countable before any rebuild.
 - Cache records are owner-only, support project exclusions and local tombstones, and can be rebuilt from sources.
+- `timer-install` generates and enables a daily user timer (04:00 local, `Persistent=true`, randomized delay, `UMask=0077`, `TimeoutStartSec=300s`, `MemoryMax=512M`) pointing at the absolute path of the running binary; it refuses to schedule anything before the policy exists, and `timer-uninstall` stops/removes the pair while retaining policy, tombstones, and cache.
 - No automatic context injection, synchronization, sharing, or curated-memory promotion occurs.
 - MCP exposes only read-only `anka_recall`, capped at eight results and framed as untrusted historical evidence.
 

@@ -363,6 +363,8 @@ Service artifacts — convention located (plan required this before adding a dir
 - No `.timer` unit exists anywhere in the repository yet, so the timer pair
   (`raios-anka-index.service` + `.timer`) is new. It should follow the `hub.rs` generator
   pattern so `UMask`, `Persistent`, and the absolute binary path are produced from live values.
+  *(Implemented 2026-10-08 as `cli/anka_timer.rs`: both units are generated at
+  install time and still no unit file is checked in.)*
 
 ## 6. Decisions and remaining gates
 
@@ -378,10 +380,21 @@ Resolved this round:
 7. **HOME retention** — decided 2026-10-08 (operator) as `keep`: the live `policy-init`
    runs with `--home keep`; home records stay recallable unfiltered but never satisfy a
    project filter.
+8. **Timer** — closed 2026-10-08. Implemented as `cli/anka_timer.rs` following the
+   `hub.rs` generator convention (units generated from live values, never checked in):
+   `timer-install` writes and enables the `raios-anka-index.{service,timer}` pair and
+   refuses to schedule until the policy is initialized; `timer-uninstall` disables and
+   removes the pair while retaining policy, tombstones, and cache. The operative
+   oneshot time bound is `TimeoutStartSec=300s` (a completed oneshot is no longer
+   running, so `RuntimeMaxSec` would never bite); `MemoryMax=512M`,
+   `UMask=0077`, daily `04:00` local with `Persistent=true` and a randomized delay.
+   Acceptance verified live: gate refusal without a policy, `systemd-analyze verify`
+   clean, manual invocation `Result=success`, next activation scheduled, failure and
+   disable behavior exercised without waiting a day.
 
 Still open:
 
-1. **Timer.** Remains the final gate, after the manual rollout passes.
+1. None — the timer, the last gate, is closed (resolved item 8).
 
 Must close before the live migration:
 

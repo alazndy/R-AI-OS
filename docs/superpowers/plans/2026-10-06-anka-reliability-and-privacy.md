@@ -585,6 +585,51 @@ four are fixed, each with a regression fixture and a verified red/green revert:
   `RuntimeMaxSec=300`, `MemoryMax=512M` (unit syntax to be verified at
   timer install).
 
+### Phase 5 — Daily refresh timer (complete)
+
+- Implementation follows the spec's `hub.rs` generator convention: units are
+  **generated from live values at install time, never checked in**. New
+  `crates/raios-surface-cli/src/cli/anka_timer.rs` + `AnkaAction::TimerInstall`
+  / `TimerUninstall`. The service is `Type=oneshot`, `UMask=0077`,
+  `ExecStart=<absolute current_exe()> anka index`, journal output (path/count
+  diagnostics only); the timer is `OnCalendar=*-*-* 04:00:00` (local),
+  `Persistent=true`, `RandomizedDelaySec=15min`, `WantedBy=timers.target`.
+- Derived decision: the operative time bound for `Type=oneshot` is
+  **`TimeoutStartSec=300s`**, not the Phase 4 candidate `RuntimeMaxSec` — a
+  completed oneshot is no longer "running", so `RuntimeMaxSec` would never
+  bite. `MemoryMax=512M` stays as planned (~25x headroom over the measured
+  11.16s / ~115 MiB).
+- Fail-closed gate: `timer-install` refuses to schedule anything until
+  `status.policy.initialized` is true, so no unattended index run can start
+  without consent. `timer-uninstall` disables, removes both unit files (both
+  attempted before any error propagates), and retains the policy, tombstones,
+  and cache by construction — it never reads or writes them.
+- Tests: 4 new (service-unit pins, timer-schedule pins, remove_unit
+  idempotency, parse) → CLI 71/71; ANKA 90/90; workspace 1201/1202, sole
+  failure = the known env-dependent `snapshot_generation_on_in_memory_db`
+  (live config `factory.enabled = true`, pre-existing and unrelated — this
+  diff is CLI-only); fmt + clippy clean.
+- Live verification of the acceptance criteria:
+  - **Gate red-check:** with an isolated `XDG_CONFIG_HOME` holding no policy,
+    `timer-install` exits 1 with the policy-init hint and writes **no** units.
+  - **Install:** both units written under `~/.config/systemd/user/`,
+    `systemd-analyze verify` exits 0 with no diagnostics; the view reports the
+    absolute tested binary `/home/alaz/.local/bin/raios`.
+  - **Manual invocation:** `systemctl --user start raios-anka-index.service`
+    → `Result=success`, `ExecMainStatus=0`.
+  - **Next activation:** `list-timers` shows Fri 2026-10-09 04:13:17 +03 —
+    04:00 plus a ~13min randomized delay.
+  - **Failure visibility (without waiting a day):** a drop-in override making
+    the service exit 1 yields `Result=exit-code` and journal lines carrying
+    only unit/path diagnostics; removing the override restores `success`.
+  - **Rollback:** `timer-uninstall` → timer `inactive`/`not-found`, units
+    gone, `anka-policy` retained; a reinstall returns to `active`/`enabled`
+    (final state: enabled, next activation Fri 04:10 +03 — the delay is
+    randomized per enable).
+- Linger was **not** enabled: a user timer runs while the user manager is
+  active, and `loginctl enable-linger` remains a separate system choice,
+  documented in `docs/ANKA.md`.
+
 ## Implementation boundary
 
 Primary implementation: `crates/raios-runtime/src/anka.rs` and its tests. Use small

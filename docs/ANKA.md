@@ -56,6 +56,8 @@ raios anka blame <path>
 raios anka forget <record-id>
 raios anka policy-init --home keep|exclude
 raios anka policy-show
+raios anka timer-install
+raios anka timer-uninstall
 ```
 
 `policy-init` creates the privacy consent file and nothing else — no
@@ -73,6 +75,36 @@ alongside the cache state.
 `index` currently discovers local Claude Code JSONL sessions plus the existing
 Codex, OpenCode, and Antigravity history files. The index is lexical and local;
 automatic context injection is intentionally not part of this phase.
+
+## Daily Refresh Timer
+
+`raios anka timer-install` generates the user-level pair
+(`raios-anka-index.service` + `raios-anka-index.timer` under
+`$XDG_CONFIG_HOME/systemd/user`) from live values — including the absolute
+path of the running binary, never a PATH lookup — and enables it. Units are
+generated at install time, never checked into the repository (the
+`hub install` generator convention).
+
+- The service is `Type=oneshot`, `UMask=0077`, runs only `anka index`, and
+  reuses the ANKA lock, so a scheduled run and a manual rebuild can never
+  interleave. Bounds come from the measured Phase 4 baseline
+  (11.16s / ~115 MiB): `TimeoutStartSec=300s`, `MemoryMax=512M`.
+- The timer fires daily at 04:00 local time with `Persistent=true` (a missed
+  day runs at the next opportunity) and `RandomizedDelaySec=15min`.
+- Fail-closed gates: `timer-install` refuses to schedule anything until the
+  policy is initialized, so no unattended index run can start without
+  consent; if a privacy error appears later, the run fails visibly through
+  `systemctl --user status raios-anka-index.service` and
+  `journalctl --user -u raios-anka-index.service` with path/count diagnostics
+  only — never transcript content.
+- A user timer runs only while the user's systemd manager is active;
+  enabling lingering so it also runs without a login session
+  (`loginctl enable-linger`) is a separate system choice, never made
+  automatically by `timer-install`.
+- Rollback: `raios anka timer-uninstall` stops and removes the timer pair and
+  retains the privacy policy, tombstones, and cache by construction. Never
+  revert to a binary that ignores the privacy/schema protections or restore
+  an unfiltered old cache; an incompatible rollback leaves recall disabled.
 
 ## MCP
 

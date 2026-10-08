@@ -1,6 +1,7 @@
 mod agent_stats;
 mod agent_wrapper;
 mod anka;
+mod anka_timer;
 mod audit;
 mod cron;
 mod db;

@@ -50,6 +50,13 @@ pub(super) fn cmd_anka(action: AnkaAction, json: bool) {
             .and_then(|view| serde_json::to_value(view).map_err(Into::into)),
         AnkaAction::PolicyShow => raios_runtime::anka::policy_show()
             .and_then(|view| serde_json::to_value(view).map_err(Into::into)),
+        // Timer artifacts follow the `hub.rs` generator convention: units are
+        // built from live values at install time, never checked in. Both
+        // actions own their systemctl orchestration (best-effort disable on
+        // rollback) — the surface may shell out for service artifacts, it
+        // still never computes ANKA state.
+        AnkaAction::TimerInstall => super::anka_timer::install(),
+        AnkaAction::TimerUninstall => super::anka_timer::uninstall(),
     };
 
     match result {

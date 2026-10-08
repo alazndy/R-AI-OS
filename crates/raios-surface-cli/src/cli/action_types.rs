@@ -258,6 +258,10 @@ pub enum AnkaAction {
     },
     /// Show resolved policy rules, tombstone count, and the kept/excluded record breakdown
     PolicyShow,
+    /// Install and enable the daily ANKA index user timer (units generated from live values)
+    TimerInstall,
+    /// Stop and remove the ANKA index timer; policy, tombstones, and cache are retained
+    TimerUninstall,
 }
 
 /// The `--home` argument of `policy-init`: clap's side of the choice. The
