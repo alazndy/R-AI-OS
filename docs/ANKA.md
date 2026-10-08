@@ -44,7 +44,12 @@ the consent's recorded `home_path` (absolute and already normalized; interior
 `//` collapses first) or its exact encoded slug, never a substring, so child
 projects stay eligible. The decision stays bound to that recorded path even if
 the process `$HOME` changes later. The original harness transcript is never
-modified by any of these controls.
+modified by any of these controls, and discovery reads each Claude
+transcript through **one verified descriptor** (`O_NOFOLLOW` open plus
+`fstat` device+inode identity against the pre-open path check): the
+extracted content and the `cwd` provenance come from that single read, so a
+file swapped in mid-scan is refused wholesale — never half-read, never
+relabelled.
 
 ## Public Surface
 

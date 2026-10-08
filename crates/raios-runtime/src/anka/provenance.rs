@@ -446,6 +446,16 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// Arm the `open_regular_file` test seam: `action` runs once, inside the
+/// window between the pre-open path check and the open itself — the interval
+/// no path check can observe. Exposed `pub(super)` so importer-level
+/// regression tests (not just `provenance`'s own) can plant a swap there;
+/// compiled out of every non-test build.
+#[cfg(test)]
+pub(super) fn after_path_check_once(action: impl FnOnce() + 'static) {
+    AFTER_PATH_CHECK.with(|hook| *hook.borrow_mut() = Some(Box::new(action)));
+}
+
 /// Outcome of one bounded line read.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum BoundedLine {
@@ -792,16 +802,27 @@ pub(super) fn first_top_level_string(
     max_line_bytes: usize,
 ) -> Option<String> {
     let file = open_regular_file(path).ok()?;
-    let mut reader = BufReader::new(file);
+    first_top_level_string_from_reader(&mut BufReader::new(file), key, max_lines, max_line_bytes)
+}
+
+/// The bounded scan itself, over any reader — the shared core behind the
+/// path-based lookup above and the already-read-bytes lookup below, so both
+/// apply the identical line budget and skip rules.
+fn first_top_level_string_from_reader(
+    reader: &mut impl BufRead,
+    key: &str,
+    max_lines: usize,
+    max_line_bytes: usize,
+) -> Option<String> {
     let mut buffer = Vec::new();
     for _ in 0..max_lines {
-        match next_line_bounded(&mut reader, &mut buffer, max_line_bytes).ok()? {
+        match next_line_bounded(reader, &mut buffer, max_line_bytes).ok()? {
             BoundedLine::Eof => break,
             BoundedLine::Oversized { line_complete } => {
                 // Keep scanning. Skipping is needed only when the budget ran out
                 // mid-line: an oversized line that already carried its terminator has
                 // left the reader on the *next* line, and skipping would delete it.
-                if !line_complete && skip_rest_of_line(&mut reader).is_err() {
+                if !line_complete && skip_rest_of_line(reader).is_err() {
                     break;
                 }
             }
@@ -823,6 +844,17 @@ pub(super) fn first_top_level_string(
 /// `cwd` asserted by a Claude transcript's own records.
 pub fn claude_cwd(path: &Path) -> Option<String> {
     first_top_level_string(path, "cwd", CLAUDE_CWD_LINES, CLAUDE_LINE_MAX_BYTES)
+}
+
+/// `cwd` from transcript bytes already read through one verified descriptor.
+///
+/// This is the provenance half of the single-open contract: when content and
+/// `cwd` are derived from the *same* read, no file swap between the walk and
+/// the open can attach one file's project label to another file's content.
+/// The scan applies exactly the bounds [`claude_cwd`] uses.
+pub fn claude_cwd_from_content(content: &str) -> Option<String> {
+    let mut reader = content.as_bytes();
+    first_top_level_string_from_reader(&mut reader, "cwd", CLAUDE_CWD_LINES, CLAUDE_LINE_MAX_BYTES)
 }
 
 #[cfg(test)]

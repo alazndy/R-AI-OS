@@ -630,6 +630,41 @@ four are fixed, each with a regression fixture and a verified red/green revert:
   active, and `loginctl enable-linger` remains a separate system choice,
   documented in `docs/ANKA.md`.
 
+### Claude import TOCTOU — one descriptor for content and cwd (complete)
+
+- Defect found in review: `discover_claude` derived the transcript content
+  through one path read (`session_memory::extract_transcript` — a plain
+  `fs::read_to_string`, no regular-file proof at all) and the `cwd`
+  provenance through a **second** open (`claude_cwd` → `open_regular_file`).
+  A file swapped between the two reads could publish one file's bytes under
+  another file's project label (provenance poisoning), and the content read
+  itself never went through the regular-file checks.
+- Fix: one `open_regular_file` (O_NOFOLLOW + fstat identity) per transcript,
+  one `read_to_string` on that descriptor, and both halves derived from
+  those same bytes — `extract_transcript_content` (a content-level split of
+  the existing extractor; the path variant delegates to it, unchanged for
+  its other callers) and `claude_cwd_from_content` (the bounded cwd scan
+  over a reader, sharing `first_top_level_string_from_reader` with the path
+  variant so the line budget and skip rules are identical). Refusal
+  mapping: `NotFound` → `empty` (benign vanish, old parity), any other
+  open error — symlink swap, identity mismatch, unreadable — →
+  `skipped_non_regular`, never a record. The parent-session fallback keeps
+  its own single verified open.
+- 2 new regression tests drive `discover_claude` itself through the
+  `after_path_check_once` seam (new `#[cfg(test)] pub(super)` setter;
+  armed inside the window between path check and open): a symlink swap and
+  a different-regular-file swap both assert `skipped_non_regular == 1` and
+  `records.is_empty()` — neither the original bytes nor the planted file
+  may produce a record. ANKA 92/92, CLI 71/71, workspace 1204/1204 (the
+  env-dependent `snapshot_generation_on_in_memory_db` passed this run —
+  still env-dependent, never claimed fixed), fmt + clippy clean.
+- Red/green: restoring the old double-open flow makes **both** tests red
+  (the old code still indexed the transcript under fallback provenance —
+  the defect proof); dropping the dev/ino identity comparison makes the
+  regular-file-swap test red. Both restores sha256-verified. The
+  O_NOFOLLOW mechanism itself is already pinned by the message-assert
+  tests from `d504c51`.
+
 ## Implementation boundary
 
 Primary implementation: `crates/raios-runtime/src/anka.rs` and its tests. Use small

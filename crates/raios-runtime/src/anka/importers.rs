@@ -5,15 +5,16 @@
 //! only counts are carried.
 
 use super::provenance::{
-    claude_cwd, codex_cwd_map, next_line_bounded, open_regular_file, skip_rest_of_line, AnkaRoots,
-    BoundedLine, CwdMatch, Provenance, TimeSource, HISTORY_LINE_MAX_BYTES,
+    claude_cwd, claude_cwd_from_content, codex_cwd_map, next_line_bounded, open_regular_file,
+    skip_rest_of_line, AnkaRoots, BoundedLine, CwdMatch, Provenance, TimeSource,
+    HISTORY_LINE_MAX_BYTES,
 };
 use super::{modified_at, record, AnkaRecord, RecordSpec};
 use anyhow::{Context, Result};
 use raios_core::anka::AnkaHarness;
 use raios_core::security::redact_secrets;
 use serde_json::Value;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -93,16 +94,39 @@ pub fn discover_claude(roots: &AnkaRoots) -> Result<(Vec<AnkaRecord>, ImportRepo
             }
         };
 
-        // Extraction limits are inherited unchanged from `extract_transcript`:
-        // 600 chars per user turn, 800 per assistant turn. Discovering a transcript
-        // is not the same as capturing every reasoning or tool output.
-        let content = crate::session_memory::extract_transcript(path);
+        // One verified descriptor per transcript: `open_regular_file` (O_NOFOLLOW
+        // + fstat identity) and a single read feed BOTH the extracted content and
+        // the `cwd` provenance below, so a file swapped in after this walk's
+        // stat can never contribute one file's bytes as another file's label —
+        // the exact window two independent path opens used to leave open.
+        let mut raw = match open_regular_file(path) {
+            Ok(file) => file,
+            // The transcript vanished between the walk and the open: the same
+            // nothing-to-import outcome an unreadable path has always had here.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                report.empty += 1;
+                continue;
+            }
+            // Refused as no longer the regular file the walk saw — a symlink
+            // swapped in, a different file swapped in, or unreadable as a
+            // regular file at all: skipped wholesale, never half-read.
+            Err(_) => {
+                report.skipped_non_regular += 1;
+                continue;
+            }
+        };
+        let mut bytes = String::new();
+        if raw.read_to_string(&mut bytes).is_err() {
+            report.empty += 1;
+            continue;
+        }
+        let content = crate::session_memory::extract_transcript_content(&bytes);
         if content.trim().is_empty() {
             report.empty += 1;
             continue;
         }
 
-        let provenance = match claude_cwd(path) {
+        let provenance = match claude_cwd_from_content(&bytes) {
             // `cwd` written by this transcript's own records: harness metadata.
             Some(cwd) => Provenance::direct(&cwd, roots).with_slug(&project_slug),
             // A subagent may inherit provenance from the session that spawned it.
@@ -1003,5 +1027,87 @@ mod tests {
             .iter()
             .all(|r| !r.content.contains("secret outside")));
         assert!(records.iter().all(|r| !r.content.contains("hidden")));
+    }
+
+    /// The walk stats a real transcript, then — inside the open, in the window
+    /// no path check can see — the path is swapped for a symlink to an
+    /// attacker's file. Content and `cwd` come from one verified descriptor
+    /// only, so the transcript is refused wholesale: no record may carry the
+    /// original's bytes under the planted file's provenance, or vice versa.
+    #[cfg(unix)]
+    #[test]
+    fn a_transcript_symlinked_between_the_walk_and_the_open_is_never_indexed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let roots = roots_in(temp.path());
+        let root = roots.claude_projects();
+        let session = root.join("-home-alaz-dev-demo").join("sess-swap.jsonl");
+        let planted = temp.path().join("planted.jsonl");
+        write(
+            &session,
+            &claude_line("/home/alaz/dev/trusted", "original content"),
+        );
+        write(
+            &planted,
+            &claude_line("/home/alaz/planted", "planted content"),
+        );
+
+        let swap_at = session.clone();
+        let swap_to = planted.clone();
+        super::super::provenance::after_path_check_once(move || {
+            let _ = fs::remove_file(&swap_at);
+            std::os::unix::fs::symlink(&swap_to, &swap_at).expect("swap to symlink");
+        });
+
+        let (records, report) = discover_claude(&roots).expect("claude import");
+
+        assert_eq!(
+            report.skipped_non_regular, 1,
+            "the swapped transcript must be refused as non-regular, never half-read"
+        );
+        assert!(
+            records.is_empty(),
+            "neither the original bytes nor the planted file may produce a record"
+        );
+    }
+
+    /// The same window, but the path is replaced by a *different regular
+    /// file* — `O_NOFOLLOW` alone cannot see that shape, only the
+    /// descriptor-identity comparison (`fstat` dev+ino) can.
+    #[cfg(unix)]
+    #[test]
+    fn a_transcript_replaced_by_another_regular_file_between_the_walk_and_the_open_is_never_indexed(
+    ) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let roots = roots_in(temp.path());
+        let root = roots.claude_projects();
+        let session = root.join("-home-alaz-dev-demo").join("sess-replace.jsonl");
+        let planted = temp.path().join("planted.jsonl");
+        write(
+            &session,
+            &claude_line("/home/alaz/dev/trusted", "original content"),
+        );
+        write(
+            &planted,
+            &claude_line("/home/alaz/planted", "planted content"),
+        );
+
+        let swap_at = session.clone();
+        let swap_to = planted.clone();
+        super::super::provenance::after_path_check_once(move || {
+            let planted_bytes = fs::read(&swap_to).expect("planted bytes");
+            let _ = fs::remove_file(&swap_at);
+            fs::write(&swap_at, planted_bytes).expect("swap to another regular file");
+        });
+
+        let (records, report) = discover_claude(&roots).expect("claude import");
+
+        assert_eq!(
+            report.skipped_non_regular, 1,
+            "a different regular file at the same path must fail the descriptor identity check"
+        );
+        assert!(
+            records.is_empty(),
+            "swapped-in content must never be indexed"
+        );
     }
 }

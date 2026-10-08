@@ -417,6 +417,14 @@ Must close before the live migration:
    through the `#[cfg(test)]` seam between check 1 and the open — the exact window the
    path checks cannot observe; the seam compiles out of non-test builds.
 
+2. **Claude discovery double-open — closed 2026-10-08.** `discover_claude` used to read
+   the transcript content through one path open and the `cwd` provenance through a second;
+   both now come from a single `open_regular_file` descriptor, so no swap window can mix
+   two files' bytes into one record (content-level split: `extract_transcript_content`,
+   `claude_cwd_from_content`). Red/green proven through `discover_claude` itself: restoring
+   the old double-open flow makes both swap regression tests red, and dropping the dev/ino
+   identity comparison makes the regular-file-swap test red.
+
 Phase 1 bounded-read round (verified):
 
 1. **No unbounded drain.** `next_line_bounded` stops at the budget and returns
