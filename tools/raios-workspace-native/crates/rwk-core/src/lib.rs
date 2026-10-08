@@ -19,5 +19,6 @@ pub mod handoff_state;
 pub mod memory;
 pub mod project;
 pub mod sessions;
+pub mod terminal;
 
 pub use error::{AppError, ErrorCode, Result};
