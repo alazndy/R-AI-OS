@@ -375,25 +375,34 @@ Resolved this round:
 4. **Lock wording** — `AnkaLock` is a new contract, not a review of existing structure.
 5. **Format rejection** — plain `schema_version` is replaced by the v2 envelope design.
 6. **Shared output types** — required; implementing the unused traits is not.
+7. **HOME retention** — decided 2026-10-08 (operator) as `keep`: the live `policy-init`
+   runs with `--home keep`; home records stay recallable unfiltered but never satisfy a
+   project filter.
 
 Still open:
 
-1. **HOME retention.** Per the revised measurement, Codex history resolves 735 outside HOME
-   and 1,432 directly to HOME, with 6 unresolved. Must be settled before the live policy
-   initialization and cache migration; it does not block Phase 1 importer/provenance work,
-   and `policy init` makes the choice an explicit argument when the time comes.
-2. **Timer.** Remains the final gate, after the manual rollout passes.
+1. **Timer.** Remains the final gate, after the manual rollout passes.
 
-Must close before the live migration (carried forward, not solved by this round):
+Must close before the live migration:
 
-1. **Descriptor identity at open.** `open_regular_file` checks `symlink_metadata` before
-   and after `File::open`. Replacing the path *after* the open cannot retarget the
-   descriptor, so the second check does not describe the real gap: the path can be
-   swapped to a symlink between the first check and the `open` (landing the descriptor
-   on the target) and restored before the second check, leaving both checks green while
-   the descriptor refers to something else. Path metadata never proves descriptor
-   identity. Closing it needs `O_NOFOLLOW` (or `openat` plus an `fstat` comparison),
-   which needs a `libc` dependency this crate does not carry.
+1. **Descriptor identity at open — closed 2026-10-08.** `open_regular_file` now opens
+   with `O_NOFOLLOW` (new unix-targeted `libc = "0.2"` dependency; std exposes
+   `OpenOptions::custom_flags` but not the flag constants) and then proves the
+   *descriptor* with `fstat`: the fd must be regular and carry the same device + inode
+   the pre-open `symlink_metadata` saw. Both swap shapes are refused — a symlink planted
+   between the check and the open (the open itself fails: ELOOP on Linux, EEXIST on
+   macOS), and a different regular file planted there (the identity comparison fails) —
+   and the refusal is `InvalidInput`, the same "not a regular file" answer discovery
+   already counts as `skipped_non_regular`, never an import abort. The post-open path
+   re-check is retained only for its original contract (a path changed or gone before
+   return is reported). Non-unix builds keep the plain open between the two path checks.
+   Red/green proven: dropping `O_NOFOLLOW` makes
+   `a_symlink_swapped_in_between_the_path_check_and_the_open_is_refused` red (it pins
+   the O_NOFOLLOW refusal message); dropping the identity comparison makes
+   `a_different_regular_file_swapped_in_between_the_checks_is_not_returned` red (the
+   old code returned `Ok` carrying the attacker's file). Both tests swap the path
+   through the `#[cfg(test)]` seam between check 1 and the open — the exact window the
+   path checks cannot observe; the seam compiles out of non-test builds.
 
 Phase 1 bounded-read round (verified):
 

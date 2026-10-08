@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -317,26 +319,41 @@ pub fn classify_asserted_path(raw: &str, roots: &AnkaRoots) -> ProjectScope {
     ProjectScope::Scoped(path)
 }
 
-/// Open a path only when it is a regular file, re-checked immediately after opening.
+/// Open a path only when it is a regular file — proven about the *descriptor*,
+/// not just about the path.
 ///
 /// `WalkDir::follow_links(false)` stops traversal from *entering* a symlinked
-/// directory, but `Path::is_file()` and `File::open` both resolve a symlink whose
-/// target is a regular file. Discovery therefore keeps only entries whose own file
-/// type is regular, and every open goes through here.
+/// directory, but `Path::is_file()` and a plain `File::open` both resolve a
+/// symlink whose target is a regular file. Discovery therefore keeps only
+/// entries whose own file type is regular, and every open goes through here.
 ///
-/// What this does **not** prove: the identity of the resulting descriptor. Replacing
-/// the path *after* `File::open` is harmless — an open fd keeps pointing at whatever
-/// it was opened as, and no later rename can retarget it. The real gap is earlier:
-/// the path can be swapped to a symlink between the first check and the `open` (so
-/// the fd lands on the target) and restored before the second check. Both path checks
-/// then pass while the descriptor refers to something else, because path metadata is
-/// never a proof about an fd.
+/// The path can still change between the first check and the open, and that
+/// swap window is exactly what path checks alone cannot see: path metadata is
+/// never a proof about an fd. Three ordered defenses close it:
 ///
-/// Closing that window requires `O_NOFOLLOW` (or `openat` plus an `fstat` identity
-/// comparison), which needs a `libc` dependency this crate does not carry. **Must be
-/// closed before the live migration**; until then this is a documented gap, not a
-/// solved one.
+/// 1. the pre-open `symlink_metadata` must name a regular file;
+/// 2. the open itself runs with `O_NOFOLLOW` (unix) — if the final component
+///    became a symlink inside the window, the open fails instead of landing
+///    the fd on the target, and the refusal is reported as `InvalidInput`, the
+///    same "not a regular file" answer the path check gives, so discovery
+///    counts a skip (`skipped_non_regular`) rather than aborting the import;
+/// 3. `fstat` on the resulting fd must say regular *and* carry the same
+///    device + inode the first check saw — a directory, fifo, or a different
+///    regular file swapped into the path cannot pass as the file that was
+///    checked. This proof is about the descriptor, which is what the old
+///    second *path* check could never establish.
+///
+/// A replacement that lands *after* the open is harmless: an open fd keeps
+/// pointing at whatever it was opened as, and no later rename can retarget it.
+/// The final path re-check stays only to preserve the original contract that
+/// a path removed or changed before we return is reported, never silently read.
+///
+/// Non-unix builds keep the plain open between the two path checks; without
+/// platform flags there is no `O_NOFOLLOW` to apply. Together these close the
+/// symlink-swap window the plan tracks as the **pre-live-migration TOCTOU
+/// gate** — it must stay closed for the live policy/cache transition.
 pub fn open_regular_file(path: &Path) -> io::Result<fs::File> {
+    // Check 1: this entry's own type, from the path, before touching it.
     let before = fs::symlink_metadata(path)?;
     if !before.file_type().is_file() {
         return Err(io::Error::new(
@@ -344,7 +361,21 @@ pub fn open_regular_file(path: &Path) -> io::Result<fs::File> {
             "not a regular file",
         ));
     }
-    let file = fs::File::open(path)?;
+    // Test-only seam: lets a regression test swap the path inside the window
+    // between this check and the open — the interval the checks cannot see.
+    // Compiled out of every non-test build.
+    #[cfg(test)]
+    AFTER_PATH_CHECK.with(|hook| {
+        if let Some(action) = hook.borrow_mut().take() {
+            action();
+        }
+    });
+    // Check 2: descriptor-side proof — `O_NOFOLLOW` at open, then `fstat`
+    // compared against what check 1 saw.
+    let file = open_checked(path, &before)?;
+    // Check 3: the path itself must still name a regular file (contract from
+    // the original implementation: never hand back a file whose path changed
+    // or vanished before this call returns).
     let after = fs::symlink_metadata(path)?;
     if !after.file_type().is_file() {
         return Err(io::Error::new(
@@ -353,6 +384,66 @@ pub fn open_regular_file(path: &Path) -> io::Result<fs::File> {
         ));
     }
     Ok(file)
+}
+
+/// Check 2 on unix: open without following the final component, then prove the
+/// descriptor identity against the pre-open path check.
+#[cfg(unix)]
+fn open_checked(path: &Path, before: &fs::Metadata) -> io::Result<fs::File> {
+    use std::os::unix::fs::MetadataExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| match error.raw_os_error() {
+            // `O_NOFOLLOW` refused a final-component symlink: ELOOP on Linux,
+            // EEXIST on macOS. Map it to the same "not a regular file"
+            // refusal the path check gives so discovery counts a skip.
+            Some(code) if code == libc::ELOOP || code == libc::EEXIST => io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "not a regular file: {} was swapped to a symlink before it \
+                         could be opened",
+                    path.display()
+                ),
+            ),
+            _ => error,
+        })?;
+    let identity = file.metadata()?;
+    if !identity.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "opened file is not regular",
+        ));
+    }
+    if (identity.dev(), identity.ino()) != (before.dev(), before.ino()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path changed during open",
+        ));
+    }
+    Ok(file)
+}
+
+/// Non-unix fallback: no `O_NOFOLLOW` exists to apply, so the plain open sits
+/// between the two path checks and the descriptor check only verifies type.
+#[cfg(not(unix))]
+fn open_checked(path: &Path, _before: &fs::Metadata) -> io::Result<fs::File> {
+    let file = fs::File::open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "opened file is not regular",
+        ));
+    }
+    Ok(file)
+}
+
+// Test-only hook storage; see the call site in `open_regular_file`.
+#[cfg(test)]
+thread_local! {
+    static AFTER_PATH_CHECK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Outcome of one bounded line read.
@@ -1041,6 +1132,78 @@ mod tests {
         assert!(
             claude_cwd(&link).is_none(),
             "a symlinked transcript must not yield provenance"
+        );
+    }
+
+    /// The TOCTOU window the plan tracks as the pre-live-migration gate: the
+    /// path is a regular file at check 1, then swapped to a symlink before the
+    /// open. Path checks alone cannot see this — the old implementation
+    /// followed the link, landing the fd on the target, and only the post-open
+    /// *path* re-check noticed anything. With `O_NOFOLLOW` the open itself
+    /// refuses, reported as the same `InvalidInput` discovery counts as a skip.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_swapped_in_between_the_path_check_and_the_open_is_refused() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("history.jsonl");
+        let target = temp.path().join("outside-secret.jsonl");
+        let hidden = temp.path().join("history.jsonl.away");
+        write(&path, "{\"project\":\"/real/source\"}\n");
+        write(&target, "{\"project\":\"/attacker/target\"}\n");
+
+        let hook_path = path.clone();
+        let hook_hidden = hidden.clone();
+        let hook_target = target.clone();
+        super::AFTER_PATH_CHECK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                fs::rename(&hook_path, &hook_hidden).expect("hide the checked file");
+                std::os::unix::fs::symlink(&hook_target, &hook_path).expect("plant the symlink");
+            }));
+        });
+
+        let error = open_regular_file(&path)
+            .expect_err("the symlink planted inside the window must never be opened");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::InvalidInput,
+            "discovery maps InvalidInput to a skip, never an abort: {error}"
+        );
+        assert!(
+            error.to_string().contains("not a regular file"),
+            "the refusal must come from the regular-file check, not a silent follow: {error}"
+        );
+    }
+
+    /// The descriptor-side identity proof: the swap leaves a *regular* file at
+    /// the path, so every path check passes — but it is not the same file.
+    /// Only `fstat` on the fd (device + inode against check 1) can see this;
+    /// the old second path check happily returned the attacker's file.
+    #[cfg(unix)]
+    #[test]
+    fn a_different_regular_file_swapped_in_between_the_checks_is_not_returned() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("history.jsonl");
+        let other = temp.path().join("other.jsonl");
+        let hidden = temp.path().join("history.jsonl.away");
+        write(&path, "{\"project\":\"/real/source\"}\n");
+        write(&other, "{\"project\":\"/attacker/source\"}\n");
+
+        let hook_path = path.clone();
+        let hook_hidden = hidden.clone();
+        let hook_other = other.clone();
+        super::AFTER_PATH_CHECK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                fs::rename(&hook_path, &hook_hidden).expect("hide the checked file");
+                fs::rename(&hook_other, &hook_path).expect("plant the other file");
+            }));
+        });
+
+        let error = open_regular_file(&path)
+            .expect_err("a different file must not pass as the one check 1 saw");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{error}");
+        assert!(
+            error.to_string().contains("path changed"),
+            "the identity refusal is reported as a changed path: {error}"
         );
     }
 

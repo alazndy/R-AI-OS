@@ -2820,6 +2820,7 @@ dependencies = [
  "fastembed",
  "hf-hub 0.4.3",
  "instant-distance",
+ "libc",
  "notify",
  "notify-rust",
  "ort-sys",

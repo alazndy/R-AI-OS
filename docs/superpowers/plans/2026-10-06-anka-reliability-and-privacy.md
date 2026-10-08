@@ -486,11 +486,10 @@ verified without waiting a day.
   fails on this machine because the live `~/.config/raios/config.toml` sets
   `factory.enabled = true` (separate tracked finding, unrelated to this diff,
   not fixed).
-- Deferred, not done here: the operator's HOME keep/exclude choice (blocks only
-  the live `policy-init` + cache rebuild — code takes it as a mandatory
-  argument), TOCTOU `O_NOFOLLOW` on provenance file opens (mandatory before any
-  live policy/cache transition, separate commit), systemd timer (final gate
-  after manual rollout).
+- Deferred, not done here: systemd timer (final gate after manual rollout).
+  The operator's HOME choice is **decided: `keep`** (2026-10-08) — the live
+  `policy-init` runs with `--home keep`; and the TOCTOU gate is closed by the
+  commit below.
 
 ### Phase 3 corrections — review probes closed (complete)
 
@@ -530,6 +529,26 @@ four are fixed, each with a regression fixture and a verified red/green revert:
 - 7 new tests (ANKA 88/88; CLI unchanged 67/67); all 6 reverts verified RED
   with byte-identical restores; workspace 1195/1196 (sole failure remains the
   known env-dependent `snapshot_generation_on_in_memory_db`).
+
+### TOCTOU gate — descriptor identity at open (complete)
+
+- `open_regular_file` now opens with `O_NOFOLLOW` (new unix-targeted
+  `libc = "0.2"` dependency — std exposes `custom_flags` but not the flag
+  constants) and proves the descriptor with `fstat`: the fd must be regular
+  and carry the same device + inode the pre-open `symlink_metadata` saw. A
+  symlink swapped in between the check and the open is refused by the open
+  itself (ELOOP on Linux, EEXIST on macOS, mapped to `InvalidInput` so
+  discovery counts `skipped_non_regular` instead of aborting the import); a
+  different regular file swapped in is refused by the identity comparison.
+  The post-open path re-check stays for its original contract; non-unix
+  builds keep the plain open between the two path checks.
+- Both swap shapes are regression-tested through a `#[cfg(test)]` seam that
+  runs between check 1 and the open — the exact window path checks cannot
+  observe — and both reverts are verified RED: dropping `O_NOFOLLOW` makes
+  `a_symlink_swapped_in_between_the_path_check_and_the_open_is_refused` red;
+  dropping the identity comparison makes
+  `a_different_regular_file_swapped_in_between_the_checks_is_not_returned` red
+  (the old code returned `Ok` carrying the attacker's file). ANKA 90/90.
 
 ## Implementation boundary
 
