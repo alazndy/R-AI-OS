@@ -105,3 +105,20 @@ exit=3
 By the decision table of Plan 4: not "every gate passed", and not a failure of G1, G2, G4, G5, G6 or G7 on a quiet machine. Only G8 failed on a quiet machine, once, by 0.3%.
 
 **The engine is sound; Plan 4b may start.** G8 is kept as a monitored risk, not a blocker, for two reasons: its limit is a proxy (a quarter of a 30 fps frame) built before any measurement, and the true test of the same question is the frame rate of a real GPUI window under four floods, which is exactly what Plan 4b measures. If that fails, the levers are known and cheap: smaller parse slices (4 KiB), a lower priority for the reader and parser threads, and a longer sampling interval. The limit is not changed to make the number pass.
+
+## Follow-up: G8 re-measurement and decision (2026-10-10)
+
+Commit measured: b2f4979, release build, `term-bench --enforce --runs 5`, Intel Core i7-8550U (4 cores, 8 threads).
+
+| Condition | G8 p99 (limit 8.3 ms) | Notes |
+|---|---|---|
+| Quiet machine, no change, 4 runs | 8.62 - 9.18 ms | 27-28% foreign CPU (Gradle daemon, aiosd); harness reports INCONCLUSIVE |
+| Earlier quiet runs | 8.73, 9.86 ms | FAIL (foreign CPU 20-22%) |
+| `PARSE_SLICE_BYTES` 8 KiB -> 2 KiB | 9.6 - 15.4 ms | Worse; G7 rose from 1.1 s to 1.3 s (and 3.6 s on a busy run). Reverted |
+| Parser threads at nice +5 | 8.8 - 12.0 ms | No improvement; one run failed G3 (1.217x). Reverted |
+
+G1-G7 pass with wide margins in every run (G5 0.4-0.6 ms, G7 about 1.1 s, G4 about 15 MiB).
+
+Reading: a single engine answers a snapshot in about 0.5 ms (G5). With four floods the p99 rises to 8-9 ms because four parser threads, four reader threads and the sampling thread compete for four physical cores, while other processes keep 25-30% of the machine busy. No engine-side lever tried (slice size, parser priority) moves it, so G8 is a CPU-contention proxy rather than a lock-wait defect.
+
+Decision (owner approved 2026-10-10): the spec limit is not relaxed. G8 is recorded as a known risk and is re-measured in Plan 4b on the real GPUI view, where the UI thread is separate and the frame time is measured directly. Plan 4b may proceed.
