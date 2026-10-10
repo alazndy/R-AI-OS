@@ -1,0 +1,23 @@
+[package]
+name = "rwk-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rwk-core = { path = "../rwk-core" }
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+async-channel = "2"
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.8", features = ["test-support"] }
+gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.8" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8" }
+
+[[test]]
+name = "view_window"
+harness = false
+
+[[test]]
+name = "view_headless"

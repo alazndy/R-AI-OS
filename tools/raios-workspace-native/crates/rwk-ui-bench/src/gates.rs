@@ -1,0 +1,215 @@
+//! The UI-bound gates of the terminal view and their evaluation.
+//!
+//! The limits come from section 9 of the design spec, which calls them hypotheses. Frames are
+//! counted when the view paints, not when the compositor presents them (decision D6), and a
+//! keystroke is timed from the key event to the paint that shows its echo; compositor and
+//! display latency are not included.
+
+/// Which side of the limit passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// The measurement must not exceed the limit.
+    AtMost,
+    /// The measurement must reach the limit.
+    AtLeast,
+}
+
+/// One gate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Gate {
+    /// Short identifier used in reports.
+    pub id: &'static str,
+    /// What is measured.
+    pub name: &'static str,
+    /// Unit of the measurement and the limit.
+    pub unit: &'static str,
+    /// The limit.
+    pub limit: f64,
+    /// Which side passes.
+    pub direction: Direction,
+}
+
+/// Process spawn to the first painted frame of one terminal window.
+pub const COLD_START: Gate = Gate {
+    id: "U1",
+    name: "spawn to first painted frame",
+    unit: "ms",
+    limit: 300.0,
+    direction: Direction::AtMost,
+};
+
+/// Painted frames per second during a 4M-line flood in one pane.
+pub const FLOOD_FPS: Gate = Gate {
+    id: "U2",
+    name: "painted frames per second, 4M-line flood",
+    unit: "fps",
+    limit: 45.0,
+    direction: Direction::AtLeast,
+};
+
+/// Painted frames per second with four panes flooding at once.
+pub const FLOOD4_FPS: Gate = Gate {
+    id: "U3",
+    name: "painted frames per second, 4 concurrent floods",
+    unit: "fps",
+    limit: 30.0,
+    direction: Direction::AtLeast,
+};
+
+/// Key event to the paint that shows the echo, 99th percentile.
+pub const KEYSTROKE_P99: Gate = Gate {
+    id: "U4",
+    name: "keystroke to painted echo, p99",
+    unit: "ms",
+    limit: 16.0,
+    direction: Direction::AtMost,
+};
+
+/// Proportional set size of the process with four idle terminals.
+pub const IDLE_PSS: Gate = Gate {
+    id: "U5",
+    name: "idle PSS with 4 live terminals",
+    unit: "MB",
+    limit: 150.0,
+    direction: Direction::AtMost,
+};
+
+/// Every gate, in report order.
+#[cfg(test)]
+pub const ALL_GATES: [Gate; 5] = [COLD_START, FLOOD_FPS, FLOOD4_FPS, KEYSTROKE_P99, IDLE_PSS];
+
+/// A gate together with what was measured.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Outcome {
+    /// The gate.
+    pub gate: Gate,
+    /// The measurement, in the gate's unit.
+    pub measured: f64,
+}
+
+impl Outcome {
+    /// True when the measurement is on the passing side of the limit.
+    pub fn passed(&self) -> bool {
+        match self.gate.direction {
+            Direction::AtMost => self.measured <= self.gate.limit,
+            Direction::AtLeast => self.measured >= self.gate.limit,
+        }
+    }
+
+    /// One report line.
+    pub fn line(&self) -> String {
+        let relation = match self.gate.direction {
+            Direction::AtMost => "limit <=",
+            Direction::AtLeast => "limit >=",
+        };
+        format!(
+            "{} {:<46} measured {:>9.3} {:<3} {} {:>7.3} {:<3} {}",
+            self.gate.id,
+            self.gate.name,
+            self.measured,
+            self.gate.unit,
+            relation,
+            self.gate.limit,
+            self.gate.unit,
+            if self.passed() { "PASS" } else { "FAIL" }
+        )
+    }
+}
+
+/// What a whole run means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Every gate passed.
+    Passed,
+    /// A gate failed on a quiet machine.
+    Failed,
+    /// A gate failed, or could not be measured, so the run proves nothing.
+    Inconclusive,
+}
+
+/// Combines the outcomes with the machine state. A pass counts even on a busy machine, because
+/// load can only make the numbers worse; a failure counts only when the machine was quiet.
+/// A gate that could not be measured (`unmeasured`, for example because the compositor
+/// delivered no frames) makes the run inconclusive, never passed.
+pub fn verdict(outcomes: &[Outcome], unmeasured: usize, machine_was_quiet: bool) -> Verdict {
+    let all_passed = outcomes.iter().all(Outcome::passed);
+    match (all_passed, unmeasured > 0, machine_was_quiet) {
+        (_, true, _) => Verdict::Inconclusive,
+        (true, false, _) => Verdict::Passed,
+        (false, false, true) => Verdict::Failed,
+        (false, false, false) => Verdict::Inconclusive,
+    }
+}
+
+/// One `key=value` pair of a child's result line.
+pub fn parse_result_line(line: &str) -> Option<Vec<(String, String)>> {
+    let rest = line.strip_prefix("RESULT ")?;
+    rest.split_whitespace()
+        .map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(gate: Gate, measured: f64) -> Outcome {
+        Outcome { gate, measured }
+    }
+
+    #[test]
+    fn at_most_gates_pass_at_the_limit_and_fail_above_it() {
+        assert!(outcome(COLD_START, 300.0).passed());
+        assert!(!outcome(COLD_START, 300.1).passed());
+    }
+
+    #[test]
+    fn at_least_gates_pass_at_the_limit_and_fail_below_it() {
+        assert!(outcome(FLOOD_FPS, 45.0).passed());
+        assert!(!outcome(FLOOD_FPS, 44.9).passed());
+    }
+
+    #[test]
+    fn gate_identifiers_are_unique_and_limits_positive() {
+        let mut ids: Vec<&str> = ALL_GATES.iter().map(|gate| gate.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), ALL_GATES.len());
+        assert!(ALL_GATES.iter().all(|gate| gate.limit > 0.0));
+    }
+
+    #[test]
+    fn a_failure_on_a_busy_machine_is_inconclusive_but_a_pass_always_counts() {
+        let failing = [outcome(FLOOD_FPS, 10.0)];
+        let passing = [outcome(FLOOD_FPS, 60.0)];
+        assert_eq!(verdict(&failing, 0, true), Verdict::Failed);
+        assert_eq!(verdict(&failing, 0, false), Verdict::Inconclusive);
+        assert_eq!(verdict(&passing, 0, false), Verdict::Passed);
+    }
+
+    #[test]
+    fn a_gate_that_could_not_be_measured_is_never_a_pass() {
+        let passing = [outcome(COLD_START, 100.0)];
+        assert_eq!(verdict(&passing, 1, true), Verdict::Inconclusive);
+    }
+
+    #[test]
+    fn report_lines_state_the_direction_and_the_verdict() {
+        let line = outcome(FLOOD_FPS, 30.0).line();
+        assert!(line.starts_with("U2 "), "{line}");
+        assert!(line.contains("limit >="), "{line}");
+        assert!(line.ends_with("FAIL"), "{line}");
+    }
+
+    #[test]
+    fn a_child_result_line_is_parsed_into_pairs() {
+        let pairs = parse_result_line("RESULT fps=61.5 frames=300 slow=2").unwrap();
+        assert_eq!(pairs[0], ("fps".to_owned(), "61.5".to_owned()));
+        assert_eq!(pairs.len(), 3);
+        assert!(parse_result_line("noise").is_none());
+        assert!(parse_result_line("RESULT broken").is_none());
+    }
+}
