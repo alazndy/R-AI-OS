@@ -184,3 +184,82 @@ jobs:
         run: |
           ./install-system.ps1 -InstallRoot "$env:RUNNER_TEMP\raios-install" -WorkspaceRoot "$env:RUNNER_TEMP\raios-workspace" -NoPath -NoScheduledTask
           & "$env:RUNNER_TEMP\raios-install\bin\raios.exe" --version
+
+  native-workspace:
+    name: Native workspace (Ubuntu, headless)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TARGET_DIR: /home/runner/.cache/rwk-native-target
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_CONFIG_SYSTEM: /dev/null
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          workspaces: tools/raios-workspace-native -> /home/runner/.cache/rwk-native-target
+          shared-key: native-workspace-ubuntu
+      - name: Check native formatting
+        run: cargo fmt --manifest-path tools/raios-workspace-native/Cargo.toml --all --check
+      - name: Verify core dependency boundary
+        run: python3 tools/raios-workspace-native/scripts/verify_core_boundary.py tools/raios-workspace-native/Cargo.toml
+      - name: Verify GPUI supply chain
+        run: python3 tools/raios-workspace-native/scripts/verify_gpui_supply_chain.py tools/raios-workspace-native/Cargo.lock --expected-owner huacnlee --allowlist tools/raios-workspace-native/scripts/gpui-supply-chain-allowlist.toml
+      # Runner system dependencies must be established from this job's actual failure logs.
+      # No speculative apt package list: review the first native gh run before adding it.
+      - name: Lint native workspace
+        run: cargo clippy --manifest-path tools/raios-workspace-native/Cargo.toml --workspace --all-targets --locked -- -D warnings
+      - name: Test native workspace without display gates
+        run: env -u RWK_UI_DISPLAY_TESTS cargo test --manifest-path tools/raios-workspace-native/Cargo.toml --workspace --locked
+      - name: Install Rust dependency auditor
+        run: cargo install cargo-audit --locked
+      - name: Audit native lockfile
+        run: cargo audit --file tools/raios-workspace-native/Cargo.lock
+
+  native-workspace-arch:
+    name: Native workspace (Arch Linux, headless)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel@sha256:996c3a1d6b0d87b01242f6fcd8cfa3ad3eece1a67ab5c8f108e20af1d7b97bdd
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TARGET_DIR: /github/home/.cache/rwk-native-target
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_CONFIG_SYSTEM: /dev/null
+    steps:
+      - name: Bootstrap Arch CI tools
+        # Needed by checkout, the toolchain installer and the Python provenance verifier.
+        # Discover GPUI library packages from the actual Arch build logs separately.
+        run: pacman -Syu --noconfirm --needed git python curl
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          workspaces: tools/raios-workspace-native -> /github/home/.cache/rwk-native-target
+          shared-key: native-workspace-arch
+      - name: Check native formatting
+        run: cargo fmt --manifest-path tools/raios-workspace-native/Cargo.toml --all --check
+      - name: Verify core dependency boundary
+        run: python3 tools/raios-workspace-native/scripts/verify_core_boundary.py tools/raios-workspace-native/Cargo.toml
+      - name: Verify GPUI supply chain
+        run: python3 tools/raios-workspace-native/scripts/verify_gpui_supply_chain.py tools/raios-workspace-native/Cargo.lock --expected-owner huacnlee --allowlist tools/raios-workspace-native/scripts/gpui-supply-chain-allowlist.toml
+      # Runner system dependencies must be established from this job's actual failure logs.
+      # No speculative library package list: review the first Arch gh run before adding it.
+      - name: Lint native workspace
+        run: cargo clippy --manifest-path tools/raios-workspace-native/Cargo.toml --workspace --all-targets --locked -- -D warnings
+      - name: Test native workspace without display gates
+        run: env -u RWK_UI_DISPLAY_TESTS cargo test --manifest-path tools/raios-workspace-native/Cargo.toml --workspace --locked
+      - name: Install Rust dependency auditor
+        run: cargo install cargo-audit --locked
+      - name: Audit native lockfile
+        run: cargo audit --file tools/raios-workspace-native/Cargo.lock
