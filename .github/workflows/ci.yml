@@ -236,7 +236,11 @@ jobs:
       - name: Bootstrap Arch CI tools
         # Needed by checkout, the toolchain installer and the Python provenance verifier.
         # Discover GPUI library packages from the actual Arch build logs separately.
-        run: pacman -Syu --noconfirm --needed git python curl
+        run: |
+          pacman -Syu --noconfirm --needed git python curl ttf-dejavu
+          # The real Arch run failed font resolution in editor_headless.
+          test -r /usr/share/fonts/TTF/DejaVuSans.ttf
+          test -r /usr/share/fonts/TTF/DejaVuSansMono.ttf
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
