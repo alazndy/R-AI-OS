@@ -191,8 +191,6 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_TARGET_DIR: /home/runner/.cache/rwk-native-target
-      GIT_CONFIG_GLOBAL: /dev/null
-      GIT_CONFIG_SYSTEM: /dev/null
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -214,6 +212,9 @@ jobs:
       - name: Lint native workspace
         run: cargo clippy --manifest-path tools/raios-workspace-native/Cargo.toml --workspace --all-targets --locked -- -D warnings
       - name: Test native workspace without display gates
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
         run: env -u RWK_UI_DISPLAY_TESTS cargo test --manifest-path tools/raios-workspace-native/Cargo.toml --workspace --locked
       - name: Install Rust dependency auditor
         run: cargo install cargo-audit --locked
@@ -231,8 +232,6 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_TARGET_DIR: /github/home/.cache/rwk-native-target
-      GIT_CONFIG_GLOBAL: /dev/null
-      GIT_CONFIG_SYSTEM: /dev/null
     steps:
       - name: Bootstrap Arch CI tools
         # Needed by checkout, the toolchain installer and the Python provenance verifier.
@@ -258,6 +257,9 @@ jobs:
       - name: Lint native workspace
         run: cargo clippy --manifest-path tools/raios-workspace-native/Cargo.toml --workspace --all-targets --locked -- -D warnings
       - name: Test native workspace without display gates
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
         run: env -u RWK_UI_DISPLAY_TESTS cargo test --manifest-path tools/raios-workspace-native/Cargo.toml --workspace --locked
       - name: Install Rust dependency auditor
         run: cargo install cargo-audit --locked
