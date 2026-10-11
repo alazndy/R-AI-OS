@@ -74,9 +74,56 @@ pub const IDLE_PSS: Gate = Gate {
     direction: Direction::AtMost,
 };
 
+/// Editor open of a 30K-line file, first painted frame after `open` (spec section 9).
+pub const EDITOR_OPEN_30K: Gate = Gate {
+    id: "E1",
+    name: "editor open, 30K lines, to first painted frame",
+    unit: "ms",
+    limit: 350.0,
+    direction: Direction::AtMost,
+};
+
+/// Editor open of a 500K-line buffer. A capability gate of the component: 500K lines exceed
+/// the product's 2 MiB document limit, so no product file is this large.
+pub const EDITOR_OPEN_500K: Gate = Gate {
+    id: "E2",
+    name: "editor open, 500K lines (capability), to first frame",
+    unit: "ms",
+    limit: 700.0,
+    direction: Direction::AtMost,
+};
+
+/// `rwk-app` spawn to its first painted frame.
+pub const APP_COLD_START: Gate = Gate {
+    id: "A1",
+    name: "rwk-app spawn to first frame",
+    unit: "ms",
+    limit: 300.0,
+    direction: Direction::AtMost,
+};
+
+/// Proportional set size with a project, one open file and four live terminals.
+pub const APP_IDLE_PSS: Gate = Gate {
+    id: "A2",
+    name: "rwk-app idle PSS, project + file + 4 terminals",
+    unit: "MB",
+    limit: 150.0,
+    direction: Direction::AtMost,
+};
+
 /// Every gate, in report order.
 #[cfg(test)]
-pub const ALL_GATES: [Gate; 5] = [COLD_START, FLOOD_FPS, FLOOD4_FPS, KEYSTROKE_P99, IDLE_PSS];
+pub const ALL_GATES: [Gate; 9] = [
+    COLD_START,
+    FLOOD_FPS,
+    FLOOD4_FPS,
+    KEYSTROKE_P99,
+    IDLE_PSS,
+    EDITOR_OPEN_30K,
+    EDITOR_OPEN_500K,
+    APP_COLD_START,
+    APP_IDLE_PSS,
+];
 
 /// A gate together with what was measured.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -164,6 +211,28 @@ mod tests {
     fn at_most_gates_pass_at_the_limit_and_fail_above_it() {
         assert!(outcome(COLD_START, 300.0).passed());
         assert!(!outcome(COLD_START, 300.1).passed());
+    }
+
+    #[test]
+    fn the_p3_gates_have_the_limits_of_the_plan() {
+        assert_eq!(
+            (
+                EDITOR_OPEN_30K.limit,
+                EDITOR_OPEN_500K.limit,
+                APP_COLD_START.limit,
+                APP_IDLE_PSS.limit
+            ),
+            (350.0, 700.0, 300.0, 150.0)
+        );
+        for gate in [
+            EDITOR_OPEN_30K,
+            EDITOR_OPEN_500K,
+            APP_COLD_START,
+            APP_IDLE_PSS,
+        ] {
+            assert_eq!(gate.direction, Direction::AtMost, "{}", gate.id);
+        }
+        assert!(outcome(EDITOR_OPEN_30K, 351.0).line().ends_with("FAIL"));
     }
 
     #[test]

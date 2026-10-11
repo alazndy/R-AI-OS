@@ -27,7 +27,7 @@ const FLOOD_LINES_QUAD: u64 = 1_000_000;
 const KEYSTROKES: usize = 200;
 const KEYSTROKE_GAP: Duration = Duration::from_millis(20);
 /// Idle time before PSS is read (U5).
-const IDLE_SETTLE: Duration = Duration::from_secs(10);
+pub(crate) const IDLE_SETTLE: Duration = Duration::from_secs(10);
 /// A flood or echo that shows fewer frames than this after two seconds means the compositor is
 /// not delivering frames to the window; the gate then cannot be measured.
 const MIN_LIVE_FRAMES: u64 = 3;
@@ -50,6 +50,12 @@ pub enum Scenario {
     Keystroke,
     /// Four idle terminals (U5).
     Idle,
+    /// Editor open of a 30K-line file (E1).
+    EditorOpen30k,
+    /// Editor open of a 500K-line buffer (E2).
+    EditorOpen500k,
+    /// The whole application at rest: project, file, four terminals (A2).
+    AppIdle,
 }
 
 impl Scenario {
@@ -61,6 +67,9 @@ impl Scenario {
             "flood4" => Scenario::Flood4,
             "keystroke" => Scenario::Keystroke,
             "idle" => Scenario::Idle,
+            "editor-open-30k" => Scenario::EditorOpen30k,
+            "editor-open-500k" => Scenario::EditorOpen500k,
+            "app-idle" => Scenario::AppIdle,
             _ => return None,
         })
     }
@@ -72,6 +81,9 @@ impl Scenario {
             Scenario::Flood4 => "flood4",
             Scenario::Keystroke => "keystroke",
             Scenario::Idle => "idle",
+            Scenario::EditorOpen30k => "editor-open-30k",
+            Scenario::EditorOpen500k => "editor-open-500k",
+            Scenario::AppIdle => "app-idle",
         }
     }
 }
@@ -236,10 +248,13 @@ fn pump_frames(window: &mut Window, seen: Rc<Cell<u32>>, remaining: u32) {
 /// True when the compositor delivers frame callbacks to the window. A window can repaint on
 /// input events without that (and then holds no GPU resources), so latency and memory are
 /// measured only after this passes.
-async fn window_receives_frames(handle: &WindowHandle<Panes>, cx: &mut AsyncApp) -> bool {
+pub(crate) async fn window_receives_frames(
+    handle: gpui::AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> bool {
     let seen = Rc::new(Cell::new(0u32));
     let counter = Rc::clone(&seen);
-    let started = cx.update_window((*handle).into(), |_root, window, _cx| {
+    let started = cx.update_window(handle, |_root, window, _cx| {
         pump_frames(window, counter, PROBE_FRAMES);
     });
     if started.is_err() {
@@ -286,11 +301,18 @@ fn fail(message: &str) -> ! {
 
 /// Runs one scenario to completion and exits the process.
 pub fn run(scenario: Scenario) -> ! {
+    if matches!(
+        scenario,
+        Scenario::EditorOpen30k | Scenario::EditorOpen500k | Scenario::AppIdle
+    ) {
+        crate::app_child::run(scenario);
+    }
     let body: &str = match scenario {
-        Scenario::ColdStart | Scenario::Idle => "exec sleep 100000",
+        Scenario::ColdStart | Scenario::Idle | Scenario::AppIdle => "exec sleep 100000",
         Scenario::Keystroke => "exec cat",
         Scenario::Flood => "seq 1 4000000",
         Scenario::Flood4 => "seq 1 1000000",
+        Scenario::EditorOpen30k | Scenario::EditorOpen500k => "exec sleep 100000",
     };
     let rig = match rig(body) {
         Ok(rig) => rig,
@@ -341,6 +363,9 @@ async fn measure(
         Scenario::Flood | Scenario::Flood4 => flood(scenario, handle, engines, started, cx).await,
         Scenario::Keystroke => keystroke(handle, cx).await,
         Scenario::Idle => idle(handle, cx).await,
+        Scenario::EditorOpen30k | Scenario::EditorOpen500k | Scenario::AppIdle => {
+            Err("handled by app_child".to_owned())
+        }
     }
 }
 
@@ -412,7 +437,7 @@ async fn keystroke(handle: &WindowHandle<Panes>, cx: &mut AsyncApp) -> Result<St
         .map_err(|error| error.to_string())?;
     // An input event repaints the window even when the compositor delivers no frame callbacks,
     // which would make the echo latency look fine; prove real frame delivery first.
-    if !window_receives_frames(handle, cx).await {
+    if !window_receives_frames((*handle).into(), cx).await {
         return Ok("RESULT scenario=keystroke status=noframes".to_owned());
     }
     let mut samples = Vec::with_capacity(KEYSTROKES);
@@ -461,7 +486,7 @@ async fn idle(handle: &WindowHandle<Panes>, cx: &mut AsyncApp) -> Result<String,
             window.focus(&focus, cx);
         })
         .map_err(|error| error.to_string())?;
-    if !window_receives_frames(handle, cx).await {
+    if !window_receives_frames((*handle).into(), cx).await {
         return Ok("RESULT scenario=idle status=noframes".to_owned());
     }
     cx.background_executor().timer(IDLE_SETTLE).await;
@@ -473,7 +498,7 @@ async fn idle(handle: &WindowHandle<Panes>, cx: &mut AsyncApp) -> Result<String,
 }
 
 /// Proportional set size of this process in MB, from `/proc/self/smaps_rollup`.
-fn pss_mb() -> Option<f64> {
+pub(crate) fn pss_mb() -> Option<f64> {
     let text = std::fs::read_to_string("/proc/self/smaps_rollup").ok()?;
     let line = text.lines().find(|line| line.starts_with("Pss:"))?;
     let kilobytes: f64 = line.split_whitespace().nth(1)?.parse().ok()?;

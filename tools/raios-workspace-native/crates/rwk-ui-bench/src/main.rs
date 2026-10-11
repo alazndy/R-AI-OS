@@ -4,7 +4,8 @@
 //! measurement runs in its own child process, because a GPUI application runs once per process.
 //!
 //! Scenarios: `cold-start` (U1), `flood` (U2), `flood4` (U3), `keystroke` (U4), `idle` (U5),
-//! `all`. Rates and times use the median of the runs, latencies and memory the worst.
+//! `editor-open` (E1, E2), `app-cold-start` (A1, needs `rwk-app` built next to `ui-bench`),
+//! `app-idle` (A2), `all`. Rates and times use the median of the runs, latencies and memory the worst.
 //!
 //! Exit status with `--enforce`: 0 every gate passed, 1 a gate failed on a quiet machine,
 //! 3 inconclusive (a failure on a busy machine, or a gate that could not be measured because the
@@ -14,6 +15,7 @@
 //! (default 25%) before and during the run. Frames are painted frames, not presented ones, and
 //! keystroke latency excludes compositor and display; the report says so.
 
+mod app_child;
 mod child;
 mod gates;
 mod machine;
@@ -25,14 +27,13 @@ use std::time::{Duration, Instant};
 
 use child::Scenario;
 use gates::{
-    parse_result_line, verdict, Gate, Outcome, Verdict, COLD_START, FLOOD4_FPS, FLOOD_FPS,
-    IDLE_PSS, KEYSTROKE_P99,
+    parse_result_line, verdict, Gate, Outcome, Verdict, APP_COLD_START, APP_IDLE_PSS, COLD_START,
+    EDITOR_OPEN_30K, EDITOR_OPEN_500K, FLOOD4_FPS, FLOOD_FPS, IDLE_PSS, KEYSTROKE_P99,
 };
 use machine::Meter;
 use stats::median;
 
 const QUIET_WAIT: Duration = Duration::from_secs(90);
-const CHILD_DEADLINE: Duration = Duration::from_secs(240);
 
 struct Options {
     scenario: String,
@@ -92,28 +93,53 @@ fn child_command(scenario: &str) -> Result<Command, String> {
 
 /// Spawn to the child's `FIRST_FRAME` line.
 fn run_cold_start() -> Result<Run, String> {
-    let mut command = child_command("cold-start")?;
+    run_first_frame(child_command("cold-start")?)
+}
+
+/// Spawn of the real application to its `FIRST_FRAME` line (A1).
+fn run_app_cold_start() -> Result<Run, String> {
+    let executable = child::current_exe()?.with_file_name("rwk-app");
+    if !executable.exists() {
+        return Ok(Run::NotMeasured(
+            "rwk-app is not built next to ui-bench (cargo build --release -p rwk-app)".into(),
+        ));
+    }
+    let mut command = Command::new(executable);
+    command.arg("--exit-after-first-frame");
+    run_first_frame(command)
+}
+
+/// How long a first frame may take before the compositor is judged not to deliver frames.
+const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(20);
+
+/// Times a command from spawn to the `FIRST_FRAME` line it prints. A child that prints nothing
+/// within [`FIRST_FRAME_DEADLINE`] is not measured (it is killed), never reported as slow.
+fn run_first_frame(mut command: Command) -> Result<Run, String> {
     command.stdout(Stdio::piped());
     let started = Instant::now();
     let mut process = command.spawn().map_err(|error| error.to_string())?;
     let stdout = process.stdout.take().ok_or("no child stdout")?;
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    let result = loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break Run::NotMeasured("the child exited before painting".into()),
-            Ok(_) if line.trim() == "FIRST_FRAME" => {
-                break Run::Value(started.elapsed().as_secs_f64() * 1000.0)
+    let (sender, receiver) = std::sync::mpsc::channel::<f64>();
+    let reader = std::thread::spawn(move || {
+        let mut lines = BufReader::new(stdout);
+        let mut line = String::new();
+        while matches!(lines.read_line(&mut line), Ok(count) if count > 0) {
+            if line.trim() == "FIRST_FRAME" {
+                let _ = sender.send(started.elapsed().as_secs_f64() * 1000.0);
+                return;
             }
-            Ok(_) => {}
+            line.clear();
         }
-        if started.elapsed() > CHILD_DEADLINE {
-            break Run::NotMeasured("no frame within the deadline".into());
-        }
+    });
+    let result = match receiver.recv_timeout(FIRST_FRAME_DEADLINE) {
+        Ok(milliseconds) => Run::Value(milliseconds),
+        Err(_) => Run::NotMeasured(
+            "no first frame within 20 s (the compositor delivered no frame callback)".into(),
+        ),
     };
     let _ = process.kill();
     let _ = process.wait();
+    let _ = reader.join();
     Ok(result)
 }
 
@@ -188,7 +214,19 @@ type GateResult = Result<Outcome, (Gate, String)>;
 
 fn measure(name: &str, runs: usize) -> Result<Vec<GateResult>, String> {
     let wanted: Vec<&str> = if name == "all" {
-        vec!["cold-start", "flood", "flood4", "keystroke", "idle"]
+        vec![
+            "cold-start",
+            "flood",
+            "flood4",
+            "keystroke",
+            "idle",
+            "editor-open-30k",
+            "editor-open-500k",
+            "app-cold-start",
+            "app-idle",
+        ]
+    } else if name == "editor-open" {
+        vec!["editor-open-30k", "editor-open-500k"]
     } else {
         vec![name]
     };
@@ -215,6 +253,22 @@ fn measure(name: &str, runs: usize) -> Result<Vec<GateResult>, String> {
                 IDLE_PSS,
                 true,
                 repeat(runs, || run_result("idle", "pss_mb"))?,
+            ),
+            "editor-open-30k" => (
+                EDITOR_OPEN_30K,
+                true,
+                repeat(runs, || run_result("editor-open-30k", "ms"))?,
+            ),
+            "editor-open-500k" => (
+                EDITOR_OPEN_500K,
+                true,
+                repeat(runs, || run_result("editor-open-500k", "ms"))?,
+            ),
+            "app-cold-start" => (APP_COLD_START, false, repeat(runs, run_app_cold_start)?),
+            "app-idle" => (
+                APP_IDLE_PSS,
+                true,
+                repeat(runs, || run_result("app-idle", "pss_mb"))?,
             ),
             other => return Err(format!("unknown scenario {other:?}")),
         };

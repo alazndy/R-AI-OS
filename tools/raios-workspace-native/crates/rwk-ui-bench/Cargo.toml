@@ -15,5 +15,6 @@ rwk-core = { path = "../rwk-core" }
 rwk-ui = { path = "../rwk-ui" }
 gpui = { package = "gpui-pre", version = "=0.3.8" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8" }
+gpui_base = { package = "gpui-base", version = "=0.7.1" }
 async-channel = "2"
 tempfile = "3"
