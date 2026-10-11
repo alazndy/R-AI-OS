@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/rwk-core", "crates/rwk-bench", "crates/rwk-ui", "crates/rwk-ui-bench"]
+members = ["crates/rwk-core", "crates/rwk-bench", "crates/rwk-ui", "crates/rwk-ui-bench", "crates/rwk-app"]
 
 [workspace.package]
 version = "0.1.0"

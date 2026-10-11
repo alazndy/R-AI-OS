@@ -4,6 +4,7 @@ pub mod element;
 pub mod gate;
 pub mod input;
 pub mod metrics;
+pub mod registry;
 pub mod view;
 
 pub use element::TerminalElement;

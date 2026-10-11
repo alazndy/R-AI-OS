@@ -233,6 +233,10 @@ impl TerminalView {
     }
 
     /// Sends bytes the user produced; a program that does not read its input is reported.
+    pub fn send_bytes(&self, bytes: &[u8], cx: &mut Context<Self>) {
+        self.send(bytes, cx);
+    }
+
     fn send(&self, bytes: &[u8], cx: &mut Context<Self>) {
         match self.shared.engine.send_input(bytes) {
             Ok(()) => self.clear_status(),
@@ -285,13 +289,15 @@ impl TerminalView {
         }
     }
 
-    fn copy_selection(&mut self, cx: &mut Context<Self>) {
+    /// Copies the selection to the clipboard (the user's explicit action).
+    pub fn copy_selection(&mut self, cx: &mut Context<Self>) {
         if let Some(text) = self.shared.engine.selection_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
-    fn paste_from_clipboard(&mut self, cx: &mut Context<Self>) {
+    /// Pastes the clipboard: single lines go straight in, multiline pastes wait for Enter.
+    pub fn paste_from_clipboard(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };

@@ -9,10 +9,13 @@ publish.workspace = true
 rwk-core = { path = "../rwk-core" }
 gpui = { package = "gpui-pre", version = "=0.3.8" }
 async-channel = "2"
+gpui_base = { package = "gpui-base", version = "=0.7.1" }
+syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.8", features = ["test-support"] }
 gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.8" }
+tempfile = "3"
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8" }
 
 [[test]]
@@ -21,3 +24,12 @@ harness = false
 
 [[test]]
 name = "view_headless"
+
+[[test]]
+name = "editor_headless"
+
+[[test]]
+name = "tree_headless"
+
+[[test]]
+name = "workbench_headless"
