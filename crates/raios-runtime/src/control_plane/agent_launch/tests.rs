@@ -7,7 +7,18 @@ use serde_json::Value;
 
 use crate::control_plane::service::{dispatch_with_seams, ControlActor};
 
-const PROJECT: &str = "/workspace/registered-app";
+/// Absolute on every platform: a bare `/workspace/...` is relative on Windows.
+const PROJECT: &str = if cfg!(windows) {
+    r"C:\workspace\registered-app"
+} else {
+    "/workspace/registered-app"
+};
+/// A well-formed absolute path nobody registered.
+const UNREGISTERED: &str = if cfg!(windows) {
+    r"C:\workspace\not-registered"
+} else {
+    "/workspace/not-registered"
+};
 
 fn db() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
@@ -148,7 +159,7 @@ fn both_commands_reject_the_same_bad_input_with_the_same_code() {
     let cases: [(&str, &str, Option<&str>, &str); 7] = [
         ("codex; touch /tmp/pwned", PROJECT, None, "INVALID_INPUT"),
         ("claude", "relative/path", None, "INVALID_INPUT"),
-        ("claude", "/workspace/not-registered", None, "NOT_FOUND"),
+        ("claude", UNREGISTERED, None, "NOT_FOUND"),
         ("claude", PROJECT, Some("--dangerous-flag"), "INVALID_INPUT"),
         (
             "claude",

@@ -16,7 +16,10 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_path_buf();
+        // macOS temporary directories live behind a symlink (/var -> /private/var) and the
+        // child process reports its working directory resolved, so the handoff is queued under
+        // the resolved path: delivery is scoped to the exact project path.
+        let root = dir.path().canonicalize().unwrap();
         let project = root.join("project");
         fs::create_dir_all(&project).unwrap();
         fs::create_dir_all(root.join("bin")).unwrap();

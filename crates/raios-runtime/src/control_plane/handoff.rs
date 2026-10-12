@@ -136,6 +136,13 @@ mod tests {
         conn
     }
 
+    /// An absolute project path on every platform: a bare `/work/app` is relative on Windows.
+    const APP: &str = if cfg!(windows) {
+        r"C:\work\app"
+    } else {
+        "/work/app"
+    };
+
     fn handoff(key: &str, project: &str, summary: &str) -> Command {
         Command::CreateHandoff {
             project_path: project.into(),
@@ -162,12 +169,9 @@ mod tests {
     #[test]
     fn queues_a_pending_handoff_and_writes_one_audit_entry() {
         let mut conn = db();
-        let result = run(
-            &mut conn,
-            &handoff("h-1", "/work/app", "Continue the migration"),
-        )
-        .unwrap()
-        .unwrap();
+        let result = run(&mut conn, &handoff("h-1", APP, "Continue the migration"))
+            .unwrap()
+            .unwrap();
         assert_eq!(result["status"], "queued");
 
         let approval_id = result["approval_id"].as_str().unwrap();
@@ -197,10 +201,10 @@ mod tests {
     #[test]
     fn replaying_the_same_key_returns_the_same_handoff_once() {
         let mut conn = db();
-        let first = run(&mut conn, &handoff("h-3", "/work/app", "Same"))
+        let first = run(&mut conn, &handoff("h-3", APP, "Same"))
             .unwrap()
             .unwrap();
-        let second = run(&mut conn, &handoff("h-3", "/work/app", "Same"))
+        let second = run(&mut conn, &handoff("h-3", APP, "Same"))
             .unwrap()
             .unwrap();
         assert_eq!(first["approval_id"], second["approval_id"]);
@@ -210,8 +214,8 @@ mod tests {
     #[test]
     fn reusing_a_key_with_a_different_payload_is_rejected() {
         let mut conn = db();
-        run(&mut conn, &handoff("h-4", "/work/app", "One")).unwrap();
-        let error = run(&mut conn, &handoff("h-4", "/work/app", "Two")).unwrap_err();
+        run(&mut conn, &handoff("h-4", APP, "One")).unwrap();
+        let error = run(&mut conn, &handoff("h-4", APP, "Two")).unwrap_err();
         assert_eq!(error.code, "INVALID_INPUT");
         assert!(error.message.contains("Idempotency collision"));
         assert_eq!(approval_count(&conn), 1);
@@ -223,7 +227,7 @@ mod tests {
         let error = dispatch_control_command(
             &mut conn,
             &ControlActor::remote_session("remote-key"),
-            &handoff("h-5", "/work/app", "ctx"),
+            &handoff("h-5", APP, "ctx"),
         )
         .unwrap_err();
         assert_eq!(error.code, "UNAUTHORIZED");
@@ -233,22 +237,22 @@ mod tests {
     #[test]
     fn invalid_handoffs_are_rejected_without_writing_anything() {
         let mut conn = db();
-        let mut same_agent = handoff("bad-1", "/work/app", "ctx");
+        let mut same_agent = handoff("bad-1", APP, "ctx");
         if let Command::CreateHandoff { to_agent, .. } = &mut same_agent {
             *to_agent = "claude_kaira".into();
         }
-        let mut unknown_agent = handoff("bad-2", "/work/app", "ctx");
+        let mut unknown_agent = handoff("bad-2", APP, "ctx");
         if let Command::CreateHandoff { from_agent, .. } = &mut unknown_agent {
             *from_agent = "mallory".into();
         }
         let cases = [
             same_agent,
             unknown_agent,
-            handoff("bad-3", "/work/app", "   "),
+            handoff("bad-3", APP, "   "),
             handoff("bad-4", "relative/path", "ctx"),
             handoff(
                 "bad-5",
-                "/work/app",
+                APP,
                 "here's my key sk-ant-abcdefghijklmnopqrstuvwxyz",
             ),
         ];
@@ -265,21 +269,17 @@ mod tests {
         // 8,000 two-byte characters are exactly 16,000 bytes and must pass.
         let at_limit = "ğ".repeat(8_000);
         assert_eq!(at_limit.len(), MAX_HANDOFF_SUMMARY_BYTES);
-        run(&mut conn, &handoff("limit-1", "/work/app", &at_limit)).unwrap();
+        run(&mut conn, &handoff("limit-1", APP, &at_limit)).unwrap();
         run(
             &mut conn,
-            &handoff(
-                "limit-2",
-                "/work/app",
-                &"a".repeat(MAX_HANDOFF_SUMMARY_BYTES),
-            ),
+            &handoff("limit-2", APP, &"a".repeat(MAX_HANDOFF_SUMMARY_BYTES)),
         )
         .unwrap();
 
         let over_multibyte = "ğ".repeat(8_001);
         let over_ascii = "a".repeat(MAX_HANDOFF_SUMMARY_BYTES + 1);
         for (key, summary) in [("limit-3", over_multibyte), ("limit-4", over_ascii)] {
-            let error = run(&mut conn, &handoff(key, "/work/app", &summary)).unwrap_err();
+            let error = run(&mut conn, &handoff(key, APP, &summary)).unwrap_err();
             assert_eq!(error.code, "INVALID_INPUT");
         }
     }
@@ -287,12 +287,12 @@ mod tests {
     #[test]
     fn receipt_tracks_a_handoff_from_pending_to_target_delivery() {
         let mut conn = db();
-        let queued = run(&mut conn, &handoff("r-1", "/work/app", "Deliver me"))
+        let queued = run(&mut conn, &handoff("r-1", APP, "Deliver me"))
             .unwrap()
             .unwrap();
         let approval_id = queued["approval_id"].as_str().unwrap().to_owned();
 
-        let pending = query_handoff_receipt(&conn, &approval_id, "/work/app").unwrap();
+        let pending = query_handoff_receipt(&conn, &approval_id, APP).unwrap();
         assert_eq!(pending.status, "pending");
         assert_eq!(
             (pending.from_agent.as_str(), pending.to_agent.as_str()),
@@ -300,13 +300,12 @@ mod tests {
         );
         assert!(!pending.delivered_by_target);
 
-        let context =
-            raios_core::db::cp_take_pending_handoff_for_path(&conn, "/work/app", "codex_kaira")
-                .unwrap()
-                .unwrap();
+        let context = raios_core::db::cp_take_pending_handoff_for_path(&conn, APP, "codex_kaira")
+            .unwrap()
+            .unwrap();
         raios_core::db::cp_consume_handoff(&conn, &context, "codex_kaira").unwrap();
 
-        let delivered = query_handoff_receipt(&conn, &approval_id, "/work/app").unwrap();
+        let delivered = query_handoff_receipt(&conn, &approval_id, APP).unwrap();
         assert_eq!(delivered.status, "approved");
         assert!(delivered.delivered_by_target);
     }
@@ -314,7 +313,7 @@ mod tests {
     #[test]
     fn a_human_approval_is_not_target_delivery() {
         let mut conn = db();
-        let queued = run(&mut conn, &handoff("r-2", "/work/app", "ctx"))
+        let queued = run(&mut conn, &handoff("r-2", APP, "ctx"))
             .unwrap()
             .unwrap();
         let approval_id = queued["approval_id"].as_str().unwrap().to_owned();
@@ -327,7 +326,7 @@ mod tests {
         )
         .unwrap();
 
-        let receipt = query_handoff_receipt(&conn, &approval_id, "/work/app").unwrap();
+        let receipt = query_handoff_receipt(&conn, &approval_id, APP).unwrap();
         assert_eq!(receipt.status, "approved");
         assert_eq!(receipt.resolved_by.as_deref(), Some("local_control_owner"));
         assert!(!receipt.delivered_by_target);
@@ -336,14 +335,13 @@ mod tests {
     #[test]
     fn a_superseded_handoff_reads_as_expired_and_undelivered() {
         let mut conn = db();
-        let first = run(&mut conn, &handoff("r-3a", "/work/app", "old"))
+        let first = run(&mut conn, &handoff("r-3a", APP, "old"))
             .unwrap()
             .unwrap();
-        run(&mut conn, &handoff("r-3b", "/work/app", "new")).unwrap();
+        run(&mut conn, &handoff("r-3b", APP, "new")).unwrap();
 
         let receipt =
-            query_handoff_receipt(&conn, first["approval_id"].as_str().unwrap(), "/work/app")
-                .unwrap();
+            query_handoff_receipt(&conn, first["approval_id"].as_str().unwrap(), APP).unwrap();
         assert_eq!(receipt.status, "expired");
         assert!(!receipt.delivered_by_target);
     }
@@ -351,7 +349,7 @@ mod tests {
     #[test]
     fn receipt_lookup_is_scoped_and_validated() {
         let mut conn = db();
-        let queued = run(&mut conn, &handoff("r-4", "/work/app", "ctx"))
+        let queued = run(&mut conn, &handoff("r-4", APP, "ctx"))
             .unwrap()
             .unwrap();
         let approval_id = queued["approval_id"].as_str().unwrap().to_owned();
@@ -359,11 +357,11 @@ mod tests {
         let other_project =
             query_handoff_receipt(&conn, &approval_id, "/other/project").unwrap_err();
         assert_eq!(other_project.code, "NOT_FOUND");
-        let missing = query_handoff_receipt(&conn, "missing-id", "/work/app").unwrap_err();
+        let missing = query_handoff_receipt(&conn, "missing-id", APP).unwrap_err();
         assert_eq!(missing.code, "NOT_FOUND");
         let relative = query_handoff_receipt(&conn, &approval_id, "relative").unwrap_err();
         assert_eq!(relative.code, "INVALID_INPUT");
-        let blank = query_handoff_receipt(&conn, "  ", "/work/app").unwrap_err();
+        let blank = query_handoff_receipt(&conn, "  ", APP).unwrap_err();
         assert_eq!(blank.code, "INVALID_INPUT");
     }
 }
