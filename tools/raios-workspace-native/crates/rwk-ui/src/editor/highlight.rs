@@ -1,26 +1,33 @@
-//! Syntax highlighting for the editor.
+//! Syntax highlighting for the editor, on tree-sitter.
 //!
 //! `gpui-base` ships no highlighter; it asks the application for one through the
-//! [`InputHighlighter`] trait. This module implements it over `syntect` (pure-Rust regex engine).
-//! Token classes are fixed names resolved to colours by the editor style, never by syntect's own
-//! theme, so switching tone does not re-parse anything.
+//! [`InputHighlighter`] trait. Parsing is incremental (the previous tree is edited and reused, so
+//! an edit re-parses only the changed region, in milliseconds even for large files) and the
+//! highlight query runs only over the byte range the editor is painting. Token classes are fixed
+//! names resolved to colours by the editor style, never by a grammar's own theme, so switching
+//! tone does not re-parse anything.
+//!
+//! (The first implementation used `syntect`; its pure-Rust regex engine parsed about 3K lines
+//! per second, which made a 30K-line file take 15 s. See the Plan 5 execution notes.)
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, TryLockError};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use gpui::{Context, HighlightStyle, SharedString, Window};
 use gpui_base::input::{
     EditorState, FoldRange, HighlightStyleResolver, InputEdit, InputHighlighter,
     InputHighlighterFactory, Rope,
 };
-use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet};
-use syntect::util::LinesWithEndings;
+use streaming_iterator::StreamingIterator;
+use tree_sitter::{InputEdit as TsEdit, Language, Parser, Point, Query, QueryCursor, Tree};
 
 /// Files larger than this open without highlighting (spec section 12: cost on large files).
 pub const HIGHLIGHT_LIMIT_BYTES: usize = 1024 * 1024;
+
+/// Ranges larger than this are not highlighted in one query (a giant minified line).
+const MAX_QUERY_BYTES: usize = 512 * 1024;
 
 /// True when a file of `len` bytes is highlighted.
 pub fn highlight_enabled(len: usize) -> bool {
@@ -33,7 +40,7 @@ const LANGUAGES: [(&str, &[&str]); 5] = [
     ("json", &["json"]),
     ("markdown", &["md", "markdown"]),
     ("javascript", &["js", "mjs", "cjs", "jsx"]),
-    ("typescript", &["ts", "mts", "cts", "tsx"]),
+    ("typescript", &["ts", "mts", "cts"]),
 ];
 
 /// The language for a file path, by extension.
@@ -43,31 +50,6 @@ pub fn language_for_path(path: &str) -> Option<&'static str> {
         .iter()
         .find(|(_, extensions)| extensions.contains(&extension.as_str()))
         .map(|(language, _)| *language)
-}
-
-fn syntaxes() -> &'static SyntaxSet {
-    static SYNTAXES: OnceLock<SyntaxSet> = OnceLock::new();
-    SYNTAXES.get_or_init(SyntaxSet::load_defaults_newlines)
-}
-
-/// The grammar for a language name. TypeScript falls back to the JavaScript grammar when the
-/// bundled set has none of its own.
-fn syntax_for(language: &str) -> Option<&'static SyntaxReference> {
-    let set = syntaxes();
-    let (_, extensions) = LANGUAGES.iter().find(|(name, _)| *name == language)?;
-    extensions
-        .iter()
-        .find_map(|extension| set.find_syntax_by_extension(extension))
-        .or_else(|| {
-            (language == "typescript")
-                .then(|| set.find_syntax_by_extension("js"))
-                .flatten()
-        })
-}
-
-/// True when `language` has a grammar.
-pub fn language_supported(language: &str) -> bool {
-    syntax_for(language).is_some()
 }
 
 /// The token classes the editor style resolves to colours.
@@ -105,6 +87,33 @@ impl TokenClass {
             TokenClass::Punctuation => "punctuation",
         }
     }
+
+    /// Folds a grammar's capture name (`function.method.builtin`, `string.escape`, ...) into a
+    /// class; captures drawn in the default text colour give `None`.
+    pub fn from_capture(name: &str) -> Option<Self> {
+        match name {
+            "string.escape" | "escape" | "string.special.symbol" => return Some(Self::String),
+            "variable.builtin" | "constant.builtin" | "boolean" => return Some(Self::Constant),
+            "constructor" | "namespace" | "module" => return Some(Self::Type),
+            "text.title" | "markup.heading" => return Some(Self::Type),
+            "text.literal" | "markup.raw" => return Some(Self::String),
+            _ => {}
+        }
+        let root = name.split('.').next().unwrap_or(name);
+        match root {
+            "keyword" | "conditional" | "repeat" | "include" | "exception" | "storageclass" => {
+                Some(Self::Keyword)
+            }
+            "function" | "method" => Some(Self::Function),
+            "type" => Some(Self::Type),
+            "string" | "character" => Some(Self::String),
+            "number" | "float" => Some(Self::Number),
+            "constant" => Some(Self::Constant),
+            "comment" => Some(Self::Comment),
+            "punctuation" | "delimiter" => Some(Self::Punctuation),
+            _ => None,
+        }
+    }
 }
 
 /// A highlighted byte range.
@@ -116,287 +125,218 @@ pub struct HighlightSpan {
     pub class: TokenClass,
 }
 
-struct ScopeTable {
-    entries: Vec<(Scope, TokenClass)>,
+/// A grammar with its compiled highlight query.
+struct Grammar {
+    language: Language,
+    query: Query,
+    /// The class of each capture index.
+    classes: Vec<Option<TokenClass>>,
 }
 
-fn scope_table() -> &'static ScopeTable {
-    static TABLE: OnceLock<ScopeTable> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        let entry = |name: &str, class| Scope::new(name).ok().map(|scope| (scope, class));
-        // Order matters: the first match for the innermost scope wins.
-        let entries = [
-            entry("comment", TokenClass::Comment),
-            entry("string", TokenClass::String),
-            entry("constant.numeric", TokenClass::Number),
-            entry("constant", TokenClass::Constant),
-            entry("entity.name.function", TokenClass::Function),
-            entry("support.function", TokenClass::Function),
-            entry("entity.name.type", TokenClass::Type),
-            entry("entity.name.class", TokenClass::Type),
-            entry("entity.name.struct", TokenClass::Type),
-            entry("entity.name.enum", TokenClass::Type),
-            entry("support.type", TokenClass::Type),
-            entry("support.class", TokenClass::Type),
-            entry("keyword", TokenClass::Keyword),
-            // `fn`, `let`, `const` and modifiers are storage scopes in the bundled grammars.
-            entry("storage", TokenClass::Keyword),
-            entry("punctuation", TokenClass::Punctuation),
-        ]
-        .into_iter()
-        .flatten()
+fn build_grammar(name: &str) -> Option<Grammar> {
+    let (language, sources): (Language, Vec<&str>) = match name {
+        "rust" => (
+            tree_sitter_rust::LANGUAGE.into(),
+            vec![tree_sitter_rust::HIGHLIGHTS_QUERY],
+        ),
+        "json" => (
+            tree_sitter_json::LANGUAGE.into(),
+            vec![tree_sitter_json::HIGHLIGHTS_QUERY],
+        ),
+        "markdown" => (
+            tree_sitter_md::LANGUAGE.into(),
+            vec![tree_sitter_md::HIGHLIGHT_QUERY_BLOCK],
+        ),
+        "javascript" => (
+            tree_sitter_javascript::LANGUAGE.into(),
+            vec![
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY,
+            ],
+        ),
+        "typescript" => (
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            vec![
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_typescript::HIGHLIGHTS_QUERY,
+            ],
+        ),
+        _ => return None,
+    };
+    // Later patterns win when two match the same node, so the base language's query goes first.
+    let query = Query::new(&language, &sources.join("\n")).ok()?;
+    let classes = query
+        .capture_names()
+        .iter()
+        .map(|capture| TokenClass::from_capture(capture))
         .collect();
-        ScopeTable { entries }
+    Some(Grammar {
+        language,
+        query,
+        classes,
     })
 }
 
-fn classify(stack: &ScopeStack) -> Option<TokenClass> {
-    let table = scope_table();
-    for scope in stack.as_slice().iter().rev() {
-        for (prefix, class) in &table.entries {
-            if prefix.is_prefix_of(*scope) {
-                return Some(*class);
-            }
+/// The compiled grammar of a language, built once per process.
+fn grammar(name: &str) -> Option<Arc<Grammar>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<Arc<Grammar>>>>> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    cache
+        .entry(name.to_owned())
+        .or_insert_with(|| build_grammar(name).map(Arc::new))
+        .clone()
+}
+
+/// True when `language` has a grammar.
+pub fn language_supported(language: &str) -> bool {
+    grammar(language).is_some()
+}
+
+/// A text replacement in bytes and (row, column) positions, as the editor reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextEdit {
+    /// First changed byte.
+    pub start_byte: usize,
+    /// End of the replaced range in the old text.
+    pub old_end_byte: usize,
+    /// End of the inserted range in the new text.
+    pub new_end_byte: usize,
+    /// Position of `start_byte`.
+    pub start_position: (usize, usize),
+    /// Position of `old_end_byte` in the old text.
+    pub old_end_position: (usize, usize),
+    /// Position of `new_end_byte` in the new text.
+    pub new_end_position: (usize, usize),
+}
+
+impl From<InputEdit> for TextEdit {
+    fn from(edit: InputEdit) -> Self {
+        let position = |point: gpui_base::input::Point| (point.row, point.column);
+        Self {
+            start_byte: edit.start_byte,
+            old_end_byte: edit.old_end_byte,
+            new_end_byte: edit.new_end_byte,
+            start_position: position(edit.start_position),
+            old_end_position: position(edit.old_end_position),
+            new_end_position: position(edit.new_end_position),
         }
     }
-    None
 }
 
-/// Lines parsed per lock hold. The UI thread waits at most this long when it needs the lock.
-const CHUNK_LINES: usize = 100;
-/// How often the UI is asked to repaint while a background parse is running.
-const REPAINT_EVERY: Duration = Duration::from_millis(60);
-
-/// Highlight state kept per line start, so an edit re-parses from its own line only.
-#[derive(Clone)]
-struct LineStart {
-    parse: ParseState,
-    stack: ScopeStack,
+fn point((row, column): (usize, usize)) -> Point {
+    Point { row, column }
 }
 
-/// Highlighted text with the per-line parser state needed for incremental updates.
-///
-/// Parsing is resumable: [`Highlighted::begin`] fixes the text and the first line to
-/// (re)compute, [`Highlighted::advance`] parses a bounded number of lines and says whether it is
-/// done. Lines parsed so far are served while the rest is still pending.
+/// Highlighted text: the text, its incrementally maintained syntax tree and the query.
 pub struct Highlighted {
-    syntax: &'static SyntaxReference,
-    /// Byte length of the text the line table describes.
-    text_len: usize,
-    /// Byte offset of each line start.
-    line_starts: Vec<usize>,
-    /// Parser state at the start of each parsed line.
-    states: Vec<LineStart>,
-    /// Parser state at the start of the next unparsed line.
-    cursor: LineStart,
-    /// Spans per parsed line, in absolute byte offsets of the text they were computed for.
-    spans: Vec<Vec<HighlightSpan>>,
+    grammar: Arc<Grammar>,
+    parser: Parser,
+    tree: Option<Tree>,
+    text: String,
 }
 
 impl Highlighted {
-    /// An empty highlighter for `language`; `None` when it has no grammar.
-    pub fn empty(language: &str) -> Option<Self> {
-        let syntax = syntax_for(language)?;
-        Some(Highlighted {
-            syntax,
-            text_len: 0,
-            line_starts: Vec::new(),
-            states: Vec::new(),
-            cursor: LineStart {
-                parse: ParseState::new(syntax),
-                stack: ScopeStack::new(),
-            },
-            spans: Vec::new(),
+    /// Parses `text` as `language`; `None` when it has no grammar.
+    pub fn new(language: &str, text: &str) -> Option<Self> {
+        let grammar = grammar(language)?;
+        let mut parser = Parser::new();
+        parser.set_language(&grammar.language).ok()?;
+        let tree = parser.parse(text, None);
+        Some(Self {
+            grammar,
+            parser,
+            tree,
+            text: text.to_owned(),
         })
     }
 
-    /// Highlights `text` completely; `None` when `language` has no grammar.
-    pub fn new(language: &str, text: &str) -> Option<Self> {
-        let mut highlighted = Self::empty(language)?;
-        highlighted.rehighlight_from(text, 0);
-        Some(highlighted)
-    }
-
-    /// The line a byte offset falls on, according to the text this was last begun for.
-    pub fn line_of(&self, byte: usize) -> usize {
-        match self.line_starts.binary_search(&byte) {
-            Ok(line) => line,
-            Err(next) => next.saturating_sub(1),
+    /// Applies an edit: the old tree is told about it and reused, so only the changed region is
+    /// parsed again. `new_text` is the whole text after the edit.
+    pub fn apply_edit(&mut self, edit: &TextEdit, new_text: &str) {
+        if let Some(tree) = &mut self.tree {
+            tree.edit(&TsEdit {
+                start_byte: edit.start_byte,
+                old_end_byte: edit.old_end_byte,
+                new_end_byte: edit.new_end_byte,
+                start_position: point(edit.start_position),
+                old_end_position: point(edit.old_end_position),
+                new_end_position: point(edit.new_end_position),
+            });
         }
+        self.text.clear();
+        self.text.push_str(new_text);
+        self.tree = self.parser.parse(&self.text, self.tree.as_ref());
     }
 
-    /// Number of lines whose spans are available.
-    pub fn parsed_lines(&self) -> usize {
-        self.states.len()
+    /// Replaces the whole text without edit information (nothing is reused).
+    pub fn replace(&mut self, new_text: &str) {
+        self.text.clear();
+        self.text.push_str(new_text);
+        self.tree = self.parser.parse(&self.text, None);
     }
 
-    /// True when every line of the text has been parsed.
-    pub fn is_complete(&self) -> bool {
-        self.states.len() >= self.line_starts.len()
-    }
-
-    /// Byte offset up to which spans are available.
-    pub fn parsed_end(&self) -> usize {
-        self.line_starts
-            .get(self.states.len())
-            .copied()
-            .unwrap_or(self.text_len)
-    }
-
-    /// Fixes the text and keeps the lines before `first_line`: their spans stay, and the parser
-    /// state at the start of `first_line` is rebuilt from the saved state of the line before it.
-    pub fn begin(&mut self, text: &str, first_line: usize) {
-        let first_line = first_line.min(self.states.len());
-        self.states.truncate(first_line);
-        self.spans.truncate(first_line);
-        self.text_len = text.len();
-        self.line_starts.clear();
-        let mut position = 0;
-        for line in LinesWithEndings::from(text) {
-            self.line_starts.push(position);
-            position += line.len();
-        }
-        self.cursor = if first_line == 0 {
-            LineStart {
-                parse: ParseState::new(self.syntax),
-                stack: ScopeStack::new(),
-            }
-        } else {
-            // Lines before the edit are unchanged: replay the line before `first_line` from its
-            // saved start state to get the state at the start of `first_line`.
-            let mut cursor = self.states[first_line - 1].clone();
-            let start = self.line_starts[first_line - 1];
-            let end = self
-                .line_starts
-                .get(first_line)
-                .copied()
-                .unwrap_or(text.len());
-            if let Ok(ops) = cursor.parse.parse_line(&text[start..end], syntaxes()) {
-                for (_, op) in ops {
-                    let _ = cursor.stack.apply(&op);
-                }
-            }
-            cursor
-        };
-    }
-
-    /// Parses up to `max_lines` more lines of `text` (the text given to [`Self::begin`]).
-    /// Returns true when the whole text has been parsed.
-    pub fn advance(&mut self, text: &str, max_lines: usize) -> bool {
-        let total = self.line_starts.len();
-        let mut parsed = 0;
-        while self.states.len() < total && parsed < max_lines {
-            let index = self.states.len();
-            let start = self.line_starts[index];
-            let end = self
-                .line_starts
-                .get(index + 1)
-                .copied()
-                .unwrap_or(text.len());
-            let line = &text[start..end];
-            self.states.push(self.cursor.clone());
-            let mut spans: Vec<HighlightSpan> = Vec::new();
-            if let Ok(ops) = self.cursor.parse.parse_line(line, syntaxes()) {
-                let mut last = 0;
-                for (position, op) in ops {
-                    push_span(
-                        &mut spans,
-                        &self.cursor.stack,
-                        start + last,
-                        start + position,
-                    );
-                    let _ = self.cursor.stack.apply(&op);
-                    last = position;
-                }
-                push_span(
-                    &mut spans,
-                    &self.cursor.stack,
-                    start + last,
-                    start + line.len(),
-                );
-            }
-            self.spans.push(spans);
-            parsed += 1;
-        }
-        self.is_complete()
-    }
-
-    /// Recomputes from `first_line` to the end of `text` in one go.
-    pub fn rehighlight_from(&mut self, text: &str, first_line: usize) {
-        self.begin(text, first_line);
-        self.advance(text, usize::MAX);
-    }
-
-    /// Every available span, in text order.
-    pub fn all_spans(&self) -> Vec<HighlightSpan> {
-        self.spans.iter().flatten().cloned().collect()
-    }
-
-    /// The available spans that overlap `range`.
+    /// Non-overlapping highlighted byte ranges inside `range`, in order.
     pub fn spans_in(&self, range: &Range<usize>) -> Vec<HighlightSpan> {
-        let first = self.line_of(range.start);
-        let last = self.line_of(range.end.saturating_sub(1).max(range.start));
-        self.spans
-            .iter()
-            .skip(first)
-            .take(last + 1 - first)
-            .flatten()
-            .filter(|span| span.range.start < range.end && span.range.end > range.start)
-            .cloned()
-            .collect()
-    }
-}
-
-fn push_span(spans: &mut Vec<HighlightSpan>, stack: &ScopeStack, start: usize, end: usize) {
-    if end <= start {
-        return;
-    }
-    let Some(class) = classify(stack) else {
-        return;
-    };
-    if let Some(previous) = spans.last_mut() {
-        if previous.class == class && previous.range.end == start {
-            previous.range.end = end;
-            return;
+        let Some(tree) = &self.tree else {
+            return Vec::new();
+        };
+        let range = range.start.min(self.text.len())..range.end.min(self.text.len());
+        if range.is_empty() || range.len() > MAX_QUERY_BYTES {
+            return Vec::new();
         }
+        let mut cursor = QueryCursor::new();
+        cursor.set_byte_range(range.clone());
+        let mut captures =
+            cursor.captures(&self.grammar.query, tree.root_node(), self.text.as_bytes());
+        let mut found: Vec<(Range<usize>, usize, TokenClass)> = Vec::new();
+        while let Some((matched, index)) = captures.next() {
+            let capture = matched.captures()[*index];
+            if let Some(Some(class)) = self.grammar.classes.get(capture.index as usize) {
+                found.push((capture.node.byte_range(), matched.pattern_index, *class));
+            }
+        }
+        // Outer nodes paint first so nested ones (an escape inside a string) win; for the same
+        // node a later pattern wins.
+        found.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then(a.1.cmp(&b.1)));
+        let mut paint: Vec<Option<TokenClass>> = vec![None; range.len()];
+        for (node_range, _, class) in found {
+            let start = node_range.start.max(range.start) - range.start;
+            let end = node_range.end.min(range.end).saturating_sub(range.start);
+            if start < end {
+                paint[start..end].fill(Some(class));
+            }
+        }
+        let mut spans: Vec<HighlightSpan> = Vec::new();
+        for (offset, class) in paint.into_iter().enumerate() {
+            let Some(class) = class else {
+                continue;
+            };
+            let byte = range.start + offset;
+            match spans.last_mut() {
+                Some(last) if last.range.end == byte && last.class == class => {
+                    last.range.end += 1;
+                }
+                _ => spans.push(HighlightSpan {
+                    range: byte..byte + 1,
+                    class,
+                }),
+            }
+        }
+        spans
     }
-    spans.push(HighlightSpan {
-        range: start..end,
-        class,
-    });
+
+    /// Every highlighted span of the text.
+    pub fn all_spans(&self) -> Vec<HighlightSpan> {
+        self.spans_in(&(0..self.text.len()))
+    }
 }
 
 /// All spans of `text` as `language`; `None` for an unsupported language.
 pub fn highlight_spans(language: &str, text: &str) -> Option<Vec<HighlightSpan>> {
     Highlighted::new(language, text).map(|highlighted| highlighted.all_spans())
-}
-
-/// Moves `spans` across an edit that replaced `edit_start..old_end` with `edit_start..new_end`:
-/// spans before it stay, spans after it shift by the length change, spans it touches are
-/// dropped. Used to keep the old colours on screen while a background parse catches up.
-pub fn shift_spans(
-    spans: &[HighlightSpan],
-    edit_start: usize,
-    old_end: usize,
-    new_end: usize,
-) -> Vec<HighlightSpan> {
-    let delta = new_end as i64 - old_end as i64;
-    spans
-        .iter()
-        .filter_map(|span| {
-            if span.range.end <= edit_start {
-                Some(span.clone())
-            } else if span.range.start >= old_end {
-                let shift = |value: usize| (value as i64 + delta).max(0) as usize;
-                Some(HighlightSpan {
-                    range: shift(span.range.start)..shift(span.range.end),
-                    class: span.class,
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
 }
 
 /// Fold ranges by structure, without a parser: a line ending in `{` folds to its closing `}`
@@ -449,101 +389,26 @@ pub fn fold_ranges_for(language: &str, text: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// State a background parse and the UI thread share.
-type SharedHighlight = Arc<Mutex<Option<Highlighted>>>;
-
-fn lock(shared: &SharedHighlight) -> std::sync::MutexGuard<'_, Option<Highlighted>> {
-    shared.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Parses `text` in chunks on a background thread, publishing each chunk. It stops as soon as a
-/// newer edit bumps `version`.
-fn run_worker(
-    shared: SharedHighlight,
-    version: Arc<AtomicU64>,
-    mine: u64,
-    language: &'static str,
-    text: String,
-    first_line: usize,
-) {
-    {
-        let mut guard = lock(&shared);
-        if version.load(Ordering::Acquire) != mine {
-            return;
-        }
-        match guard.as_mut() {
-            Some(highlighted) => highlighted.begin(&text, first_line),
-            None => {
-                let Some(mut highlighted) = Highlighted::empty(language) else {
-                    return;
-                };
-                highlighted.begin(&text, 0);
-                *guard = Some(highlighted);
-            }
-        }
-    }
-    loop {
-        let done = {
-            let mut guard = lock(&shared);
-            if version.load(Ordering::Acquire) != mine {
-                return;
-            }
-            guard
-                .as_mut()
-                .map(|highlighted| highlighted.advance(&text, CHUNK_LINES))
-                .unwrap_or(true)
-        };
-        if done {
-            return;
-        }
-        std::thread::yield_now();
-    }
-}
-
-/// The `gpui-base` highlighter. Parsing runs on a background thread; the UI thread only reads
-/// what has been parsed (plus the previous colours, shifted across the edit, for the rest).
-pub struct SyntectHighlighter {
+/// The `gpui-base` highlighter backed by [`Highlighted`].
+pub struct SyntaxHighlighter {
     language: SharedString,
     name: &'static str,
-    shared: SharedHighlight,
-    version: Arc<AtomicU64>,
-    /// Colours of the text as it was before the last edit, shifted across it. Used for the part
-    /// the background parse has not reached yet.
-    stale: Vec<HighlightSpan>,
+    state: Option<Highlighted>,
 }
 
-impl SyntectHighlighter {
+impl SyntaxHighlighter {
     /// A highlighter for `language`; `None` when it has no grammar.
     pub fn new(language: &str) -> Option<Self> {
         let (name, _) = LANGUAGES.iter().find(|(name, _)| *name == language)?;
         language_supported(name).then(|| Self {
             language: SharedString::from(*name),
             name,
-            shared: Arc::new(Mutex::new(None)),
-            version: Arc::new(AtomicU64::new(0)),
-            stale: Vec::new(),
+            state: None,
         })
-    }
-
-    /// What is on screen now: the parsed prefix plus the stale spans past it.
-    fn displayed_spans(&self) -> Vec<HighlightSpan> {
-        let guard = lock(&self.shared);
-        let Some(highlighted) = guard.as_ref() else {
-            return self.stale.clone();
-        };
-        let parsed_end = highlighted.parsed_end();
-        let mut spans = highlighted.all_spans();
-        spans.extend(
-            self.stale
-                .iter()
-                .filter(|span| span.range.start >= parsed_end)
-                .cloned(),
-        );
-        spans
     }
 }
 
-impl InputHighlighter for SyntectHighlighter {
+impl InputHighlighter for SyntaxHighlighter {
     fn language(&self) -> SharedString {
         self.language.clone()
     }
@@ -554,50 +419,18 @@ impl InputHighlighter for SyntectHighlighter {
         text: &Rope,
         _folding: bool,
         _window: &mut Window,
-        cx: &mut Context<EditorState>,
+        _cx: &mut Context<EditorState>,
     ) {
         let text = text.to_string();
-        let mine = self.version.fetch_add(1, Ordering::AcqRel) + 1;
         if !highlight_enabled(text.len()) {
-            *lock(&self.shared) = None;
-            self.stale.clear();
+            self.state = None;
             return;
         }
-        let first_line = match (&edit, lock(&self.shared).as_ref()) {
-            (Some(edit), Some(highlighted)) => highlighted.line_of(edit.start_byte),
-            _ => 0,
-        };
-        self.stale = match edit {
-            Some(edit) => shift_spans(
-                &self.displayed_spans(),
-                edit.start_byte,
-                edit.old_end_byte,
-                edit.new_end_byte,
-            ),
-            None => Vec::new(),
-        };
-        let shared = Arc::clone(&self.shared);
-        let version = Arc::clone(&self.version);
-        let name = self.name;
-        cx.background_executor()
-            .spawn(async move { run_worker(shared, version, mine, name, text, first_line) })
-            .detach();
-        // Ask for repaints while the background parse publishes chunks.
-        let shared = Arc::clone(&self.shared);
-        let version = Arc::clone(&self.version);
-        cx.spawn(async move |editor, cx| loop {
-            cx.background_executor().timer(REPAINT_EVERY).await;
-            let superseded = version.load(Ordering::Acquire) != mine;
-            let done = match shared.try_lock() {
-                Ok(guard) => guard.as_ref().is_none_or(Highlighted::is_complete),
-                Err(TryLockError::Poisoned(_)) => true,
-                Err(TryLockError::WouldBlock) => false,
-            };
-            if editor.update(cx, |_, cx| cx.notify()).is_err() || superseded || done {
-                break;
-            }
-        })
-        .detach();
+        match (&mut self.state, edit) {
+            (Some(state), Some(edit)) => state.apply_edit(&edit.into(), &text),
+            (Some(state), None) => state.replace(&text),
+            (slot, _) => *slot = Highlighted::new(self.name, &text),
+        }
     }
 
     fn styles(
@@ -605,35 +438,11 @@ impl InputHighlighter for SyntectHighlighter {
         range: &Range<usize>,
         resolver: &dyn HighlightStyleResolver,
     ) -> Vec<(Range<usize>, HighlightStyle)> {
-        let mut spans = Vec::new();
-        match self.shared.try_lock() {
-            Ok(guard) => {
-                if let Some(highlighted) = guard.as_ref() {
-                    let parsed_end = highlighted.parsed_end();
-                    spans.extend(highlighted.spans_in(range));
-                    spans.extend(
-                        self.stale
-                            .iter()
-                            .filter(|span| {
-                                span.range.start >= parsed_end
-                                    && span.range.start < range.end
-                                    && span.range.end > range.start
-                            })
-                            .cloned(),
-                    );
-                } else {
-                    spans.extend(self.stale.iter().cloned());
-                }
-            }
-            // The worker holds the lock for one chunk; show the previous colours meanwhile.
-            Err(_) => spans.extend(
-                self.stale
-                    .iter()
-                    .filter(|span| span.range.start < range.end && span.range.end > range.start)
-                    .cloned(),
-            ),
-        }
-        spans
+        let Some(state) = &self.state else {
+            return Vec::new();
+        };
+        state
+            .spans_in(range)
             .into_iter()
             .filter_map(|span| {
                 resolver
@@ -658,7 +467,7 @@ impl InputHighlighter for SyntectHighlighter {
 /// The factory the editor calls with a language name.
 pub fn highlighter_factory() -> InputHighlighterFactory {
     Rc::new(|language: &str| {
-        SyntectHighlighter::new(language)
+        SyntaxHighlighter::new(language)
             .map(|highlighter| Box::new(highlighter) as Box<dyn InputHighlighter>)
     })
 }
@@ -667,23 +476,48 @@ pub fn highlighter_factory() -> InputHighlighterFactory {
 mod tests {
     use super::*;
 
+    fn text_of<'a>(source: &'a str, spans: &[HighlightSpan], class: TokenClass) -> Vec<&'a str> {
+        spans
+            .iter()
+            .filter(|span| span.class == class)
+            .map(|span| &source[span.range.clone()])
+            .collect()
+    }
+
     #[test]
     fn rust_keywords_get_a_style_and_plain_text_does_not() {
         let source = "fn main() { let x = 1; }\n";
         let spans = highlight_spans("rust", source).expect("rust is supported");
+        let keywords = text_of(source, &spans, TokenClass::Keyword);
         assert!(
-            spans.iter().any(
-                |span| &source[span.range.clone()] == "fn" && span.class == TokenClass::Keyword
-            ),
+            keywords.contains(&"fn") && keywords.contains(&"let"),
             "{spans:?}"
         );
+        // tree-sitter-rust captures numeric literals as `constant.builtin`.
+        let coloured_one = spans.iter().any(|span| {
+            &source[span.range.clone()] == "1"
+                && matches!(span.class, TokenClass::Number | TokenClass::Constant)
+        });
+        assert!(coloured_one, "{spans:?}");
         assert!(highlight_spans("text", "just words").is_none());
     }
 
     #[test]
-    fn json_markdown_javascript_and_rust_are_supported_like_workspace_0_1() {
-        for language in ["rust", "json", "markdown", "javascript", "typescript"] {
+    fn every_language_of_workspace_0_1_has_a_grammar_that_colours_something() {
+        let samples = [
+            ("rust", "fn a() { let s = \"x\"; } // c\n"),
+            ("json", "{\"key\": [1, true, null, \"v\"]}\n"),
+            ("markdown", "# Title\n\nsome `code` text\n"),
+            ("javascript", "const f = (a) => { return \"s\"; }; // c\n"),
+            (
+                "typescript",
+                "interface A { b: number }\nconst c: string = \"s\";\n",
+            ),
+        ];
+        for (language, source) in samples {
             assert!(language_supported(language), "{language}");
+            let spans = highlight_spans(language, source).expect(language);
+            assert!(!spans.is_empty(), "{language} produced no spans");
         }
     }
 
@@ -707,26 +541,61 @@ mod tests {
     fn comments_and_strings_are_classified() {
         let source = "// note\nlet s = \"text\";\n";
         let spans = highlight_spans("rust", source).expect("rust");
-        let text_of = |class| {
-            spans
-                .iter()
-                .filter(|span| span.class == class)
-                .map(|span| &source[span.range.clone()])
-                .collect::<String>()
-        };
-        assert!(text_of(TokenClass::Comment).contains("note"));
-        assert!(text_of(TokenClass::String).contains("text"));
+        assert!(text_of(source, &spans, TokenClass::Comment)
+            .join("")
+            .contains("note"));
+        assert!(text_of(source, &spans, TokenClass::String)
+            .join("")
+            .contains("text"));
     }
 
     #[test]
-    fn an_edit_re_highlights_from_its_own_line_and_matches_a_full_run() {
+    fn a_nested_capture_wins_over_its_container() {
+        let source = "let s = \"a\\nb\";\n";
+        let spans = highlight_spans("rust", source).expect("rust");
+        // The escape sequence is inside a string; both classify as String here, and the spans
+        // never overlap.
+        let mut end = 0;
+        for span in &spans {
+            assert!(span.range.start >= end, "overlap in {spans:?}");
+            end = span.range.end;
+        }
+    }
+
+    #[test]
+    fn an_incremental_edit_gives_the_same_spans_as_a_fresh_parse() {
         let before = "fn a() {}\nfn b() {}\nfn c() {}\n";
-        let after = "fn a() {}\nfn bb() {}\nfn c() {}\n";
+        let after = "fn a() {}\nfn bb() { let x = 2; }\nfn c() {}\n";
+        let start = before.find("b()").expect("b");
         let mut incremental = Highlighted::new("rust", before).expect("rust");
-        let line = incremental.line_of(before.find("fn b").unwrap());
-        incremental.rehighlight_from(after, line);
-        let full = Highlighted::new("rust", after).expect("rust");
-        assert_eq!(incremental.all_spans(), full.all_spans());
+        incremental.apply_edit(
+            &TextEdit {
+                start_byte: start + 1,
+                old_end_byte: start + 1,
+                new_end_byte: start + 2,
+                start_position: (1, 4),
+                old_end_position: (1, 4),
+                new_end_position: (1, 5),
+            },
+            // The text after only the first change (an inserted `b`), then the rest by a
+            // second edit.
+            &before.replacen("fn b()", "fn bb()", 1),
+        );
+        let second = before.replacen("fn b()", "fn bb()", 1);
+        let brace = second.find("{}\nfn c").expect("brace");
+        incremental.apply_edit(
+            &TextEdit {
+                start_byte: brace + 1,
+                old_end_byte: brace + 1,
+                new_end_byte: brace + 1 + " let x = 2; ".len(),
+                start_position: (1, 9),
+                old_end_position: (1, 9),
+                new_end_position: (1, 9 + " let x = 2; ".len()),
+            },
+            after,
+        );
+        let fresh = Highlighted::new("rust", after).expect("rust");
+        assert_eq!(incremental.all_spans(), fresh.all_spans());
     }
 
     #[test]
@@ -734,19 +603,50 @@ mod tests {
         let before = "/* open\nmiddle\nclose */\nlet y = 1;\n";
         let after = "/* open\nmiddle!\nclose */\nlet y = 1;\n";
         let mut incremental = Highlighted::new("rust", before).expect("rust");
-        incremental.rehighlight_from(after, 1);
-        let full = Highlighted::new("rust", after).expect("rust");
-        assert_eq!(incremental.all_spans(), full.all_spans());
+        let at = before.find("middle").expect("middle") + "middle".len();
+        incremental.apply_edit(
+            &TextEdit {
+                start_byte: at,
+                old_end_byte: at,
+                new_end_byte: at + 1,
+                start_position: (1, 6),
+                old_end_position: (1, 6),
+                new_end_position: (1, 7),
+            },
+            after,
+        );
+        let fresh = Highlighted::new("rust", after).expect("rust");
+        assert_eq!(incremental.all_spans(), fresh.all_spans());
+        assert!(
+            text_of(after, &incremental.all_spans(), TokenClass::Comment)
+                .join("")
+                .contains("middle!")
+        );
     }
 
     #[test]
-    fn spans_in_a_range_only_return_overlapping_spans() {
+    fn spans_in_a_range_only_return_overlapping_spans_and_clamp() {
         let source = "fn a() {}\nlet b = 2;\n";
         let highlighted = Highlighted::new("rust", source).expect("rust");
-        let second_line = source.find("let").unwrap()..source.len();
+        let second_line = source.find("let").expect("let")..source.len();
         let spans = highlighted.spans_in(&second_line);
         assert!(!spans.is_empty());
-        assert!(spans.iter().all(|span| span.range.end > second_line.start));
+        assert!(spans
+            .iter()
+            .all(|span| span.range.start >= second_line.start));
+        // A range past the end is clamped, not a panic.
+        let _ = highlighted.spans_in(&(0..source.len() + 1000));
+        assert!(highlighted.spans_in(&(5..5)).is_empty());
+    }
+
+    #[test]
+    fn multibyte_text_does_not_break_ranges() {
+        let source = "let ş = \"çğü\"; // ö\n";
+        let spans = highlight_spans("rust", source).expect("rust");
+        for span in &spans {
+            assert!(source.is_char_boundary(span.range.start), "{spans:?}");
+            assert!(source.is_char_boundary(span.range.end), "{spans:?}");
+        }
     }
 
     #[test]
@@ -772,103 +672,31 @@ mod tests {
         }
         let started = std::time::Instant::now();
         let mut highlighted = Highlighted::new("rust", &text).expect("rust");
-        let full = started.elapsed();
+        let parse = started.elapsed();
+        let started = std::time::Instant::now();
+        let visible_end = text
+            .char_indices()
+            .nth(2_500)
+            .map_or(text.len(), |(i, _)| i);
+        let visible = highlighted.spans_in(&(0..visible_end)).len();
+        let query = started.elapsed();
         let edited = text.replacen("value_100 ", "value_100x ", 1);
+        let at = text.find("value_100 ").expect("line") + "value_100".len();
         let started = std::time::Instant::now();
-        highlighted.rehighlight_from(&edited, 100);
-        let early = started.elapsed();
-        let later = edited.replacen("value_29900 ", "value_29900x ", 1);
-        let started = std::time::Instant::now();
-        highlighted.rehighlight_from(&later, 29_900);
-        let late = started.elapsed();
+        highlighted.apply_edit(
+            &TextEdit {
+                start_byte: at,
+                old_end_byte: at,
+                new_end_byte: at + 1,
+                start_position: (100, 14),
+                old_end_position: (100, 14),
+                new_end_position: (100, 15),
+            },
+            &edited,
+        );
+        let edit = started.elapsed();
         println!(
-            "30K lines: full {full:?}, edit at line 100 {early:?}, edit at line 29900 {late:?}"
+            "30K lines: full parse {parse:?}, visible-range query {query:?} ({visible} spans), one-char edit near the top {edit:?}"
         );
-    }
-
-    /// Splits the cost between syntect's regex parsing and this module's bookkeeping.
-    #[test]
-    #[ignore = "reports timings; run in release mode"]
-    fn highlight_cost_breakdown_is_reported() {
-        let mut text = String::new();
-        for line in 0..3_000 {
-            text.push_str(&format!(
-                "    let value_{line} = compute(\"text {line}\", {line}); // note\n"
-            ));
-        }
-        let syntax = syntax_for("rust").expect("rust");
-        let started = std::time::Instant::now();
-        let mut parse = ParseState::new(syntax);
-        let mut ops_total = 0;
-        for line in LinesWithEndings::from(&text) {
-            ops_total += parse
-                .parse_line(line, syntaxes())
-                .map(|ops| ops.len())
-                .unwrap_or(0);
-        }
-        let parse_only = started.elapsed();
-        let started = std::time::Instant::now();
-        let highlighted = Highlighted::new("rust", &text).expect("rust");
-        let with_bookkeeping = started.elapsed();
-        println!(
-            "3K lines ({} bytes): syntect parse only {parse_only:?} ({ops_total} ops), full Highlighted {with_bookkeeping:?}, {} spans",
-            text.len(),
-            highlighted.all_spans().len()
-        );
-        let started = std::time::Instant::now();
-        let _ = syntaxes();
-        println!(
-            "syntax set load (already loaded here): {:?}",
-            started.elapsed()
-        );
-    }
-
-    #[test]
-    fn parsing_in_chunks_publishes_a_prefix_and_ends_equal_to_a_full_run() {
-        let text = "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n";
-        let mut chunked = Highlighted::empty("rust").expect("rust");
-        chunked.begin(text, 0);
-        assert_eq!(chunked.parsed_lines(), 0);
-        assert!(!chunked.advance(text, 1));
-        assert_eq!(chunked.parsed_lines(), 1);
-        assert_eq!(chunked.parsed_end(), "fn a() {}\n".len());
-        assert!(chunked
-            .all_spans()
-            .iter()
-            .all(|span| span.range.end <= chunked.parsed_end()));
-        assert!(!chunked.advance(text, 2));
-        assert!(chunked.advance(text, 10));
-        assert_eq!(chunked.parsed_end(), text.len());
-        let full = Highlighted::new("rust", text).expect("rust");
-        assert_eq!(chunked.all_spans(), full.all_spans());
-    }
-
-    #[test]
-    fn beginning_again_midway_keeps_the_earlier_lines_and_matches_a_full_run() {
-        let before = "fn a() {}\nfn b() {}\nfn c() {}\n";
-        let after = "fn a() {}\nfn bb() {}\nfn c() {}\n";
-        let mut highlighted = Highlighted::new("rust", before).expect("rust");
-        highlighted.begin(after, 1);
-        assert_eq!(highlighted.parsed_lines(), 1);
-        assert!(highlighted.advance(after, 100));
-        assert_eq!(
-            highlighted.all_spans(),
-            Highlighted::new("rust", after).expect("rust").all_spans()
-        );
-    }
-
-    #[test]
-    fn spans_shift_across_an_edit_and_the_touched_ones_are_dropped() {
-        let span = |start: usize, end: usize| HighlightSpan {
-            range: start..end,
-            class: TokenClass::Keyword,
-        };
-        let spans = [span(0, 2), span(5, 9), span(12, 14)];
-        // Bytes 4..10 were replaced by 4..16 (6 bytes became 12): +6.
-        let shifted = shift_spans(&spans, 4, 10, 16);
-        assert_eq!(shifted, vec![span(0, 2), span(18, 20)]);
-        // A deletion shifts left.
-        let shifted = shift_spans(&spans, 4, 10, 4);
-        assert_eq!(shifted, vec![span(0, 2), span(6, 8)]);
     }
 }

@@ -12,7 +12,7 @@ use gpui::{
     KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Subscription, Window,
 };
-use gpui_base::{Tree, TreeEvent, TreeItem, TreeState};
+use gpui_base::{TreeEvent, TreeItem, TreeState};
 use rwk_core::project::{FileEntry, ProjectRoot};
 
 /// What the tree tells the workbench.
@@ -191,6 +191,16 @@ impl FileTreeView {
             .map(|item| item.id.to_string())
     }
 
+    /// Expands a collapsed folder or collapses an expanded one.
+    pub fn toggle(&mut self, path: &str, cx: &mut Context<Self>) {
+        if self.expanded.contains(path) {
+            self.expanded.remove(path);
+            self.rebuild(cx);
+        } else {
+            self.expand(path, cx);
+        }
+    }
+
     /// Selects a row by path (no event).
     pub fn select(&mut self, path: &str, cx: &mut Context<Self>) {
         let id = SharedString::from(path.to_owned());
@@ -238,37 +248,74 @@ impl FileTreeView {
 
 impl Render for FileTreeView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let view = cx.entity().downgrade();
-        let tree = Tree::new(&self.tree).item(move |ix, entry, _state, _window, _cx| {
-            let id = entry.item().id.clone();
-            let label = entry.item().label.clone();
-            let folder = entry.is_folder();
-            let view = view.clone();
-            let text = if folder {
-                format!("{label}/")
-            } else {
-                label.to_string()
-            };
-            let mut row = div().id(ix).px_2().child(text);
-            if !folder {
-                row = row.on_click(move |_, _window, cx| {
-                    let path = id.to_string();
-                    view.update(cx, |view, cx| {
-                        view.select(&path, cx);
-                        view.activate(&path, cx);
-                    })
-                    .ok();
-                });
-            }
-            row.into_any_element()
-        });
+        // The rows are drawn here rather than by `gpui_base::Tree`'s virtual list, which painted
+        // nothing in this setup; the component's state still owns the flattened entries.
+        let selected = self.selected_path(cx);
+        let rows: Vec<_> = {
+            let tree = self.tree.read(cx);
+            (0..)
+                .map_while(|ix| tree.entry(ix))
+                .filter(|entry| !entry.item().id.ends_with(LOADING_SUFFIX))
+                .map(|entry| {
+                    (
+                        entry.item().id.to_string(),
+                        entry.item().label.to_string(),
+                        entry.depth(),
+                        entry.is_folder(),
+                        entry.is_expanded(),
+                    )
+                })
+                .collect()
+        };
+        let rows = rows
+            .into_iter()
+            .enumerate()
+            .map(|(ix, (id, label, depth, folder, open))| {
+                let marker = match (folder, open) {
+                    (true, true) => "▾ ",
+                    (true, false) => "▸ ",
+                    (false, _) => "  ",
+                };
+                let text = if folder {
+                    format!("{marker}{label}/")
+                } else {
+                    format!("{marker}{label}")
+                };
+                let is_selected = selected.as_deref() == Some(id.as_str());
+                let mut row = div()
+                    .id(ix)
+                    .w_full()
+                    .h(gpui::px(22.0))
+                    .pl(gpui::px(8.0 + 14.0 * depth as f32))
+                    .text_color(gpui::rgb(0xd4d4d4))
+                    .child(text)
+                    .on_click(cx.listener(move |view, _, _window, cx| {
+                        view.select(&id, cx);
+                        if folder {
+                            view.toggle(&id, cx);
+                        } else {
+                            view.activate(&id, cx);
+                        }
+                    }));
+                if is_selected {
+                    row = row.bg(gpui::rgb(0x37373d));
+                }
+                row
+            });
         let status = self.status.clone().unwrap_or_default();
         let element: AnyElement = div()
             .size_full()
             .flex()
             .flex_col()
             .on_key_down(cx.listener(Self::on_key_down))
-            .child(div().flex_1().min_h_0().child(tree))
+            .child(
+                div()
+                    .id("file-tree-rows")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .children(rows),
+            )
             .child(div().px_2().child(status))
             .into_any_element();
         element

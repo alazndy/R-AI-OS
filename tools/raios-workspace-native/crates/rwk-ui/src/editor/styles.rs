@@ -1,5 +1,5 @@
 //! Editor colours: the token-class resolver and the editor style for each tone. Syntax colours
-//! are chosen here, never by syntect's own theme, so switching tone re-resolves instead of
+//! are chosen here, never by a grammar's own theme, so switching tone re-resolves instead of
 //! re-parsing.
 
 use std::sync::Arc;

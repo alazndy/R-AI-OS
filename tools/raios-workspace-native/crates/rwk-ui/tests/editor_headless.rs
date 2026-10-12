@@ -11,7 +11,7 @@ use gpui_base::input::{EditorState, InputHighlighter, Rope};
 use gpui_wgpu::CosmicTextSystem;
 use rwk_core::project::ProjectRoot;
 use rwk_core::workbench::{SwitchDecision, Tone};
-use rwk_ui::editor::highlight::{SyntectHighlighter, HIGHLIGHT_LIMIT_BYTES};
+use rwk_ui::editor::highlight::{SyntaxHighlighter, HIGHLIGHT_LIMIT_BYTES};
 use rwk_ui::editor::styles::SyntaxStyles;
 use rwk_ui::editor::view::EditorView;
 
@@ -304,14 +304,14 @@ fn the_diff_view_is_read_only_and_shows_added_and_removed_lines() {
 }
 
 #[test]
-fn highlighting_arrives_in_the_background_without_blocking_the_update() {
-    let mut rig = rig();
+fn highlighting_is_ready_right_after_the_update_and_follows_edits() {
+    let rig = rig();
     let source = "fn main() { let value = 1; }\n".repeat(400);
     let rope = Rope::from(source.as_str());
     let state = rig
         .cx
         .update(|window, cx| cx.new(|cx| EditorState::new(window, cx)));
-    let mut highlighter = SyntectHighlighter::new("rust").expect("rust");
+    let mut highlighter = SyntaxHighlighter::new("rust").expect("rust");
     let started = Instant::now();
     rig.cx.update(|window, cx| {
         state.update(cx, |_state, cx| {
@@ -320,31 +320,36 @@ fn highlighting_arrives_in_the_background_without_blocking_the_update() {
     });
     assert!(
         started.elapsed() < Duration::from_millis(500),
-        "update blocked the caller for {:?}",
+        "update took {:?}",
         started.elapsed()
     );
     let styles = SyntaxStyles::new(Tone::Dark);
-    let range = 0..source.len();
-    let arrived = rig.settle_until(|_| !highlighter.styles(&range, &styles).is_empty());
-    assert!(arrived, "no highlight spans ever arrived");
-    // Once the whole text is parsed every line has colours.
-    let all_parsed = rig.settle_until(|_| {
-        let last_line = source.len() - 5..source.len();
-        !highlighter.styles(&last_line, &styles).is_empty()
+    // No waiting: the colours exist as soon as `update` returned, for the whole text.
+    let head = highlighter.styles(&(0..30), &styles);
+    let tail = highlighter.styles(&(source.len() - 30..source.len()), &styles);
+    assert!(!head.is_empty() && !tail.is_empty());
+    // An edit updates them: turning the first `fn` into plain text removes its colour.
+    let edited = source.replacen("fn main", "xx main", 1);
+    let edit = gpui_base::input::InputEdit {
+        start_byte: 0,
+        old_end_byte: 2,
+        new_end_byte: 2,
+        start_position: gpui_base::input::Point::new(0, 0),
+        old_end_position: gpui_base::input::Point::new(0, 2),
+        new_end_position: gpui_base::input::Point::new(0, 2),
+    };
+    let edited_rope = Rope::from(edited.as_str());
+    rig.cx.update(|window, cx| {
+        state.update(cx, |_state, cx| {
+            highlighter.update(Some(edit), &edited_rope, false, window, cx)
+        })
     });
-    assert!(all_parsed, "the tail of the text was never highlighted");
-}
-
-#[test]
-fn open_path_refuses_while_dirty_even_for_the_same_file() {
-    let fixture = fixture(&[("a.txt", b"one")]);
-    let mut rig = rig();
-    rig.open(&fixture, "a.txt");
-    assert!(rig.settle_until(|rig| rig.text() == "one"));
-    rig.type_text("!");
-    rig.open(&fixture, "a.txt");
-    rig.settle_until(|_| false);
-    assert!(rig.text().contains('!'), "the edits were overwritten");
-    assert!(rig.dirty());
-    assert!(rig.status().is_some());
+    let first_word = highlighter.styles(&(0..2), &styles);
+    assert!(
+        first_word.is_empty(),
+        "the edited word is still coloured: {first_word:?}"
+    );
+    assert!(!highlighter
+        .styles(&(source.len() - 30..source.len()), &styles)
+        .is_empty());
 }

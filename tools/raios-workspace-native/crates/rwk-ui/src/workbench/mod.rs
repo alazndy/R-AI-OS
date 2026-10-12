@@ -837,6 +837,10 @@ impl Render for Workbench {
             .flex()
             .flex_col()
             .track_focus(&self.focus)
+            // GPUI's default text colour is black on a black window: every pane that does not
+            // paint its own colours (file tree, toast line) would be invisible.
+            .bg(surface_background(self.appearance.tone))
+            .text_color(surface_foreground(self.appearance.tone))
             // Capture phase: a shortcut is resolved before the focused terminal sees the key.
             .capture_key_down(cx.listener(Self::on_key_down))
             .child(div().flex_1().min_h_0().child(main))
@@ -844,6 +848,22 @@ impl Render for Workbench {
             .children(self.palette.clone())
             .children(dialog)
     }
+}
+
+/// Window background of a tone, the same surface the editor and terminal paint on.
+fn surface_background(tone: Tone) -> gpui::Rgba {
+    gpui::rgb(match tone {
+        Tone::Dark => 0x1e1e1e,
+        Tone::Light => 0xffffff,
+    })
+}
+
+/// Default text colour of a tone.
+fn surface_foreground(tone: Tone) -> gpui::Rgba {
+    gpui::rgb(match tone {
+        Tone::Dark => 0xd4d4d4,
+        Tone::Light => 0x1f2328,
+    })
 }
 
 /// Styling helper kept next to its only user.
