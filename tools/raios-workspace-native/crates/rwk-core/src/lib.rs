@@ -15,6 +15,7 @@ pub mod consent;
 pub mod control;
 pub mod documents;
 pub mod error;
+pub mod handoff_input;
 pub mod handoff_state;
 pub mod inspector;
 pub mod memory;
