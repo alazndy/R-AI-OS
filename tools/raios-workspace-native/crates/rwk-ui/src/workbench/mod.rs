@@ -11,7 +11,7 @@ use std::sync::Arc;
 use gpui::{
     div, px, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Window,
+    Subscription, Task, Window,
 };
 use gpui_base::{h_resizable, resizable_panel, ResizableState};
 use rwk_core::project::ProjectRoot;
@@ -145,6 +145,8 @@ pub struct Workbench {
     /// An action to run once the save started by `Decision::Save` has succeeded.
     after_save: Option<PendingAction>,
     toast: Option<SharedString>,
+    toast_task: Option<Task<()>>,
+    file_search_task: Option<Task<()>>,
     appearance: Appearance,
     close_confirmed: bool,
     last_command: Option<CommandId>,
@@ -207,6 +209,8 @@ impl Workbench {
             palette_subscription: None,
             after_save: None,
             toast: None,
+            toast_task: None,
+            file_search_task: None,
             appearance,
             close_confirmed: false,
             last_command: None,
@@ -318,6 +322,16 @@ impl Workbench {
 
     fn say(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.toast = Some(message.into());
+        let timer = cx
+            .background_executor()
+            .timer(std::time::Duration::from_secs(5));
+        self.toast_task = Some(cx.spawn(async move |this, cx| {
+            timer.await;
+            let _ = this.update(cx, |view, cx| {
+                view.toast = None;
+                cx.notify();
+            });
+        }));
         cx.notify();
     }
 
@@ -327,6 +341,7 @@ impl Workbench {
     pub fn run(&mut self, id: CommandId, window: &mut Window, cx: &mut Context<Self>) {
         self.last_command = Some(id);
         self.toast = None;
+        self.toast_task = None;
         let state = available(id, &self.state(cx));
         if !state.enabled {
             if let Some(reason) = state.reason {
@@ -379,7 +394,7 @@ impl Workbench {
             CommandId::EditorLayout => self.apply_layout(LayoutPreset::Editor, window, cx),
             CommandId::AgentsLayout => self.apply_layout(LayoutPreset::Agents, window, cx),
             CommandId::Commands | CommandId::Shortcuts => self.toggle_palette(window, cx),
-            CommandId::Files => self.say("Dosya arama sonraki sürümde", cx),
+            CommandId::Files => self.open_file_palette(window, cx),
             CommandId::Memory | CommandId::Agent | CommandId::Handoff => {
                 self.say("Bu sürümde henüz yok", cx);
             }
@@ -393,11 +408,24 @@ impl Workbench {
         }
         let state = self.state(cx);
         let palette = cx.new(|cx| PaletteView::new(state, window, cx));
+        self.attach_palette(palette, window, cx);
+    }
+
+    fn attach_palette(
+        &mut self,
+        palette: Entity<PaletteView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.palette_subscription = Some(cx.subscribe_in(
             &palette,
             window,
-            |this, _palette, event: &PaletteEvent, window, cx| match *event {
+            |this, _palette, event: &PaletteEvent, window, cx| match event.clone() {
                 PaletteEvent::Close => this.close_palette(window, cx),
+                PaletteEvent::OpenFile(path) => {
+                    this.close_palette(window, cx);
+                    this.request_open_file(path, window, cx);
+                }
                 PaletteEvent::Run(id) => {
                     this.close_palette(window, cx);
                     this.run(id, window, cx);
@@ -408,7 +436,48 @@ impl Workbench {
         cx.notify();
     }
 
+    fn open_file_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .palette
+            .as_ref()
+            .is_some_and(|palette| palette.read(cx).is_file_picker())
+        {
+            self.close_palette(window, cx);
+            return;
+        }
+        self.close_palette(window, cx);
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        let project_id = project.info().id.clone();
+        let palette = cx.new(|cx| PaletteView::for_files(window, cx));
+        self.attach_palette(palette.clone(), window, cx);
+        self.file_search_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let listing = cx
+                .background_executor()
+                .spawn(async move {
+                    rwk_core::workbench::quick_open::list_project_files(&project, 10_000)
+                })
+                .await;
+            let _ = this.update_in(cx, |view, window, cx| {
+                if view.project.as_ref().map(|p| &p.info().id) != Some(&project_id)
+                    || view.palette.as_ref().map(Entity::entity_id) != Some(palette.entity_id())
+                {
+                    return;
+                }
+                match listing {
+                    Ok(files) => palette.update(cx, |palette, cx| palette.set_files(files, cx)),
+                    Err(_) => {
+                        view.close_palette(window, cx);
+                        view.say("Dosyalar listelenemedi; daha dar bir proje açın", cx);
+                    }
+                }
+            });
+        }));
+    }
+
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.file_search_task = None;
         self.palette = None;
         self.palette_subscription = None;
         window.focus(&self.focus, cx);
@@ -596,6 +665,7 @@ impl Workbench {
             }
             PendingAction::OpenProject(root) => match ProjectRoot::open(root) {
                 Ok(project) => {
+                    self.close_palette(window, cx);
                     self.stop_terminals(false);
                     self.editor
                         .update(cx, |editor, cx| editor.discard(window, cx));

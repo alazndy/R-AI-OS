@@ -5,6 +5,7 @@ pub mod appearance;
 pub mod commands;
 pub mod documents;
 pub mod palette;
+pub mod quick_open;
 
 pub use appearance::{parse_appearance, serialize_appearance, Appearance, Skin, Tone};
 pub use commands::{

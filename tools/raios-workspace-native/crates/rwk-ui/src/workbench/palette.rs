@@ -1,18 +1,21 @@
-//! The command palette overlay: a query box over the filtered command list.
+//! Shared command and quick-open palette: a query box over commands or project files.
 
 use gpui::{
     div, App, AppContext, Context, EventEmitter, InteractiveElement, IntoElement, KeyDownEvent,
-    ParentElement, Render, SharedString, Styled, Subscription, Window,
+    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Window,
 };
 use gpui_base::input::{InputEvent, InputState};
 use gpui_base::Input;
 use rwk_core::workbench::{palette_entries, CommandId, PaletteEntry, WorkbenchState};
 
 /// What the palette tells the workbench.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaletteEvent {
     /// Run this command (it was enabled when chosen).
     Run(CommandId),
+    /// Open a project-relative file through the workbench decision guard.
+    OpenFile(String),
     /// Close without running anything.
     Close,
 }
@@ -23,10 +26,16 @@ pub struct PaletteView {
     state: WorkbenchState,
     entries: Vec<PaletteEntry>,
     selected: usize,
+    scroll: ScrollHandle,
+    files: Option<Vec<String>>,
+    filtered_files: Vec<String>,
+    loading: bool,
+    truncated: bool,
     _subscription: Subscription,
 }
 
 use gpui::Entity;
+use rwk_core::workbench::quick_open::{matching_files, FileListing};
 
 impl EventEmitter<PaletteEvent> for PaletteView {}
 
@@ -46,14 +55,51 @@ impl PaletteView {
             state,
             entries: palette_entries("", &state),
             selected: 0,
+            scroll: ScrollHandle::new(),
+            files: None,
+            filtered_files: Vec::new(),
+            loading: false,
+            truncated: false,
             _subscription: subscription,
         }
     }
 
+    /// A filename picker using the existing palette input and keyboard navigation.
+    pub fn for_files(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut view = Self::new(WorkbenchState::default(), window, cx);
+        view.files = Some(Vec::new());
+        view.entries.clear();
+        view.loading = true;
+        view
+    }
+
+    /// True when this palette is selecting a file rather than a command.
+    pub fn is_file_picker(&self) -> bool {
+        self.files.is_some()
+    }
+
+    /// Replace the discovered files while keeping any query typed during discovery.
+    pub fn set_files(&mut self, listing: FileListing, cx: &mut Context<Self>) {
+        self.files = Some(listing.files);
+        self.loading = false;
+        self.truncated = listing.truncated;
+        self.refilter(cx);
+    }
+
+    /// The project-relative file paths currently matching the filename query.
+    pub fn file_paths(&self) -> &[String] {
+        &self.filtered_files
+    }
+
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
-        self.entries = palette_entries(&query, &self.state);
+        if let Some(files) = &self.files {
+            self.filtered_files = matching_files(files, &query, 100);
+        } else {
+            self.entries = palette_entries(&query, &self.state);
+        }
         self.selected = 0;
+        self.scroll.scroll_to_item(0);
         cx.notify();
     }
 
@@ -81,17 +127,29 @@ impl PaletteView {
 
     /// Moves the highlight, wrapping at both ends.
     pub fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if self.entries.is_empty() {
+        let count = if self.is_file_picker() {
+            self.filtered_files.len()
+        } else {
+            self.entries.len()
+        };
+        if count == 0 {
             return;
         }
-        let count = self.entries.len() as isize;
+        let count = count as isize;
         self.selected = (self.selected as isize + delta).rem_euclid(count) as usize;
+        self.scroll.scroll_to_item(self.selected);
         cx.notify();
     }
 
-    /// Runs the highlighted command when it is available; an unavailable one stays on screen
-    /// with its reason.
+    /// Activates the highlighted file or available command. An unavailable command stays
+    /// on screen with its reason.
     pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        if self.is_file_picker() {
+            if let Some(path) = self.filtered_files.get(self.selected) {
+                cx.emit(PaletteEvent::OpenFile(path.clone()));
+            }
+            return;
+        }
         if let Some(entry) = self.entries.get(self.selected) {
             if entry.state.enabled {
                 cx.emit(PaletteEvent::Run(entry.id));
@@ -110,24 +168,56 @@ impl PaletteView {
     }
 }
 
+/// Height of the filter box; the input would otherwise take all the room it is given.
+const INPUT_HEIGHT: f32 = 32.0;
+
 impl Render for PaletteView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = self.entries.iter().enumerate().map(|(index, entry)| {
+        let mut rows: Vec<_> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let marker = if index == self.selected { "› " } else { "  " };
+                let shortcut = entry.shortcut.unwrap_or("");
+                let reason = entry.state.reason.unwrap_or("");
+                let text = if entry.state.enabled {
+                    format!("{marker}{}   {shortcut}", entry.label)
+                } else {
+                    format!("{marker}{}   ({reason})", entry.label)
+                };
+                let row = div().px_2().child(SharedString::from(text));
+                if entry.state.enabled {
+                    row
+                } else {
+                    row.opacity(0.5)
+                }
+            })
+            .collect();
+        for (index, path) in self.filtered_files.iter().enumerate() {
             let marker = if index == self.selected { "› " } else { "  " };
-            let shortcut = entry.shortcut.unwrap_or("");
-            let reason = entry.state.reason.unwrap_or("");
-            let text = if entry.state.enabled {
-                format!("{marker}{}   {shortcut}", entry.label)
-            } else {
-                format!("{marker}{}   ({reason})", entry.label)
-            };
-            let row = div().px_2().child(SharedString::from(text));
-            if entry.state.enabled {
-                row
-            } else {
-                row.opacity(0.5)
-            }
-        });
+            let chosen = path.clone();
+            rows.push(
+                div()
+                    .px_2()
+                    .child(SharedString::from(format!("{marker}{path}")))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |_, _, _, cx| {
+                            cx.emit(PaletteEvent::OpenFile(chosen.clone()));
+                        }),
+                    ),
+            );
+        }
+        let hint = if self.loading {
+            "Dosyalar aranıyor…"
+        } else if self.truncated {
+            "İlk 10.000 girdide arama; daha dar bir proje açın"
+        } else if self.is_file_picker() && self.filtered_files.is_empty() {
+            "Dosya bulunamadı"
+        } else {
+            ""
+        };
         div()
             .absolute()
             .top_8()
@@ -139,7 +229,22 @@ impl Render for PaletteView {
             .bg(gpui::rgb(0x252526))
             .text_color(gpui::rgb(0xe5e5e5))
             .capture_key_down(cx.listener(Self::on_key_down))
-            .child(Input::new(&self.input))
-            .child(div().flex().flex_col().children(rows))
+            .child(
+                div()
+                    .h(gpui::px(INPUT_HEIGHT))
+                    .overflow_hidden()
+                    .child(Input::new(&self.input)),
+            )
+            .child(hint)
+            .child(
+                div()
+                    .id("palette-results")
+                    .max_h(gpui::px(360.0))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .flex()
+                    .flex_col()
+                    .children(rows),
+            )
     }
 }

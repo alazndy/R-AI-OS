@@ -579,3 +579,70 @@ fn reopening_the_open_clean_file_does_nothing() {
     rig.open_file("a.txt");
     assert!(rig.read(|wb, _| wb.pending().is_none()));
 }
+
+fn tick_ready(rig: &mut Rig) {
+    while rig.cx.executor().tick() {}
+}
+
+#[test]
+fn toasts_expire_after_five_seconds_and_a_replacement_gets_its_own_timer() {
+    let mut rig = rig();
+    rig.run(CommandId::Save);
+    tick_ready(&mut rig);
+    assert!(rig.read(|wb, _| wb.toast()).is_some());
+    rig.cx.executor().advance_clock(Duration::from_secs(4));
+    tick_ready(&mut rig);
+    assert!(rig.read(|wb, _| wb.toast()).is_some());
+    rig.run(CommandId::NewTerminal);
+    tick_ready(&mut rig);
+    let replacement = rig.read(|wb, _| wb.toast());
+    assert!(replacement.is_some());
+    rig.cx.executor().advance_clock(Duration::from_secs(1));
+    tick_ready(&mut rig);
+    assert_eq!(rig.read(|wb, _| wb.toast()), replacement);
+    rig.cx.executor().advance_clock(Duration::from_secs(4));
+    tick_ready(&mut rig);
+    assert_eq!(rig.read(|wb, _| wb.toast()), None);
+}
+
+#[test]
+fn quick_open_finds_nested_files_and_respects_unsaved_edits() {
+    let mut rig = rig();
+    std::fs::create_dir(rig.dir.path().join("nested")).expect("nested");
+    std::fs::write(rig.dir.path().join("nested/needle.rs"), "nested").expect("file");
+    std::fs::create_dir(rig.dir.path().join("target")).expect("target");
+    std::fs::write(rig.dir.path().join("target/needle-hidden.rs"), "noise").expect("noise");
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("a.txt")));
+    rig.type_text("edited");
+    rig.run(CommandId::Files);
+    let palette = rig
+        .read(|wb, _| wb.palette().cloned())
+        .expect("file palette");
+    assert!(rig.settle_until(|rig| rig.read(|_, cx| !palette.read(cx).file_paths().is_empty())));
+    rig.with(|_, window, cx| palette.update(cx, |p, cx| p.set_query("needle", window, cx)));
+    assert_eq!(
+        rig.read(|_, cx| palette.read(cx).file_paths().to_vec()),
+        vec!["nested/needle.rs"]
+    );
+    rig.cx
+        .update(|_, cx| palette.update(cx, |p, cx| p.confirm(cx)));
+    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
+    assert_eq!(
+        rig.read(|wb, _| wb.pending().cloned()),
+        Some(PendingAction::OpenFile("nested/needle.rs".into()))
+    );
+    rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
+    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
+    rig.run(CommandId::Files);
+    let palette = rig
+        .read(|wb, _| wb.palette().cloned())
+        .expect("file palette");
+    assert!(rig.settle_until(|rig| rig.read(|_, cx| !palette.read(cx).file_paths().is_empty())));
+    rig.with(|_, window, cx| palette.update(cx, |p, cx| p.set_query("needle", window, cx)));
+    rig.cx
+        .update(|_, cx| palette.update(cx, |p, cx| p.confirm(cx)));
+    rig.with(|wb, window, cx| wb.resolve(Decision::Discard, window, cx));
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("nested/needle.rs")));
+}
