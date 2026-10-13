@@ -4,6 +4,7 @@
 pub mod editor;
 pub mod file_tree;
 pub mod fonts;
+pub mod handoff;
 pub mod inspector;
 pub mod terminal;
 pub mod workbench;

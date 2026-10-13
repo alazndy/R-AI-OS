@@ -25,7 +25,12 @@ impl IdempotencyKey {
         Self(raw.into())
     }
 
-    /// The wire value.
+    /// A new key for a new user action.
+    pub fn fresh() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+
+    /// The key text.
     pub fn as_str(&self) -> &str {
         &self.0
     }

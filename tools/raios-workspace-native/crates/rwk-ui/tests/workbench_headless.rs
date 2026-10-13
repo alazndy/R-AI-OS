@@ -41,8 +41,8 @@ fn rig() -> Rig {
     )));
     app.update(gpui_base::init);
     let programs = ProgramPaths {
-        shell: Some(script),
-        raios: None,
+        shell: Some(script.clone()),
+        raios: Some(script),
     };
     let (view, cx) = app.add_window_view(move |window, cx| {
         Workbench::new(programs, Appearance::default(), window, cx)
@@ -753,4 +753,277 @@ fn enter_never_adds_a_newline_to_the_palette_query() {
 
     let query = rig.cx.update(|_w, cx| palette.read(cx).query(cx));
     assert_eq!(query, "zzzz-no-match");
+}
+
+// ----- guarded daemon commands ---------------------------------------------------------
+
+use rwk_core::control::fake::{FakeControlPlane, RecordedCall};
+use rwk_core::control::{ControlPlane, PolicyAction, QueuedHandoff};
+use rwk_core::sessions::SessionKind;
+
+fn connected(rig: &mut Rig, policy: PolicyAction) -> Arc<FakeControlPlane> {
+    let fake = Arc::new(FakeControlPlane::new());
+    fake.set_policy("launch_agent", policy);
+    fake.set_policy("create_handoff", policy);
+    fake.set_policy("register_project", policy);
+    // The first inspector poll finds the daemon healthy; only then are agent commands offered.
+    fake.push_work_snapshot(Ok(raios_contracts::WorkSnapshot::default()))
+        .push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()));
+    let plane: Arc<dyn ControlPlane> = fake.clone();
+    rig.with(|wb, _, cx| wb.set_control_plane(Some(plane), cx));
+    rig.open_project();
+    assert!(rig.settle_until(|rig| {
+        rig.read(|wb, cx| wb.state(cx).daemon_reachable)
+            && rig.read(|wb, cx| {
+                wb.inspector().read(cx).model().banner == rwk_core::inspector::Banner::None
+            })
+    }));
+    fake
+}
+
+fn sends(fake: &FakeControlPlane) -> usize {
+    fake.calls()
+        .iter()
+        .filter(|call| {
+            matches!(
+                call,
+                RecordedCall::LaunchAgent(_)
+                    | RecordedCall::CreateHandoff(_)
+                    | RecordedCall::RegisterProject { .. }
+            )
+        })
+        .count()
+}
+
+#[test]
+fn a_confirm_policy_asks_first_and_sends_only_after_yes() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Confirm);
+    fake.push_launch(Ok(()));
+
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Claude, window, cx));
+
+    assert!(rig.settle_until(|rig| matches!(
+        rig.read(|wb, _| wb.pending().cloned()),
+        Some(PendingAction::Consent(..))
+    )));
+    assert_eq!(sends(&fake), 0, "nothing may be sent before the answer");
+    let message = rig.read(|wb, _| wb.dialog().map(|dialog| dialog.message));
+    assert!(message.is_some_and(|text| text.contains("claude_kaira")));
+
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert_eq!(sends(&fake), 1);
+}
+
+#[test]
+fn declining_the_consent_dialog_sends_nothing() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Confirm);
+
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.pending().is_some())));
+    rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
+    rig.settle_for(200);
+
+    assert_eq!(sends(&fake), 0);
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+}
+
+#[test]
+fn a_deny_policy_refuses_without_a_dialog_or_a_send() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Deny);
+
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Claude, window, cx));
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.toast()).is_some()));
+    assert!(rig.read(|wb, _| wb.pending().is_none()));
+    assert_eq!(sends(&fake), 0);
+}
+
+#[test]
+fn an_allow_policy_sends_straight_away() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_launch(Ok(()));
+
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Opencode, window, cx));
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert!(rig.read(|wb, _| wb.pending().is_none()));
+    assert_eq!(sends(&fake), 1);
+}
+
+#[test]
+fn a_daemon_refusal_of_the_launch_starts_no_terminal() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_launch(Err(rwk_core::error::AppError::new(
+        rwk_core::error::ErrorCode::Forbidden,
+        "launch refused",
+    )));
+
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Claude, window, cx));
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.toast()).is_some()));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+}
+
+#[test]
+fn a_secret_in_the_handoff_note_never_reaches_the_daemon() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    rig.run(CommandId::Handoff);
+    let composer = rig
+        .read(|wb, _| wb.composer().cloned())
+        .expect("the composer opens");
+
+    rig.with(|_, window, cx| {
+        composer.update(cx, |composer, cx| {
+            composer.set_text("anahtar sk-abcdefghijklmnopqrstuvwx", window, cx);
+            composer.submit(SessionKind::Codex, cx);
+        })
+    });
+    rig.cx.run_until_parked();
+
+    assert!(rig.read(|wb, cx| wb
+        .composer()
+        .is_some_and(|c| c.read(cx).problem().is_some())));
+    assert_eq!(sends(&fake), 0);
+}
+
+#[test]
+fn a_valid_handoff_is_queued_and_tracked() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    let root = std::fs::canonicalize(rig.dir.path()).expect("root");
+    fake.push_handoff(Ok(QueuedHandoff {
+        approval_id: "a-1".into(),
+        project_path: root.clone(),
+    }));
+    fake.push_receipt(Ok(raios_contracts::HandoffReceiptDto {
+        approval_id: "a-1".into(),
+        project_path: root.to_string_lossy().into_owned(),
+        from_agent: "claude_kaira".into(),
+        to_agent: "codex_kaira".into(),
+        status: "pending".into(),
+        resolved_by: None,
+        resolved_at: None,
+        delivered_by_target: false,
+    }));
+    rig.run(CommandId::Handoff);
+    let composer = rig
+        .read(|wb, _| wb.composer().cloned())
+        .expect("the composer opens");
+
+    rig.with(|_, window, cx| {
+        composer.update(cx, |composer, cx| {
+            composer.set_text("Devam et: testleri çalıştır.", window, cx);
+            composer.submit(SessionKind::Codex, cx);
+        })
+    });
+
+    assert!(rig.settle_until(|rig| !rig.read(|wb, _| wb.handoffs().is_empty())));
+    assert!(
+        rig.read(|wb, _| wb.composer().is_none()),
+        "the composer closes"
+    );
+    // The receipt read that follows the queueing confirms the handoff is pending.
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.handoffs()[0].can_start_receiver())));
+    let tracked = rig.read(|wb, _| wb.handoffs()[0].clone());
+    assert_eq!(tracked.approval_id, "a-1");
+    assert_eq!(tracked.to, "codex_kaira");
+    assert_eq!(sends(&fake), 1);
+}
+
+#[test]
+fn the_agent_command_asks_which_agent() {
+    let mut rig = rig();
+    let _fake = connected(&mut rig, PolicyAction::Allow);
+
+    rig.run(CommandId::Agent);
+
+    let dialog = rig.read(|wb, _| wb.dialog()).expect("a chooser");
+    assert_eq!(dialog.title, "Ajan başlat");
+    assert_eq!(dialog.buttons.len(), 5);
+}
+
+#[test]
+fn agent_commands_are_refused_without_a_daemon_connection() {
+    let mut rig = rig();
+    rig.open_project();
+
+    rig.run(CommandId::Agent);
+
+    assert!(rig.read(|wb, _| wb.pending().is_none()));
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Daemon bağlantısı yapılandırılmadı".to_owned())
+    );
+}
+
+#[test]
+fn starting_the_receiver_reads_the_receipt_again_and_tracks_the_process() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    let root = std::fs::canonicalize(rig.dir.path()).expect("root");
+    let pending = || raios_contracts::HandoffReceiptDto {
+        approval_id: "a-1".into(),
+        project_path: root.to_string_lossy().into_owned(),
+        from_agent: "claude_kaira".into(),
+        to_agent: "codex_kaira".into(),
+        status: "pending".into(),
+        resolved_by: None,
+        resolved_at: None,
+        delivered_by_target: false,
+    };
+    fake.push_handoff(Ok(QueuedHandoff {
+        approval_id: "a-1".into(),
+        project_path: root.clone(),
+    }))
+    .push_receipt(Ok(pending()))
+    .push_receipt(Ok(pending()))
+    .push_launch(Ok(()));
+    rig.with(|wb, window, cx| {
+        wb.start_guarded(
+            rwk_core::guarded::Guarded::CreateHandoff(rwk_core::control::CreateHandoffRequest {
+                project_root: root.clone(),
+                from: SessionKind::Claude,
+                to: SessionKind::Codex,
+                summary: "devam".into(),
+                idempotency_key: rwk_core::control::IdempotencyKey::fresh(),
+            }),
+            window,
+            cx,
+        )
+    });
+    assert!(rig.settle_until(|rig| {
+        rig.read(|wb, _| {
+            wb.handoffs()
+                .first()
+                .is_some_and(|h| h.can_start_receiver())
+        })
+    }));
+
+    rig.with(|wb, window, cx| wb.start_receiver("a-1".into(), window, cx));
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert!(rig.settle_until(|rig| {
+        rig.read(|wb, _| wb.handoffs()[0].label().contains("alıcı çalışıyor"))
+    }));
+    let reads = fake
+        .calls()
+        .iter()
+        .filter(|call| matches!(call, RecordedCall::HandoffReceipt { .. }))
+        .count();
+    assert!(
+        reads >= 2,
+        "the receipt is read again before the receiver starts"
+    );
+    assert!(
+        !rig.read(|wb, _| wb.handoffs()[0].can_start_receiver()),
+        "a running receiver blocks a second start"
+    );
 }

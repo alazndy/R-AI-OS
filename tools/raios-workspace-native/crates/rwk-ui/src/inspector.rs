@@ -16,8 +16,21 @@ use rwk_core::inspector::{fetch, Banner, InspectorModel};
 /// How often the daemon is read.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
+/// What the inspector asks of the workbench.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InspectorEvent {
+    /// The user asked to start the receiver of this handoff.
+    StartReceiver(String),
+}
+
+impl gpui::EventEmitter<InspectorEvent> for InspectorView {}
+
+/// One handoff line: approval id, text, and whether the receiver may be started.
+pub type HandoffLine = (String, String, bool);
+
 /// The inspector panel.
 pub struct InspectorView {
+    handoffs: Vec<HandoffLine>,
     plane: Option<Arc<dyn ControlPlane>>,
     project: Option<PathBuf>,
     /// Bumped on every project or plane change; answers of an older generation are dropped.
@@ -30,6 +43,7 @@ impl InspectorView {
     /// An inspector with no project and no daemon connection.
     pub fn new() -> Self {
         Self {
+            handoffs: Vec::new(),
             plane: None,
             project: None,
             generation: 0,
@@ -52,6 +66,12 @@ impl InspectorView {
     pub fn set_project(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
         self.project = root;
         self.restart(cx);
+    }
+
+    /// Replaces the handoff lines the workspace queued.
+    pub fn set_handoffs(&mut self, lines: Vec<HandoffLine>, cx: &mut Context<Self>) {
+        self.handoffs = lines;
+        cx.notify();
     }
 
     /// What the panel currently shows.
@@ -132,7 +152,7 @@ fn row(primary: String, secondary: String) -> impl IntoElement {
 }
 
 impl Render for InspectorView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let banner = self.model.banner.text().map(|text| {
             let color = match self.model.banner {
                 Banner::Unreachable(_) => 0xf14c4c,
@@ -170,14 +190,38 @@ impl Render for InspectorView {
                 ),
             )
         });
-        let empty =
-            (self.model.is_empty() && matches!(self.model.banner, Banner::None)).then(|| {
-                div()
-                    .px_2()
-                    .py_2()
-                    .text_xs()
-                    .child("Bu proje için kayıt yok.")
-            });
+        let handoffs: Vec<_> = self
+            .handoffs
+            .iter()
+            .map(|(id, text, can_start)| {
+                let line = row(text.clone(), format!("onay {id}"));
+                let start = can_start.then(|| {
+                    let id = id.clone();
+                    div()
+                        .id(SharedString::from(format!("start-receiver-{id}")))
+                        .mx_2()
+                        .px_2()
+                        .border_1()
+                        .border_color(gpui::rgb(0x3794ff))
+                        .text_xs()
+                        .child("Alıcıyı başlat")
+                        .on_click(cx.listener(move |_, _, _window, cx| {
+                            cx.emit(InspectorEvent::StartReceiver(id.clone()));
+                        }))
+                });
+                div().child(line).children(start)
+            })
+            .collect();
+        let empty = (self.model.is_empty()
+            && self.handoffs.is_empty()
+            && matches!(self.model.banner, Banner::None))
+        .then(|| {
+            div()
+                .px_2()
+                .py_2()
+                .text_xs()
+                .child("Bu proje için kayıt yok.")
+        });
         div()
             .id("inspector")
             .size_full()
@@ -203,6 +247,8 @@ impl Render for InspectorView {
             .children(runs)
             .child(heading("Görevler", self.model.tasks.len()))
             .children(tasks)
+            .child(heading("Devirler", self.handoffs.len()))
+            .children(handoffs)
             .children(empty)
     }
 }

@@ -43,6 +43,8 @@ pub enum CommandId {
     Handoff,
     /// Show the project memory.
     Memory,
+    /// Register the open project with Raios.
+    RegisterProject,
     /// Show or hide the inspector (tasks, runs and approvals of the project).
     Inspector,
     /// Refresh the file tree and RAIOS data.
@@ -118,7 +120,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 29] = [
+const COMMANDS: [Command; 30] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -244,6 +246,12 @@ const COMMANDS: [Command; 29] = [
         &[bind_terminal("h", true, false)],
     ),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
+    cmd(
+        CommandId::RegisterProject,
+        "Projeyi Raios'a kaydet",
+        None,
+        &[],
+    ),
     cmd(
         CommandId::Inspector,
         "Denetçiyi göster / gizle",
@@ -462,9 +470,9 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("Böyle bir terminal yok")
             }
         }
-        Agent | Handoff => {
+        Agent | Handoff | RegisterProject => {
             if !state.control_plane_features {
-                deny("Bu sürümde henüz yok")
+                deny("Daemon bağlantısı yapılandırılmadı")
             } else if !state.project_open {
                 deny("Önce bir proje klasörü açın")
             } else if !state.daemon_reachable {
@@ -510,7 +518,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 29);
+        assert_eq!(catalog().len(), 30);
     }
 
     #[test]
@@ -678,7 +686,7 @@ mod tests {
         };
         assert_eq!(
             available(CommandId::Agent, &state).reason,
-            Some("Bu sürümde henüz yok")
+            Some("Daemon bağlantısı yapılandırılmadı")
         );
         state.control_plane_features = true;
         assert_eq!(

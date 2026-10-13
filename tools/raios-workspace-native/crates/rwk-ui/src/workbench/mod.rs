@@ -1,6 +1,7 @@
 //! The workbench: the window's three panes, the terminal dock and the single place where
 //! commands take effect.
 
+pub mod control;
 pub mod host;
 pub mod layout;
 pub mod palette;
@@ -14,7 +15,10 @@ use gpui::{
     Subscription, Task, Window,
 };
 use gpui_base::{h_resizable, resizable_panel, ResizableState};
+use rwk_core::consent::{ConsentRegistry, ConsentRequest};
 use rwk_core::control::ControlPlane;
+use rwk_core::guarded::Guarded;
+use rwk_core::handoff_flow::TrackedHandoff;
 use rwk_core::project::ProjectRoot;
 use rwk_core::sessions::{SessionId, SessionKind, SessionRegistry, TerminalHost, TerminalSize};
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
@@ -62,6 +66,11 @@ pub enum PendingAction {
     CloseWindow,
     /// Stop this terminal session.
     StopTerminal(SessionId),
+    /// Choose which agent to start.
+    ChooseAgent,
+    /// A command whose policy is `confirm` waits for an explicit yes; the text is derived from
+    /// the payload that will be sent.
+    Consent(ConsentRequest, Box<Guarded>),
 }
 
 /// The user's answer to a pending action.
@@ -73,6 +82,8 @@ pub enum Decision {
     Discard,
     /// Go ahead (stopping a session).
     Confirm,
+    /// Start this agent.
+    Agent(SessionKind),
     /// Do nothing.
     Cancel,
 }
@@ -92,6 +103,22 @@ impl PendingAction {
     /// The dialog this action waits behind.
     pub fn dialog(&self) -> Dialog {
         match self {
+            PendingAction::ChooseAgent => Dialog {
+                title: "Ajan başlat",
+                message: "Hangi ajan bu projede başlatılsın? Daemon politikası ve denetim kaydı uygulanır.".to_owned(),
+                buttons: vec![
+                    (Decision::Agent(SessionKind::Claude), "Claude"),
+                    (Decision::Agent(SessionKind::Codex), "Codex"),
+                    (Decision::Agent(SessionKind::Opencode), "OpenCode"),
+                    (Decision::Agent(SessionKind::Agy), "Antigravity"),
+                    (Decision::Cancel, "Vazgeç"),
+                ],
+            },
+            PendingAction::Consent(request, _) => Dialog {
+                title: "Onay gerekiyor",
+                message: request.summary.clone(),
+                buttons: vec![(Decision::Confirm, "Onayla"), (Decision::Cancel, "Vazgeç")],
+            },
             PendingAction::StopTerminal(_) => Dialog {
                 title: "Oturumu durdur",
                 message: "Seçili terminal oturumu durdurulacak.".to_owned(),
@@ -124,6 +151,7 @@ impl PendingAction {
 }
 
 struct TerminalPane {
+    kind: SessionKind,
     id: SessionId,
     view: Entity<TerminalView>,
 }
@@ -134,6 +162,15 @@ pub struct Workbench {
     editor: Entity<EditorView>,
     inspector: Entity<InspectorView>,
     inspector_visible: bool,
+    plane: Option<Arc<dyn ControlPlane>>,
+    consent: Arc<ConsentRegistry>,
+    consent_wait: Option<std::sync::mpsc::Receiver<rwk_core::consent::ConsentDecision>>,
+    composer: Option<Entity<crate::handoff::HandoffComposer>>,
+    composer_subscription: Option<Subscription>,
+    handoffs: Vec<TrackedHandoff>,
+    receipt_task: Option<Task<()>>,
+    receiver_for: Option<String>,
+    receiver_session: Option<(String, SessionId)>,
     project: Option<Arc<ProjectRoot>>,
     host: SharedHost,
     sessions: Arc<SessionRegistry>,
@@ -180,7 +217,16 @@ impl Workbench {
         let editor = cx.new(|cx| EditorView::new(appearance.tone, window, cx));
         let inspector = cx.new(|_| InspectorView::new());
         let sizes = cx.new(|_| ResizableState::default());
+        let inspector_events = cx.subscribe_in(
+            &inspector,
+            window,
+            |this, _inspector, event: &crate::inspector::InspectorEvent, window, cx| {
+                let crate::inspector::InspectorEvent::StartReceiver(id) = event;
+                this.start_receiver(id.clone(), window, cx);
+            },
+        );
         let subscriptions = vec![
+            inspector_events,
             cx.subscribe_in(
                 &files,
                 window,
@@ -202,6 +248,15 @@ impl Workbench {
             editor,
             inspector,
             inspector_visible: false,
+            plane: None,
+            consent: Arc::new(ConsentRegistry::new()),
+            consent_wait: None,
+            composer: None,
+            composer_subscription: None,
+            handoffs: Vec::new(),
+            receipt_task: None,
+            receiver_for: None,
+            receiver_session: None,
             project: None,
             host,
             sessions,
@@ -238,19 +293,13 @@ impl Workbench {
             dirty: editor.is_dirty(),
             terminals: u8::try_from(self.terminals.len()).unwrap_or(u8::MAX),
             dock_visible: self.dock_visible,
-            control_plane_features: false,
-            daemon_reachable: false,
+            control_plane_features: self.plane.is_some(),
+            daemon_reachable: self.plane.is_some()
+                && !matches!(
+                    self.inspector.read(cx).model().banner,
+                    rwk_core::inspector::Banner::Unreachable(_)
+                ),
         }
-    }
-
-    /// Connects the inspector (and later the guarded commands) to the daemon.
-    pub fn set_control_plane(
-        &mut self,
-        plane: Option<Arc<dyn ControlPlane>>,
-        cx: &mut Context<Self>,
-    ) {
-        self.inspector
-            .update(cx, |inspector, cx| inspector.set_control_plane(plane, cx));
     }
 
     /// True while the inspector is shown above the terminals.
@@ -429,9 +478,10 @@ impl Workbench {
             CommandId::AgentsLayout => self.apply_layout(LayoutPreset::Agents, window, cx),
             CommandId::Commands | CommandId::Shortcuts => self.toggle_palette(window, cx),
             CommandId::Files => self.open_file_palette(window, cx),
-            CommandId::Memory | CommandId::Agent | CommandId::Handoff => {
-                self.say("Bu sürümde henüz yok", cx);
-            }
+            CommandId::Agent => self.open_agent_chooser(cx),
+            CommandId::Handoff => self.open_composer(window, cx),
+            CommandId::RegisterProject => self.register_project(window, cx),
+            CommandId::Memory => self.say("Bu sürümde henüz yok", cx),
         }
     }
 
@@ -636,10 +686,23 @@ impl Workbench {
             return;
         };
         match (decision, &action) {
+            (Decision::Cancel, PendingAction::Consent(request, op)) => {
+                self.answer_consent(request, (**op).clone(), false, window, cx);
+            }
             (Decision::Cancel, _) => {}
+            (Decision::Agent(kind), PendingAction::ChooseAgent) => {
+                self.launch_agent(kind, window, cx);
+            }
+            (Decision::Agent(_), _) => {}
+            (Decision::Confirm, PendingAction::Consent(request, op)) => {
+                self.answer_consent(request, (**op).clone(), true, window, cx);
+            }
             (
                 Decision::Save | Decision::Discard,
-                PendingAction::StopTerminal(_) | PendingAction::OpenProjectStoppingSessions(_),
+                PendingAction::StopTerminal(_)
+                | PendingAction::OpenProjectStoppingSessions(_)
+                | PendingAction::ChooseAgent
+                | PendingAction::Consent(..),
             ) => {}
             (Decision::Save, _) => {
                 self.after_save = Some(action);
@@ -723,6 +786,8 @@ impl Workbench {
                     self.say(error.message, cx);
                 }
             }
+            // These two are answered through `resolve`, never performed directly.
+            PendingAction::ChooseAgent | PendingAction::Consent(..) => {}
         }
     }
 
@@ -789,7 +854,11 @@ impl Workbench {
         let appearance = terminal_appearance(self.appearance.tone);
         let id = info.id.clone();
         let view = cx.new(|cx| TerminalView::new(engine, host, id, appearance, gate, receiver, cx));
-        self.terminals.push(TerminalPane { id: info.id, view });
+        self.terminals.push(TerminalPane {
+            kind,
+            id: info.id,
+            view,
+        });
         self.dock_visible = true;
         let last = self.terminals.len() - 1;
         self.select_terminal(last, window, cx);
@@ -848,6 +917,8 @@ impl Workbench {
         if let Some(dialog) = self.dialog() {
             // A dialog owns the keyboard: Enter takes the default button, Escape cancels.
             let decision = match event.keystroke.key.as_str() {
+                // A consent dialog is never answered by a stray Enter: approval is a click.
+                "enter" if matches!(self.pending, Some(PendingAction::Consent(..))) => None,
                 "enter" => dialog.buttons.first().map(|(decision, _)| *decision),
                 "escape" => Some(Decision::Cancel),
                 _ => None,
@@ -960,6 +1031,7 @@ impl Render for Workbench {
             .child(div().flex_1().min_h_0().child(main))
             .child(div().px_2().child(toast))
             .children(self.palette.clone())
+            .children(self.composer.clone())
             .children(dialog)
     }
 }
