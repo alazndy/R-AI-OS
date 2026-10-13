@@ -21,6 +21,7 @@ tree-sitter-typescript = "0.23"
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.8", features = ["test-support"] }
 gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.8" }
+raios-contracts = { path = "../../../../crates/raios-contracts" }
 tempfile = "3"
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["wayland", "x11"] }
 

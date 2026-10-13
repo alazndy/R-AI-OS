@@ -43,6 +43,8 @@ pub enum CommandId {
     Handoff,
     /// Show the project memory.
     Memory,
+    /// Show or hide the inspector (tasks, runs and approvals of the project).
+    Inspector,
     /// Refresh the file tree and RAIOS data.
     Refresh,
     /// Appearance settings.
@@ -116,7 +118,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 28] = [
+const COMMANDS: [Command; 29] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -242,6 +244,12 @@ const COMMANDS: [Command; 28] = [
         &[bind_terminal("h", true, false)],
     ),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
+    cmd(
+        CommandId::Inspector,
+        "Denetçiyi göster / gizle",
+        Some("Ctrl Shift I"),
+        &[bind_terminal("i", true, false)],
+    ),
     cmd(
         CommandId::Refresh,
         "Dosya ağacı ve Raios verisini yenile",
@@ -422,7 +430,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         Commands | Project | Settings | Shortcuts | Balanced | EditorLayout | AgentsLayout => {
             allow()
         }
-        Files | Refresh | FocusFiles | Memory => needs_project(),
+        Files | Refresh | FocusFiles | Memory | Inspector => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
@@ -502,7 +510,21 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 28);
+        assert_eq!(catalog().len(), 29);
+    }
+
+    #[test]
+    fn ctrl_shift_i_toggles_the_inspector_in_the_editor_and_in_a_terminal() {
+        let mut stroke = stroke("i");
+        stroke.shift = true;
+        assert_eq!(
+            resolve_shortcut(&stroke, EDITOR, false),
+            Some(CommandId::Inspector)
+        );
+        assert_eq!(
+            resolve_shortcut(&stroke, TERMINAL, false),
+            Some(CommandId::Inspector)
+        );
     }
 
     #[test]

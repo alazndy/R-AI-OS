@@ -7,13 +7,18 @@
 //! cold-start gate).
 
 mod persistence;
+mod token;
 
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use gpui::{App, AppContext, WindowOptions};
+use rwk_core::control::daemon::DaemonClient;
+use rwk_core::control::ControlPlane;
 use rwk_core::terminal::ProgramPaths;
 use rwk_ui::workbench::{Workbench, WorkbenchEvent};
+use token::FileTokenSource;
 
 /// Exits with a message instead of panicking: this is the application boundary.
 fn fail(message: &str) -> ! {
@@ -21,11 +26,14 @@ fn fail(message: &str) -> ! {
     std::process::exit(1);
 }
 
-fn appearance_file() -> Option<PathBuf> {
+fn config_home() -> Option<PathBuf> {
     let xdg = std::env::var("XDG_CONFIG_HOME").ok();
     let home = std::env::var("HOME").ok();
     persistence::config_home(xdg.as_deref(), home.as_deref())
-        .map(|home| persistence::appearance_path(&home))
+}
+
+fn appearance_file() -> Option<PathBuf> {
+    config_home().map(|home| persistence::appearance_path(&home))
 }
 
 fn main() {
@@ -95,6 +103,18 @@ fn main() {
             },
         )
         .detach();
+        // The daemon connection: without a config home there is no token file, so the inspector
+        // keeps showing "not configured" instead of guessing a path.
+        if let Some(config_home) = config_home() {
+            let client = DaemonClient::new(
+                format!("http://127.0.0.1:{}", DaemonClient::DEFAULT_PORT),
+                Box::new(FileTokenSource::new(token::token_path(&config_home))),
+            );
+            let plane: Arc<dyn ControlPlane> = Arc::new(client);
+            workbench.update(cx, |workbench, cx| {
+                workbench.set_control_plane(Some(plane), cx);
+            });
+        }
         if let Some(root) = project.clone() {
             let _ = window.update(cx, |workbench, window, cx| {
                 workbench.open_project(root, window, cx);

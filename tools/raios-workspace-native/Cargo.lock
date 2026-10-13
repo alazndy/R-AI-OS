@@ -5373,6 +5373,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "gpui-pre-wgpu",
+ "raios-contracts",
  "rwk-core",
  "streaming-iterator",
  "tempfile",

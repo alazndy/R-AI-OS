@@ -42,7 +42,9 @@ impl EventEmitter<PaletteEvent> for PaletteView {}
 impl PaletteView {
     /// A palette over the commands available in `state`; the query box takes focus.
     pub fn new(state: WorkbenchState, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx));
+        // The state is multi-line by construction; without `submit_on_enter` a real Enter key would
+        // insert a newline into the query before it confirms.
+        let input = cx.new(|cx| InputState::new(window, cx).submit_on_enter(true));
         input.update(cx, |input, cx| input.focus(window, cx));
         let subscription =
             cx.subscribe(&input, |this, _input, event: &InputEvent, cx| match event {

@@ -14,6 +14,7 @@ use gpui::{
     Subscription, Task, Window,
 };
 use gpui_base::{h_resizable, resizable_panel, ResizableState};
+use rwk_core::control::ControlPlane;
 use rwk_core::project::ProjectRoot;
 use rwk_core::sessions::{SessionId, SessionKind, SessionRegistry, TerminalHost, TerminalSize};
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
@@ -24,6 +25,7 @@ use rwk_core::workbench::{
 
 use crate::editor::view::{EditorEvent, EditorView};
 use crate::file_tree::view::{FileTreeEvent, FileTreeView};
+use crate::inspector::InspectorView;
 use crate::terminal::registry::GateRegistry;
 use crate::terminal::{Appearance as TerminalAppearance, TerminalView};
 
@@ -130,6 +132,8 @@ struct TerminalPane {
 pub struct Workbench {
     files: Entity<FileTreeView>,
     editor: Entity<EditorView>,
+    inspector: Entity<InspectorView>,
+    inspector_visible: bool,
     project: Option<Arc<ProjectRoot>>,
     host: SharedHost,
     sessions: Arc<SessionRegistry>,
@@ -174,6 +178,7 @@ impl Workbench {
         let sessions = Arc::new(SessionRegistry::new(Box::new(host.clone())));
         let files = cx.new(FileTreeView::new);
         let editor = cx.new(|cx| EditorView::new(appearance.tone, window, cx));
+        let inspector = cx.new(|_| InspectorView::new());
         let sizes = cx.new(|_| ResizableState::default());
         let subscriptions = vec![
             cx.subscribe_in(
@@ -195,6 +200,8 @@ impl Workbench {
         Self {
             files,
             editor,
+            inspector,
+            inspector_visible: false,
             project: None,
             host,
             sessions,
@@ -234,6 +241,26 @@ impl Workbench {
             control_plane_features: false,
             daemon_reachable: false,
         }
+    }
+
+    /// Connects the inspector (and later the guarded commands) to the daemon.
+    pub fn set_control_plane(
+        &mut self,
+        plane: Option<Arc<dyn ControlPlane>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.inspector
+            .update(cx, |inspector, cx| inspector.set_control_plane(plane, cx));
+    }
+
+    /// True while the inspector is shown above the terminals.
+    pub fn inspector_visible(&self) -> bool {
+        self.inspector_visible
+    }
+
+    /// The inspector panel.
+    pub fn inspector(&self) -> &Entity<InspectorView> {
+        &self.inspector
     }
 
     /// The message shown at the bottom of the window.
@@ -361,6 +388,13 @@ impl Workbench {
             CommandId::NewTerminal => self.new_terminal(SessionKind::Shell, window, cx),
             CommandId::ToggleTerminal => {
                 self.dock_visible = !self.dock_visible;
+                cx.notify();
+            }
+            CommandId::Inspector => {
+                self.inspector_visible = !self.inspector_visible;
+                if self.inspector_visible {
+                    self.dock_visible = true;
+                }
                 cx.notify();
             }
             CommandId::FocusEditor => self
@@ -672,7 +706,10 @@ impl Workbench {
                     let project = Arc::new(project);
                     self.files
                         .update(cx, |files, cx| files.set_project(Arc::clone(&project), cx));
+                    let root = project.info().root.clone();
                     self.project = Some(project);
+                    self.inspector
+                        .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));
                     cx.notify();
                 }
                 Err(error) => self.say(error.message, cx),
@@ -850,19 +887,26 @@ fn terminal_appearance(tone: Tone) -> TerminalAppearance {
 impl Render for Workbench {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frames += 1;
-        let dock =
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .children(self.terminals.iter().enumerate().map(|(index, pane)| {
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .border_1()
-                        .when_selected(index == self.selected)
-                        .child(pane.view.clone())
-                }));
+        let dock = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .children(self.inspector_visible.then(|| {
+                div()
+                    .h(px(INSPECTOR_HEIGHT))
+                    .flex_none()
+                    .border_b_1()
+                    .border_color(gpui::rgb(0x333333))
+                    .child(self.inspector.clone())
+            }))
+            .children(self.terminals.iter().enumerate().map(|(index, pane)| {
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .border_1()
+                    .when_selected(index == self.selected)
+                    .child(pane.view.clone())
+            }));
         let main = h_resizable("workbench")
             .with_state(&self.sizes)
             .child(resizable_panel().size(px(260.0)).child(self.files.clone()))
@@ -919,6 +963,9 @@ impl Render for Workbench {
             .children(dialog)
     }
 }
+
+/// Height of the inspector above the terminals.
+const INSPECTOR_HEIGHT: f32 = 260.0;
 
 /// Window background of a tone, the same surface the editor and terminal paint on.
 fn surface_background(tone: Tone) -> gpui::Rgba {

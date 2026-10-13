@@ -100,6 +100,15 @@ Done (headless, all in `rwk-core`, tested):
 - `handoff_input.rs`: `validate_summary`, `validate_prompt`, `handoff_operation_text`; injected detector.
 - `consent::gate`: policy lookup, then allow / deny / confirm-with-wait; refuses on no, expiry, shutdown.
 
-Remaining (GPUI and wiring): `WorkspaceState` polling entity, inspector dock tab, consent dialog view,
-handoff composer view, `DaemonClient` + `TokenSource` in `rwk-app`, catalog commands and shortcuts,
-launch path through `gate`, visual check, gates and report.
+Done on 2026-10-14 (GPUI and wiring): `rwk-ui::inspector::InspectorView` (polls every 3 s on the
+background executor, generation-guarded; folds in the planned `WorkspaceState`), shown above the
+terminals in the dock (a stacked section, not a tab), catalog command `Inspector` (Ctrl Shift I, 29
+commands), `rwk-app::token::FileTokenSource` (owner-only, 8 h, re-read each call) and `DaemonClient`
+wired into the workbench, `inspector::fetch` (connected / degraded / unreachable).
+Found on the way: the palette's query box inserted a newline on a real Enter key (fixed with
+`submit_on_enter`); in the real window Ctrl+Shift+I does not reach the app (Ctrl+Shift+T and
+Ctrl+Shift+P do) while the resolver test passes, so the cause is outside the shortcut table and
+is open. The palette entry works.
+
+Remaining: consent dialog view and the guarded launch/handoff/register paths through `consent::gate`,
+handoff composer view with receipt polling, visual check against a running `aiosd`, gates and report.

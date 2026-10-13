@@ -646,3 +646,111 @@ fn quick_open_finds_nested_files_and_respects_unsaved_edits() {
     rig.with(|wb, window, cx| wb.resolve(Decision::Discard, window, cx));
     assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("nested/needle.rs")));
 }
+
+#[test]
+fn the_inspector_command_toggles_the_panel_and_shows_the_dock() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::ToggleTerminal);
+    assert!(!rig.read(|wb, _| wb.dock_visible()));
+
+    rig.run(CommandId::Inspector);
+
+    assert!(rig.read(|wb, _| wb.inspector_visible()));
+    assert!(rig.read(|wb, _| wb.dock_visible()));
+    rig.run(CommandId::Inspector);
+    assert!(!rig.read(|wb, _| wb.inspector_visible()));
+}
+
+#[test]
+fn the_inspector_lists_only_the_records_of_the_open_project() {
+    use raios_contracts::{NowSnapshot, ScoredApprovalDto, UnifiedTaskDto, WorkSnapshot};
+    use rwk_core::control::fake::FakeControlPlane;
+    use rwk_core::control::ControlPlane;
+
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical root");
+    let mine = root.to_string_lossy().into_owned();
+    let plane = FakeControlPlane::new();
+    plane
+        .push_work_snapshot(Ok(WorkSnapshot {
+            tasks: vec![
+                UnifiedTaskDto {
+                    id: "t1".into(),
+                    title: "mine".into(),
+                    project_path: Some(mine.clone()),
+                    ..UnifiedTaskDto::default()
+                },
+                UnifiedTaskDto {
+                    id: "t2".into(),
+                    title: "elsewhere".into(),
+                    project_path: Some("/somewhere/else".into()),
+                    ..UnifiedTaskDto::default()
+                },
+            ],
+            ..WorkSnapshot::default()
+        }))
+        .push_now_snapshot(Ok(NowSnapshot {
+            approvals: vec![ScoredApprovalDto {
+                id: "a1".into(),
+                project_path: Some(mine),
+                ..ScoredApprovalDto::default()
+            }],
+            ..NowSnapshot::default()
+        }));
+    let plane: Arc<dyn ControlPlane> = Arc::new(plane);
+    rig.with(|wb, _, cx| wb.set_control_plane(Some(plane), cx));
+    rig.open_project();
+
+    let shown = rig
+        .settle_until(|rig| rig.read(|wb, cx| !wb.inspector().read(cx).model().tasks.is_empty()));
+
+    assert!(shown, "the inspector never received the snapshot");
+    let (tasks, approvals) = rig.read(|wb, cx| {
+        let model = wb.inspector().read(cx).model().clone();
+        (model.tasks, model.approvals)
+    });
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].id, "t1");
+    assert_eq!(approvals.len(), 1);
+}
+
+#[test]
+fn pressing_enter_in_the_palette_runs_the_highlighted_command() {
+    let mut rig = rig();
+    rig.run(CommandId::Commands);
+    let palette = rig
+        .read(|wb, _| wb.palette().cloned())
+        .expect("palette is open");
+    rig.with(|_wb, window, cx| {
+        palette.update(cx, |palette, cx| {
+            palette.set_query("editör yerleşimi", window, cx)
+        })
+    });
+
+    rig.cx.simulate_keystrokes("enter");
+    rig.cx.run_until_parked();
+
+    assert_eq!(rig.read(|wb, _| wb.layout()), LayoutPreset::Editor);
+    assert!(rig.read(|wb, _| wb.palette().is_none()));
+}
+
+#[test]
+fn enter_never_adds_a_newline_to_the_palette_query() {
+    let mut rig = rig();
+    rig.run(CommandId::Commands);
+    let palette = rig
+        .read(|wb, _| wb.palette().cloned())
+        .expect("palette is open");
+    rig.with(|_wb, window, cx| {
+        palette.update(cx, |palette, cx| {
+            palette.set_query("zzzz-no-match", window, cx)
+        })
+    });
+
+    rig.cx.simulate_keystrokes("enter");
+    rig.cx.run_until_parked();
+
+    let query = rig.cx.update(|_w, cx| palette.read(cx).query(cx));
+    assert_eq!(query, "zzzz-no-match");
+}

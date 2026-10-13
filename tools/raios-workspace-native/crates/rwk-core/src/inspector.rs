@@ -9,7 +9,7 @@ use std::path::Path;
 
 use raios_contracts::{ActiveRunDto, NowSnapshot, ScoredApprovalDto, UnifiedTaskDto, WorkSnapshot};
 
-use crate::control::ConnectionState;
+use crate::control::{ConnectionState, ControlPlane};
 
 /// The banner above the inspector.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,6 +180,36 @@ pub fn project_view(
     }
 }
 
+/// Reads both projections from the daemon and builds the inspector for `project`.
+///
+/// Blocking: call it from a background executor. When both reads fail the daemon counts as
+/// unreachable and nothing is listed; when one fails the other half is shown with a degraded
+/// banner; a failed read never leaves stale rows of the failed half.
+pub fn fetch(plane: &dyn ControlPlane, project: &Path) -> InspectorModel {
+    match (plane.work_snapshot(), plane.now_snapshot()) {
+        (Ok(work), Ok(now)) => project_view(&work, &now, project, &ConnectionState::Connected),
+        (Ok(work), Err(error)) => project_view(
+            &work,
+            &NowSnapshot::default(),
+            project,
+            &ConnectionState::Degraded {
+                reason: error.message,
+            },
+        ),
+        (Err(error), Ok(now)) => project_view(
+            &WorkSnapshot::default(),
+            &now,
+            project,
+            &ConnectionState::Degraded {
+                reason: error.message,
+            },
+        ),
+        (Err(error), Err(_)) => InspectorModel::empty(&ConnectionState::Unreachable {
+            reason: error.message,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +344,61 @@ mod tests {
             Banner::Unreachable(_)
         ));
         assert!(InspectorModel::empty(&unreachable).is_empty());
+    }
+
+    mod fetch_tests {
+        use super::super::*;
+        use crate::control::fake::FakeControlPlane;
+        use crate::error::{AppError, ErrorCode};
+
+        fn failure() -> AppError {
+            AppError::new(ErrorCode::DaemonUnreachable, "bağlantı reddedildi")
+        }
+
+        #[test]
+        fn both_reads_ok_is_connected() {
+            let plane = FakeControlPlane::new();
+            plane
+                .push_work_snapshot(Ok(WorkSnapshot::default()))
+                .push_now_snapshot(Ok(NowSnapshot::default()));
+
+            let model = fetch(&plane, Path::new("/a"));
+
+            assert_eq!(model.banner, Banner::None);
+        }
+
+        #[test]
+        fn one_failed_read_is_degraded_and_keeps_the_other_half() {
+            let plane = FakeControlPlane::new();
+            let work = WorkSnapshot {
+                tasks: vec![UnifiedTaskDto {
+                    id: "t".into(),
+                    project_path: Some("/a".into()),
+                    ..UnifiedTaskDto::default()
+                }],
+                ..WorkSnapshot::default()
+            };
+            plane
+                .push_work_snapshot(Ok(work))
+                .push_now_snapshot(Err(failure()));
+
+            let model = fetch(&plane, Path::new("/a"));
+
+            assert!(matches!(model.banner, Banner::Degraded(_)));
+            assert_eq!(model.tasks.len(), 1);
+        }
+
+        #[test]
+        fn both_reads_failing_is_unreachable_and_lists_nothing() {
+            let plane = FakeControlPlane::new();
+            plane
+                .push_work_snapshot(Err(failure()))
+                .push_now_snapshot(Err(failure()));
+
+            let model = fetch(&plane, Path::new("/a"));
+
+            assert!(matches!(model.banner, Banner::Unreachable(_)));
+            assert!(model.is_empty());
+        }
     }
 }
