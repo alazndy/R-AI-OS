@@ -11,6 +11,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::control::{ControlPlane, PolicyAction};
 use crate::error::{AppError, ErrorCode, Result};
 
 /// How long a consent request stays valid.
@@ -168,6 +169,51 @@ fn closed() -> AppError {
     )
 }
 
+/// The outcome of [`gate`] when the operation may proceed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateOutcome {
+    /// Policy allows the command without asking.
+    Allowed,
+    /// Policy asks for confirmation and the user approved.
+    Approved,
+}
+
+/// Decides whether a mutating command may be sent. Blocking: run on a background executor.
+///
+/// Reads the daemon's policy for `command_name` first. `deny` and an unreadable policy refuse
+/// (nothing is asked); `allow` proceeds; `confirm` opens a consent request and hands it to `ask`
+/// (the UI shows the dialog and answers through [`ConsentRegistry::decide`]). A cancelled, expired
+/// or shut-down request refuses, so nothing is sent without an explicit yes. `summary` must be
+/// derived from the exact payload that will be sent.
+pub fn gate(
+    plane: &dyn ControlPlane,
+    registry: &ConsentRegistry,
+    command_name: &str,
+    project_root: &Path,
+    summary: &str,
+    ask: &dyn Fn(ConsentRequest),
+) -> Result<GateOutcome> {
+    match plane.command_policy(command_name)? {
+        PolicyAction::Allow => Ok(GateOutcome::Allowed),
+        PolicyAction::Deny => Err(AppError::new(
+            ErrorCode::Forbidden,
+            format!("Policy denies '{command_name}'."),
+        )),
+        PolicyAction::Confirm => {
+            let (request, receiver) = registry.begin(command_name, project_root, summary)?;
+            let id = request.id.clone();
+            ask(request);
+            match registry.wait(&id, receiver)? {
+                ConsentDecision::Approved => Ok(GateOutcome::Approved),
+                ConsentDecision::Denied => Err(AppError::new(
+                    ErrorCode::Forbidden,
+                    "You declined the operation; nothing was sent.",
+                )),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +283,124 @@ mod tests {
         assert!(registry
             .begin_at("launch_agent", Path::new("/b"), "Second", later)
             .is_ok());
+    }
+
+    mod gate_tests {
+        use super::super::*;
+        use crate::control::fake::{FakeControlPlane, RecordedCall};
+
+        fn answering(
+            registry: &ConsentRegistry,
+            decision: ConsentDecision,
+        ) -> impl Fn(ConsentRequest) + '_ {
+            move |request| registry.decide(&request.id, decision).unwrap()
+        }
+
+        fn run(
+            policy: PolicyAction,
+            decision: ConsentDecision,
+        ) -> (Result<GateOutcome>, FakeControlPlane) {
+            let plane = FakeControlPlane::new();
+            plane.set_policy("launch_agent", policy);
+            let registry = ConsentRegistry::new();
+            let outcome = gate(
+                &plane,
+                &registry,
+                "launch_agent",
+                Path::new("/work/app"),
+                "Start Claude",
+                &answering(&registry, decision),
+            );
+            (outcome, plane)
+        }
+
+        #[test]
+        fn allow_proceeds_without_asking() {
+            let plane = FakeControlPlane::new();
+            plane.set_policy("launch_agent", PolicyAction::Allow);
+            let registry = ConsentRegistry::new();
+            let asked = std::cell::Cell::new(false);
+
+            let outcome = gate(
+                &plane,
+                &registry,
+                "launch_agent",
+                Path::new("/a"),
+                "s",
+                &|_| asked.set(true),
+            );
+
+            assert_eq!(outcome.unwrap(), GateOutcome::Allowed);
+            assert!(!asked.get());
+        }
+
+        #[test]
+        fn deny_refuses_without_asking() {
+            let plane = FakeControlPlane::new();
+            plane.set_policy("launch_agent", PolicyAction::Deny);
+            let registry = ConsentRegistry::new();
+            let asked = std::cell::Cell::new(false);
+
+            let error = gate(
+                &plane,
+                &registry,
+                "launch_agent",
+                Path::new("/a"),
+                "s",
+                &|_| asked.set(true),
+            )
+            .unwrap_err();
+
+            assert_eq!(error.code, ErrorCode::Forbidden);
+            assert!(!asked.get());
+        }
+
+        #[test]
+        fn confirm_proceeds_only_after_an_explicit_yes() {
+            let (outcome, plane) = run(PolicyAction::Confirm, ConsentDecision::Approved);
+
+            assert_eq!(outcome.unwrap(), GateOutcome::Approved);
+            assert_eq!(
+                plane.calls(),
+                vec![RecordedCall::CommandPolicy {
+                    command_name: "launch_agent".to_owned()
+                }]
+            );
+        }
+
+        #[test]
+        fn confirm_refuses_after_a_no() {
+            let (outcome, _) = run(PolicyAction::Confirm, ConsentDecision::Denied);
+
+            assert_eq!(outcome.unwrap_err().code, ErrorCode::Forbidden);
+        }
+
+        #[test]
+        fn an_unreadable_policy_refuses() {
+            let plane = FakeControlPlane::new();
+            let registry = ConsentRegistry::new();
+
+            let outcome = gate(&plane, &registry, "unknown", Path::new("/a"), "s", &|_| {});
+
+            assert!(outcome.is_err());
+        }
+
+        #[test]
+        fn shutdown_while_waiting_refuses() {
+            let plane = FakeControlPlane::new();
+            plane.set_policy("launch_agent", PolicyAction::Confirm);
+            let registry = ConsentRegistry::new();
+
+            let outcome = gate(
+                &plane,
+                &registry,
+                "launch_agent",
+                Path::new("/a"),
+                "s",
+                &|_| registry.shutdown(),
+            );
+
+            assert_eq!(outcome.unwrap_err().code, ErrorCode::WorkspaceClosed);
+        }
     }
 }
