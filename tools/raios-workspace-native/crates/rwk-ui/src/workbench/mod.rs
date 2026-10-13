@@ -174,6 +174,8 @@ pub struct Workbench {
     handoffs: Vec<TrackedHandoff>,
     receipt_task: Option<Task<()>>,
     receiver_for: Option<String>,
+    /// A command that asked for a project first and runs once one is open.
+    after_pick: Option<CommandId>,
     receiver_session: Option<(String, SessionId)>,
     project: Option<Arc<ProjectRoot>>,
     host: SharedHost,
@@ -266,6 +268,7 @@ impl Workbench {
             handoffs: Vec::new(),
             receipt_task: None,
             receiver_for: None,
+            after_pick: None,
             receiver_session: None,
             project: None,
             host,
@@ -436,6 +439,13 @@ impl Workbench {
         self.last_command = Some(id);
         self.toast = None;
         self.toast_task = None;
+        // Starting a session without a project offers the folder picker first; cancelling it
+        // starts nothing.
+        if self.project.is_none() && matches!(id, CommandId::NewTerminal | CommandId::Agent) {
+            self.after_pick = Some(id);
+            self.pick_project(window, cx);
+            return;
+        }
         let state = available(id, &self.state(cx));
         if !state.enabled {
             if let Some(reason) = state.reason {
@@ -599,10 +609,13 @@ impl Workbench {
             prompt: Some("Proje klasörü seç".into()),
         });
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(paths))) = receiver.await else {
-                return;
+            let picked = match receiver.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                _ => None,
             };
-            let Some(path) = paths.into_iter().next() else {
+            let Some(path) = picked else {
+                this.update(cx, |workbench, _| workbench.after_pick = None)
+                    .ok();
                 return;
             };
             this.update_in(cx, |workbench, window, cx| {
@@ -827,6 +840,10 @@ impl Workbench {
                     self.project = Some(project);
                     self.inspector
                         .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));
+                    self.register_if_unknown(window, cx);
+                    if let Some(command) = self.after_pick.take() {
+                        self.run(command, window, cx);
+                    }
                     cx.notify();
                 }
                 Err(error) => self.say(error.message, cx),
@@ -914,6 +931,9 @@ impl Workbench {
             view,
         });
         self.dock_visible = true;
+        if self.terminals.len() >= 3 && self.layout != LayoutPreset::Agents {
+            self.apply_layout(LayoutPreset::Agents, window, cx);
+        }
         let last = self.terminals.len() - 1;
         self.select_terminal(last, window, cx);
     }

@@ -4,9 +4,9 @@ Nested Cargo workspace for the native (GPUI) RAIOS workspace. Design: `docs/supe
 
 | Crate | Role | GPUI |
 |---|---|---|
-| `rwk-core` | project capability, documents, sessions, control plane client, handoff state machine, memory projection, terminal engine and its pure helpers (`palette`, `keys`, `mouse`, `paint`) | no |
-| `rwk-ui` | terminal view (`terminal`), code editor and highlighter (`editor`), file tree (`file_tree`), workbench shell, palette and dialogs (`workbench`) | yes |
-| `rwk-app` | the application binary: window, folder picker, appearance persistence | yes |
+| `rwk-core` | project capability, documents, sessions, control plane client, consent gate, guarded commands, handoff state machine and receipt tracking, input validation, inspector and memory models, theme tokens, file-type classifier, terminal engine and its pure helpers | no |
+| `rwk-ui` | terminal view (`terminal`), code editor and highlighter (`editor`), file tree (`file_tree`), inspector, handoff composer, memory view, bundled assets (Breeze icons, Antonio), workbench shell, palette and dialogs (`workbench`) | yes |
+| `rwk-app` | the application binary: window, folder picker, appearance persistence, daemon token source | yes |
 | `rwk-bench` | headless terminal gates G1-G8 (`term-bench`) | no |
 | `rwk-ui-bench` | UI-bound gates U1-U5, E1-E2, A1-A2 (`ui-bench`) | yes |
 
@@ -18,7 +18,23 @@ cargo run --release -p rwk-app -- /path/to/project
 
 `Ctrl+O` picks a folder, `Ctrl+Shift+P` opens the command palette (it lists every command with its shortcut and, for unavailable ones, why). `Ctrl+S` saves, `Ctrl+Shift+T` opens a terminal (up to four), `Ctrl+1/2/3` switch the layout. While a terminal has focus only the shortcuts that carry Shift or Alt are taken by the workbench: plain Ctrl keys (`Ctrl+C`, `Ctrl+K`, `Ctrl+L`, ...) reach the shell. Unsaved edits are never discarded without a choice (Save / Discard / Cancel).
 
-Known limits: no file-type icons, the LCARS skin renders as standard, agent/handoff/memory commands are disabled until P4/P5, no file-name search, no side-by-side diff, no IME pre-edit.
+`Ctrl+Shift+I` (or the palette) shows the inspector above the terminals, `Ctrl+Shift+A` starts an agent, `Ctrl+Shift+H` writes a handoff, the palette's "Proje hafızasını göster" opens the memory view and "GT-LCARS görünümünü aç / kapat" switches the skin; `Ctrl+,` switches dark and light.
+
+## Daemon-facing commands
+
+Everything that changes daemon state (start an agent, queue a handoff, register a project) first reads the policy for that command: `deny` refuses, `allow` sends, `confirm` shows a dialog whose text is derived from the exact payload and sends only after a click (Enter never answers it). Declining, closing or letting it expire sends nothing. Opening a project the daemon does not know registers it through the same guard. The daemon token is read from `<config>/raios/.session_token` (owner-only, at most eight hours old) on every call; without the daemon, files, editor, terminals and memory keep working and the daemon commands say why they are unavailable.
+
+The inspector lists the open project's tasks, running agents and pending approvals (read-only) by exact project path; records without a path are only counted. The handoff composer validates the note (size, option-looking text, control characters, credential-looking text) before anything is sent; the receipt is polled and the receiver can be started only while the freshly read receipt is pending and no owned receiver runs.
+
+## Memory view
+
+Shows `memory.md` as a heading outline with checklist progress and search, and the structured RAIOS records (type and layer filters) from a read-only connection to `workspace.db`. Links, images and HTML are shown as inert text; credentials in stored records are replaced by `[gizli]`. Budgets: 64,000 characters, 300 headings, 2,000 lines per section, 32 table columns.
+
+## Appearance
+
+Skin (standard or GT-LCARS) and tone (dark or light) are independent and persisted; switching repaints every pane, the editor and the terminal surface without recreating sessions. The 28 KDE Breeze file icons are bundled unmodified (checksums in `crates/rwk-ui/assets/file-icons/provenance.json`, licenses in `crates/rwk-ui/assets/licenses`) and tinted by file type; Antonio (OFL) is the LCARS display font.
+
+Known limits: no side-by-side diff, no IME pre-edit text, approvals cannot be approved or rejected here (read-only until the contract carries an expected revision).
 
 ## Terminal view
 

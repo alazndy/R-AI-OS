@@ -149,7 +149,7 @@ fn a_disabled_command_does_nothing_and_reports_its_reason() {
         rig.read(|wb, _| wb.toast()).as_deref(),
         Some("Açık dosya yok")
     );
-    rig.run(CommandId::NewTerminal);
+    rig.run(CommandId::Refresh);
     assert_eq!(
         rig.read(|wb, _| wb.toast()).as_deref(),
         Some("Önce bir proje klasörü açın")
@@ -593,7 +593,7 @@ fn toasts_expire_after_five_seconds_and_a_replacement_gets_its_own_timer() {
     rig.cx.executor().advance_clock(Duration::from_secs(4));
     tick_ready(&mut rig);
     assert!(rig.read(|wb, _| wb.toast()).is_some());
-    rig.run(CommandId::NewTerminal);
+    rig.run(CommandId::Refresh);
     tick_ready(&mut rig);
     let replacement = rig.read(|wb, _| wb.toast());
     assert!(replacement.is_some());
@@ -1135,4 +1135,89 @@ fn the_skin_command_switches_between_standard_and_lcars_and_announces_it() {
     ));
     rig.run(CommandId::Skin);
     assert!(!rig.read(|wb, _| wb.theme().lcars));
+}
+
+fn projects_snapshot(root: Option<&std::path::Path>) -> raios_contracts::WorkSnapshot {
+    raios_contracts::WorkSnapshot {
+        projects: root
+            .map(|root| {
+                vec![raios_contracts::ProjectDto {
+                    path: root.to_string_lossy().into_owned(),
+                    name: "app".into(),
+                    status: "active".into(),
+                    ..raios_contracts::ProjectDto::default()
+                }]
+            })
+            .unwrap_or_default(),
+        ..raios_contracts::WorkSnapshot::default()
+    }
+}
+
+#[test]
+fn opening_a_project_the_daemon_does_not_know_registers_it() {
+    let mut rig = rig();
+    let fake = Arc::new(FakeControlPlane::new());
+    fake.set_policy("register_project", PolicyAction::Allow);
+    for _ in 0..3 {
+        fake.push_work_snapshot(Ok(projects_snapshot(None)));
+    }
+    fake.push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()))
+        .push_registration(Ok(rwk_core::control::RegistrationOutcome {
+            project_path: std::path::PathBuf::new(),
+            already_registered: false,
+        }));
+    let plane: Arc<dyn ControlPlane> = fake.clone();
+    rig.with(|wb, _, cx| wb.set_control_plane(Some(plane), cx));
+
+    rig.open_project();
+
+    assert!(rig.settle_until(|_| {
+        fake.calls()
+            .iter()
+            .any(|call| matches!(call, RecordedCall::RegisterProject { .. }))
+    }));
+}
+
+#[test]
+fn opening_an_already_registered_project_registers_nothing() {
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("root");
+    let fake = Arc::new(FakeControlPlane::new());
+    fake.set_policy("register_project", PolicyAction::Allow);
+    for _ in 0..3 {
+        fake.push_work_snapshot(Ok(projects_snapshot(Some(&root))));
+    }
+    fake.push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()));
+    let plane: Arc<dyn ControlPlane> = fake.clone();
+    rig.with(|wb, _, cx| wb.set_control_plane(Some(plane), cx));
+
+    rig.open_project();
+    rig.settle_for(500);
+
+    assert_eq!(sends(&fake), 0);
+}
+
+#[test]
+fn the_third_terminal_switches_to_the_agent_layout() {
+    let mut rig = rig();
+    rig.open_project();
+
+    for _ in 0..3 {
+        rig.run(CommandId::NewTerminal);
+    }
+
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 3);
+    assert_eq!(rig.read(|wb, _| wb.layout()), LayoutPreset::Agents);
+}
+
+#[test]
+fn starting_a_terminal_without_a_project_offers_the_picker_and_remembers_the_command() {
+    let mut rig = rig();
+
+    rig.run(CommandId::NewTerminal);
+
+    // The folder picker is the platform's; here the command is only remembered and no refusal
+    // toast appears.
+    assert_eq!(rig.read(|wb, _| wb.toast()), None);
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
 }

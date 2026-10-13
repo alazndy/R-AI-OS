@@ -481,3 +481,42 @@ impl Workbench {
         }
     }
 }
+
+impl Workbench {
+    /// A project the daemon does not know yet is registered with Raios (through the same policy
+    /// and consent guard); a known one is left untouched. Nothing happens without a daemon.
+    pub(super) fn register_if_unknown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(plane), Some(project)) = (self.plane.clone(), self.project.clone()) else {
+            return;
+        };
+        let root = project.info().root.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let known = cx
+                .background_executor()
+                .spawn({
+                    let root = root.clone();
+                    async move {
+                        plane.work_snapshot().map(|work| {
+                            work.projects
+                                .iter()
+                                .any(|project| std::path::Path::new(&project.path) == root)
+                        })
+                    }
+                })
+                .await;
+            // An unreachable daemon or a failed read registers nothing.
+            if let Ok(false) = known {
+                let _ = this.update_in(cx, |workbench, window, cx| {
+                    let still_open = workbench
+                        .project
+                        .as_ref()
+                        .is_some_and(|project| project.info().root == root);
+                    if still_open {
+                        workbench.register_project(window, cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+}
