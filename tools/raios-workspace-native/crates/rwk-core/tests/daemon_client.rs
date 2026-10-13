@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use raios_contracts::{GovernSnapshot, WorkSnapshot};
+use raios_contracts::{GovernSnapshot, NowSnapshot, WorkSnapshot};
 use rwk_core::control::daemon::{DaemonClient, TokenSource};
 use rwk_core::control::{
     ControlPlane, CreateHandoffRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction,
@@ -194,6 +194,18 @@ fn a_govern_snapshot_is_read_from_the_govern_field() {
     let requests = server.join().unwrap();
     assert_eq!(result, GovernSnapshot::default());
     assert_eq!(json_body(&requests[0])["query_type"], "GetGovernSnapshot");
+}
+
+#[test]
+fn a_now_snapshot_is_read_from_the_now_field() {
+    let snapshot = serde_json::to_value(NowSnapshot::default()).unwrap();
+    let (url, server) = spawn_daemon(vec![ok(json!({"status": "ok", "now": snapshot}))]);
+
+    let result = client(&url).now_snapshot().unwrap();
+
+    let requests = server.join().unwrap();
+    assert_eq!(result, NowSnapshot::default());
+    assert_eq!(json_body(&requests[0])["query_type"], "GetNowSnapshot");
 }
 
 #[test]

@@ -9,7 +9,7 @@ pub mod fake;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use raios_contracts::{GovernSnapshot, HandoffReceiptDto, WorkSnapshot};
+use raios_contracts::{GovernSnapshot, HandoffReceiptDto, NowSnapshot, WorkSnapshot};
 
 use crate::error::{AppError, ErrorCode, Result};
 use crate::sessions::SessionKind;
@@ -139,8 +139,12 @@ pub trait ControlPlane: Send + Sync {
     /// Tasks, runs and projects, unfiltered; the inspector filters by exact project path.
     fn work_snapshot(&self) -> Result<WorkSnapshot>;
 
-    /// Pending approvals, unfiltered; the inspector filters by exact project path.
+    /// Policy, audit and health projection.
     fn govern_snapshot(&self) -> Result<GovernSnapshot>;
+
+    /// Pending approvals and active runs (the `now` projection), unfiltered; the inspector
+    /// filters by exact project path. Approvals are not part of the govern projection.
+    fn now_snapshot(&self) -> Result<NowSnapshot>;
 
     /// Policy action the daemon applies to `command_name` (snake_case, e.g. `launch_agent`).
     fn command_policy(&self, command_name: &str) -> Result<PolicyAction>;

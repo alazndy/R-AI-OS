@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use raios_contracts::{
-    Command, CommandPolicyDto, GovernSnapshot, HandoffReceiptDto, Problem, Query, WorkSnapshot,
+    Command, CommandPolicyDto, GovernSnapshot, HandoffReceiptDto, NowSnapshot, Problem, Query,
+    WorkSnapshot,
 };
 use serde_json::Value;
 
@@ -161,6 +162,10 @@ fn invalid(message: &str) -> AppError {
 impl ControlPlane for DaemonClient {
     fn work_snapshot(&self) -> Result<WorkSnapshot> {
         take(self.query(&Query::GetWorkSnapshot)?, "work")
+    }
+
+    fn now_snapshot(&self) -> Result<NowSnapshot> {
+        take(self.query(&Query::GetNowSnapshot)?, "now")
     }
 
     fn govern_snapshot(&self) -> Result<GovernSnapshot> {

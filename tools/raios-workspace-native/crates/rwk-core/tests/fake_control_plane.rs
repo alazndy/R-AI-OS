@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use raios_contracts::{GovernSnapshot, HandoffReceiptDto, WorkSnapshot};
+use raios_contracts::{GovernSnapshot, HandoffReceiptDto, NowSnapshot, WorkSnapshot};
 use rwk_core::control::fake::{FakeControlPlane, RecordedCall};
 use rwk_core::control::{
     ControlPlane, CreateHandoffRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction,
@@ -87,6 +87,7 @@ fn every_call_is_recorded_with_its_arguments_in_order() {
     let fake = FakeControlPlane::new();
     fake.push_work_snapshot(Ok(WorkSnapshot::default()))
         .push_govern_snapshot(Ok(GovernSnapshot::default()))
+        .push_now_snapshot(Ok(NowSnapshot::default()))
         .push_registration(Ok(RegistrationOutcome {
             project_path: PathBuf::from("/work/app"),
             already_registered: false,
@@ -106,6 +107,7 @@ fn every_call_is_recorded_with_its_arguments_in_order() {
 
     fake.work_snapshot().unwrap();
     fake.govern_snapshot().unwrap();
+    fake.now_snapshot().unwrap();
     fake.command_policy("launch_agent").unwrap();
     fake.register_project(Path::new("/work/app"), &IdempotencyKey::new("r-1"))
         .unwrap();
@@ -123,6 +125,7 @@ fn every_call_is_recorded_with_its_arguments_in_order() {
         vec![
             RecordedCall::WorkSnapshot,
             RecordedCall::GovernSnapshot,
+            RecordedCall::NowSnapshot,
             RecordedCall::CommandPolicy {
                 command_name: "launch_agent".into()
             },

@@ -6,7 +6,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use raios_contracts::{GovernSnapshot, HandoffReceiptDto, WorkSnapshot};
+use raios_contracts::{GovernSnapshot, HandoffReceiptDto, NowSnapshot, WorkSnapshot};
 
 use super::{
     ControlPlane, CreateHandoffRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction,
@@ -21,6 +21,8 @@ pub enum RecordedCall {
     WorkSnapshot,
     /// [`ControlPlane::govern_snapshot`].
     GovernSnapshot,
+    /// [`ControlPlane::now_snapshot`].
+    NowSnapshot,
     /// [`ControlPlane::command_policy`].
     CommandPolicy {
         /// Command name that was looked up.
@@ -51,6 +53,7 @@ struct Script {
     calls: Vec<RecordedCall>,
     work: VecDeque<Result<WorkSnapshot>>,
     govern: VecDeque<Result<GovernSnapshot>>,
+    now: VecDeque<Result<NowSnapshot>>,
     policies: HashMap<String, PolicyAction>,
     registrations: VecDeque<Result<RegistrationOutcome>>,
     launches: VecDeque<Result<()>>,
@@ -83,6 +86,12 @@ impl FakeControlPlane {
     /// Queues the response of the next [`ControlPlane::govern_snapshot`] call.
     pub fn push_govern_snapshot(&self, response: Result<GovernSnapshot>) -> &Self {
         self.script().govern.push_back(response);
+        self
+    }
+
+    /// Queues the response of the next [`ControlPlane::now_snapshot`] call.
+    pub fn push_now_snapshot(&self, response: Result<NowSnapshot>) -> &Self {
+        self.script().now.push_back(response);
         self
     }
 
@@ -148,6 +157,15 @@ impl ControlPlane for FakeControlPlane {
             .govern
             .pop_front()
             .unwrap_or_else(|| Err(unscripted("govern_snapshot")))
+    }
+
+    fn now_snapshot(&self) -> Result<NowSnapshot> {
+        let mut script = self.script();
+        script.calls.push(RecordedCall::NowSnapshot);
+        script
+            .now
+            .pop_front()
+            .unwrap_or_else(|| Err(unscripted("now_snapshot")))
     }
 
     fn command_policy(&self, command_name: &str) -> Result<PolicyAction> {
