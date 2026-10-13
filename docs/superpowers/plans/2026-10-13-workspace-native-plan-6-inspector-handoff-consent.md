@@ -85,3 +85,21 @@ Dependencies: tasks 1 -> 2,3; 1 -> 4 -> 5; 4 -> 6 -> 7. Estimated size 8-10 comm
 2. Approvals stay read-only in this plan (spec C3). Confirm that approve/reject remains deferred to v1.1.
 3. Secret heuristics for the composer: reuse `raios-core`'s `looks_like_secret` through the application crate (injected, because `rwk-core` must not depend on `raios-core`) or a small local pattern list?
 4. Should consent also guard `register_project`, or only agent launch and handoff?
+
+## 6. Execution notes (2026-10-13)
+
+Owner approved all four decisions as recommended: inspector as a tab in the right dock; approvals
+read-only (v1.1); secret scan injected into `rwk-core` by the application crate; consent guards
+`register_project`, `launch_agent` and `create_handoff`.
+
+Done (headless, all in `rwk-core`, tested):
+- `ControlPlane::now_snapshot` (+ `DaemonClient`, `FakeControlPlane`). **Finding:** pending approvals
+  are in the `now` projection, not in `GovernSnapshot` as the spec and the old trait doc assumed.
+- `inspector.rs`: `project_view` (exact path filter, runs by their task's project), `Banner`.
+  Moved from the planned `rwk-ui/inspector/model.rs` to `rwk-core` because it is pure.
+- `handoff_input.rs`: `validate_summary`, `validate_prompt`, `handoff_operation_text`; injected detector.
+- `consent::gate`: policy lookup, then allow / deny / confirm-with-wait; refuses on no, expiry, shutdown.
+
+Remaining (GPUI and wiring): `WorkspaceState` polling entity, inspector dock tab, consent dialog view,
+handoff composer view, `DaemonClient` + `TokenSource` in `rwk-app`, catalog commands and shortcuts,
+launch path through `gate`, visual check, gates and report.
