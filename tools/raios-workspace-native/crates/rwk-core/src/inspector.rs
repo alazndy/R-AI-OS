@@ -96,6 +96,9 @@ pub struct InspectorModel {
     pub runs: Vec<RunRow>,
     /// Pending approvals of the project.
     pub approvals: Vec<ApprovalRow>,
+    /// How many tasks and approvals carry no project path and are therefore not shown anywhere
+    /// near a project; only the number is reported, never their content.
+    pub unscoped: usize,
 }
 
 impl InspectorModel {
@@ -106,6 +109,7 @@ impl InspectorModel {
             tasks: Vec::new(),
             runs: Vec::new(),
             approvals: Vec::new(),
+            unscoped: 0,
         }
     }
 
@@ -172,11 +176,22 @@ pub fn project_view(
             reason: approval.reason.clone(),
         })
         .collect();
+    let unscoped = work
+        .tasks
+        .iter()
+        .filter(|task| task.project_path.is_none())
+        .count()
+        + now
+            .approvals
+            .iter()
+            .filter(|approval| approval.project_path.is_none())
+            .count();
     InspectorModel {
         banner: Banner::for_state(state),
         tasks,
         runs,
         approvals,
+        unscoped,
     }
 }
 
@@ -281,6 +296,21 @@ mod tests {
         assert_eq!(task_ids, ["t1", "t4"]);
         assert_eq!(model.approvals.len(), 1);
         assert_eq!(model.approvals[0].id, "a1");
+    }
+
+    #[test]
+    fn records_without_a_path_are_only_counted() {
+        let (work, now) = snapshots();
+
+        let model = project_view(
+            &work,
+            &now,
+            Path::new("/work/app"),
+            &ConnectionState::Connected,
+        );
+
+        // task t3 and approval a3 have no path.
+        assert_eq!(model.unscoped, 2);
     }
 
     #[test]

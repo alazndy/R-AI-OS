@@ -21,6 +21,7 @@ pub mod handoff_input;
 pub mod handoff_state;
 pub mod inspector;
 pub mod memory;
+pub mod memory_model;
 pub mod project;
 pub mod sessions;
 pub mod terminal;

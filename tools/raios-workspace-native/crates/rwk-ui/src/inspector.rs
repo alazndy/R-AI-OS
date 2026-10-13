@@ -250,5 +250,16 @@ impl Render for InspectorView {
             .child(heading("Devirler", self.handoffs.len()))
             .children(handoffs)
             .children(empty)
+            .children((self.model.unscoped > 0).then(|| {
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(gpui::rgb(0x8a8a8a))
+                    .child(SharedString::from(format!(
+                        "{} kayıt bir projeye bağlı olmadığı için gösterilmiyor.",
+                        self.model.unscoped
+                    )))
+            }))
     }
 }
