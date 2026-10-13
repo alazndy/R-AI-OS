@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::{
-    div, AnyElement, AppContext, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Window,
+    div, AnyElement, AppContext, Context, Entity, EventEmitter, FocusHandle, InteractiveElement,
+    IntoElement, KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement,
+    Styled, Subscription, Window,
 };
 use gpui_base::{TreeEvent, TreeItem, TreeState};
 use rwk_core::project::{FileEntry, ProjectRoot};
@@ -38,6 +38,7 @@ pub struct FileTreeView {
     /// Folders whose listing is in flight.
     pending: HashSet<String>,
     status: Option<SharedString>,
+    focus: FocusHandle,
     _subscription: Subscription,
 }
 
@@ -61,6 +62,7 @@ impl FileTreeView {
             expanded: HashSet::new(),
             pending: HashSet::new(),
             status: None,
+            focus: cx.focus_handle(),
             _subscription: subscription,
         }
     }
@@ -229,7 +231,7 @@ impl FileTreeView {
 
     /// Gives the tree keyboard focus.
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        self.tree.update(cx, |tree, cx| tree.focus(window, cx));
+        window.focus(&self.focus, cx);
     }
 
     /// The message shown under the tree (a failed listing).
@@ -237,11 +239,51 @@ impl FileTreeView {
         self.status.as_ref().map(ToString::to_string)
     }
 
+    /// Moves the selection `step` rows (clamped); selects the first row when nothing is selected.
+    fn move_selection(&mut self, step: isize, cx: &mut Context<Self>) {
+        let ids = self.visible_ids(cx);
+        if ids.is_empty() {
+            return;
+        }
+        let current = self
+            .selected_path(cx)
+            .and_then(|selected| ids.iter().position(|id| *id == selected));
+        let next = match current {
+            Some(ix) => ix.saturating_add_signed(step).min(ids.len() - 1),
+            None => 0,
+        };
+        self.select(&ids[next], cx);
+        cx.notify();
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        if event.keystroke.key == "enter" {
-            if let Some(path) = self.selected_path(cx) {
-                self.activate(&path, cx);
+        match event.keystroke.key.as_str() {
+            "down" => self.move_selection(1, cx),
+            "up" => self.move_selection(-1, cx),
+            "right" => {
+                if let Some(path) = self.selected_path(cx) {
+                    if !self.is_file(&path) && !self.expanded.contains(&path) {
+                        self.expand(&path, cx);
+                    }
+                }
             }
+            "left" => {
+                if let Some(path) = self.selected_path(cx) {
+                    if self.expanded.remove(&path) {
+                        self.rebuild(cx);
+                    }
+                }
+            }
+            "enter" => {
+                if let Some(path) = self.selected_path(cx) {
+                    if self.is_file(&path) {
+                        self.activate(&path, cx);
+                    } else {
+                        self.toggle(&path, cx);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -319,6 +361,7 @@ impl Render for FileTreeView {
             .size_full()
             .flex()
             .flex_col()
+            .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
             .child(
                 div()
