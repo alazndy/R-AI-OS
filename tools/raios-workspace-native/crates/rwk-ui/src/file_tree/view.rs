@@ -271,24 +271,28 @@ impl Render for FileTreeView {
             .into_iter()
             .enumerate()
             .map(|(ix, (id, label, depth, folder, open))| {
-                let marker = match (folder, open) {
-                    (true, true) => "▾ ",
-                    (true, false) => "▸ ",
-                    (false, _) => "  ",
-                };
-                let text = if folder {
-                    format!("{marker}{label}/")
-                } else {
-                    format!("{marker}{label}")
-                };
+                let icon = icon_for(&label, folder, open);
                 let is_selected = selected.as_deref() == Some(id.as_str());
                 let mut row = div()
                     .id(ix)
                     .w_full()
-                    .h(gpui::px(22.0))
-                    .pl(gpui::px(8.0 + 14.0 * depth as f32))
-                    .text_color(gpui::rgb(0xd4d4d4))
-                    .child(text)
+                    .h(gpui::px(ROW_HEIGHT))
+                    .pl(gpui::px(8.0 + INDENT * depth as f32))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1p5()
+                    .text_color(gpui::rgb(if folder { 0xe8e8e8 } else { 0xcfcfcf }))
+                    .hover(|style| style.bg(gpui::rgb(HOVER_BACKGROUND)))
+                    .child(
+                        div()
+                            .w(gpui::px(14.0))
+                            .flex()
+                            .justify_center()
+                            .text_color(gpui::rgb(icon.color))
+                            .child(icon.glyph),
+                    )
+                    .child(label)
                     .on_click(cx.listener(move |view, _, _window, cx| {
                         view.select(&id, cx);
                         if folder {
@@ -298,10 +302,18 @@ impl Render for FileTreeView {
                         }
                     }));
                 if is_selected {
-                    row = row.bg(gpui::rgb(0x37373d));
+                    row = row
+                        .bg(gpui::rgb(SELECTED_BACKGROUND))
+                        .border_l_2()
+                        .border_color(gpui::rgb(ACCENT));
                 }
                 row
             });
+        let title = self
+            .project
+            .as_ref()
+            .map(|project| project.info().name.to_uppercase())
+            .unwrap_or_default();
         let status = self.status.clone().unwrap_or_default();
         let element: AnyElement = div()
             .size_full()
@@ -310,14 +322,96 @@ impl Render for FileTreeView {
             .on_key_down(cx.listener(Self::on_key_down))
             .child(
                 div()
+                    .h(gpui::px(28.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(gpui::rgb(0x333333))
+                    .text_xs()
+                    .text_color(gpui::rgb(0x9a9a9a))
+                    .child(title),
+            )
+            .child(
+                div()
                     .id("file-tree-rows")
                     .flex_1()
                     .min_h_0()
+                    .py_1()
                     .overflow_y_scroll()
                     .children(rows),
             )
-            .child(div().px_2().child(status))
+            .child(
+                div()
+                    .px_2()
+                    .text_xs()
+                    .text_color(gpui::rgb(0xf14c4c))
+                    .child(status),
+            )
             .into_any_element();
         element
+    }
+}
+
+const ROW_HEIGHT: f32 = 24.0;
+const INDENT: f32 = 14.0;
+const ACCENT: u32 = 0x3794ff;
+const HOVER_BACKGROUND: u32 = 0x2a2d2e;
+const SELECTED_BACKGROUND: u32 = 0x37373d;
+
+/// The glyph and colour drawn in front of a tree row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowIcon {
+    /// What is drawn.
+    pub glyph: &'static str,
+    /// 0xRRGGBB.
+    pub color: u32,
+}
+
+/// The icon of a row: an open/closed chevron for folders, a coloured mark by file type otherwise.
+pub fn icon_for(name: &str, is_folder: bool, is_open: bool) -> RowIcon {
+    if is_folder {
+        let glyph = if is_open { "▾" } else { "▸" };
+        return RowIcon {
+            glyph,
+            color: 0xdcb67a,
+        };
+    }
+    let extension = name.rsplit_once('.').map_or("", |(_, extension)| extension);
+    let color = match extension {
+        "rs" => 0xe8845c,
+        "toml" | "lock" => 0xb180d7,
+        "md" | "txt" => 0x6fb3ff,
+        "json" | "yaml" | "yml" => 0xe5c07b,
+        "ts" | "tsx" | "js" | "jsx" => 0x4ec9f0,
+        "py" => 0x6bc46d,
+        "sh" | "bash" | "zsh" => 0x89d185,
+        "kt" | "java" => 0xf0883e,
+        "css" | "html" => 0xe06c9f,
+        _ => 0x8a8a8a,
+    };
+    RowIcon {
+        glyph: "●", color
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folders_get_a_chevron_that_follows_their_state() {
+        assert_eq!(icon_for("src", true, false).glyph, "▸");
+        assert_eq!(icon_for("src", true, true).glyph, "▾");
+    }
+
+    #[test]
+    fn files_are_coloured_by_type_and_unknown_types_are_grey() {
+        assert_ne!(
+            icon_for("main.rs", false, false).color,
+            icon_for("Cargo.toml", false, false).color
+        );
+        assert_eq!(icon_for("LICENSE", false, false).color, 0x8a8a8a);
+        assert_eq!(icon_for(".gitignore", false, false).color, 0x8a8a8a);
     }
 }

@@ -391,7 +391,7 @@ impl EditorView {
 }
 
 impl Render for EditorView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let shown = match (&self.diff, self.diff_visible) {
             (Some(diff), true) => diff,
             _ => &self.state,
@@ -403,7 +403,13 @@ impl Render for EditorView {
             .size_full()
             .flex()
             .flex_col()
-            .child(div().flex_1().min_h_0().child(Editor::new(shown)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .font_family(crate::fonts::monospace_family(window))
+                    .child(Editor::new(shown)),
+            )
             .child(
                 div()
                     .flex()

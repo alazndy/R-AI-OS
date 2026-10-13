@@ -143,7 +143,7 @@ impl Element for TerminalElement {
         );
         let font_size = px(FONT_SIZE);
         let line_height = px(LINE_HEIGHT);
-        let base_font = gpui::font("monospace");
+        let base_font = gpui::font(crate::fonts::monospace_family(window));
 
         // Cell metrics: the advance of "M" in the base font.
         let font_id = window.text_system().resolve_font(&base_font);
