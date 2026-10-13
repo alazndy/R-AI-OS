@@ -31,11 +31,13 @@ pub struct PaletteView {
     filtered_files: Vec<String>,
     loading: bool,
     truncated: bool,
+    theme: Theme,
     _subscription: Subscription,
 }
 
 use gpui::Entity;
 use rwk_core::workbench::quick_open::{matching_files, FileListing};
+use rwk_core::workbench::{Appearance, Theme};
 
 impl EventEmitter<PaletteEvent> for PaletteView {}
 
@@ -62,8 +64,15 @@ impl PaletteView {
             filtered_files: Vec::new(),
             loading: false,
             truncated: false,
+            theme: Theme::of(Appearance::default()),
             _subscription: subscription,
         }
+    }
+
+    /// Repaints the palette with another skin or tone.
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
     }
 
     /// A filename picker using the existing palette input and keyboard navigation.
@@ -228,8 +237,10 @@ impl Render for PaletteView {
             .mx_auto()
             .w(gpui::px(560.0))
             .p_2()
-            .bg(gpui::rgb(0x252526))
-            .text_color(gpui::rgb(0xe5e5e5))
+            .bg(gpui::rgb(self.theme.panel))
+            .border_1()
+            .border_color(gpui::rgb(self.theme.line))
+            .text_color(gpui::rgb(self.theme.text))
             .capture_key_down(cx.listener(Self::on_key_down))
             .child(
                 div()

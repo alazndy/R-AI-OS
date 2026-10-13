@@ -11,7 +11,9 @@ use gpui_base::input::{Editor, EditorState, InputEvent, InputHighlighter};
 use rwk_core::documents::Document;
 use rwk_core::error::{AppError, ErrorCode};
 use rwk_core::project::{ProjectId, ProjectRoot};
-use rwk_core::workbench::{DocumentSession, SaveBlocked, SaveTicket, SwitchDecision, Tone};
+use rwk_core::workbench::{
+    Appearance, DocumentSession, SaveBlocked, SaveTicket, Skin, SwitchDecision, Theme, Tone,
+};
 
 use super::diff::DiffHighlighter;
 use super::highlight::{
@@ -36,18 +38,22 @@ pub enum EditorEvent {
 
 /// Builds an editor state with the settings every editor in the workspace uses: soft wrap off
 /// (spec section 2: it costs about 0.26 ms per line), line numbers and folding on.
-fn new_editor_state(tone: Tone, window: &mut Window, cx: &mut Context<EditorState>) -> EditorState {
+fn new_editor_state(
+    theme: Theme,
+    window: &mut Window,
+    cx: &mut Context<EditorState>,
+) -> EditorState {
     let mut state = EditorState::new(window, cx)
         .soft_wrap(false)
         .line_number(true)
         .folding(true);
-    state.set_editor_style(editor_style(tone));
+    state.set_editor_style(editor_style(theme));
     state
 }
 
 /// One file open for editing, plus the optional Git diff of it.
 pub struct EditorView {
-    tone: Tone,
+    theme: Theme,
     state: Entity<EditorState>,
     diff: Option<Entity<EditorState>>,
     diff_visible: bool,
@@ -65,7 +71,19 @@ impl EventEmitter<EditorEvent> for EditorView {}
 impl EditorView {
     /// An empty editor.
     pub fn new(tone: Tone, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let state = cx.new(|cx| new_editor_state(tone, window, cx));
+        Self::themed(
+            Theme::of(Appearance {
+                skin: Skin::Standard,
+                tone,
+            }),
+            window,
+            cx,
+        )
+    }
+
+    /// An editor painted with `theme`.
+    pub fn themed(theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = cx.new(|cx| new_editor_state(theme, window, cx));
         let subscription = cx.subscribe(&state, |this, _state, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.session.edited();
@@ -74,7 +92,7 @@ impl EditorView {
             }
         });
         Self {
-            tone,
+            theme,
             state,
             diff: None,
             diff_visible: false,
@@ -156,8 +174,19 @@ impl EditorView {
 
     /// Switches the tone: editor colours and syntax colours, without recreating the editors.
     pub fn set_tone(&mut self, tone: Tone, cx: &mut Context<Self>) {
-        self.tone = tone;
-        let style = editor_style(tone);
+        self.set_theme(
+            Theme::of(Appearance {
+                skin: Skin::Standard,
+                tone,
+            }),
+            cx,
+        );
+    }
+
+    /// Switches skin and tone together.
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        let style = editor_style(theme);
         self.state
             .update(cx, |state, _| state.set_editor_style(style.clone()));
         if let Some(diff) = &self.diff {
@@ -334,7 +363,7 @@ impl EditorView {
     }
 
     fn install_diff(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
-        let tone = self.tone;
+        let theme = self.theme;
         let diff = match &self.diff {
             Some(diff) => diff.clone(),
             None => {
@@ -349,7 +378,7 @@ impl EditorView {
             }
         };
         diff.update(cx, |state, cx| {
-            state.set_editor_style(editor_style(tone));
+            state.set_editor_style(editor_style(theme));
             state.set_highlighter_factory(
                 Rc::new(|_: &str| {
                     Some(Box::new(DiffHighlighter::default()) as Box<dyn InputHighlighter>)

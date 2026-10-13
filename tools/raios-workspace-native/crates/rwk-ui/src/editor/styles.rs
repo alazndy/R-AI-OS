@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use gpui::{rgb, HighlightStyle, Hsla};
 use gpui_base::input::{DiagnosticColors, HighlightStyleResolver, InputEditorStyle};
-use rwk_core::workbench::Tone;
+use rwk_core::workbench::{Theme, Tone};
 
 /// Resolves token-class and diff names to colours.
 #[derive(Debug, Clone, Copy)]
@@ -53,23 +53,20 @@ impl HighlightStyleResolver for SyntaxStyles {
     }
 }
 
-/// The editor style for a tone (surface colours of the standard skin).
-pub fn editor_style(tone: Tone) -> InputEditorStyle {
-    let (foreground, muted, background, border, selection, caret, active_line, gutter) = match tone
-    {
-        Tone::Dark => (
-            0xd4d4d4, 0x858585, 0x1e1e1e, 0x333333, 0x264f78, 0xffffff, 0x2a2d2e, 0x1e1e1e,
-        ),
-        Tone::Light => (
-            0x1f2328, 0x6e7781, 0xffffff, 0xd0d7de, 0xadd6ff, 0x000000, 0xf3f5f7, 0xffffff,
-        ),
+/// The editor style for a theme: surface and text colours come from the skin, syntax colours
+/// from the tone.
+pub fn editor_style(theme: Theme) -> InputEditorStyle {
+    let tone = theme.tone();
+    let (selection, caret, active_line) = match tone {
+        Tone::Dark => (0x264f78, 0xffffff, 0x2a2d2e),
+        Tone::Light => (0xadd6ff, 0x000000, 0xf3f5f7),
     };
     let color = |hex: u32| Hsla::from(rgb(hex));
     InputEditorStyle {
-        foreground: color(foreground),
-        muted_foreground: color(muted),
-        background: color(background),
-        border: color(border),
+        foreground: color(theme.text),
+        muted_foreground: color(theme.muted),
+        background: color(theme.editor),
+        border: color(theme.line),
         selection: color(selection),
         caret: color(caret),
         diagnostics: DiagnosticColors {
@@ -80,8 +77,12 @@ pub fn editor_style(tone: Tone) -> InputEditorStyle {
         },
         highlight_styles: Arc::new(SyntaxStyles::new(tone)),
         editor_invisible: Some(color(0x3b3b3b)),
-        editor_active_line: Some(color(active_line)),
-        editor_gutter_background: Some(color(gutter)),
+        editor_active_line: Some(color(if theme.lcars {
+            theme.raised
+        } else {
+            active_line
+        })),
+        editor_gutter_background: Some(color(theme.editor)),
         fold_icon_renderer: None,
     }
 }

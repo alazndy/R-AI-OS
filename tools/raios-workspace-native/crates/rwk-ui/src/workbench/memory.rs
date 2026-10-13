@@ -29,7 +29,9 @@ impl Workbench {
             return;
         }
         let name = project.info().name.clone();
+        let theme = self.theme();
         let view = cx.new(|cx| MemoryView::new(name, window, cx));
+        view.update(cx, |view, cx| view.set_theme(theme, cx));
         self.memory_subscription = Some(cx.subscribe_in(
             &view,
             window,

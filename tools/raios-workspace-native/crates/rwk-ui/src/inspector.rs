@@ -12,6 +12,7 @@ use gpui::{div, Context, IntoElement, ParentElement, Render, SharedString, Style
 use gpui::{InteractiveElement, StatefulInteractiveElement};
 use rwk_core::control::{ConnectionState, ControlPlane};
 use rwk_core::inspector::{fetch, Banner, InspectorModel};
+use rwk_core::workbench::{Appearance, Theme};
 
 /// How often the daemon is read.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(3);
@@ -31,6 +32,7 @@ pub type HandoffLine = (String, String, bool);
 /// The inspector panel.
 pub struct InspectorView {
     handoffs: Vec<HandoffLine>,
+    theme: Theme,
     plane: Option<Arc<dyn ControlPlane>>,
     project: Option<PathBuf>,
     /// Bumped on every project or plane change; answers of an older generation are dropped.
@@ -44,6 +46,7 @@ impl InspectorView {
     pub fn new() -> Self {
         Self {
             handoffs: Vec::new(),
+            theme: Theme::of(Appearance::default()),
             plane: None,
             project: None,
             generation: 0,
@@ -66,6 +69,12 @@ impl InspectorView {
     pub fn set_project(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
         self.project = root;
         self.restart(cx);
+    }
+
+    /// Repaints the panel with another skin or tone.
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
     }
 
     /// Replaces the handoff lines the workspace queued.
@@ -126,19 +135,23 @@ fn not_configured() -> ConnectionState {
     }
 }
 
-fn heading(text: &str, count: usize) -> impl IntoElement {
+fn heading(theme: Theme, text: &str, count: usize) -> impl IntoElement {
     div()
         .px_2()
         .pt_2()
         .text_xs()
-        .text_color(gpui::rgb(0x9a9a9a))
+        .text_color(gpui::rgb(if theme.lcars {
+            theme.accent_ink
+        } else {
+            theme.muted
+        }))
         .child(SharedString::from(format!(
             "{} ({count})",
             text.to_uppercase()
         )))
 }
 
-fn row(primary: String, secondary: String) -> impl IntoElement {
+fn row(theme: Theme, primary: String, secondary: String) -> impl IntoElement {
     div()
         .px_2()
         .py_0p5()
@@ -146,17 +159,18 @@ fn row(primary: String, secondary: String) -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(gpui::rgb(0x8a8a8a))
+                .text_color(gpui::rgb(theme.muted))
                 .child(SharedString::from(secondary)),
         )
 }
 
 impl Render for InspectorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
         let banner = self.model.banner.text().map(|text| {
             let color = match self.model.banner {
-                Banner::Unreachable(_) => 0xf14c4c,
-                _ => 0xcca700,
+                Banner::Unreachable(_) => theme.bad,
+                _ => theme.accent_ink,
             };
             div()
                 .px_2()
@@ -167,6 +181,7 @@ impl Render for InspectorView {
         });
         let tasks = self.model.tasks.iter().map(|task| {
             row(
+                theme,
                 task.title.clone(),
                 format!(
                     "{} · {}",
@@ -177,12 +192,14 @@ impl Render for InspectorView {
         });
         let runs = self.model.runs.iter().map(|run| {
             row(
+                theme,
                 run.agent.clone(),
                 format!("çalışıyor · görev {}", run.task_id),
             )
         });
         let approvals = self.model.approvals.iter().map(|approval| {
             row(
+                theme,
                 approval.title.clone(),
                 format!(
                     "{} → {} · {}",
@@ -194,7 +211,7 @@ impl Render for InspectorView {
             .handoffs
             .iter()
             .map(|(id, text, can_start)| {
-                let line = row(text.clone(), format!("onay {id}"));
+                let line = row(theme, text.clone(), format!("onay {id}"));
                 let start = can_start.then(|| {
                     let id = id.clone();
                     div()
@@ -202,7 +219,7 @@ impl Render for InspectorView {
                         .mx_2()
                         .px_2()
                         .border_1()
-                        .border_color(gpui::rgb(0x3794ff))
+                        .border_color(gpui::rgb(theme.accent_ink))
                         .text_xs()
                         .child("Alıcıyı başlat")
                         .on_click(cx.listener(move |_, _, _window, cx| {
@@ -235,19 +252,19 @@ impl Render for InspectorView {
                     .flex()
                     .items_center()
                     .border_b_1()
-                    .border_color(gpui::rgb(0x333333))
+                    .border_color(gpui::rgb(theme.line))
                     .text_xs()
-                    .text_color(gpui::rgb(0x9a9a9a))
+                    .text_color(gpui::rgb(theme.muted))
                     .child("DENETÇİ"),
             )
             .children(banner)
-            .child(heading("Onaylar", self.model.approvals.len()))
+            .child(heading(theme, "Onaylar", self.model.approvals.len()))
             .children(approvals)
-            .child(heading("Çalışanlar", self.model.runs.len()))
+            .child(heading(theme, "Çalışanlar", self.model.runs.len()))
             .children(runs)
-            .child(heading("Görevler", self.model.tasks.len()))
+            .child(heading(theme, "Görevler", self.model.tasks.len()))
             .children(tasks)
-            .child(heading("Devirler", self.handoffs.len()))
+            .child(heading(theme, "Devirler", self.handoffs.len()))
             .children(handoffs)
             .children(empty)
             .children((self.model.unscoped > 0).then(|| {
@@ -255,7 +272,7 @@ impl Render for InspectorView {
                     .px_2()
                     .py_1()
                     .text_xs()
-                    .text_color(gpui::rgb(0x8a8a8a))
+                    .text_color(gpui::rgb(theme.muted))
                     .child(SharedString::from(format!(
                         "{} kayıt bir projeye bağlı olmadığı için gösterilmiyor.",
                         self.model.unscoped

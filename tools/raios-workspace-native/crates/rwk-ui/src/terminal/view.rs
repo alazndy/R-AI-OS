@@ -27,13 +27,24 @@ use super::input::{
 /// Lines moved by one wheel notch.
 const WHEEL_LINES: i32 = 3;
 
-/// Dark or light tone of the terminal surface.
+/// Surface of the terminal: a plain dark or light tone, or colours taken from the active theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Appearance {
     /// Light text on a dark surface.
     Dark,
     /// Dark text on a light surface.
     Light,
+    /// Text and background colours of the active skin; `dark` picks the ANSI palette family.
+    Themed {
+        /// True for the dark ANSI palette.
+        dark: bool,
+        /// Default text colour, 0xRRGGBB.
+        foreground: u32,
+        /// Surface colour, 0xRRGGBB.
+        background: u32,
+        /// Selection colour, 0xRRGGBB.
+        selection: u32,
+    },
 }
 
 impl Appearance {
@@ -52,6 +63,24 @@ impl Appearance {
                 cursor: Rgb::from_hex(0x000000),
                 selection: Rgb::from_hex(0xadd6ff),
             }),
+            Appearance::Themed {
+                dark,
+                foreground,
+                background,
+                selection,
+            } => {
+                let surface = Surface {
+                    foreground: Rgb::from_hex(foreground),
+                    background: Rgb::from_hex(background),
+                    cursor: Rgb::from_hex(foreground),
+                    selection: Rgb::from_hex(selection),
+                };
+                if dark {
+                    Palette::dark(surface)
+                } else {
+                    Palette::light(surface)
+                }
+            }
         }
     }
 }

@@ -1110,3 +1110,29 @@ fn a_project_without_memory_md_says_so_and_escape_closes_the_view() {
     rig.with(|wb, window, cx| wb.close_memory(window, cx));
     assert!(rig.read(|wb, _| wb.memory().is_none()));
 }
+
+#[test]
+fn the_skin_command_switches_between_standard_and_lcars_and_announces_it() {
+    use rwk_core::workbench::Skin;
+
+    let mut rig = rig();
+    let events: Arc<Mutex<Vec<WorkbenchEvent>>> = Arc::default();
+    let sink = Arc::clone(&events);
+    let view = rig.view.clone();
+    let _subscription = rig.cx.update(|_, cx| {
+        cx.subscribe(&view, move |_wb, event: &WorkbenchEvent, _cx| {
+            sink.lock().expect("events").push(*event);
+        })
+    });
+
+    rig.run(CommandId::Skin);
+
+    assert!(rig.read(|wb, _| wb.theme().lcars));
+    let announced = events.lock().expect("events").clone();
+    assert!(matches!(
+        announced.last(),
+        Some(WorkbenchEvent::AppearanceChanged(a)) if a.skin == Skin::Lcars
+    ));
+    rig.run(CommandId::Skin);
+    assert!(!rig.read(|wb, _| wb.theme().lcars));
+}

@@ -24,8 +24,8 @@ use rwk_core::project::ProjectRoot;
 use rwk_core::sessions::{SessionId, SessionKind, SessionRegistry, TerminalHost, TerminalSize};
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
 use rwk_core::workbench::{
-    available, resolve_shortcut, Appearance, CommandId, KeyboardContext, Keystroke, SwitchDecision,
-    Tone, WorkbenchState,
+    available, resolve_shortcut, Appearance, CommandId, KeyboardContext, Keystroke, Skin,
+    SwitchDecision, Theme, Tone, WorkbenchState,
 };
 
 use crate::editor::view::{EditorEvent, EditorView};
@@ -217,9 +217,12 @@ impl Workbench {
         ));
         let host = SharedHost(pty);
         let sessions = Arc::new(SessionRegistry::new(Box::new(host.clone())));
+        let theme = Theme::of(appearance);
         let files = cx.new(FileTreeView::new);
-        let editor = cx.new(|cx| EditorView::new(appearance.tone, window, cx));
+        files.update(cx, |files, cx| files.set_theme(theme, cx));
+        let editor = cx.new(|cx| EditorView::themed(theme, window, cx));
         let inspector = cx.new(|_| InspectorView::new());
+        inspector.update(cx, |inspector, cx| inspector.set_theme(theme, cx));
         let sizes = cx.new(|_| ResizableState::default());
         let inspector_events = cx.subscribe_in(
             &inspector,
@@ -317,6 +320,14 @@ impl Workbench {
     /// The inspector panel.
     pub fn inspector(&self) -> &Entity<InspectorView> {
         &self.inspector
+    }
+
+    /// The name of the open project, or an empty string.
+    pub fn project_name(&self) -> String {
+        self.project
+            .as_ref()
+            .map(|project| project.info().name.clone())
+            .unwrap_or_default()
     }
 
     /// The message shown at the bottom of the window.
@@ -480,6 +491,7 @@ impl Workbench {
             }
             CommandId::Refresh => self.files.update(cx, |files, cx| files.refresh(cx)),
             CommandId::Settings => self.toggle_tone(cx),
+            CommandId::Skin => self.toggle_skin(cx),
             CommandId::Balanced => self.apply_layout(LayoutPreset::Balanced, window, cx),
             CommandId::EditorLayout => self.apply_layout(LayoutPreset::Editor, window, cx),
             CommandId::AgentsLayout => self.apply_layout(LayoutPreset::Agents, window, cx),
@@ -498,7 +510,9 @@ impl Workbench {
             return;
         }
         let state = self.state(cx);
+        let theme = self.theme();
         let palette = cx.new(|cx| PaletteView::new(state, window, cx));
+        palette.update(cx, |palette, cx| palette.set_theme(theme, cx));
         self.attach_palette(palette, window, cx);
     }
 
@@ -541,7 +555,9 @@ impl Workbench {
             return;
         };
         let project_id = project.info().id.clone();
+        let theme = self.theme();
         let palette = cx.new(|cx| PaletteView::for_files(window, cx));
+        palette.update(cx, |palette, cx| palette.set_theme(theme, cx));
         self.attach_palette(palette.clone(), window, cx);
         self.file_search_task = Some(cx.spawn_in(window, async move |this, cx| {
             let listing = cx
@@ -605,18 +621,49 @@ impl Workbench {
     }
 
     fn toggle_tone(&mut self, cx: &mut Context<Self>) {
-        let tone = match self.appearance.tone {
+        self.appearance.tone = match self.appearance.tone {
             Tone::Dark => Tone::Light,
             Tone::Light => Tone::Dark,
         };
-        self.appearance.tone = tone;
+        self.apply_appearance(cx);
+    }
+
+    fn toggle_skin(&mut self, cx: &mut Context<Self>) {
+        self.appearance.skin = match self.appearance.skin {
+            Skin::Standard => Skin::Lcars,
+            Skin::Lcars => Skin::Standard,
+        };
+        self.apply_appearance(cx);
+    }
+
+    /// The colour tokens of the current appearance.
+    pub fn theme(&self) -> Theme {
+        Theme::of(self.appearance)
+    }
+
+    /// Tells every pane about a changed skin or tone, without recreating editors or sessions.
+    fn apply_appearance(&mut self, cx: &mut Context<Self>) {
+        let theme = self.theme();
         cx.emit(WorkbenchEvent::AppearanceChanged(self.appearance));
+        self.files
+            .update(cx, |files, cx| files.set_theme(theme, cx));
+        self.inspector
+            .update(cx, |inspector, cx| inspector.set_theme(theme, cx));
         self.editor
-            .update(cx, |editor, cx| editor.set_tone(tone, cx));
-        let terminal = terminal_appearance(tone);
+            .update(cx, |editor, cx| editor.set_theme(theme, cx));
+        let terminal = terminal_appearance(theme);
         for pane in &self.terminals {
             pane.view
                 .update(cx, |view, cx| view.set_appearance(terminal, cx));
+        }
+        if let Some(palette) = &self.palette {
+            palette.update(cx, |palette, cx| palette.set_theme(theme, cx));
+        }
+        if let Some(composer) = &self.composer {
+            composer.update(cx, |composer, cx| composer.set_theme(theme, cx));
+        }
+        if let Some(memory) = &self.memory {
+            memory.update(cx, |memory, cx| memory.set_theme(theme, cx));
         }
         cx.notify();
     }
@@ -858,7 +905,7 @@ impl Workbench {
         };
         let (gate, receiver) = self.gates.attach(&info.id);
         let host: Arc<dyn TerminalHost> = Arc::new(self.host.clone());
-        let appearance = terminal_appearance(self.appearance.tone);
+        let appearance = terminal_appearance(self.theme());
         let id = info.id.clone();
         let view = cx.new(|cx| TerminalView::new(engine, host, id, appearance, gate, receiver, cx));
         self.terminals.push(TerminalPane {
@@ -955,16 +1002,19 @@ impl Workbench {
     }
 }
 
-fn terminal_appearance(tone: Tone) -> TerminalAppearance {
-    match tone {
-        Tone::Dark => TerminalAppearance::Dark,
-        Tone::Light => TerminalAppearance::Light,
+fn terminal_appearance(theme: Theme) -> TerminalAppearance {
+    TerminalAppearance::Themed {
+        dark: theme.dark,
+        foreground: theme.text,
+        background: theme.editor,
+        selection: theme.selected,
     }
 }
 
 impl Render for Workbench {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frames += 1;
+        let theme = self.theme();
         let dock = div()
             .size_full()
             .flex()
@@ -974,7 +1024,7 @@ impl Render for Workbench {
                     .h(px(INSPECTOR_HEIGHT))
                     .flex_none()
                     .border_b_1()
-                    .border_color(gpui::rgb(0x333333))
+                    .border_color(gpui::rgb(theme.line))
                     .child(self.inspector.clone())
             }))
             .children(self.terminals.iter().enumerate().map(|(index, pane)| {
@@ -982,7 +1032,7 @@ impl Render for Workbench {
                     .flex_1()
                     .min_h_0()
                     .border_1()
-                    .when_selected(index == self.selected)
+                    .when_selected(theme, index == self.selected)
                     .child(pane.view.clone())
             }));
         let main = h_resizable("workbench")
@@ -1004,6 +1054,7 @@ impl Render for Workbench {
                     .px_3()
                     .py_1()
                     .border_1()
+                    .border_color(gpui::rgb(theme.accent_ink))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.resolve(decision, window, cx);
                     }))
@@ -1017,8 +1068,14 @@ impl Render for Workbench {
                 .mx_auto()
                 .w(px(520.0))
                 .p_3()
-                .bg(gpui::rgb(0x252526))
-                .text_color(gpui::rgb(0xe5e5e5))
+                .bg(gpui::rgb(theme.panel))
+                .border_1()
+                .border_color(gpui::rgb(if theme.lcars {
+                    theme.accent
+                } else {
+                    theme.line
+                }))
+                .text_color(gpui::rgb(theme.text))
                 .child(div().child(dialog.title))
                 .child(div().py_2().child(dialog.message))
                 .child(div().flex().flex_row().gap_2().children(buttons))
@@ -1031,12 +1088,32 @@ impl Render for Workbench {
             .track_focus(&self.focus)
             // GPUI's default text colour is black on a black window: every pane that does not
             // paint its own colours (file tree, toast line) would be invisible.
-            .bg(surface_background(self.appearance.tone))
-            .text_color(surface_foreground(self.appearance.tone))
+            .bg(gpui::rgb(theme.bg))
+            .text_color(gpui::rgb(theme.text))
             // Capture phase: a shortcut is resolved before the focused terminal sees the key.
             .capture_key_down(cx.listener(Self::on_key_down))
+            .children(
+                theme
+                    .lcars
+                    .then(|| lcars_header(theme, self.project_name(), window)),
+            )
             .child(div().flex_1().min_h_0().child(main))
-            .child(div().px_2().child(toast))
+            .child(
+                div()
+                    .px_2()
+                    .text_xs()
+                    .text_color(gpui::rgb(if theme.lcars {
+                        theme.accent_ink
+                    } else {
+                        theme.muted
+                    }))
+                    .children(
+                        theme
+                            .lcars
+                            .then(|| div().h(px(3.0)).mb_1().bg(gpui::rgb(theme.blue))),
+                    )
+                    .child(toast),
+            )
             .children(self.palette.clone())
             .children(self.composer.clone())
             .children(self.memory.clone())
@@ -1047,29 +1124,64 @@ impl Render for Workbench {
 /// Height of the inspector above the terminals.
 const INSPECTOR_HEIGHT: f32 = 260.0;
 
-/// Window background of a tone, the same surface the editor and terminal paint on.
-fn surface_background(tone: Tone) -> gpui::Rgba {
-    gpui::rgb(match tone {
-        Tone::Dark => 0x1e1e1e,
-        Tone::Light => 0xffffff,
-    })
-}
-
-/// Default text colour of a tone.
-fn surface_foreground(tone: Tone) -> gpui::Rgba {
-    gpui::rgb(match tone {
-        Tone::Dark => 0xd4d4d4,
-        Tone::Light => 0x1f2328,
-    })
+/// The GT-LCARS header: the brand in display lettering and the command rail, three bars in
+/// blue, blue and orange as in the KDE theme.
+fn lcars_header(theme: Theme, project: String, window: &Window) -> impl IntoElement {
+    let display = crate::fonts::display_family(window);
+    div()
+        .flex_none()
+        .px_4()
+        .pt_2()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_baseline()
+                .gap_3()
+                .font_family(display)
+                .child(
+                    div()
+                        .text_size(px(30.0))
+                        .text_color(gpui::rgb(theme.blue))
+                        .child("RAIOS"),
+                )
+                .child(
+                    div()
+                        .text_size(px(16.0))
+                        .text_color(gpui::rgb(theme.ice))
+                        .child(SharedString::from(project.to_uppercase())),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1p5()
+                .h(px(9.0))
+                .mt_1()
+                .child(
+                    div()
+                        .w(px(198.0))
+                        .bg(gpui::rgb(theme.blue))
+                        .rounded_tl(px(12.0)),
+                )
+                .child(div().flex_1().bg(gpui::rgb(theme.blue)))
+                .child(
+                    div()
+                        .w(px(278.0))
+                        .bg(gpui::rgb(theme.accent))
+                        .rounded_tr(px(12.0)),
+                ),
+        )
 }
 
 /// Styling helper kept next to its only user.
 trait SelectedPane: Styled + Sized {
-    fn when_selected(self, selected: bool) -> Self {
+    fn when_selected(self, theme: Theme, selected: bool) -> Self {
         if selected {
-            self.border_color(gpui::rgb(0x3794ff))
+            self.border_color(gpui::rgb(theme.accent_ink))
         } else {
-            self.border_color(gpui::rgb(0x333333))
+            self.border_color(gpui::rgb(theme.line))
         }
     }
 }

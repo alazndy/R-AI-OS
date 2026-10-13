@@ -11,6 +11,7 @@ use rwk_core::memory::MemorySnapshot;
 use rwk_core::memory_model::{
     blocks, filter_records, filter_sections, layer_name, sections, Block,
 };
+use rwk_core::workbench::{Appearance, Theme};
 
 /// What the memory view asks of the workbench.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,7 @@ pub struct MemoryView {
     kind_filter: Option<String>,
     layer_filter: Option<i64>,
     query: Entity<InputState>,
+    theme: Theme,
     _subscription: gpui::Subscription,
 }
 
@@ -78,8 +80,15 @@ impl MemoryView {
             kind_filter: None,
             layer_filter: None,
             query,
+            theme: Theme::of(Appearance::default()),
             _subscription: subscription,
         }
+    }
+
+    /// Repaints the view with another skin or tone.
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
     }
 
     /// Sets what `memory.md` delivered (`None` content means the file does not exist).
@@ -187,6 +196,7 @@ impl MemoryView {
 }
 
 fn button(
+    theme: Theme,
     id: &'static str,
     label: impl Into<SharedString>,
     active: bool,
@@ -196,21 +206,25 @@ fn button(
         .px_2()
         .py_0p5()
         .border_1()
-        .border_color(gpui::rgb(if active { 0x3794ff } else { 0x3a3a3a }))
+        .border_color(gpui::rgb(if active {
+            theme.accent_ink
+        } else {
+            theme.line
+        }))
         .child(label.into());
     if active {
-        base.bg(gpui::rgb(0x264f78))
+        base.bg(gpui::rgb(theme.selected))
     } else {
         base
     }
 }
 
-fn draw(blocks: Vec<Block>, family: &'static str) -> impl IntoElement {
+fn draw(theme: Theme, blocks: Vec<Block>, family: &'static str) -> impl IntoElement {
     // `min_w_0` lets the column shrink to its parent so long lines wrap instead of widening it.
     let rows = blocks.into_iter().map(|block| match block {
         Block::Heading { level, text } => div()
             .pt_2()
-            .text_color(gpui::rgb(0x4ec9b0))
+            .text_color(gpui::rgb(theme.blue_ink))
             .text_size(px(20.0 - (level.min(4) as f32) * 1.5))
             .child(SharedString::from(text))
             .into_any_element(),
@@ -237,7 +251,7 @@ fn draw(blocks: Vec<Block>, family: &'static str) -> impl IntoElement {
         Block::Code(line) => div()
             .pl_3()
             .font_family(family)
-            .text_color(gpui::rgb(0xce9178))
+            .text_color(gpui::rgb(theme.accent_ink))
             .child(SharedString::from(line))
             .into_any_element(),
         Block::Row(cells) => div()
@@ -251,7 +265,7 @@ fn draw(blocks: Vec<Block>, family: &'static str) -> impl IntoElement {
             )
             .into_any_element(),
         Block::Truncated => div()
-            .text_color(gpui::rgb(0xcca700))
+            .text_color(gpui::rgb(theme.accent_ink))
             .child("Bölüm 2.000 satırda kesildi; tamamı için dosyada aç.")
             .into_any_element(),
     });
@@ -261,6 +275,7 @@ fn draw(blocks: Vec<Block>, family: &'static str) -> impl IntoElement {
 impl Render for MemoryView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let family = crate::fonts::monospace_family(window);
+        let theme = self.theme;
         let query = self.query.read(cx).value().to_string();
         let mut entries: Vec<(SharedString, Option<SharedString>)> = Vec::new();
         let mut detail: Vec<Block> = Vec::new();
@@ -367,13 +382,15 @@ impl Render for MemoryView {
                 .flex()
                 .flex_col()
                 .child(title)
-                .children(badge.map(|b| div().text_xs().text_color(gpui::rgb(0x8a8a8a)).child(b)))
+                .children(
+                    badge.map(|b| div().text_xs().text_color(gpui::rgb(theme.muted)).child(b)),
+                )
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.selected = ix;
                     cx.notify();
                 }));
             if ix == selected {
-                row.bg(gpui::rgb(0x37373d))
+                row.bg(gpui::rgb(theme.selected))
             } else {
                 row
             }
@@ -400,8 +417,10 @@ impl Render for MemoryView {
             .flex_col()
             .gap_2()
             .p_3()
-            .bg(gpui::rgb(0x252526))
-            .text_color(gpui::rgb(0xe5e5e5))
+            .bg(gpui::rgb(theme.panel))
+            .border_1()
+            .border_color(gpui::rgb(theme.line))
+            .text_color(gpui::rgb(theme.text))
             .capture_key_down(cx.listener(Self::on_key_down))
             .child(
                 div()
@@ -409,22 +428,27 @@ impl Render for MemoryView {
                     .flex_row()
                     .gap_2()
                     .items_center()
-                    .child(div().text_color(gpui::rgb(0x9a9a9a)).child("HAFIZA"))
+                    .child(div().text_color(gpui::rgb(theme.muted)).child("HAFIZA"))
                     .child(
-                        button("memory-source-document", "memory.md", document_mode).on_click(
-                            cx.listener(|this, _, _w, cx| {
+                        button(theme, "memory-source-document", "memory.md", document_mode)
+                            .on_click(cx.listener(|this, _, _w, cx| {
                                 this.show(MemorySourceKind::Document, cx)
-                            }),
-                        ),
+                            })),
                     )
                     .child(
-                        button("memory-source-records", "RAIOS kayıtları", !document_mode)
-                            .on_click(cx.listener(|this, _, _w, cx| {
-                                this.show(MemorySourceKind::Records, cx)
-                            })),
+                        button(
+                            theme,
+                            "memory-source-records",
+                            "RAIOS kayıtları",
+                            !document_mode,
+                        )
+                        .on_click(
+                            cx.listener(|this, _, _w, cx| this.show(MemorySourceKind::Records, cx)),
+                        ),
                     )
                     .children(document_mode.then(|| {
                         button(
+                            theme,
                             "memory-raw",
                             if self.raw {
                                 "Görsel görünüm"
@@ -440,24 +464,28 @@ impl Render for MemoryView {
                     }))
                     .children((!document_mode).then(|| {
                         let snapshot = snapshot_for_filter.clone();
-                        button("memory-kind", kind_label, self.kind_filter.is_some()).on_click(
-                            cx.listener(move |this, _, _w, cx| {
+                        button(theme, "memory-kind", kind_label, self.kind_filter.is_some())
+                            .on_click(cx.listener(move |this, _, _w, cx| {
                                 if let Some(snapshot) = &snapshot {
                                     this.cycle_kind(snapshot, cx);
                                 }
-                            }),
-                        )
+                            }))
                     }))
                     .children((!document_mode).then(|| {
-                        button("memory-layer", layer_label, self.layer_filter.is_some())
-                            .on_click(cx.listener(|this, _, _w, cx| this.cycle_layer(cx)))
+                        button(
+                            theme,
+                            "memory-layer",
+                            layer_label,
+                            self.layer_filter.is_some(),
+                        )
+                        .on_click(cx.listener(|this, _, _w, cx| this.cycle_layer(cx)))
                     }))
                     .child(
-                        button("memory-refresh", "Yenile", false)
+                        button(theme, "memory-refresh", "Yenile", false)
                             .on_click(cx.listener(|_, _, _w, cx| cx.emit(MemoryEvent::Refresh))),
                     )
                     .child(
-                        button("memory-close", "Kapat (Esc)", false)
+                        button(theme, "memory-close", "Kapat (Esc)", false)
                             .on_click(cx.listener(|_, _, _w, cx| cx.emit(MemoryEvent::Close))),
                     ),
             )
@@ -466,13 +494,13 @@ impl Render for MemoryView {
                     .h(px(32.0))
                     .overflow_hidden()
                     .border_1()
-                    .border_color(gpui::rgb(0x333333))
+                    .border_color(gpui::rgb(theme.line))
                     .child(Input::new(&self.query)),
             )
             .child(
                 div()
                     .text_xs()
-                    .text_color(gpui::rgb(0x9a9a9a))
+                    .text_color(gpui::rgb(theme.muted))
                     .child(status),
             )
             .child(
@@ -489,7 +517,7 @@ impl Render for MemoryView {
                             .flex_none()
                             .overflow_y_scroll()
                             .border_r_1()
-                            .border_color(gpui::rgb(0x333333))
+                            .border_color(gpui::rgb(theme.line))
                             .children(outline),
                     )
                     .child(
@@ -503,7 +531,7 @@ impl Render for MemoryView {
                             .gap_2()
                             .children(message.map(|m| {
                                 div()
-                                    .text_color(gpui::rgb(0xcca700))
+                                    .text_color(gpui::rgb(theme.accent_ink))
                                     .child(SharedString::from(m))
                             }))
                             .children(progress.map(|(done, all)| {
@@ -512,7 +540,7 @@ impl Render for MemoryView {
                                     all - done
                                 )))
                             }))
-                            .child(draw(detail, family)),
+                            .child(draw(theme, detail, family)),
                     ),
             )
     }

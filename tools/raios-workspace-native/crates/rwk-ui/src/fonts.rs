@@ -32,6 +32,23 @@ pub fn pick_monospace(available: &[String]) -> &'static str {
         .unwrap_or("monospace")
 }
 
+/// The family of the GT-LCARS display lettering: Antonio when it is registered, else the UI font.
+pub fn display_family(window: &Window) -> &'static str {
+    static FAMILY: OnceLock<&'static str> = OnceLock::new();
+    FAMILY.get_or_init(|| {
+        if window
+            .text_system()
+            .all_font_names()
+            .iter()
+            .any(|name| name == "Antonio")
+        {
+            "Antonio"
+        } else {
+            "Noto Sans"
+        }
+    })
+}
+
 /// The monospace family to draw code with (looked up once per process).
 pub fn monospace_family(window: &Window) -> &'static str {
     static FAMILY: OnceLock<&'static str> = OnceLock::new();

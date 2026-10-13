@@ -4,8 +4,10 @@
 pub mod appearance;
 pub mod commands;
 pub mod documents;
+pub mod file_types;
 pub mod palette;
 pub mod quick_open;
+pub mod theme;
 
 pub use appearance::{parse_appearance, serialize_appearance, Appearance, Skin, Tone};
 pub use commands::{
@@ -13,4 +15,6 @@ pub use commands::{
     KeyboardContext, Keystroke, WorkbenchState,
 };
 pub use documents::{DocumentSession, SaveBlocked, SaveTicket, SwitchDecision};
+pub use file_types::{presentation, FileIcon, FilePresentation, FileTone};
 pub use palette::{palette_entries, PaletteEntry};
+pub use theme::Theme;

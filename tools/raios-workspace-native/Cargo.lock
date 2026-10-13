@@ -5375,6 +5375,8 @@ dependencies = [
  "gpui-pre-wgpu",
  "raios-contracts",
  "rwk-core",
+ "serde_json",
+ "sha2",
  "streaming-iterator",
  "tempfile",
  "tree-sitter",

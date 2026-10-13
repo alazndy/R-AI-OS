@@ -9,6 +9,7 @@ use gpui::{AppContext, Entity};
 use gpui_base::input::{Input, InputState};
 use rwk_core::handoff_input::{looks_like_secret, validate_summary};
 use rwk_core::sessions::SessionKind;
+use rwk_core::workbench::{Appearance, Theme};
 
 /// The agents a handoff can be addressed to, in the order the buttons appear.
 pub const TARGETS: [SessionKind; 4] = [
@@ -39,6 +40,7 @@ pub struct HandoffComposer {
     input: Entity<InputState>,
     from: SessionKind,
     problem: Option<SharedString>,
+    theme: Theme,
 }
 
 impl HandoffComposer {
@@ -50,7 +52,14 @@ impl HandoffComposer {
             input,
             from,
             problem: None,
+            theme: Theme::of(Appearance::default()),
         }
+    }
+
+    /// Repaints the composer with another skin or tone.
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
     }
 
     /// The handing-off agent.
@@ -102,6 +111,7 @@ impl HandoffComposer {
 impl Render for HandoffComposer {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let from = self.from;
+        let theme = self.theme;
         let buttons = TARGETS.into_iter().filter(|to| *to != from).map(|to| {
             let name = to.identity().unwrap_or("shell");
             div()
@@ -109,7 +119,7 @@ impl Render for HandoffComposer {
                 .px_3()
                 .py_1()
                 .border_1()
-                .border_color(gpui::rgb(0x3794ff))
+                .border_color(gpui::rgb(theme.accent_ink))
                 .child(SharedString::from(format!("→ {name}")))
                 .on_click(cx.listener(move |this, _, _window, cx| this.submit(to, cx)))
         });
@@ -124,8 +134,10 @@ impl Render for HandoffComposer {
             .flex()
             .flex_col()
             .gap_2()
-            .bg(gpui::rgb(0x252526))
-            .text_color(gpui::rgb(0xe5e5e5))
+            .bg(gpui::rgb(theme.panel))
+            .border_1()
+            .border_color(gpui::rgb(theme.line))
+            .text_color(gpui::rgb(theme.text))
             .capture_key_down(cx.listener(Self::on_key_down))
             .child(SharedString::from(format!(
                 "Devir notu · gönderen {}",
@@ -136,19 +148,19 @@ impl Render for HandoffComposer {
                     .h(gpui::px(160.0))
                     .overflow_hidden()
                     .border_1()
-                    .border_color(gpui::rgb(0x333333))
+                    .border_color(gpui::rgb(theme.line))
                     .child(Input::new(&self.input)),
             )
             .children(self.problem.clone().map(|problem| {
                 div()
                     .text_xs()
-                    .text_color(gpui::rgb(0xf14c4c))
+                    .text_color(gpui::rgb(theme.bad))
                     .child(problem)
             }))
             .child(
                 div()
                     .text_xs()
-                    .text_color(gpui::rgb(0x9a9a9a))
+                    .text_color(gpui::rgb(theme.muted))
                     .child("Not bir BLOCKER devri olarak kuyruğa alınır; parola ve anahtar yazmayın. Esc kapatır."),
             )
             .child(div().flex().flex_row().gap_2().children(buttons))

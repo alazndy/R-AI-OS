@@ -235,7 +235,9 @@ impl Workbench {
             return;
         }
         let from = self.selected_agent_kind().unwrap_or(SessionKind::Claude);
+        let theme = self.theme();
         let composer = cx.new(|cx| HandoffComposer::new(from, window, cx));
+        composer.update(cx, |composer, cx| composer.set_theme(theme, cx));
         self.composer_subscription = Some(cx.subscribe_in(
             &composer,
             window,

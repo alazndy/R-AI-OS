@@ -14,6 +14,9 @@ use gpui::{
 };
 use gpui_base::{TreeEvent, TreeItem, TreeState};
 use rwk_core::project::{FileEntry, ProjectRoot};
+use rwk_core::workbench::{presentation, Appearance, Theme};
+
+use crate::assets::icon_path;
 
 /// What the tree tells the workbench.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +42,7 @@ pub struct FileTreeView {
     pending: HashSet<String>,
     status: Option<SharedString>,
     focus: FocusHandle,
+    theme: Theme,
     _subscription: Subscription,
 }
 
@@ -63,6 +67,7 @@ impl FileTreeView {
             pending: HashSet::new(),
             status: None,
             focus: cx.focus_handle(),
+            theme: Theme::of(Appearance::default()),
             _subscription: subscription,
         }
     }
@@ -229,6 +234,12 @@ impl FileTreeView {
         }
     }
 
+    /// Repaints the tree with another skin or tone.
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
     /// Gives the tree keyboard focus.
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
@@ -289,7 +300,7 @@ impl FileTreeView {
 }
 
 impl Render for FileTreeView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The rows are drawn here rather than by `gpui_base::Tree`'s virtual list, which painted
         // nothing in this setup; the component's state still owns the flattened entries.
         let selected = self.selected_path(cx);
@@ -309,30 +320,53 @@ impl Render for FileTreeView {
                 })
                 .collect()
         };
+        let theme = self.theme;
         let rows = rows
             .into_iter()
             .enumerate()
             .map(|(ix, (id, label, depth, folder, open))| {
-                let icon = icon_for(&label, folder, open);
+                let look = presentation(&label, folder, open);
                 let is_selected = selected.as_deref() == Some(id.as_str());
+                let chevron = match (folder, open) {
+                    (true, true) => "▾",
+                    (true, false) => "▸",
+                    (false, _) => " ",
+                };
+                // On a filled selection the glyph takes the fill's ink colour, as in 0.1.
+                let on_fill = theme.lcars && is_selected;
+                let glyph_color = if on_fill {
+                    theme.on_fill
+                } else {
+                    look.tone.color(theme.tone())
+                };
                 let mut row = div()
                     .id(ix)
                     .w_full()
                     .h(gpui::px(ROW_HEIGHT))
-                    .pl(gpui::px(8.0 + INDENT * depth as f32))
+                    .pl(gpui::px(6.0 + INDENT * depth as f32))
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap_1p5()
-                    .text_color(gpui::rgb(if folder { 0xe8e8e8 } else { 0xcfcfcf }))
-                    .hover(|style| style.bg(gpui::rgb(HOVER_BACKGROUND)))
+                    .text_color(gpui::rgb(if on_fill { theme.on_fill } else { theme.text }))
+                    .hover(move |style| style.bg(gpui::rgb(theme.raised)))
                     .child(
                         div()
-                            .w(gpui::px(14.0))
-                            .flex()
-                            .justify_center()
-                            .text_color(gpui::rgb(icon.color))
-                            .child(icon.glyph),
+                            .w(gpui::px(10.0))
+                            .text_xs()
+                            .text_color(gpui::rgb(if on_fill {
+                                theme.on_fill
+                            } else {
+                                theme.blue_ink
+                            }))
+                            .child(chevron),
+                    )
+                    .child(
+                        gpui::svg()
+                            .path(icon_path(look.icon))
+                            .size(gpui::px(16.0))
+                            .flex_none()
+                            .text_color(gpui::rgb(glyph_color)),
                     )
                     .child(label)
                     .on_click(cx.listener(move |view, _, _window, cx| {
@@ -343,11 +377,17 @@ impl Render for FileTreeView {
                             view.activate(&id, cx);
                         }
                     }));
+                if theme.lcars {
+                    row = row.rounded_r(gpui::px(14.0));
+                }
                 if is_selected {
-                    row = row
-                        .bg(gpui::rgb(SELECTED_BACKGROUND))
-                        .border_l_2()
-                        .border_color(gpui::rgb(ACCENT));
+                    row = if theme.lcars {
+                        row.bg(gpui::rgb(theme.accent))
+                    } else {
+                        row.bg(gpui::rgb(theme.selected))
+                            .border_l_2()
+                            .border_color(gpui::rgb(theme.accent))
+                    };
                 }
                 row
             });
@@ -363,18 +403,31 @@ impl Render for FileTreeView {
             .flex_col()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
-            .child(
+            .child(if theme.lcars {
+                // The LCARS pane title: a blue bar with display lettering.
+                div()
+                    .h(gpui::px(40.0))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .bg(gpui::rgb(theme.blue))
+                    .rounded_tl(gpui::px(16.0))
+                    .text_color(gpui::rgb(theme.on_fill))
+                    .font_family(crate::fonts::display_family(window))
+                    .text_size(gpui::px(16.0))
+                    .child(title)
+            } else {
                 div()
                     .h(gpui::px(28.0))
                     .px_2()
                     .flex()
                     .items_center()
                     .border_b_1()
-                    .border_color(gpui::rgb(0x333333))
+                    .border_color(gpui::rgb(theme.line))
                     .text_xs()
-                    .text_color(gpui::rgb(0x9a9a9a))
-                    .child(title),
-            )
+                    .text_color(gpui::rgb(theme.muted))
+                    .child(title)
+            })
             .child(
                 div()
                     .id("file-tree-rows")
@@ -388,7 +441,7 @@ impl Render for FileTreeView {
                 div()
                     .px_2()
                     .text_xs()
-                    .text_color(gpui::rgb(0xf14c4c))
+                    .text_color(gpui::rgb(theme.bad))
                     .child(status),
             )
             .into_any_element();
@@ -398,63 +451,3 @@ impl Render for FileTreeView {
 
 const ROW_HEIGHT: f32 = 24.0;
 const INDENT: f32 = 14.0;
-const ACCENT: u32 = 0x3794ff;
-const HOVER_BACKGROUND: u32 = 0x2a2d2e;
-const SELECTED_BACKGROUND: u32 = 0x37373d;
-
-/// The glyph and colour drawn in front of a tree row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RowIcon {
-    /// What is drawn.
-    pub glyph: &'static str,
-    /// 0xRRGGBB.
-    pub color: u32,
-}
-
-/// The icon of a row: an open/closed chevron for folders, a coloured mark by file type otherwise.
-pub fn icon_for(name: &str, is_folder: bool, is_open: bool) -> RowIcon {
-    if is_folder {
-        let glyph = if is_open { "▾" } else { "▸" };
-        return RowIcon {
-            glyph,
-            color: 0xdcb67a,
-        };
-    }
-    let extension = name.rsplit_once('.').map_or("", |(_, extension)| extension);
-    let color = match extension {
-        "rs" => 0xe8845c,
-        "toml" | "lock" => 0xb180d7,
-        "md" | "txt" => 0x6fb3ff,
-        "json" | "yaml" | "yml" => 0xe5c07b,
-        "ts" | "tsx" | "js" | "jsx" => 0x4ec9f0,
-        "py" => 0x6bc46d,
-        "sh" | "bash" | "zsh" => 0x89d185,
-        "kt" | "java" => 0xf0883e,
-        "css" | "html" => 0xe06c9f,
-        _ => 0x8a8a8a,
-    };
-    RowIcon {
-        glyph: "●", color
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn folders_get_a_chevron_that_follows_their_state() {
-        assert_eq!(icon_for("src", true, false).glyph, "▸");
-        assert_eq!(icon_for("src", true, true).glyph, "▾");
-    }
-
-    #[test]
-    fn files_are_coloured_by_type_and_unknown_types_are_grey() {
-        assert_ne!(
-            icon_for("main.rs", false, false).color,
-            icon_for("Cargo.toml", false, false).color
-        );
-        assert_eq!(icon_for("LICENSE", false, false).color, 0x8a8a8a);
-        assert_eq!(icon_for(".gitignore", false, false).color, 0x8a8a8a);
-    }
-}

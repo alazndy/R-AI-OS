@@ -53,6 +53,8 @@ pub enum CommandId {
     Settings,
     /// Keyboard shortcut list.
     Shortcuts,
+    /// Switch between the standard and the GT-LCARS skin.
+    Skin,
     /// Balanced layout.
     Balanced,
     /// Editor-first layout.
@@ -120,7 +122,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 30] = [
+const COMMANDS: [Command; 31] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -270,6 +272,7 @@ const COMMANDS: [Command; 30] = [
         Some("Ctrl ,"),
         &[bind(",")],
     ),
+    cmd(CommandId::Skin, "GT-LCARS görünümünü aç / kapat", None, &[]),
     cmd(CommandId::Shortcuts, "Klavye kısayolları", None, &[]),
     cmd(
         CommandId::Balanced,
@@ -435,9 +438,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         }
     };
     match id {
-        Commands | Project | Settings | Shortcuts | Balanced | EditorLayout | AgentsLayout => {
-            allow()
-        }
+        Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
+        | AgentsLayout => allow(),
         Files | Refresh | FocusFiles | Memory | Inspector => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
@@ -518,7 +520,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 30);
+        assert_eq!(catalog().len(), 31);
     }
 
     #[test]
