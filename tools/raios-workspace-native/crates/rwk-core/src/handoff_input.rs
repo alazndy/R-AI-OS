@@ -68,6 +68,70 @@ fn check_text(text: &str, secret: &dyn Fn(&str) -> bool) -> Result<(), InputProb
     Ok(())
 }
 
+/// A conservative check for text that looks like a credential. It is a guard against accidents
+/// (a pasted key), not a security boundary: the daemon scans again, and a clean result proves
+/// nothing.
+pub fn looks_like_secret(text: &str) -> bool {
+    if text.contains("-----BEGIN") && text.contains("PRIVATE KEY") {
+        return true;
+    }
+    let tokens: Vec<&str> = text
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ',' | ';' | '(' | ')'))
+        .filter(|token| !token.is_empty())
+        .collect();
+    tokens.iter().any(|token| token_looks_like_secret(token))
+        // "API_KEY: value" arrives as two tokens.
+        || tokens
+            .windows(2)
+            .any(|pair| names_a_secret(pair[0].trim_end_matches([':', '='])) && pair[0].ends_with([':', '=']) && pair[1].len() >= 8)
+}
+
+fn names_a_secret(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    ["password", "passwd", "secret", "token", "apikey", "api_key"]
+        .iter()
+        .any(|word| name.contains(word))
+}
+
+fn token_looks_like_secret(token: &str) -> bool {
+    const PREFIXES: [(&str, usize); 7] = [
+        ("sk-", 20),
+        ("ghp_", 20),
+        ("gho_", 20),
+        ("github_pat_", 20),
+        ("xoxb-", 20),
+        ("xoxp-", 20),
+        ("AIza", 30),
+    ];
+    if PREFIXES
+        .iter()
+        .any(|(prefix, length)| token.starts_with(prefix) && token.len() >= *length)
+    {
+        return true;
+    }
+    let aws = token.len() == 20
+        && token.starts_with("AKIA")
+        && token
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+    if aws {
+        return true;
+    }
+    if let Some((name, value)) = token.split_once(['=', ':']) {
+        if names_a_secret(name) && value.len() >= 8 {
+            return true;
+        }
+    }
+    let long_blob = token.len() >= 40
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '_' | '=' | '-'))
+        && token.chars().any(|c| c.is_ascii_digit())
+        && token.chars().any(|c| c.is_ascii_lowercase())
+        && token.chars().any(|c| c.is_ascii_uppercase());
+    long_blob
+}
+
 /// Validates a handoff summary (at most [`MAX_SUMMARY_BYTES`] bytes).
 pub fn validate_summary(text: &str, secret: &dyn Fn(&str) -> bool) -> Result<(), InputProblem> {
     if text.len() > MAX_SUMMARY_BYTES {
@@ -212,6 +276,34 @@ mod tests {
             text.contains("/work/app") && text.contains("5 bayt"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_local_detector_flags_common_credential_shapes() {
+        for secret in [
+            "sk-abcdefghijklmnopqrstuvwx",
+            "token ghp_abcdefghijklmnopqrstuvwxyz0123",
+            "AKIAABCDEFGHIJKLMNOP",
+            "password=hunter2hunter2",
+            "API_KEY: abcdef123456",
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIE",
+            "Zm9vYmFyQmF6MTIzNDU2Nzg5MEFiQ2RFZkdoSWpLbE1uT3A=",
+        ] {
+            assert!(looks_like_secret(secret), "{secret}");
+        }
+    }
+
+    #[test]
+    fn ordinary_prose_and_short_identifiers_are_not_flagged() {
+        for text in [
+            "Devam et: testleri çalıştır ve raporla.",
+            "the token budget is small; see section 3",
+            "commit 4f2a9c1 fixes the parser",
+            "path /home/alaz/dev/core/R-AI-OS/crates/rwk-core/src/handoff_input.rs",
+            "password reset flow needs review",
+        ] {
+            assert!(!looks_like_secret(text), "{text}");
+        }
     }
 
     #[test]
