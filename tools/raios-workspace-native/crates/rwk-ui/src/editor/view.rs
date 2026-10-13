@@ -195,6 +195,8 @@ impl EditorView {
         // The editor lays a new text out during paint; without input nothing else would ask for
         // the frame that shows it.
         window.refresh();
+        // The next keystroke belongs to the file that was just opened.
+        self.focus(window, cx);
     }
 
     /// Reads `path` on the background executor and opens it. A file that cannot be edited
