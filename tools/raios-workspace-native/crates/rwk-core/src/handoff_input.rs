@@ -93,6 +93,36 @@ fn names_a_secret(name: &str) -> bool {
         .any(|word| name.contains(word))
 }
 
+/// The text with every whitespace-separated word that looks like a credential replaced by
+/// `[gizli]`; whitespace and everything else is kept. Used before stored memory is shown.
+pub fn redact_secrets(text: &str) -> String {
+    if text.contains("-----BEGIN") && text.contains("PRIVATE KEY") {
+        return "[gizli]".to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if !word.is_empty() {
+            out.push_str(if token_looks_like_secret(word) {
+                "[gizli]"
+            } else {
+                word
+            });
+            word.clear();
+        }
+    };
+    for c in text.chars() {
+        if c.is_whitespace() {
+            flush(&mut word, &mut out);
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
 fn token_looks_like_secret(token: &str) -> bool {
     const PREFIXES: [(&str, usize); 7] = [
         ("sk-", 20),
@@ -291,6 +321,19 @@ mod tests {
         ] {
             assert!(looks_like_secret(secret), "{secret}");
         }
+    }
+
+    #[test]
+    fn redaction_replaces_only_the_secret_words() {
+        assert_eq!(
+            redact_secrets("use sk-abcdefghijklmnopqrstuvwx for\nthe call"),
+            "use [gizli] for\nthe call"
+        );
+        assert_eq!(redact_secrets("nothing here"), "nothing here");
+        assert_eq!(
+            redact_secrets("-----BEGIN PRIVATE KEY-----\nabc"),
+            "[gizli]"
+        );
     }
 
     #[test]

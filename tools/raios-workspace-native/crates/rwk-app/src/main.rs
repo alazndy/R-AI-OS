@@ -16,6 +16,8 @@ use std::sync::Arc;
 use gpui::{App, AppContext, WindowOptions};
 use rwk_core::control::daemon::DaemonClient;
 use rwk_core::control::ControlPlane;
+use rwk_core::handoff_input::redact_secrets;
+use rwk_core::memory::{MemorySource, SqliteMemorySource};
 use rwk_core::terminal::ProgramPaths;
 use rwk_ui::workbench::{Workbench, WorkbenchEvent};
 use token::FileTokenSource;
@@ -103,6 +105,14 @@ fn main() {
             },
         )
         .detach();
+        // The structured memory records: a read-only view of the daemon's database, with
+        // credentials hidden before anything is shown.
+        if let Some(config_home) = config_home() {
+            let source = SqliteMemorySource::new(config_home.join("raios").join("workspace.db"))
+                .with_redactor(redact_secrets);
+            let source: Arc<dyn MemorySource> = Arc::new(source);
+            workbench.update(cx, |workbench, _| workbench.set_memory_source(Some(source)));
+        }
         // The daemon connection: without a config home there is no token file, so the inspector
         // keeps showing "not configured" instead of guessing a path.
         if let Some(config_home) = config_home() {

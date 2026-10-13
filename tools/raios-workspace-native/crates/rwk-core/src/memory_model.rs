@@ -314,6 +314,63 @@ fn item_of(line: &str) -> Option<Block> {
     })
 }
 
+/// Sections whose title or text contains `query` (case-insensitive, Turkish dotted/dotless I
+/// folded); an empty query keeps all of them.
+pub fn filter_sections(all: Vec<MemorySection>, query: &str) -> Vec<MemorySection> {
+    let needle = fold(query);
+    if needle.is_empty() {
+        return all;
+    }
+    all.into_iter()
+        .filter(|section| {
+            fold(&format!("{}\n{}", section.title, section.content)).contains(&needle)
+        })
+        .collect()
+}
+
+/// Records matching the text query and the optional type and layer filters.
+pub fn filter_records<'a>(
+    items: &'a [crate::memory::MemoryItem],
+    query: &str,
+    item_type: Option<&str>,
+    layer: Option<i64>,
+) -> Vec<&'a crate::memory::MemoryItem> {
+    let needle = fold(query);
+    items
+        .iter()
+        .filter(|item| item_type.is_none_or(|wanted| item.item_type == wanted))
+        .filter(|item| layer.is_none_or(|wanted| item.layer == wanted))
+        .filter(|item| {
+            needle.is_empty()
+                || fold(&format!(
+                    "{}\n{}\n{}\n{}",
+                    item.title, item.description, item.slug, item.body
+                ))
+                .contains(&needle)
+        })
+        .collect()
+}
+
+fn fold(text: &str) -> String {
+    text.chars()
+        .flat_map(|c| match c {
+            'İ' => vec!['i'],
+            'I' | 'ı' => vec!['i'],
+            other => other.to_lowercase().collect(),
+        })
+        .collect()
+}
+
+/// The name of a record layer.
+pub fn layer_name(layer: i64) -> &'static str {
+    match layer {
+        1 => "L1 · olgular",
+        2 => "L2 · sahneler",
+        3 => "L3 · persona",
+        _ => "Katman ?",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +493,44 @@ mod tests {
         let found = sections(&huge);
 
         assert_eq!(found.len(), 1, "the heading after the budget is never seen");
+    }
+
+    #[test]
+    fn the_search_folds_turkish_case_and_matches_titles_and_bodies() {
+        let found = filter_sections(sections("# Işık\ntext\n# Other\nbody ışık"), "IŞIK");
+
+        let titles: Vec<_> = found.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, ["Işık", "Other"]);
+        assert_eq!(filter_sections(sections("# A"), "").len(), 1);
+    }
+
+    #[test]
+    fn records_filter_by_text_type_and_layer() {
+        let item = |slug: &str, kind: &str, layer: i64, body: &str| crate::memory::MemoryItem {
+            id: slug.into(),
+            slug: slug.into(),
+            title: slug.into(),
+            description: String::new(),
+            item_type: kind.into(),
+            layer,
+            provenance: String::new(),
+            updated_at: String::new(),
+            body: body.into(),
+            truncated: false,
+        };
+        let items = vec![
+            item("a", "feedback", 1, "alpha"),
+            item("b", "project", 2, "beta"),
+            item("c", "feedback", 2, "gamma"),
+        ];
+
+        assert_eq!(filter_records(&items, "", Some("feedback"), None).len(), 2);
+        assert_eq!(filter_records(&items, "", None, Some(2)).len(), 2);
+        assert_eq!(
+            filter_records(&items, "gamma", Some("feedback"), Some(2)).len(),
+            1
+        );
+        assert_eq!(filter_records(&items, "zzz", None, None).len(), 0);
+        assert_eq!(layer_name(3), "L3 · persona");
     }
 }

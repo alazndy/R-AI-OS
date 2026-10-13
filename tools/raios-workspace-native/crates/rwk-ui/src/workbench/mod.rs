@@ -4,6 +4,7 @@
 pub mod control;
 pub mod host;
 pub mod layout;
+pub mod memory;
 pub mod palette;
 
 use std::path::PathBuf;
@@ -163,6 +164,9 @@ pub struct Workbench {
     inspector: Entity<InspectorView>,
     inspector_visible: bool,
     plane: Option<Arc<dyn ControlPlane>>,
+    memory_source: Option<Arc<dyn rwk_core::memory::MemorySource>>,
+    memory: Option<Entity<crate::memory::MemoryView>>,
+    memory_subscription: Option<Subscription>,
     consent: Arc<ConsentRegistry>,
     consent_wait: Option<std::sync::mpsc::Receiver<rwk_core::consent::ConsentDecision>>,
     composer: Option<Entity<crate::handoff::HandoffComposer>>,
@@ -249,6 +253,9 @@ impl Workbench {
             inspector,
             inspector_visible: false,
             plane: None,
+            memory_source: None,
+            memory: None,
+            memory_subscription: None,
             consent: Arc::new(ConsentRegistry::new()),
             consent_wait: None,
             composer: None,
@@ -481,7 +488,7 @@ impl Workbench {
             CommandId::Agent => self.open_agent_chooser(cx),
             CommandId::Handoff => self.open_composer(window, cx),
             CommandId::RegisterProject => self.register_project(window, cx),
-            CommandId::Memory => self.say("Bu sürümde henüz yok", cx),
+            CommandId::Memory => self.open_memory(window, cx),
         }
     }
 
@@ -1032,6 +1039,7 @@ impl Render for Workbench {
             .child(div().px_2().child(toast))
             .children(self.palette.clone())
             .children(self.composer.clone())
+            .children(self.memory.clone())
             .children(dialog)
     }
 }

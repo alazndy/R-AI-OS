@@ -1027,3 +1027,86 @@ fn starting_the_receiver_reads_the_receipt_again_and_tracks_the_process() {
         "a running receiver blocks a second start"
     );
 }
+
+// ----- memory view ---------------------------------------------------------------------
+
+struct FixedMemory;
+
+impl rwk_core::memory::MemorySource for FixedMemory {
+    fn snapshot(
+        &self,
+        project: &rwk_core::project::ProjectRoot,
+    ) -> rwk_core::error::Result<rwk_core::memory::MemorySnapshot> {
+        Ok(rwk_core::memory::MemorySnapshot {
+            project_id: project.info().id.clone(),
+            items: vec![rwk_core::memory::MemoryItem {
+                id: "1".into(),
+                slug: "persona".into(),
+                title: "Persona".into(),
+                description: "who".into(),
+                item_type: "user".into(),
+                layer: 3,
+                provenance: "test".into(),
+                updated_at: "2026-10-14".into(),
+                body: "- [ ] todo".into(),
+                truncated: false,
+            }],
+            total: 1,
+        })
+    }
+
+    fn history(
+        &self,
+        _project: &rwk_core::project::ProjectRoot,
+        _slug: &str,
+    ) -> rwk_core::error::Result<rwk_core::memory::MemoryHistory> {
+        Err(rwk_core::error::AppError::new(
+            rwk_core::error::ErrorCode::NotFound,
+            "none",
+        ))
+    }
+}
+
+#[test]
+fn the_memory_view_lists_the_sections_of_memory_md_and_the_records() {
+    use rwk_ui::memory::MemorySourceKind;
+
+    let mut rig = rig();
+    std::fs::write(
+        rig.dir.path().join("memory.md"),
+        "# Proje\n## Hedefler\n- [x] a\n- [ ] b\n",
+    )
+    .expect("memory.md");
+    rig.with(|wb, _, _| wb.set_memory_source(Some(Arc::new(FixedMemory))));
+    rig.open_project();
+
+    rig.run(CommandId::Memory);
+
+    let view = rig
+        .read(|wb, _| wb.memory().cloned())
+        .expect("the memory view opens");
+    assert!(rig.settle_until(|rig| {
+        rig.read(|_, cx| view.read(cx).outline(cx)) == ["Proje", "Hedefler"]
+    }));
+    rig.with(|_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.show(MemorySourceKind::Records, cx);
+            view.set_query("pers", window, cx);
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.read(|_, cx| view.read(cx).outline(cx)) == ["Persona"]));
+}
+
+#[test]
+fn a_project_without_memory_md_says_so_and_escape_closes_the_view() {
+    let mut rig = rig();
+    rig.open_project();
+
+    rig.run(CommandId::Memory);
+    let view = rig.read(|wb, _| wb.memory().cloned()).expect("view");
+    rig.settle_for(300);
+
+    assert!(rig.read(|_, cx| view.read(cx).outline(cx)).is_empty());
+    rig.with(|wb, window, cx| wb.close_memory(window, cx));
+    assert!(rig.read(|wb, _| wb.memory().is_none()));
+}
