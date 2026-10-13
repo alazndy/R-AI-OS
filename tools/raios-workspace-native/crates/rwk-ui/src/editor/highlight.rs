@@ -328,6 +328,11 @@ impl Highlighted {
         spans
     }
 
+    /// Length of the parsed text in bytes.
+    pub fn text_len(&self) -> usize {
+        self.text.len()
+    }
+
     /// Every highlighted span of the text.
     pub fn all_spans(&self) -> Vec<HighlightSpan> {
         self.spans_in(&(0..self.text.len()))
@@ -441,15 +446,25 @@ impl InputHighlighter for SyntaxHighlighter {
         let Some(state) = &self.state else {
             return Vec::new();
         };
-        state
-            .spans_in(range)
-            .into_iter()
-            .filter_map(|span| {
-                resolver
-                    .style(span.class.name())
-                    .map(|style| (span.range, style))
-            })
-            .collect()
+        // The editor lays text runs out from these ranges, so they must cover `range` without
+        // gaps: unstyled stretches get the default style.
+        let end = range.end.min(state.text_len());
+        let mut covered = range.start.min(end);
+        let mut styles = Vec::new();
+        for span in state.spans_in(range) {
+            let Some(style) = resolver.style(span.class.name()) else {
+                continue;
+            };
+            if span.range.start > covered {
+                styles.push((covered..span.range.start, HighlightStyle::default()));
+            }
+            covered = span.range.end;
+            styles.push((span.range, style));
+        }
+        if covered < end {
+            styles.push((covered..end, HighlightStyle::default()));
+        }
+        styles
     }
 
     fn fold_ranges(&self, text: &Rope) -> Vec<FoldRange> {
@@ -482,6 +497,36 @@ mod tests {
             .filter(|span| span.class == class)
             .map(|span| &source[span.range.clone()])
             .collect()
+    }
+
+    struct EveryClassRed;
+
+    impl HighlightStyleResolver for EveryClassRed {
+        fn style(&self, _name: &str) -> Option<HighlightStyle> {
+            Some(HighlightStyle {
+                color: Some(gpui::red()),
+                ..HighlightStyle::default()
+            })
+        }
+    }
+
+    #[test]
+    fn styles_cover_the_whole_range_without_gaps() {
+        // The editor lays text runs out from these ranges; a gap shifts every later colour.
+        let source = "// note\nfn main() { let x = 1; }\n\nstruct A;\n";
+        let mut highlighter = SyntaxHighlighter::new("rust").expect("rust is supported");
+        highlighter.state = Highlighted::new("rust", source);
+        for range in [0..source.len(), 9..30, 0..4] {
+            let styles = highlighter.styles(&range, &EveryClassRed);
+            let mut at = range.start;
+            for (piece, _) in &styles {
+                assert_eq!(piece.start, at, "gap or overlap in {styles:?}");
+                at = piece.end;
+            }
+            assert_eq!(at, range.end, "range not covered: {styles:?}");
+        }
+        let all = highlighter.styles(&(0..source.len()), &EveryClassRed);
+        assert!(all.iter().any(|(_, style)| style.color.is_none()));
     }
 
     #[test]

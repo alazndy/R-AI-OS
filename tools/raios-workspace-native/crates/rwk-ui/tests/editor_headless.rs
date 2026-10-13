@@ -327,7 +327,10 @@ fn highlighting_is_ready_right_after_the_update_and_follows_edits() {
     // No waiting: the colours exist as soon as `update` returned, for the whole text.
     let head = highlighter.styles(&(0..30), &styles);
     let tail = highlighter.styles(&(source.len() - 30..source.len()), &styles);
-    assert!(!head.is_empty() && !tail.is_empty());
+    let coloured = |styles: &[(std::ops::Range<usize>, gpui::HighlightStyle)]| {
+        styles.iter().any(|(_, style)| style.color.is_some())
+    };
+    assert!(coloured(&head) && coloured(&tail));
     // An edit updates them: turning the first `fn` into plain text removes its colour.
     let edited = source.replacen("fn main", "xx main", 1);
     let edit = gpui_base::input::InputEdit {
@@ -346,10 +349,10 @@ fn highlighting_is_ready_right_after_the_update_and_follows_edits() {
     });
     let first_word = highlighter.styles(&(0..2), &styles);
     assert!(
-        first_word.is_empty(),
+        !coloured(&first_word),
         "the edited word is still coloured: {first_word:?}"
     );
-    assert!(!highlighter
-        .styles(&(source.len() - 30..source.len()), &styles)
-        .is_empty());
+    assert!(coloured(
+        &highlighter.styles(&(source.len() - 30..source.len()), &styles)
+    ));
 }

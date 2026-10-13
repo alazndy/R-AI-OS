@@ -1,6 +1,8 @@
 //! The native RAIOS workspace.
 //!
-//! `rwk-app [PROJECT_DIR] [--exit-after-first-frame]`. With `--exit-after-first-frame` the
+//! `rwk-app [PROJECT_DIR] [--open FILE] [--terminal] [--exit-after-first-frame]`. `--open` opens a
+//! file of the project (a path relative to it) and `--terminal` starts one terminal, both right
+//! after the project is shown. With `--exit-after-first-frame` the
 //! process prints `FIRST_FRAME` once its first frame is painted and exits (used by the
 //! cold-start gate).
 
@@ -29,9 +31,20 @@ fn appearance_file() -> Option<PathBuf> {
 fn main() {
     let mut project: Option<PathBuf> = None;
     let mut exit_after_first_frame = false;
-    for argument in std::env::args().skip(1) {
+    let mut open_file: Option<String> = None;
+    let mut open_terminal = false;
+    let mut arguments = std::env::args().skip(1);
+    while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--exit-after-first-frame" => exit_after_first_frame = true,
+            "--terminal" => open_terminal = true,
+            "--open" => {
+                open_file = Some(
+                    arguments
+                        .next()
+                        .unwrap_or_else(|| fail("--open needs a path")),
+                );
+            }
             other if !other.starts_with("--") && project.is_none() => {
                 project = Some(PathBuf::from(other));
             }
@@ -86,6 +99,24 @@ fn main() {
             let _ = window.update(cx, |workbench, window, cx| {
                 workbench.open_project(root, window, cx);
             });
+            if open_file.is_some() || open_terminal {
+                // The project and its listing are ready a moment after `open_project`.
+                let file = open_file.clone();
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(400))
+                        .await;
+                    let _ = window.update(cx, |workbench, window, cx| {
+                        if let Some(path) = file {
+                            workbench.request_open_file(path, window, cx);
+                        }
+                        if open_terminal {
+                            workbench.run(rwk_core::workbench::CommandId::NewTerminal, window, cx);
+                        }
+                    });
+                })
+                .detach();
+            }
         }
         cx.activate(true);
         if exit_after_first_frame {

@@ -192,6 +192,9 @@ impl EditorView {
         self.diff_visible = false;
         cx.emit(EditorEvent::Opened(document.path));
         cx.notify();
+        // The editor lays a new text out during paint; without input nothing else would ask for
+        // the frame that shows it.
+        window.refresh();
     }
 
     /// Reads `path` on the background executor and opens it. A file that cannot be edited
