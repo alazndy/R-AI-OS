@@ -123,7 +123,7 @@ Rules: **Restart receiver** is enabled only when a freshly read receipt is Pendi
 
 | Gate | Target | Spike reference |
 |---|---|---|
-| Cold start to first frame | <= 300 ms | 250-310 ms |
+| Cold start to first frame | <= 300 ms (A1, the whole application: <= 350 ms since 2026-10-14, see the gate report) | 250-310 ms |
 | Editor open, 30K / 500K lines | <= 350 / <= 700 ms | 272 / 579 ms |
 | 1M plain lines fully parsed | <= 0.7 s | 0.55 s (raw, no UI) |
 | 300K colored lines | <= 1.0 s | 0.9 s (raw) |
