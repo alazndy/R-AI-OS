@@ -64,13 +64,6 @@ fn main() {
     gpui_platform::application()
         .with_assets(rwk_ui::assets::Assets)
         .run(move |cx: &mut App| {
-            // The GT-LCARS display font ships with the application.
-            if let Err(error) = cx
-                .text_system()
-                .add_fonts(vec![rwk_ui::assets::antonio_font()])
-            {
-                eprintln!("rwk-app: could not load the display font: {error}");
-            }
             gpui_base::init(cx);
             let path = appearance_file();
             let appearance = path

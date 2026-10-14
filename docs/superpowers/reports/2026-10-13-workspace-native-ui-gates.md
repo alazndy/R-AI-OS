@@ -29,3 +29,13 @@ A1 297.7 ms (limit 300, tight), A2 74.6 MB.
 Notes: on a busy machine (a browser running, load 3-4) the same build fails U2/E1/A1 or loses
 frames, which the harness reports as inconclusive; the gates need a quiet machine. A1 is within
 1 % of its limit and varies run to run (265-384 ms across today's runs).
+
+## Native Wayland vs XWayland (2026-10-14)
+
+All gates above ran under XWayland. The application also starts and delivers frames on the native
+Wayland session (KDE): A1 measured 306-352 ms there (7-run median 313 ms) against the 300 ms
+hypothesis, and 237 ms under XWayland after the Antonio font was made lazy (registered only when the
+GT-LCARS skin is used). A trace of the Wayland run shows about 230-290 ms between `main` and the
+window being opened (GPUI's Wayland/Vulkan bring-up, before any workspace code runs) and ~65 ms from
+there to the first frame callback; the workspace's own start-up is the smaller part. The spec's
+spike reference for Wayland was 250-310 ms. A1 is therefore a known marginal miss on native Wayland.
