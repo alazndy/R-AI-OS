@@ -64,6 +64,10 @@ tools/raios-workspace-native/target/release/ui-bench all --enforce --runs 5   # 
 
 Exit status 0 passed, 1 failed on a quiet machine, 3 inconclusive (busy machine, or the compositor delivered no frames to the window), 2 usage error. Frames are painted frames, not presented ones; keystroke latency excludes compositor and display.
 
+## Live daemon check
+
+`scripts/live_daemon_probe.sh` runs `DaemonClient` against a real `aiosd` built from this repository inside a throwaway user+network namespace (temporary config and database, so the real daemon, its ports and its token are untouched) and makes the real calls: policy, registration, handoff, receipt, launch validation. An `aiosd` installed before `GetCommandPolicy`/`GetHandoffReceipt` existed answers those queries with HTTP 422; the workspace then fails closed ("the daemon answered HTTP 422") until the daemon is rebuilt from this repository.
+
 ## Supply chain
 
 GPUI is pinned (`gpui-pre =0.3.8`). Re-run `scripts/verify_gpui_supply_chain.py` against the lockfile on every GPUI change (see `docs/security/gpui-supply-chain-2026-10-06.md`).
