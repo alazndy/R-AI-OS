@@ -55,6 +55,10 @@ pub enum CommandId {
     Shortcuts,
     /// Switch between the standard and the GT-LCARS skin.
     Skin,
+    /// Widen the dock (the divider moves left).
+    GrowDock,
+    /// Narrow the dock (the divider moves right).
+    ShrinkDock,
     /// Balanced layout.
     Balanced,
     /// Editor-first layout.
@@ -122,7 +126,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 31] = [
+const COMMANDS: [Command; 33] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -273,6 +277,18 @@ const COMMANDS: [Command; 31] = [
         &[bind(",")],
     ),
     cmd(CommandId::Skin, "GT-LCARS görünümünü aç / kapat", None, &[]),
+    cmd(
+        CommandId::GrowDock,
+        "Dock'u genişlet",
+        Some("Ctrl Alt ."),
+        &[bind_terminal(".", false, true)],
+    ),
+    cmd(
+        CommandId::ShrinkDock,
+        "Dock'u daralt",
+        Some("Ctrl Alt ,"),
+        &[bind_terminal(",", false, true)],
+    ),
     cmd(CommandId::Shortcuts, "Klavye kısayolları", None, &[]),
     cmd(
         CommandId::Balanced,
@@ -463,6 +479,13 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             }
         }
         ToggleTerminal => allow(),
+        GrowDock | ShrinkDock => {
+            if state.dock_visible {
+                allow()
+            } else {
+                deny("Dock gizli")
+            }
+        }
         NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
         | StopTerminal => needs_terminal(),
         FocusTerminal(index) => {
@@ -520,7 +543,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 31);
+        assert_eq!(catalog().len(), 33);
     }
 
     #[test]

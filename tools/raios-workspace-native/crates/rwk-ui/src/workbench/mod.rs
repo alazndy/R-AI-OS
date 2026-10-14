@@ -363,6 +363,18 @@ impl Workbench {
         self.dock_visible
     }
 
+    /// Width of the dock in pixels, as the divider currently has it.
+    pub fn dock_width(&self, cx: &gpui::App) -> f32 {
+        f32::from(
+            self.sizes
+                .read(cx)
+                .sizes()
+                .get(2)
+                .copied()
+                .unwrap_or(px(0.0)),
+        )
+    }
+
     /// Number of terminal panes.
     pub fn terminal_count(&self) -> usize {
         self.terminals.len()
@@ -502,6 +514,8 @@ impl Workbench {
             CommandId::Refresh => self.files.update(cx, |files, cx| files.refresh(cx)),
             CommandId::Settings => self.toggle_tone(cx),
             CommandId::Skin => self.toggle_skin(cx),
+            CommandId::GrowDock => self.nudge_dock(DOCK_STEP_PX, window, cx),
+            CommandId::ShrinkDock => self.nudge_dock(-DOCK_STEP_PX, window, cx),
             CommandId::Balanced => self.apply_layout(LayoutPreset::Balanced, window, cx),
             CommandId::EditorLayout => self.apply_layout(LayoutPreset::Editor, window, cx),
             CommandId::AgentsLayout => self.apply_layout(LayoutPreset::Agents, window, cx),
@@ -678,6 +692,36 @@ impl Workbench {
         if let Some(memory) = &self.memory {
             memory.update(cx, |memory, cx| memory.set_theme(theme, cx));
         }
+        cx.notify();
+    }
+
+    /// Moves the dock divider by `delta` pixels (positive widens the dock). The same minimums as
+    /// the layout presets apply.
+    fn nudge_dock(&mut self, delta: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let total = f32::from(window.viewport_size().width);
+        let current = f32::from(
+            self.sizes
+                .read(cx)
+                .sizes()
+                .get(2)
+                .copied()
+                .unwrap_or(px(0.0)),
+        );
+        let files = f32::from(
+            self.sizes
+                .read(cx)
+                .sizes()
+                .first()
+                .copied()
+                .unwrap_or(px(0.0)),
+        );
+        let wanted = (current + delta).clamp(
+            layout::MIN_SIDE_PANE_PX,
+            (total - files - layout::MIN_EDITOR_PX).max(layout::MIN_SIDE_PANE_PX),
+        );
+        self.sizes.update(cx, |sizes, cx| {
+            sizes.resize_panel(2, px(wanted), window, cx)
+        });
         cx.notify();
     }
 
@@ -1140,6 +1184,9 @@ impl Render for Workbench {
             .children(dialog)
     }
 }
+
+/// How far one dock-resize command moves the divider.
+const DOCK_STEP_PX: f32 = 40.0;
 
 /// Height of the inspector above the terminals.
 const INSPECTOR_HEIGHT: f32 = 260.0;

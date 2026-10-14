@@ -1221,3 +1221,28 @@ fn starting_a_terminal_without_a_project_offers_the_picker_and_remembers_the_com
     assert_eq!(rig.read(|wb, _| wb.toast()), None);
     assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
 }
+
+#[test]
+fn the_dock_divider_moves_with_the_keyboard_commands_and_respects_the_minimums() {
+    let mut rig = rig();
+    rig.run(CommandId::Balanced);
+    let start = rig.read(|wb, cx| wb.dock_width(cx));
+
+    rig.run(CommandId::GrowDock);
+    let wider = rig.read(|wb, cx| wb.dock_width(cx));
+    rig.run(CommandId::ShrinkDock);
+    rig.run(CommandId::ShrinkDock);
+    let narrower = rig.read(|wb, cx| wb.dock_width(cx));
+
+    assert!(wider > start, "{start} -> {wider}");
+    assert!(narrower < start, "{start} -> {narrower}");
+    for _ in 0..40 {
+        rig.run(CommandId::ShrinkDock);
+    }
+    assert!(
+        rig.read(|wb, cx| wb.dock_width(cx)) >= rwk_ui::workbench::layout::MIN_SIDE_PANE_PX - 0.5
+    );
+    rig.run(CommandId::ToggleTerminal);
+    rig.run(CommandId::GrowDock);
+    assert_eq!(rig.read(|wb, _| wb.toast()).as_deref(), Some("Dock gizli"));
+}
