@@ -15,6 +15,8 @@ pub enum CommandId {
     Save,
     /// Git diff of the open file.
     Diff,
+    /// Switch the diff between unified and side-by-side.
+    DiffSplit,
     /// New terminal or split session.
     NewTerminal,
     /// Show or hide the terminal dock.
@@ -126,7 +128,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 33] = [
+const COMMANDS: [Command; 34] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -157,6 +159,7 @@ const COMMANDS: [Command; 33] = [
         None,
         &[],
     ),
+    cmd(CommandId::DiffSplit, "Diff: yan yana / birleşik", None, &[]),
     cmd(
         CommandId::NewTerminal,
         "Yeni terminal / bölünmüş oturum",
@@ -462,7 +465,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | FocusEditor => {
+        Diff | DiffSplit | FocusEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -543,7 +546,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 33);
+        assert_eq!(catalog().len(), 34);
     }
 
     #[test]

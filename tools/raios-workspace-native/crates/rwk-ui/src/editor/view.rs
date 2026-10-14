@@ -12,7 +12,8 @@ use rwk_core::documents::Document;
 use rwk_core::error::{AppError, ErrorCode};
 use rwk_core::project::{ProjectId, ProjectRoot};
 use rwk_core::workbench::{
-    Appearance, DocumentSession, SaveBlocked, SaveTicket, Skin, SwitchDecision, Theme, Tone,
+    side_by_side, Appearance, DocumentSession, SaveBlocked, SaveTicket, Skin, SwitchDecision,
+    Theme, Tone,
 };
 
 use super::diff::DiffHighlighter;
@@ -56,6 +57,10 @@ pub struct EditorView {
     theme: Theme,
     state: Entity<EditorState>,
     diff: Option<Entity<EditorState>>,
+    /// The right column while the diff is shown side by side (`diff` is then the left one).
+    diff_right: Option<Entity<EditorState>>,
+    diff_split: bool,
+    diff_raw: String,
     diff_visible: bool,
     session: DocumentSession,
     status: Option<SharedString>,
@@ -95,6 +100,9 @@ impl EditorView {
             theme,
             state,
             diff: None,
+            diff_right: None,
+            diff_split: false,
+            diff_raw: String::new(),
             diff_visible: false,
             session: DocumentSession::new(),
             status: None,
@@ -189,6 +197,9 @@ impl EditorView {
         let style = editor_style(theme);
         self.state
             .update(cx, |state, _| state.set_editor_style(style.clone()));
+        if let Some(right) = &self.diff_right {
+            right.update(cx, |state, _| state.set_editor_style(style.clone()));
+        }
         if let Some(diff) = &self.diff {
             diff.update(cx, |state, _| state.set_editor_style(style));
         }
@@ -362,22 +373,24 @@ impl EditorView {
         .detach();
     }
 
-    fn install_diff(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn new_diff_state(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<EditorState> {
+        cx.new(|cx| {
+            EditorState::new(window, cx)
+                .soft_wrap(false)
+                .line_number(false)
+                .folding(false)
+        })
+    }
+
+    fn fill_diff_state(
+        &self,
+        state: &Entity<EditorState>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let theme = self.theme;
-        let diff = match &self.diff {
-            Some(diff) => diff.clone(),
-            None => {
-                let diff = cx.new(|cx| {
-                    EditorState::new(window, cx)
-                        .soft_wrap(false)
-                        .line_number(false)
-                        .folding(false)
-                });
-                self.diff = Some(diff.clone());
-                diff
-            }
-        };
-        diff.update(cx, |state, cx| {
+        state.update(cx, |state, cx| {
             state.set_editor_style(editor_style(theme));
             state.set_highlighter_factory(
                 Rc::new(|_: &str| {
@@ -386,11 +399,66 @@ impl EditorView {
                 cx,
             );
             state.set_highlighter("diff", cx);
-            state.set_value(text.as_str(), window, cx);
+            state.set_value(text, window, cx);
             state.set_disabled(true, cx);
         });
+    }
+
+    fn install_diff(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.diff_raw = text;
+        self.render_diff(window, cx);
         self.diff_visible = true;
         cx.notify();
+    }
+
+    /// Fills the diff editors from the stored diff: one unified column, or two aligned ones.
+    fn render_diff(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let left = match &self.diff {
+            Some(diff) => diff.clone(),
+            None => {
+                let diff = self.new_diff_state(window, cx);
+                self.diff = Some(diff.clone());
+                diff
+            }
+        };
+        if self.diff_split {
+            let columns = side_by_side(&self.diff_raw);
+            let right = match &self.diff_right {
+                Some(right) => right.clone(),
+                None => {
+                    let right = self.new_diff_state(window, cx);
+                    self.diff_right = Some(right.clone());
+                    right
+                }
+            };
+            self.fill_diff_state(&left, &columns.left, window, cx);
+            self.fill_diff_state(&right, &columns.right, window, cx);
+        } else {
+            let raw = self.diff_raw.clone();
+            self.fill_diff_state(&left, &raw, window, cx);
+        }
+    }
+
+    /// Switches the diff between one unified column and two side-by-side columns.
+    pub fn set_diff_split(&mut self, split: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.diff_split = split;
+        if self.diff.is_some() {
+            self.render_diff(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// True when the diff is shown side by side.
+    pub fn diff_split(&self) -> bool {
+        self.diff_split
+    }
+
+    /// The text of the right column while the diff is side by side.
+    pub fn diff_right_text(&self, cx: &gpui::App) -> Option<String> {
+        self.diff_right
+            .as_ref()
+            .filter(|_| self.diff_split)
+            .map(|right| right.read(cx).value().to_string())
     }
 
     /// Returns to the editor from the diff view.
@@ -427,6 +495,10 @@ impl Render for EditorView {
             (Some(diff), true) => diff,
             _ => &self.state,
         };
+        let second = match (&self.diff_right, self.diff_visible && self.diff_split) {
+            (Some(right), true) => Some(right),
+            _ => None,
+        };
         let title = self.session.path().unwrap_or("").to_owned();
         let marker = if self.session.is_dirty() { " ●" } else { "" };
         let status = self.status.clone().unwrap_or_default();
@@ -438,8 +510,18 @@ impl Render for EditorView {
                 div()
                     .flex_1()
                     .min_h_0()
+                    .flex()
+                    .flex_row()
                     .font_family(crate::fonts::monospace_family(window))
-                    .child(Editor::new(shown)),
+                    .child(div().flex_1().min_w_0().child(Editor::new(shown)))
+                    .children(second.map(|right| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .border_l_1()
+                            .border_color(gpui::rgb(self.theme.line))
+                            .child(Editor::new(right))
+                    })),
             )
             .child(
                 div()

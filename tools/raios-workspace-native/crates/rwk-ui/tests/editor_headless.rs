@@ -356,3 +356,49 @@ fn highlighting_is_ready_right_after_the_update_and_follows_edits() {
         &highlighter.styles(&(source.len() - 30..source.len()), &styles)
     ));
 }
+
+#[test]
+fn the_diff_can_be_shown_side_by_side_with_aligned_columns() {
+    let fixture = fixture(&[("a.txt", b"one\ntwo\nfour\n")]);
+    let dir = fixture.dir.path();
+    assert!(git(dir, &["init", "-q"]));
+    assert!(git(dir, &["add", "a.txt"]));
+    assert!(git(dir, &["commit", "-q", "-m", "init"]));
+    std::fs::write(dir.join("a.txt"), "one\nthree\nfour\n").expect("edit");
+    let mut rig = rig();
+    rig.open(&fixture, "a.txt");
+    assert!(rig.settle_until(|rig| rig.path().as_deref() == Some("a.txt")));
+    let (view, project) = (rig.view.clone(), fixture.project.clone());
+    rig.cx
+        .update(|window, cx| view.update(cx, |editor, cx| editor.show_diff(project, window, cx)));
+    let view = rig.view.clone();
+    assert!(rig.settle_until(|rig| rig.cx.update(|_w, cx| view.read(cx).diff_visible())));
+
+    rig.cx
+        .update(|window, cx| view.update(cx, |editor, cx| editor.set_diff_split(true, window, cx)));
+
+    let (left, right, split) = rig.cx.update(|_w, cx| {
+        let editor = view.read(cx);
+        (
+            editor.diff_text(cx),
+            editor.diff_right_text(cx).unwrap_or_default(),
+            editor.diff_split(),
+        )
+    });
+    assert!(split);
+    assert!(left.contains("-two") && !left.contains("+three"), "{left}");
+    assert!(
+        right.contains("+three") && !right.contains("-two"),
+        "{right}"
+    );
+    assert_eq!(left.lines().count(), right.lines().count());
+
+    rig.cx.update(|window, cx| {
+        view.update(cx, |editor, cx| editor.set_diff_split(false, window, cx))
+    });
+    let unified = rig.cx.update(|_w, cx| view.read(cx).diff_text(cx));
+    assert!(
+        unified.contains("-two") && unified.contains("+three"),
+        "{unified}"
+    );
+}

@@ -445,3 +445,65 @@ fn repainting_does_not_resend_an_unchanged_grid() {
         "an unchanged grid was sent to the PTY again"
     );
 }
+
+#[test]
+fn ime_pre_edit_text_is_shown_but_never_sent_and_a_commit_replaces_it() {
+    use gpui::EntityInputHandler;
+
+    let mut rig = rig();
+    rig.focus();
+    let view = rig.view.clone();
+
+    rig.cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.replace_and_mark_text_in_range(None, "かな", None, window, cx)
+        })
+    });
+    rig.settle_for(100);
+
+    let marked = rig
+        .cx
+        .update(|window, cx| view.update(cx, |view, cx| view.marked_text_range(window, cx)));
+    assert_eq!(marked, Some(0..2), "two UTF-16 units of pre-edit text");
+    assert!(
+        rig.sink.bytes().is_empty(),
+        "pre-edit text must not reach the program"
+    );
+
+    rig.cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.replace_text_in_range(None, "仮名", window, cx)
+        })
+    });
+
+    assert!(
+        rig.wait_for_sink("仮名".as_bytes()),
+        "sink was {:?}",
+        rig.sink.bytes()
+    );
+    let after = rig
+        .cx
+        .update(|window, cx| view.update(cx, |view, cx| view.marked_text_range(window, cx)));
+    assert_eq!(after, None);
+}
+
+#[test]
+fn cancelling_the_composition_clears_the_pre_edit_text() {
+    use gpui::EntityInputHandler;
+
+    let mut rig = rig();
+    rig.focus();
+    let view = rig.view.clone();
+    rig.cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.replace_and_mark_text_in_range(None, "ab", None, window, cx);
+            view.unmark_text(window, cx);
+        })
+    });
+
+    let marked = rig
+        .cx
+        .update(|window, cx| view.update(cx, |view, cx| view.marked_text_range(window, cx)));
+    assert_eq!(marked, None);
+    assert!(rig.sink.bytes().is_empty());
+}

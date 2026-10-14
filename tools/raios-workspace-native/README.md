@@ -34,7 +34,9 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
 
 Skin (standard or GT-LCARS) and tone (dark or light) are independent and persisted; switching repaints every pane, the editor and the terminal surface without recreating sessions. The 28 KDE Breeze file icons are bundled unmodified (checksums in `crates/rwk-ui/assets/file-icons/provenance.json`, licenses in `crates/rwk-ui/assets/licenses`) and tinted by file type; Antonio (OFL) is the LCARS display font.
 
-Known limits: no side-by-side diff, no IME pre-edit text, approvals cannot be approved or rejected here (read-only until the contract carries an expected revision).
+The palette's "Diff: yan yana / birleşik" switches the Git diff between one unified column and two aligned columns (old and new); the terminal shows IME pre-edit text at the cursor until it is committed.
+
+Known limits: approvals cannot be approved or rejected here (read-only until the contract carries an expected revision).
 
 ## Terminal view
 
@@ -42,7 +44,7 @@ Known limits: no side-by-side diff, no IME pre-edit text, approvals cannot be ap
 
 Implemented: 16/256/24-bit colour with the 0.1 dark and light ANSI palettes, cursor shapes, selection and copy (`Ctrl+Shift+C`), paste (`Ctrl+Shift+V`; multiline pastes show a preview and wait for Enter/Esc; over 16 KiB is refused), keyboard encoding, committed IME text, SGR mouse reporting, wheel scrollback, resize.
 
-Known limits: no IME pre-edit text, SGR (1006) mouse encoding only, no special box-drawing glyphs, one fixed monospace font, no accessibility tree.
+Known limits: SGR (1006) mouse encoding only, no special box-drawing glyphs, one fixed monospace font, no accessibility tree.
 
 ## Tests
 

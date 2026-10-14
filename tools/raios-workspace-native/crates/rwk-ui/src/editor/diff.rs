@@ -32,6 +32,8 @@ pub fn classify_diff_line(line: &str) -> Option<&'static str> {
 pub struct DiffHighlighter {
     /// `(start_byte, end_byte, class)` per coloured line, in text order.
     lines: Vec<(usize, usize, &'static str)>,
+    /// Length of the text in bytes.
+    len: usize,
 }
 
 impl DiffHighlighter {
@@ -62,7 +64,9 @@ impl InputHighlighter for DiffHighlighter {
         _window: &mut Window,
         _cx: &mut Context<EditorState>,
     ) {
-        self.lines = Self::index(&text.to_string());
+        let text = text.to_string();
+        self.len = text.len();
+        self.lines = Self::index(&text);
     }
 
     fn styles(
@@ -70,16 +74,35 @@ impl InputHighlighter for DiffHighlighter {
         range: &Range<usize>,
         resolver: &dyn HighlightStyleResolver,
     ) -> Vec<(Range<usize>, HighlightStyle)> {
+        // The editor lays text runs out from these ranges, so they must cover `range` without
+        // gaps (see `SyntaxHighlighter::styles`): uncoloured stretches get the default style.
+        let end = range.end.min(self.len);
+        let mut covered = range.start.min(end);
         let first = self
             .lines
-            .partition_point(|(_, end, _)| *end <= range.start);
-        self.lines[first..]
+            .partition_point(|(_, line_end, _)| *line_end <= range.start);
+        let mut styles = Vec::new();
+        for (start, line_end, class) in self.lines[first..]
             .iter()
-            .take_while(|(start, _, _)| *start < range.end)
-            .filter_map(|(start, end, class)| {
-                resolver.style(class).map(|style| (*start..*end, style))
-            })
-            .collect()
+            .take_while(|(start, _, _)| *start < end)
+        {
+            let Some(style) = resolver.style(class) else {
+                continue;
+            };
+            let (start, line_end) = ((*start).max(covered), (*line_end).min(end));
+            if start >= line_end {
+                continue;
+            }
+            if start > covered {
+                styles.push((covered..start, HighlightStyle::default()));
+            }
+            styles.push((start..line_end, style));
+            covered = line_end;
+        }
+        if covered < end {
+            styles.push((covered..end, HighlightStyle::default()));
+        }
+        styles
     }
 
     fn fold_ranges(&self, _text: &Rope) -> Vec<FoldRange> {
@@ -111,6 +134,7 @@ mod tests {
         let text = "diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new\n context\n";
         let highlighter = DiffHighlighter {
             lines: DiffHighlighter::index(text),
+            len: text.len(),
         };
         struct All;
         impl HighlightStyleResolver for All {
@@ -121,7 +145,15 @@ mod tests {
         let removed = text.find("-old").unwrap();
         let styled = highlighter.styles(&(removed..removed + 4), &All);
         assert_eq!(styled.len(), 1);
-        assert_eq!(&text[styled[0].0.clone()], "-old\n");
-        assert_eq!(highlighter.styles(&(0..text.len()), &All).len(), 4);
+        assert_eq!(&text[styled[0].0.clone()], "-old");
+        // Over the whole text the four coloured lines are joined by the default-styled context.
+        let all = highlighter.styles(&(0..text.len()), &All);
+        let mut at = 0;
+        for (piece, _) in &all {
+            assert_eq!(piece.start, at, "gap or overlap in {all:?}");
+            at = piece.end;
+        }
+        assert_eq!(at, text.len());
+        assert!(all.len() >= 5);
     }
 }

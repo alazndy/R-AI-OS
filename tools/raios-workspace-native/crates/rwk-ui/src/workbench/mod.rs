@@ -474,6 +474,11 @@ impl Workbench {
                         .update(cx, |editor, cx| editor.show_diff(project, window, cx));
                 }
             }
+            CommandId::DiffSplit => {
+                let split = !self.editor.read(cx).diff_split();
+                self.editor
+                    .update(cx, |editor, cx| editor.set_diff_split(split, window, cx));
+            }
             CommandId::NewTerminal => self.new_terminal(SessionKind::Shell, window, cx),
             CommandId::ToggleTerminal => {
                 self.dock_visible = !self.dock_visible;

@@ -125,6 +125,8 @@ pub(crate) struct ViewShared {
     pub(crate) status: RefCell<Option<SharedString>>,
     /// A multiline paste waiting for the user's confirmation.
     pub(crate) pending_paste: RefCell<Option<String>>,
+    /// IME pre-edit text, drawn at the cursor until it is committed or cancelled.
+    pub(crate) marked: RefCell<Option<String>>,
     /// A left-button selection drag is in progress.
     pub(crate) dragging: Cell<bool>,
 }
@@ -180,6 +182,7 @@ impl TerminalView {
             cursor: Cell::new(None),
             status: RefCell::new(None),
             pending_paste: RefCell::new(None),
+            marked: RefCell::new(None),
             dragging: Cell::new(false),
         });
         let wake_task = cx.spawn(async move |this, cx| {
@@ -533,10 +536,18 @@ impl EntityInputHandler for TerminalView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        None
+        self.shared
+            .marked
+            .borrow()
+            .as_ref()
+            .map(|text| 0..text.encode_utf16().count())
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.shared.marked.borrow_mut().take().is_some() {
+            cx.notify();
+        }
+    }
 
     /// Committed text (IME commit, AltGr output, dead-key results) goes to the program.
     fn replace_text_in_range(
@@ -546,20 +557,27 @@ impl EntityInputHandler for TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A commit ends the composition: the pre-edit text is replaced by what was committed.
+        if self.shared.marked.borrow_mut().take().is_some() {
+            cx.notify();
+        }
         if !text.is_empty() {
             self.send(text.as_bytes(), cx);
         }
     }
 
-    /// Pre-edit text is not rendered in this slice (known limit, Plan 4b out of scope).
+    /// Pre-edit text is kept (and drawn at the cursor) until it is committed or cancelled; it
+    /// is never sent to the program.
     fn replace_and_mark_text_in_range(
         &mut self,
         _range: Option<Range<usize>>,
-        _new_text: &str,
+        new_text: &str,
         _new_selected_range: Option<Range<usize>>,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
+        *self.shared.marked.borrow_mut() = (!new_text.is_empty()).then(|| new_text.to_owned());
+        cx.notify();
     }
 
     fn bounds_for_range(

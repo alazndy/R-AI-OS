@@ -246,6 +246,32 @@ impl Element for TerminalElement {
             };
             window.paint_quad(fill(area, hsla(cursor.color, 0.9)));
         }
+        // IME pre-edit text: drawn over the cursor cell with an underline, never sent.
+        if let (Some(text), Some(cursor)) = (shared.marked.borrow().clone(), list.cursor) {
+            let origin = cell_origin(cursor.row, cursor.col);
+            let foreground = hsla(palette.foreground, 1.0);
+            let run = TextRun {
+                len: text.len(),
+                font: base_font.clone(),
+                color: foreground,
+                background_color: None,
+                underline: Some(UnderlineStyle {
+                    thickness: px(1.0),
+                    color: Some(foreground),
+                    wavy: false,
+                }),
+                strikethrough: None,
+            };
+            let shaped =
+                window
+                    .text_system()
+                    .shape_line(SharedString::from(text), font_size, &[run], None);
+            window.paint_quad(fill(
+                Bounds::new(origin, size(shaped.width, px(cell_height))),
+                hsla(palette.background, 1.0),
+            ));
+            let _ = shaped.paint(origin, line_height, TextAlign::Left, None, window, cx);
+        }
 
         let paint_micros = started.elapsed().as_micros() as u64;
         let mut stats = shared.stats.get();
