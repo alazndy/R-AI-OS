@@ -270,10 +270,30 @@ fn validate_size(size: TerminalSize) -> Result<()> {
     Ok(())
 }
 
+/// Makes the calling thread slightly less eager than the UI thread. During a flood the reader
+/// and parser threads of several sessions can use every core and starve the thread that paints;
+/// a few nice levels keep the flood fast while the window stays responsive. Best effort: a
+/// failure only means the thread keeps its default priority.
+#[cfg(target_os = "linux")]
+fn lower_thread_priority() {
+    const BACKGROUND_NICE: libc::c_int = 6;
+    // SAFETY: `setpriority` with `PRIO_PROCESS` and id 0 touches only the calling thread's
+    // scheduling priority (a thread is a task on Linux) and reads no memory of ours.
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS, 0, BACKGROUND_NICE);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn lower_thread_priority() {}
+
 fn spawn_thread(name: &str, body: impl FnOnce() + Send + 'static) -> Result<()> {
     thread::Builder::new()
         .name(name.to_owned())
-        .spawn(body)
+        .spawn(move || {
+            lower_thread_priority();
+            body();
+        })
         .map(|_| ())
         .map_err(|error| {
             AppError::new(ErrorCode::Internal, format!("cannot start {name}: {error}"))
