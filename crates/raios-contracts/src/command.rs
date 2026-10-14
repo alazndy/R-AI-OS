@@ -52,6 +52,22 @@ pub enum Command {
         /// Unique key to prevent duplicate execution.
         idempotency_key: String,
     },
+    /// Validate, authorize and audit an agent launch **without starting any process**.
+    ///
+    /// Same payload and checks as [`Command::LaunchAgent`] (known agent, registered project,
+    /// bounded prompt without credentials) and the same `launch_agent` security policy, but the
+    /// daemon never opens a terminal. A client that runs the agent itself, such as the native
+    /// workspace with its own PTY, sends this instead of `LaunchAgent`.
+    ValidateAgentLaunch {
+        /// Target agent harness name (e.g. "claude", "codex", "opencode", "agy").
+        agent_name: String,
+        /// Absolute path of a registered project directory.
+        project_path: String,
+        /// Optional initial prompt text the client will pass to the agent.
+        prompt: Option<String>,
+        /// Unique key to prevent duplicate execution.
+        idempotency_key: String,
+    },
     /// Terminate an active agent run.
     CancelAgentRun {
         /// Unique run identifier to terminate.
@@ -114,6 +130,26 @@ pub enum Command {
         /// Unique key to prevent duplicate execution.
         idempotency_key: String,
     },
+    /// Register an existing directory as a project so agents can be launched in it.
+    RegisterProject {
+        /// Absolute path to an existing project directory.
+        project_path: String,
+        /// Unique key to prevent duplicate execution.
+        idempotency_key: String,
+    },
+    /// Queue a handoff (recorded as a `BLOCKER` continuation) from one agent identity to another.
+    CreateHandoff {
+        /// Absolute project root the handoff is scoped to.
+        project_path: String,
+        /// Agent identity that is handing off (for example `"claude_kaira"`).
+        from_agent: String,
+        /// Agent identity that should receive the context.
+        to_agent: String,
+        /// Context for the receiving agent, at most 16,000 bytes, without credentials.
+        summary: String,
+        /// Unique key to prevent duplicate execution.
+        idempotency_key: String,
+    },
 }
 
 impl Command {
@@ -135,6 +171,9 @@ impl Command {
             Command::LaunchAgent {
                 idempotency_key, ..
             } => idempotency_key,
+            Command::ValidateAgentLaunch {
+                idempotency_key, ..
+            } => idempotency_key,
             Command::CancelAgentRun {
                 idempotency_key, ..
             } => idempotency_key,
@@ -154,6 +193,12 @@ impl Command {
                 idempotency_key, ..
             } => idempotency_key,
             Command::UpdatePolicyRule {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::RegisterProject {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::CreateHandoff {
                 idempotency_key, ..
             } => idempotency_key,
         }

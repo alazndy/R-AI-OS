@@ -3,34 +3,38 @@
 ## Context
 - **Status**: In Development
 - **Stack**: Python 3 + PySide6 + psutil
-- **Last Milestone**: Cross-platform rewrite plan prepared for Linux, macOS, and Windows tray support
+- **Last Milestone**: Canonical control-plane task integration, lossless config saves, and non-blocking refresh deployed on Linux
 
 ## Active Objectives
 - [x] Linux-only AppIndicator tray prototype
 - [x] Add tray-side editor for `aiosd` config paths and worker intervals
 - [x] Project Manager — add/edit/remove/pin projects, VSCode + agent launch
 - [x] Git dirty status indicators per project, dirty count warning in tray
-- [x] Native Wayland tray (AyatanaAppIndicator3 + Gtk.Menu, GTK pump via QTimer)
+- [x] Native Wayland-compatible Qt tray with a portal desktop identity
+- [x] Lossless config editing, canonical task API, and non-blocking refresh
 - [x] Light/dark mode adaptive dialogs (Fusion palette, gsettings detection)
 - [ ] Validate on macOS and Windows
 - [ ] Install platform-specific startup integration files
 
 ## Technical Decisions
-- **Architecture**: Single-file Python tray with Qt-based UI, sync polling via QTimer, persistent QMenu instance (prevents GC on Wayland), zenity/xdg-open fallbacks for Wayland file dialogs
+- **Architecture**: Single-file Python tray with Qt-based UI, persistent menus, a bounded background refresh executor, and zenity/xdg-open fallbacks for Wayland file dialogs
 - **Auth**: Bearer token from the platform-specific raios config directory
-- **Polling**: Every 15 seconds via `QTimer`
+- **Polling**: Every 15 seconds via QTimer; API and Git work execute outside the UI thread
 - **Python**: Use `python3` / `python` from the active environment instead of Linux-only GI bindings
-- **Config Editing**: Tray writes platform `config.toml` directly and offers optional `aiosd` restart after saving
+- **Config Editing**: Tray atomically patches owned config keys and preserves unknown TOML sections
+- **Tasks**: Tray uses authenticated HTTP control-plane APIs; it never reads or writes the legacy `tasks` cache
 
 ## Important Links & Paths
 - **Main Entry**: `./raios-tray.py`
 - **Service**: `~/.config/systemd/user/raios-tray.service`
-- **API**: `http://127.0.0.1:42069 (health) / 42071 (agents)` — endpoints: /api/health, /api/projects, /api/usage
+- **API**: `http://127.0.0.1:42071` — endpoints: /api/health, /api/projects, /api/tasks, /api/v1/control/command
 
 ## Current Focus
 - Validate the desktop-independent Qt tray on Budgie, GNOME, Plasma, macOS, and Windows.
 
 ## Change Log & Agent Trail
+- [2026-08-26] Codex Kaira: Fixed the live tray controller ownership bug. `RaiosTray` is now parented to `QApplication`; previously its timers could be garbage-collected after initial DBus registration, leaving the active indicator menu permanently on “Loading…”. Live StatusNotifier verification now shows daemon, projects, dirty state, memory, and canonical task counts.
+- [2026-08-26] Codex Kaira: Fixed tray root defects: atomically preserve unknown config sections; migrate task reads and mutations to authenticated canonical control-plane APIs; render a bounded task window; move API/Git refresh work off the Qt UI thread; remove stale dirty caching; add the portal desktop identity and deploy the refreshed user service. Verified live service startup without portal warnings, 7 Python tests, control-plane contract test, security scan A/100, and clean dependency audit.
 - [2026-07-27] Codex Kaira: Replaced the GTK/AppIndicator event-loop bridge with PySide6's standard tray API, added desktop-session detection with Budgie-specific host guidance, and covered the portable detector with unit tests. The tray now has no GNOME Shell extension or GTK dependency.
 - [2026-06-25] Codex Kaira: Promoted this directory to the canonical raios-tray source of truth. External copies must launch or mirror from here instead of diverging.
 - [2026-06-13] Claude Kaira: Initial implementation — tray with daemon status, CPU/RAM (aiosd+raios), project list, verify-chain status; systemd user service created

@@ -256,6 +256,9 @@ pub enum Commands {
         report: Option<PathBuf>,
         #[arg(short, long)]
         project: Option<String>,
+        /// Start the receiving agent immediately in this project after recording the handoff
+        #[arg(long, conflicts_with = "json")]
+        run: bool,
     },
     /// Inject a message into a currently-running, daemon-spawned agent
     /// session (best-effort — does not know if the target is mid-turn).

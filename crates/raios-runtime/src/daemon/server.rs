@@ -54,7 +54,10 @@ impl Server {
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let token_mgr =
             raios_core::security::SessionTokenManager::with_path(config_dir.join(".session_token"));
-        let token = bootstrap_session_token(&token_mgr, &config_dir)?;
+        let token = Arc::new(RwLock::new(bootstrap_session_token(
+            &token_mgr,
+            &config_dir,
+        )?));
 
         // NOTE: this daemon no longer writes a `.ipc_token` copy. It used to,
         // for backwards compatibility with older clients, but that copy
@@ -64,6 +67,40 @@ impl Server {
         // TUI, tray, VS Code extension) now read .session_token, with the
         // VS Code/tray clients falling back to a pre-existing .ipc_token
         // file on disk for one release cycle to avoid a hard break.
+
+        // Proactively rotate the on-disk session token well before it hits
+        // its 8h expiry (see TOKEN_REFRESH_INTERVAL). aiosd is designed to
+        // stay running indefinitely, and without this, every localhost API
+        // client that only reads the token file per-request (the HTTP API's
+        // GNOME/Plasma tray and VS Code clients) would start getting a
+        // silent 401 the moment the daemon's uptime crossed 8h, recoverable
+        // only by restarting the daemon. The in-process IPC token below is
+        // refreshed in lockstep via the shared `token` lock so newly
+        // accepted TCP clients always authenticate against the current file.
+        {
+            let refresh_config_dir = config_dir.clone();
+            let refresh_token = token.clone();
+            tokio::spawn(async move {
+                let refresh_mgr = raios_core::security::SessionTokenManager::with_path(
+                    refresh_config_dir.join(".session_token"),
+                );
+                loop {
+                    tokio::time::sleep(raios_core::security::auth::TOKEN_REFRESH_INTERVAL).await;
+                    match refresh_mgr.generate_and_save() {
+                        Ok(new_token) => {
+                            *refresh_token.write().await = new_token;
+                            println!(
+                                "[Daemon] Security: Session token proactively rotated \
+                                 (refresh interval elapsed)"
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("[Daemon] Security: Session token refresh failed: {e}");
+                        }
+                    }
+                }
+            });
+        }
 
         let bind_ip = crate::server::http::resolve_bind_addr(42069).ip();
         let daemon_addr = format!("{bind_ip}:42069");
@@ -286,7 +323,7 @@ impl Server {
             let state_for_client = self.state.clone();
             let proxy_for_client = self.execution_proxy.clone().with_event_tx(tx.clone());
             let _tx_sender = tx.clone();
-            let server_token = token.clone();
+            let server_token = token.read().await.clone();
             let sessions_for_client = self.sessions.clone();
             let factory_for_client = factory.clone();
             let proxy_for_client_cap = self.proxy.clone();

@@ -214,9 +214,14 @@
   },
 
   "devDependencies": {
-    "@vscode/vsce": "3.9.2",
+    "@vscode/vsce": "4.0.0",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.3.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "brace-expansion@>=4.0.0 <5.0.11": ">=5.0.11"
+    }
   }
 }

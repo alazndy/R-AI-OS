@@ -6,6 +6,7 @@ mod control_plane;
 mod db_path;
 mod factory;
 mod handoff;
+mod handoff_receipt;
 mod integration;
 mod mem;
 mod schema;

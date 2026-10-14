@@ -873,16 +873,14 @@ mod auth_handshake_tests {
 /// `raios_core::db::open_db()` (audit ledger write) on every command, which
 /// resolves a fixed `$HOME/.config/raios/workspace.db` with no injection
 /// seam — these tests redirect HOME/XDG_CONFIG_HOME to a tempdir for their
-/// duration, serialized since that's process-global state.
+/// duration, serialized on the crate-wide `TEST_ENV_LOCK` (see lib.rs) since
+/// that's process-global state.
 #[cfg(all(test, unix))]
 mod dispatch_loop_tests {
     use super::auth_handshake_tests::test_client_handle;
     use super::*;
-    use std::sync::Mutex;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct IsolatedHome {
         _lock: std::sync::MutexGuard<'static, ()>,
@@ -893,7 +891,9 @@ mod dispatch_loop_tests {
 
     impl IsolatedHome {
         fn new() -> Self {
-            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let lock = crate::TEST_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::TempDir::new().unwrap();
             let original_home = std::env::var("HOME").ok();
             let original_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();

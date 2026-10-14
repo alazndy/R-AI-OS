@@ -6,6 +6,16 @@ use std::time::{Duration, SystemTime};
 /// Maximum age of a token before it expires (8 hours)
 const TOKEN_MAX_AGE: Duration = Duration::from_secs(8 * 60 * 60);
 
+/// How often a long-lived daemon should proactively rotate the on-disk
+/// session token, well ahead of `TOKEN_MAX_AGE`. Without this, any daemon
+/// process that stays up longer than `TOKEN_MAX_AGE` (aiosd routinely does)
+/// leaves every localhost API client — GNOME/Plasma tray, VS Code extension,
+/// MCP server — locked out with a silent 401 until the daemon happens to
+/// restart, since `SessionTokenManager::generate_and_save` was previously
+/// only ever called once at daemon bootstrap. Half the max age gives ample
+/// safety margin even if a refresh tick is delayed.
+pub const TOKEN_REFRESH_INTERVAL: Duration = Duration::from_secs(TOKEN_MAX_AGE.as_secs() / 2);
+
 /// Draws 32 bytes directly from the OS CSPRNG and hex-encodes them into a
 /// 256-bit secret. Used for session tokens and API keys — anywhere a bearer
 /// credential needs to be generated. Deliberately does not hash any
@@ -232,6 +242,15 @@ mod tests {
 
         manager.clear().unwrap();
         assert!(!manager.token_path.exists());
+    }
+
+    #[test]
+    fn token_refresh_interval_leaves_a_safety_margin_before_expiry() {
+        assert!(
+            TOKEN_REFRESH_INTERVAL < TOKEN_MAX_AGE,
+            "a daemon that refreshes exactly at (or after) TOKEN_MAX_AGE would \
+             still let the token expire under real-world scheduling jitter"
+        );
     }
 
     #[test]
