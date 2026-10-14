@@ -16,6 +16,7 @@ rwk-ui = { path = "../rwk-ui" }
 gpui = { package = "gpui-pre", version = "=0.3.8" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["wayland", "x11"] }
 gpui_base = { package = "gpui-base", version = "=0.7.1" }
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"

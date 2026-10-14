@@ -495,14 +495,16 @@ fn changing_the_tone_announces_the_new_appearance_and_keeps_the_terminals() {
     let view = rig.view.clone();
     rig.cx.update(|_w, app| {
         app.subscribe(&view, move |_wb, event: &WorkbenchEvent, _app| {
-            sink.lock().unwrap().push(*event);
+            sink.lock().unwrap().push(event.clone());
         })
         .detach();
     });
     rig.run(CommandId::Settings);
     let seen = events.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
-    let WorkbenchEvent::AppearanceChanged(appearance) = seen[0];
+    let WorkbenchEvent::AppearanceChanged(appearance) = seen[0].clone() else {
+        panic!("expected an appearance change, got {:?}", seen[0]);
+    };
     assert_eq!(appearance.tone, Tone::Light);
     assert_eq!(rig.read(|wb, _| wb.appearance().tone), Tone::Light);
     assert_eq!(
@@ -1121,7 +1123,7 @@ fn the_skin_command_switches_between_standard_and_lcars_and_announces_it() {
     let view = rig.view.clone();
     let _subscription = rig.cx.update(|_, cx| {
         cx.subscribe(&view, move |_wb, event: &WorkbenchEvent, _cx| {
-            sink.lock().expect("events").push(*event);
+            sink.lock().expect("events").push(event.clone());
         })
     });
 
@@ -1245,4 +1247,59 @@ fn the_dock_divider_moves_with_the_keyboard_commands_and_respects_the_minimums()
     rig.run(CommandId::ToggleTerminal);
     rig.run(CommandId::GrowDock);
     assert_eq!(rig.read(|wb, _| wb.toast()).as_deref(), Some("Dock gizli"));
+}
+
+#[test]
+fn a_project_remembered_as_registered_is_not_offered_again() {
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("root");
+    let fake = Arc::new(FakeControlPlane::new());
+    fake.set_policy("register_project", PolicyAction::Allow);
+    for _ in 0..3 {
+        fake.push_work_snapshot(Ok(projects_snapshot(None)));
+    }
+    fake.push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()));
+    let plane: Arc<dyn ControlPlane> = fake.clone();
+    rig.with(|wb, _, cx| {
+        wb.set_known_projects([root]);
+        wb.set_control_plane(Some(plane), cx);
+    });
+
+    rig.open_project();
+    rig.settle_for(500);
+
+    assert_eq!(sends(&fake), 0);
+}
+
+#[test]
+fn a_confirmed_registration_is_announced_so_the_application_can_remember_it() {
+    let mut rig = rig();
+    let events: Arc<Mutex<Vec<WorkbenchEvent>>> = Arc::default();
+    let sink = Arc::clone(&events);
+    let view = rig.view.clone();
+    let _subscription = rig.cx.update(|_, cx| {
+        cx.subscribe(&view, move |_wb, event: &WorkbenchEvent, _cx| {
+            sink.lock().expect("events").push(event.clone());
+        })
+    });
+    let fake = Arc::new(FakeControlPlane::new());
+    fake.set_policy("register_project", PolicyAction::Allow);
+    for _ in 0..3 {
+        fake.push_work_snapshot(Ok(projects_snapshot(None)));
+    }
+    fake.push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()))
+        .push_registration(Ok(rwk_core::control::RegistrationOutcome {
+            project_path: std::path::PathBuf::new(),
+            already_registered: true,
+        }));
+    let plane: Arc<dyn ControlPlane> = fake.clone();
+    rig.with(|wb, _, cx| wb.set_control_plane(Some(plane), cx));
+
+    rig.open_project();
+
+    assert!(rig.settle_until(|_| events
+        .lock()
+        .expect("events")
+        .iter()
+        .any(|event| matches!(event, WorkbenchEvent::ProjectRegistered(_)))));
 }
