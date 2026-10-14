@@ -153,9 +153,10 @@ jobs:
         working-directory: vscode-extension
         run: |
           corepack enable
-          # Without a pin corepack fetches the newest pnpm, and 12.11.2 arrived with a broken
-          # launcher on the runner; the lockfile is verified with the pnpm used locally.
-          corepack prepare pnpm@12.5.1 --activate
+          # Without a pin corepack fetches the newest pnpm; pnpm 12 has no bin/pnpm.cjs that
+          # corepack on Node 22.14 can launch ("Cannot find module"). The lockfile (v9) is
+          # written by pnpm 9/10, the line this job passed with before.
+          corepack prepare pnpm@10.12.1 --activate
           pnpm install --frozen-lockfile
           pnpm audit --audit-level=high
           pnpm run compile
