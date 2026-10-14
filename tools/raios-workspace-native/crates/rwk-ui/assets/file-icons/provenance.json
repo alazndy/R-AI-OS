@@ -1,0 +1,145 @@
+{
+  "source": "Installed KDE Breeze icons, Arch Linux package breeze-icons 6.30.0-1",
+  "assets": [
+    {
+      "file": "folder.svg",
+      "source": "places/16/folder.svg",
+      "sha256": "d13a8c548d0a5b979965a651e585a6b8db0537cdb50744956fbb928f074db19b"
+    },
+    {
+      "file": "folder-open.svg",
+      "source": "places/16/folder-open.svg",
+      "sha256": "ae213bf76cd0bb6c68ea4bec9347c618b66d2c5c849c1dac376a73c4273a4c00"
+    },
+    {
+      "file": "file.svg",
+      "source": "mimetypes/16/text-x-generic.svg",
+      "sha256": "13049a59ef72243566d5443496c0055521ebe4834e658518d9e237ae02e97515"
+    },
+    {
+      "file": "code.svg",
+      "source": "actions/16/format-text-code.svg",
+      "sha256": "a61ead70ae5172f174fd0dfc2b39064156efaf9e6d462787b2afa01550928238"
+    },
+    {
+      "file": "rust.svg",
+      "source": "mimetypes/16/text-rust.svg",
+      "sha256": "1a2ad7a9961538982ec8641034cdf706a9d8cb847c23f5e32acf1b8bb650a60f"
+    },
+    {
+      "file": "python.svg",
+      "source": "mimetypes/16/text-x-python.svg",
+      "sha256": "248ba78d74f240d3796d13756e5578d4719b75d2919de0658b6a5ac4077af87d"
+    },
+    {
+      "file": "javascript.svg",
+      "source": "mimetypes/16/application-x-javascript.svg",
+      "sha256": "98676f77a0b01220e6d01c1068176b2c25a3ba0070d88e31cf90827f38823483"
+    },
+    {
+      "file": "kotlin.svg",
+      "source": "mimetypes/16/text-x-kotlin.svg",
+      "sha256": "4a7b25dcd0bd36e1ba66d9295799c0b5d26606453c1cfd45718e4266a550f461"
+    },
+    {
+      "file": "java.svg",
+      "source": "mimetypes/16/text-x-java.svg",
+      "sha256": "cb5f9c13cfaf4e43b27925aa69073c7fc5c5032af35ffa212d50692bf0b9c82f"
+    },
+    {
+      "file": "go.svg",
+      "source": "mimetypes/16/text-x-go.svg",
+      "sha256": "6dfbc8eabe4398ada1b55fd962cea6941325f60b32f029ae1b22503ec0bc05f1"
+    },
+    {
+      "file": "c.svg",
+      "source": "mimetypes/16/text-x-csrc.svg",
+      "sha256": "de471615cb31c45884fb8c1fdf771c4ff3251096934a4c6dc81838ed246ccdaf"
+    },
+    {
+      "file": "cpp.svg",
+      "source": "mimetypes/16/text-x-c++src.svg",
+      "sha256": "8be47d9b91d6cebe38672b14d042b9982c3eb047ad95d929297bc11cf5cdca40"
+    },
+    {
+      "file": "csharp.svg",
+      "source": "mimetypes/16/text-x-csharp.svg",
+      "sha256": "275344fccbc9bc69e4355bbb2d36f1b0be69941434e9c8c544fa26a04c7e5129"
+    },
+    {
+      "file": "markdown.svg",
+      "source": "mimetypes/16/text-x-markdown.svg",
+      "sha256": "8ca2a9574611c75bc0ed4b95edab979910dd0902ac2414517a503b9def29d62b"
+    },
+    {
+      "file": "json.svg",
+      "source": "mimetypes/16/application-json.svg",
+      "sha256": "8ade9969ad00562858a5a98e6b6853ac927f2345b3c134d094194cb49743ac99"
+    },
+    {
+      "file": "config.svg",
+      "source": "mimetypes/16/application-x-sharedlib.svg",
+      "sha256": "3dfed795d6a77756120e3c897ce5cbaba40682dc7d4ce7edb3e0c90ddfcd132e"
+    },
+    {
+      "file": "html.svg",
+      "source": "mimetypes/16/text-html.svg",
+      "sha256": "2f59cefe1e8e302f433233a43ff037f92079bcb38827e7babd7dd817a6384e62"
+    },
+    {
+      "file": "css.svg",
+      "source": "mimetypes/16/text-css.svg",
+      "sha256": "c3dda051255ae0ed84c3c5a4c0718892f396ac23b44d9e71665401e1ad31654d"
+    },
+    {
+      "file": "xml.svg",
+      "source": "mimetypes/16/application-xml.svg",
+      "sha256": "025e00b2084a4aba6153b1b227f4dfeb2a3e42bea51bc7ffc149afe243005993"
+    },
+    {
+      "file": "shell.svg",
+      "source": "mimetypes/16/text-x-script.svg",
+      "sha256": "37f18d8c7197b6eb5f06ba65368711e812be342e52b09a8dd166228463927ab1"
+    },
+    {
+      "file": "image.svg",
+      "source": "mimetypes/16/image-x-generic.svg",
+      "sha256": "b598bd171ea9b1480aa754ea8ea1627403937e6b6f15e6cacd8e4b235cd96ef0"
+    },
+    {
+      "file": "audio.svg",
+      "source": "mimetypes/16/audio-x-generic.svg",
+      "sha256": "32108495c0a976c4f023bf73708cad925ad5c51acb76dd49e0aacf64f59e5417"
+    },
+    {
+      "file": "video.svg",
+      "source": "mimetypes/16/video-x-generic.svg",
+      "sha256": "66eb0c83781542191b70c92bc24bc226e334e964ae553477d235e1152c57fe45"
+    },
+    {
+      "file": "archive.svg",
+      "source": "mimetypes/16/application-x-archive.svg",
+      "sha256": "c0ea298fba47ed71bee4aa498f277ba2e24291dd99fda74e793e3b3ca3e9e3dc"
+    },
+    {
+      "file": "pdf.svg",
+      "source": "mimetypes/16/application-pdf.svg",
+      "sha256": "30fe8d751ccd2b57be0dc6572e1de45cb72d991347348883d95428cc21587d5a"
+    },
+    {
+      "file": "font.svg",
+      "source": "mimetypes/16/font-ttf.svg",
+      "sha256": "60919e43d4f453794070c6277438559277c8ceb8e2d5a81e5d3e21161207c5c3"
+    },
+    {
+      "file": "database.svg",
+      "source": "mimetypes/16/application-vnd.oasis.opendocument.database.svg",
+      "sha256": "ec8c5a2e147ef6a8128c8d5f898475207ba0880f8d14e045cfbbd4079c2def59"
+    },
+    {
+      "file": "table.svg",
+      "source": "mimetypes/16/application-vnd.openxmlformats-officedocument.spreadsheetml.sheet.svg",
+      "sha256": "6e6e164d099a5d1187ade9b167c8f43e62d6190c817204a9ba8acc112ac1289d"
+    }
+  ]
+}

@@ -21,16 +21,28 @@ Cross-platform system tray for R-AI-OS. The app talks to the local `aiosd` HTTP 
 ## Files
 
 - `raios-tray.py`: main application
+- `raios-tray.desktop`: Linux portal identity installed with the user service
 - `requirements.txt`: Python dependencies
 - `raios-tray.service`: Linux systemd user service
 - `raios-tray-macos.plist`: macOS LaunchAgent template
 - `raios-tray-windows.ps1`: Windows startup helper
 - `memory.md`: project memory log
-- Tray settings can edit the platform `config.toml` directly:
+- Tray settings update only tray-owned `config.toml` keys atomically. Existing
+  sections such as `[bootstrap]` and `[factory]` are preserved:
   - Workspace scan root: `dev_ops_path`
   - Constitution / skills / vault paths
   - `daemon` worker switches and polling intervals
   - Lifecycle thresholds and startup indexing flags
+
+## Data and Responsiveness
+
+- Tasks are read from the authenticated `/api/tasks` endpoint and changed only
+  through typed `/api/v1/control/command` requests. The tray never writes the
+  legacy SQLite `tasks` cache.
+- The menu reports the full pending-task count but renders at most 50 task cards
+  at once to keep the desktop responsive.
+- API polling and Git dirty checks run outside Qt's UI thread. Dirty state is
+  recalculated on each refresh rather than retained by a stale cache.
 
 ## Install
 
@@ -51,6 +63,8 @@ python3 raios-tray.py
 - Prefers `ptyxis`, then `gnome-terminal`, `konsole`, `xfce4-terminal`, and `x-terminal-emulator`
 - `raios-tray.service` is owned by `graphical-session.target`, so it starts only
   after the desktop session is ready and stops before the display disappears.
+  It also installs `raios-tray.desktop` to the user application directory before
+  start, allowing Qt to register its portal identity.
   Install or refresh the user service with:
 
   ```bash

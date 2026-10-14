@@ -351,6 +351,23 @@ pub(super) async fn handle_cp_query(
                 ),
             }
         }
+        raios_contracts::Query::GetHandoffReceipt {
+            approval_id,
+            project_path,
+        } => match crate::control_plane::handoff::query_handoff_receipt(
+            &conn,
+            &approval_id,
+            &project_path,
+        ) {
+            Ok(receipt) => Json(json!({"status": "ok", "handoff_receipt": receipt})),
+            Err(problem) => Json(json!({"status": "error", "problem": problem})),
+        },
+        raios_contracts::Query::GetCommandPolicy { command_name } => {
+            match crate::control_plane::command_policy::query_command_policy(&command_name) {
+                Ok(policy) => Json(json!({"status": "ok", "command_policy": policy})),
+                Err(problem) => Json(json!({"status": "error", "problem": problem})),
+            }
+        }
         _ => Json(
             json!({"status": "error", "problem": raios_contracts::Problem::not_implemented("Query variant not supported via HTTP API")}),
         ),

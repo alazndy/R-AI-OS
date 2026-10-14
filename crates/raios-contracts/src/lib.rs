@@ -10,6 +10,7 @@ pub mod command;
 pub mod dto;
 pub mod event;
 pub mod factory;
+pub mod handoff;
 pub mod problem;
 pub mod query;
 pub mod snapshot;
@@ -22,6 +23,7 @@ pub use factory::{
     FactoryCommand, FactoryEvent, FactoryMode, FactoryOverviewSnapshot, FactoryProductSummaryDto,
     FactoryQuery,
 };
+pub use handoff::{CommandPolicyDto, HandoffReceiptDto};
 pub use problem::Problem;
 pub use query::Query;
 pub use snapshot::{ExploreSnapshot, GovernSnapshot, NowSnapshot, SnapshotEnvelope, WorkSnapshot};

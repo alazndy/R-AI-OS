@@ -414,6 +414,7 @@ fn command_name(cmd: &Command) -> &'static str {
         Command::ApproveFileChange { .. } => "approve_file_change",
         Command::RejectFileChange { .. } => "reject_file_change",
         Command::LaunchAgent { .. } => "launch_agent",
+        Command::ValidateAgentLaunch { .. } => "validate_agent_launch",
         Command::CancelAgentRun { .. } => "cancel_agent_run",
         Command::CreateTask { .. } => "create_task",
         Command::UpdateTaskStatus { .. } => "update_task_status",
@@ -421,6 +422,17 @@ fn command_name(cmd: &Command) -> &'static str {
         Command::ToggleCronJob { .. } => "toggle_cron_job",
         Command::ExecuteSearch { .. } => "execute_search",
         Command::UpdatePolicyRule { .. } => "update_policy_rule",
+        Command::RegisterProject { .. } => "register_project",
+        Command::CreateHandoff { .. } => "create_handoff",
+    }
+}
+
+/// Name under which the security policy is consulted. Validating a launch is governed by the
+/// same `launch_agent` rule as launching, so a policy that denies launches also denies it.
+fn policy_name(cmd: &Command) -> &'static str {
+    match cmd {
+        Command::ValidateAgentLaunch { .. } => "launch_agent",
+        other => command_name(other),
     }
 }
 
@@ -439,7 +451,7 @@ fn validate_task_title(title: &str) -> Result<String, Problem> {
     Ok(title.to_owned())
 }
 
-fn validate_project_path(project_path: Option<&str>) -> Result<Option<String>, Problem> {
+pub(super) fn validate_project_path(project_path: Option<&str>) -> Result<Option<String>, Problem> {
     let Some(project_path) = project_path else {
         return Ok(None);
     };
@@ -456,13 +468,13 @@ fn validate_project_path(project_path: Option<&str>) -> Result<Option<String>, P
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct AgentLaunchRequest {
-    agent_name: String,
-    project_path: String,
-    prompt: Option<String>,
+pub(super) struct AgentLaunchRequest {
+    pub(super) agent_name: String,
+    pub(super) project_path: String,
+    pub(super) prompt: Option<String>,
 }
 
-fn validate_agent_name(agent_name: &str) -> Result<String, Problem> {
+pub(super) fn validate_agent_name(agent_name: &str) -> Result<String, Problem> {
     match agent_name.trim().to_ascii_lowercase().as_str() {
         "claude" => Ok("claude".into()),
         "codex" => Ok("codex".into()),
@@ -474,7 +486,7 @@ fn validate_agent_name(agent_name: &str) -> Result<String, Problem> {
     }
 }
 
-fn validate_agent_prompt(prompt: Option<&str>) -> Result<Option<String>, Problem> {
+pub(super) fn validate_agent_prompt(prompt: Option<&str>) -> Result<Option<String>, Problem> {
     let Some(prompt) = prompt else {
         return Ok(None);
     };
@@ -530,6 +542,26 @@ pub fn dispatch_control_command(
     actor: &ControlActor,
     cmd: &Command,
 ) -> Result<Option<serde_json::Value>, Problem> {
+    dispatch_with_seams(
+        conn,
+        actor,
+        cmd,
+        &launch_agent_in_terminal,
+        &raios_core::security::PolicyConfig::try_load_default,
+    )
+}
+
+/// [`dispatch_control_command`] with its two outside effects injected: the terminal launcher and
+/// the security policy loader. Tests use this to prove which commands start a process and which
+/// never do, and to apply a policy without touching process-wide state (the working directory or
+/// `XDG_CONFIG_HOME`), which other tests share.
+pub(super) fn dispatch_with_seams(
+    conn: &mut Connection,
+    actor: &ControlActor,
+    cmd: &Command,
+    launcher: &dyn Fn(&AgentLaunchRequest) -> Result<(), Problem>,
+    load_policy: &dyn Fn() -> Option<raios_core::security::PolicyConfig>,
+) -> Result<Option<serde_json::Value>, Problem> {
     if !actor.may_mutate_control_plane {
         return Err(Problem::unauthorized(
             "This authenticated principal is not authorized to mutate the control plane",
@@ -539,27 +571,26 @@ pub fn dispatch_control_command(
     init_idempotency_table(conn).map_err(Problem::internal)?;
 
     let command_name = command_name(cmd);
-    let audit_event_type = match raios_core::security::PolicyConfig::try_load_default()
-        .map(|policy| policy.tool_action(command_name).clone())
-    {
-        Some(raios_core::security::policy::PolicyAction::Deny) => {
-            let _ = raios_core::security::record_tool_decision(
-                conn,
-                command_name,
-                &format!("{:x}", Sha256::digest(command_name.as_bytes())),
-                "control_plane",
-                "tool_deny",
-                actor.subject(),
-            );
-            return Err(Problem::forbidden(format!(
-                "Security policy denies control command '{command_name}'"
-            )));
-        }
-        Some(raios_core::security::policy::PolicyAction::Allow) => "tool_allow",
-        // The authenticated human gesture that submitted this command is the
-        // confirmation required by the policy; it remains distinct in audit.
-        Some(raios_core::security::policy::PolicyAction::Confirm) | None => "tool_confirm",
-    };
+    let audit_event_type =
+        match load_policy().map(|policy| policy.tool_action(policy_name(cmd)).clone()) {
+            Some(raios_core::security::policy::PolicyAction::Deny) => {
+                let _ = raios_core::security::record_tool_decision(
+                    conn,
+                    command_name,
+                    &format!("{:x}", Sha256::digest(command_name.as_bytes())),
+                    "control_plane",
+                    "tool_deny",
+                    actor.subject(),
+                );
+                return Err(Problem::forbidden(format!(
+                    "Security policy denies control command '{command_name}'"
+                )));
+            }
+            Some(raios_core::security::policy::PolicyAction::Allow) => "tool_allow",
+            // The authenticated human gesture that submitted this command is the
+            // confirmation required by the policy; it remains distinct in audit.
+            Some(raios_core::security::policy::PolicyAction::Confirm) | None => "tool_confirm",
+        };
 
     let key = cmd.idempotency_key();
     let payload_json = serde_json::to_string(cmd).map_err(|e| {
@@ -704,33 +735,29 @@ pub fn dispatch_control_command(
             prompt,
             ..
         } => {
-            let agent_name = validate_agent_name(agent_name)?;
-            let project_path = validate_project_path(Some(project_path))?
-                .ok_or_else(|| Problem::invalid_input("Project path is required"))?;
-            let project_exists: Option<i64> = tx
-                .query_row(
-                    "SELECT id FROM projects WHERE path = ?1",
-                    params![project_path],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|error| Problem::internal(error.to_string()))?;
-            if project_exists.is_none() {
-                return Err(Problem::not_found(
-                    "Agent launch requires a registered project path",
-                ));
-            }
-            let prompt = validate_agent_prompt(prompt.as_deref())?;
-            launch_request = Some(AgentLaunchRequest {
-                agent_name: agent_name.clone(),
-                project_path: project_path.clone(),
-                prompt,
-            });
-            Some(serde_json::json!({
-                "agent_name": agent_name,
-                "project_path": project_path,
-                "status": "launching",
-            }))
+            let request = super::agent_launch::validate_launch(
+                &tx,
+                agent_name,
+                project_path,
+                prompt.as_deref(),
+            )?;
+            let result = super::agent_launch::launch_result(&request, "launching");
+            launch_request = Some(request);
+            Some(result)
+        }
+        Command::ValidateAgentLaunch {
+            agent_name,
+            project_path,
+            prompt,
+            ..
+        } => {
+            let request = super::agent_launch::validate_launch(
+                &tx,
+                agent_name,
+                project_path,
+                prompt.as_deref(),
+            )?;
+            Some(super::agent_launch::launch_result(&request, "validated"))
         }
         Command::CreateTask {
             title,
@@ -804,7 +831,7 @@ pub fn dispatch_control_command(
                        AND parent_task_id IS NULL
                        AND EXISTS (
                          SELECT 1 FROM cp_task_list_items li
-                         WHERE li.task_id = cp_tasks.id AND li.source_kind = 'tui'
+                         WHERE li.task_id = cp_tasks.id
                        )
                        AND NOT EXISTS (
                          SELECT 1 FROM cp_approvals ap WHERE ap.task_id = cp_tasks.id
@@ -817,11 +844,27 @@ pub fn dispatch_control_command(
                 .map_err(|error| Problem::internal(error.to_string()))?;
             if changed != 1 {
                 return Err(Problem::not_found(
-                    "TUI-managed personal task was not found or cannot be updated",
+                    "Operator-managed personal task was not found or cannot be updated",
                 ));
             }
             Some(serde_json::json!({"task_id": task_id, "status": status}))
         }
+        Command::RegisterProject { project_path, .. } => Some(
+            super::project_registry::register_project(&tx, project_path)?,
+        ),
+        Command::CreateHandoff {
+            project_path,
+            from_agent,
+            to_agent,
+            summary,
+            ..
+        } => Some(super::handoff::create_handoff(
+            &tx,
+            project_path,
+            from_agent,
+            to_agent,
+            summary,
+        )?),
         unhandled => {
             return Err(Problem::not_implemented(format!(
                 "Command '{:?}' is not implemented",
@@ -851,7 +894,7 @@ pub fn dispatch_control_command(
         .map_err(|e| Problem::internal(format!("Commit failed: {}", e)))?;
 
     if let Some(request) = launch_request {
-        if let Err(problem) = launch_agent_in_terminal(&request) {
+        if let Err(problem) = launcher(&request) {
             let failed_result = serde_json::json!({
                 "agent_name": request.agent_name,
                 "project_path": request.project_path,
@@ -872,8 +915,48 @@ pub fn dispatch_control_command(
 mod tests {
     use super::*;
 
+    /// Points `dirs::config_dir()` at an empty tempdir for the duration of a
+    /// test, so `Config::load()` inside `load_work_snapshot` never reads the
+    /// live `~/.config/raios/config.toml`. Without this, the
+    /// `factory.enabled` assertion in `snapshot_generation_on_in_memory_db`
+    /// depends on the machine running the tests. Serialized on the crate-wide
+    /// `TEST_ENV_LOCK` (see lib.rs) with the other env-redirecting tests.
+    struct IsolatedConfigDir {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        original_xdg_config_home: Option<String>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl IsolatedConfigDir {
+        fn new() -> Self {
+            let lock = crate::TEST_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let tmp = tempfile::TempDir::new().unwrap();
+            let original_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();
+            // dirs::config_dir() prefers XDG_CONFIG_HOME over HOME and only
+            // accepts absolute paths; TempDir paths are absolute.
+            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+            Self {
+                _lock: lock,
+                original_xdg_config_home,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for IsolatedConfigDir {
+        fn drop(&mut self) {
+            match &self.original_xdg_config_home {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+
     #[test]
     fn snapshot_generation_on_in_memory_db() {
+        let _isolated_config = IsolatedConfigDir::new();
         let conn = Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap();
 
@@ -1168,7 +1251,7 @@ mod tests {
     }
 
     #[test]
-    fn task_commands_reject_invalid_or_non_tui_managed_mutations() {
+    fn task_commands_reject_invalid_but_allow_canonical_personal_task_mutations() {
         let mut conn = Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap();
         let invalid_create = Command::CreateTask {
@@ -1200,16 +1283,16 @@ mod tests {
             params![now],
         )
         .unwrap();
-        let protected_update = Command::UpdateTaskStatus {
+        let markdown_update = Command::UpdateTaskStatus {
             task_id: "markdown-task".into(),
             status: "completed".into(),
-            idempotency_key: "protect-legacy-task".into(),
+            idempotency_key: "complete-markdown-task".into(),
         };
         assert_eq!(
-            dispatch_control_command(&mut conn, &ControlActor::test_local(), &protected_update)
-                .unwrap_err()
-                .code,
-            "NOT_FOUND"
+            dispatch_control_command(&mut conn, &ControlActor::test_local(), &markdown_update)
+                .unwrap()
+                .unwrap()["status"],
+            "completed"
         );
     }
 }

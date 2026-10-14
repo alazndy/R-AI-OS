@@ -31,4 +31,16 @@ pub enum Query {
         /// Unique task identifier.
         task_id: String,
     },
+    /// Retrieve the delivery receipt of one handoff, scoped to a project.
+    GetHandoffReceipt {
+        /// Approval identifier returned by `CreateHandoff`.
+        approval_id: String,
+        /// Absolute project root the handoff must belong to.
+        project_path: String,
+    },
+    /// Resolve the policy action the daemon would apply to a control command.
+    GetCommandPolicy {
+        /// Snake-case command name, for example `"launch_agent"`.
+        command_name: String,
+    },
 }

@@ -37,6 +37,19 @@ pub fn create_handoff_workflow(
     conn: &Connection,
     input: HandoffWorkflowInput<'_>,
 ) -> Result<raios_core::control_plane::HandoffWorkflowIds> {
+    let tx = conn.unchecked_transaction()?;
+    let ids = create_handoff_workflow_in_tx(&tx, input)?;
+    tx.commit()?;
+    Ok(ids)
+}
+
+/// Same workflow as [`create_handoff_workflow`] for callers that already own an open
+/// transaction, such as the control-plane dispatcher, which commits the handoff together
+/// with its idempotency record and audit entry. It never begins or commits a transaction.
+pub fn create_handoff_workflow_in_tx(
+    conn: &Connection,
+    input: HandoffWorkflowInput<'_>,
+) -> Result<raios_core::control_plane::HandoffWorkflowIds> {
     let HandoffWorkflowInput {
         project_path,
         from_agent,
@@ -95,7 +108,8 @@ pub fn create_handoff_workflow(
     }
     let metadata_json = metadata_value.to_string();
 
-    let tx = conn.unchecked_transaction()?;
+    // The caller owns the transaction; `tx` aliases it so the statements below are unchanged.
+    let tx = conn;
 
     // One active handoff per (project, assignee): supersede whatever this one replaces
     // instead of letting stale pending handovers pile up for the same agent.
@@ -105,9 +119,11 @@ pub fn create_handoff_workflow(
          WHERE approval_type = 'handover' AND status = 'pending'
            AND task_id IN (
                SELECT id FROM cp_tasks
-               WHERE assignee_id = ?2 AND (?3 IS NULL OR project_id = ?3)
+               WHERE assignee_id = ?2 AND (project_id = ?3 OR (?3 IS NULL AND id IN (
+                   SELECT task_id FROM cp_run_contracts WHERE workspace_root = ?4
+               )))
            )",
-        params![now, to_agent, project_id],
+        params![now, to_agent, project_id, project_path],
     )?;
     tx.execute(
         "UPDATE cp_artifacts
@@ -115,9 +131,11 @@ pub fn create_handoff_workflow(
          WHERE kind = 'handover_note' AND status = 'submitted'
            AND task_id IN (
                SELECT id FROM cp_tasks
-               WHERE assignee_id = ?1 AND (?2 IS NULL OR project_id = ?2)
+               WHERE assignee_id = ?1 AND (project_id = ?2 OR (?2 IS NULL AND id IN (
+                   SELECT task_id FROM cp_run_contracts WHERE workspace_root = ?3
+               )))
            )",
-        params![to_agent, project_id],
+        params![to_agent, project_id, project_path],
     )?;
     tx.execute(
         "UPDATE cp_agent_runs
@@ -125,16 +143,20 @@ pub fn create_handoff_workflow(
          WHERE provider = 'handoff' AND status = 'awaiting_approval'
            AND task_id IN (
                SELECT id FROM cp_tasks
-               WHERE assignee_id = ?2 AND (?3 IS NULL OR project_id = ?3)
+               WHERE assignee_id = ?2 AND (project_id = ?3 OR (?3 IS NULL AND id IN (
+                   SELECT task_id FROM cp_run_contracts WHERE workspace_root = ?4
+               )))
            )",
-        params![now, to_agent, project_id],
+        params![now, to_agent, project_id, project_path],
     )?;
     tx.execute(
         "UPDATE cp_tasks
          SET status = 'cancelled', updated_at = ?1
          WHERE assignee_id = ?2 AND status = 'awaiting_approval'
-           AND (?3 IS NULL OR project_id = ?3)",
-        params![now, to_agent, project_id],
+           AND (project_id = ?3 OR (?3 IS NULL AND id IN (
+                   SELECT task_id FROM cp_run_contracts WHERE workspace_root = ?4
+               )))",
+        params![now, to_agent, project_id, project_path],
     )?;
 
     tx.execute(
@@ -147,7 +169,7 @@ pub fn create_handoff_workflow(
     )?;
 
     let run_contract_id = cp_insert_run_contract(
-        &tx,
+        tx,
         Some(&task_id),
         project_path,
         "[]",
@@ -175,7 +197,6 @@ pub fn create_handoff_workflow(
          VALUES (?1, ?2, ?3, ?4, ?5, 'handover', ?6, 'pending', ?7)",
         params![approval_id, project_id, task_id, agent_run_id, artifact_id, msg, now],
     )?;
-    tx.commit()?;
 
     Ok(raios_core::control_plane::HandoffWorkflowIds {
         task_id,
@@ -193,18 +214,44 @@ pub fn cp_take_pending_handoff(
     project_id: Option<i64>,
     to_agent: &str,
 ) -> Result<Option<raios_core::control_plane::HandoffContext>> {
+    select_pending_handoff(conn, project_id, None, to_agent)
+}
+
+/// Scope delivery to a directory even when it has not been registered yet.
+pub fn cp_take_pending_handoff_for_path(
+    conn: &Connection,
+    project_path: &str,
+    to_agent: &str,
+) -> Result<Option<raios_core::control_plane::HandoffContext>> {
+    select_pending_handoff(
+        conn,
+        project_id_for_file_path(conn, project_path),
+        Some(project_path),
+        to_agent,
+    )
+}
+
+fn select_pending_handoff(
+    conn: &Connection,
+    project_id: Option<i64>,
+    project_path: Option<&str>,
+    to_agent: &str,
+) -> Result<Option<raios_core::control_plane::HandoffContext>> {
     let row = conn
         .query_row(
             "SELECT ap.id, ap.artifact_id, ap.agent_run_id, ap.task_id, art.metadata_json
              FROM cp_approvals ap
              JOIN cp_tasks t ON t.id = ap.task_id
              JOIN cp_artifacts art ON art.id = ap.artifact_id
+             JOIN cp_agent_runs run ON run.id = ap.agent_run_id
+             JOIN cp_run_contracts contract ON contract.id = run.run_contract_id
              WHERE ap.approval_type = 'handover' AND ap.status = 'pending'
                AND t.assignee_id = ?1
-               AND (?2 IS NULL OR t.project_id = ?2)
+               AND ((?2 IS NULL AND ?3 IS NULL) OR t.project_id = ?2
+                    OR (?2 IS NULL AND contract.workspace_root = ?3))
              ORDER BY ap.requested_at DESC
              LIMIT 1",
-            params![to_agent, project_id],
+            params![to_agent, project_id, project_path],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,

@@ -220,9 +220,33 @@ pub fn run(cli: Cli) {
             msg,
             report,
             project,
+            run,
         } => {
+            // Global flags before the subcommand are propagated after clap's
+            // local conflict validation, so reject this combination here too.
+            if run && cli.json {
+                eprintln!("Handoff failed: --run cannot be combined with --json.");
+                std::process::exit(1);
+            }
             let project_path = resolve_project_path(project, &cfg.dev_ops_path);
             handoff::cmd_handoff(to, status, msg, report, &project_path, cli.json);
+            if run {
+                let agent = match to {
+                    HandoffTarget::ClaudeKaira => "claude",
+                    HandoffTarget::CodexKaira => "codex",
+                    HandoffTarget::OpencodeKaira => "opencode",
+                    HandoffTarget::AntigravityKaira => "agy",
+                };
+                if let Err(error) = raios_runtime::agent_runner::run_agent(
+                    agent,
+                    Some(project_path.to_string_lossy().into_owned()),
+                    None,
+                    Vec::new(),
+                ) {
+                    eprintln!("Receiving agent failed: {error}");
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Steer { agent_id, message } => steer::cmd_steer(agent_id, message, cli.json),
         Commands::Bootstrap { dry_run, yes } => new::cmd_bootstrap(&cfg.bootstrap, dry_run, yes),
@@ -330,6 +354,40 @@ pub fn run(cli: Cli) {
 mod tests {
     use super::resolve_project_path;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn handoff_run_is_explicit_and_conflicts_with_json_output() {
+        use clap::Parser;
+        let cli = super::Cli::try_parse_from([
+            "raios",
+            "handoff",
+            "--to",
+            "claude-kaira",
+            "--status",
+            "success",
+            "--msg",
+            "ready",
+            "--run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(super::Commands::Handoff { run: true, .. })
+        ));
+        assert!(super::Cli::try_parse_from([
+            "raios",
+            "handoff",
+            "--json",
+            "--to",
+            "claude-kaira",
+            "--status",
+            "success",
+            "--msg",
+            "ready",
+            "--run",
+        ])
+        .is_err());
+    }
 
     #[test]
     fn resolve_project_path_with_no_project_uses_the_current_directory() {
