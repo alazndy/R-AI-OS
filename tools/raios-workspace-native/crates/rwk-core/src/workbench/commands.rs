@@ -257,8 +257,8 @@ const COMMANDS: [Command; 31] = [
     cmd(
         CommandId::Inspector,
         "Denetçiyi göster / gizle",
-        Some("Ctrl Shift I"),
-        &[bind_terminal("i", true, false)],
+        Some("Ctrl Shift D"),
+        &[bind_terminal("d", true, false)],
     ),
     cmd(
         CommandId::Refresh,
@@ -524,8 +524,9 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_shift_i_toggles_the_inspector_in_the_editor_and_in_a_terminal() {
-        let mut stroke = stroke("i");
+    fn ctrl_shift_d_toggles_the_inspector_in_the_editor_and_in_a_terminal() {
+        // Ctrl+Shift+I is not usable: a Turkish layout reports it as a different key.
+        let mut stroke = stroke("d");
         stroke.shift = true;
         assert_eq!(
             resolve_shortcut(&stroke, EDITOR, false),

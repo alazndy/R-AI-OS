@@ -102,7 +102,7 @@ Done (headless, all in `rwk-core`, tested):
 
 Done on 2026-10-14 (GPUI and wiring): `rwk-ui::inspector::InspectorView` (polls every 3 s on the
 background executor, generation-guarded; folds in the planned `WorkspaceState`), shown above the
-terminals in the dock (a stacked section, not a tab), catalog command `Inspector` (Ctrl Shift I, 29
+terminals in the dock (a stacked section, not a tab), catalog command `Inspector` (Ctrl Shift D; Ctrl Shift I does not reach the app on a Turkish layout, where it arrives as a different key, 29
 commands), `rwk-app::token::FileTokenSource` (owner-only, 8 h, re-read each call) and `DaemonClient`
 wired into the workbench, `inspector::fetch` (connected / degraded / unreachable).
 Found on the way: the palette's query box inserted a newline on a real Enter key (fixed with
