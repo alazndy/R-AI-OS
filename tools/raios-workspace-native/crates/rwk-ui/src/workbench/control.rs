@@ -35,6 +35,11 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Projects the application remembers as registered, so they are not offered again.
+    pub fn set_known_projects(&mut self, projects: impl IntoIterator<Item = std::path::PathBuf>) {
+        self.known_projects = projects.into_iter().collect();
+    }
+
     /// True while a daemon connection is configured.
     pub fn has_control_plane(&self) -> bool {
         self.plane.is_some()
@@ -207,9 +212,11 @@ impl Workbench {
                 self.start_receipt_polling(window, cx);
             }
             (
-                Guarded::RegisterProject { .. },
+                Guarded::RegisterProject { root, .. },
                 Ok(GuardedOutcome::ProjectRegistered { already_registered }),
             ) => {
+                self.known_projects.insert(root.clone());
+                cx.emit(super::WorkbenchEvent::ProjectRegistered(root));
                 self.say(
                     if already_registered {
                         "Proje zaten kayıtlı"
@@ -490,6 +497,9 @@ impl Workbench {
             return;
         };
         let root = project.info().root.clone();
+        if self.known_projects.contains(&root) {
+            return;
+        }
         cx.spawn_in(window, async move |this, cx| {
             let known = cx
                 .background_executor()

@@ -23,6 +23,48 @@ pub fn config_home(xdg: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
     }
 }
 
+/// File name of the projects the daemon confirmed as registered.
+const REGISTERED_FILE: &str = "registered-projects.json";
+
+/// The registered-projects file inside a config home.
+pub fn registered_path(config_home: &Path) -> PathBuf {
+    config_home.join(APP_DIR).join(REGISTERED_FILE)
+}
+
+/// The projects remembered as registered; a missing or invalid file gives none.
+pub fn load_registered(path: &Path) -> Vec<PathBuf> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .collect()
+}
+
+/// Remembers `project` as registered (no duplicates), atomically and owner-only.
+pub fn remember_registered(path: &Path, project: &Path) -> std::io::Result<()> {
+    let mut projects = load_registered(path);
+    if projects.iter().any(|known| known == project) {
+        return Ok(());
+    }
+    projects.push(project.to_path_buf());
+    let Some(directory) = path.parent() else {
+        return Err(std::io::Error::other("the registry path has no directory"));
+    };
+    create_private_dir(directory)?;
+    let temporary = directory.join(format!(".{REGISTERED_FILE}.tmp"));
+    let names: Vec<String> = projects
+        .iter()
+        .map(|project| project.to_string_lossy().into_owned())
+        .collect();
+    let mut file = open_private(&temporary)?;
+    file.write_all(serde_json::to_string(&names).unwrap_or_default().as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, path)
+}
+
 /// The appearance file inside a config home.
 pub fn appearance_path(config_home: &Path) -> PathBuf {
     config_home.join(APP_DIR).join(FILE)
@@ -165,5 +207,25 @@ mod tests {
             &Appearance::default(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn registered_projects_round_trip_without_duplicates_and_ignore_junk() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let file = registered_path(directory.path());
+        assert!(load_registered(&file).is_empty());
+
+        remember_registered(&file, Path::new("/work/a")).expect("first");
+        remember_registered(&file, Path::new("/work/b")).expect("second");
+        remember_registered(&file, Path::new("/work/a")).expect("again");
+
+        assert_eq!(
+            load_registered(&file),
+            vec![PathBuf::from("/work/a"), PathBuf::from("/work/b")]
+        );
+        std::fs::write(&file, r#"["relative", "/ok"]"#).expect("write");
+        assert_eq!(load_registered(&file), vec![PathBuf::from("/ok")]);
+        std::fs::write(&file, "not json").expect("write");
+        assert!(load_registered(&file).is_empty());
     }
 }

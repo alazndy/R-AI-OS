@@ -102,13 +102,26 @@ fn main() {
             });
             // Persist appearance changes; a failure never blocks the application.
             let saved_path = path.clone();
+            let registered_file = config_home().map(|home| persistence::registered_path(&home));
+            if let Some(file) = &registered_file {
+                let known = persistence::load_registered(file);
+                let _ = window.update(cx, |workbench, _, _| workbench.set_known_projects(known));
+            }
             cx.subscribe(
                 &workbench,
-                move |_workbench, event: &WorkbenchEvent, _cx| {
-                    let WorkbenchEvent::AppearanceChanged(appearance) = event;
-                    if let Some(path) = &saved_path {
-                        if let Err(error) = persistence::save_appearance(path, appearance) {
-                            eprintln!("rwk-app: could not save the appearance: {error}");
+                move |_workbench, event: &WorkbenchEvent, _cx| match event {
+                    WorkbenchEvent::AppearanceChanged(appearance) => {
+                        if let Some(path) = &saved_path {
+                            if let Err(error) = persistence::save_appearance(path, appearance) {
+                                eprintln!("rwk-app: could not save the appearance: {error}");
+                            }
+                        }
+                    }
+                    WorkbenchEvent::ProjectRegistered(project) => {
+                        if let Some(file) = &registered_file {
+                            if let Err(error) = persistence::remember_registered(file, project) {
+                                eprintln!("rwk-app: could not remember the registration: {error}");
+                            }
                         }
                     }
                 },

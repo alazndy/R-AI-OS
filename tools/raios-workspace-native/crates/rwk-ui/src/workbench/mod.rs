@@ -45,10 +45,13 @@ const NEW_TERMINAL_SIZE: TerminalSize = TerminalSize {
 };
 
 /// What the workbench tells the application around it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkbenchEvent {
     /// The user changed skin or tone; the application stores it.
     AppearanceChanged(Appearance),
+    /// The daemon confirmed this project is registered (newly or before); the application
+    /// remembers it so the registration is not offered again at every start.
+    ProjectRegistered(PathBuf),
 }
 
 impl gpui::EventEmitter<WorkbenchEvent> for Workbench {}
@@ -174,6 +177,8 @@ pub struct Workbench {
     handoffs: Vec<TrackedHandoff>,
     receipt_task: Option<Task<()>>,
     receiver_for: Option<String>,
+    /// Projects already known to be registered with the daemon.
+    known_projects: std::collections::HashSet<PathBuf>,
     /// A command that asked for a project first and runs once one is open.
     after_pick: Option<CommandId>,
     receiver_session: Option<(String, SessionId)>,
@@ -268,6 +273,7 @@ impl Workbench {
             handoffs: Vec::new(),
             receipt_task: None,
             receiver_for: None,
+            known_projects: std::collections::HashSet::new(),
             after_pick: None,
             receiver_session: None,
             project: None,
