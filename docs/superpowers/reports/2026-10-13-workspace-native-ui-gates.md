@@ -19,3 +19,13 @@ machine **not quiet**: 24-29 % foreign CPU, another agent was building).
 Verdict: INCONCLUSIVE, as the harness itself reports for a failing gate on a busy machine.
 U3 must be re-run on a quiet machine; U1 and A1 are within 4 % of their limits and need the same.
 Frames are painted frames, not presented ones; keystroke latency excludes compositor and display.
+
+## Re-run on a quiet machine (2026-10-14, after the nice-level change for reader/parser threads)
+
+`ui-bench all --enforce --runs 5`, foreign CPU 11-18 %, **ALL GATES PASSED**:
+U1 199.0 ms, U2 50.6 fps, U3 32.2 fps, U4 13.8 ms, U5 60.8 MB, E1 267.8 ms, E2 330.5 ms,
+A1 297.7 ms (limit 300, tight), A2 74.6 MB.
+
+Notes: on a busy machine (a browser running, load 3-4) the same build fails U2/E1/A1 or loses
+frames, which the harness reports as inconclusive; the gates need a quiet machine. A1 is within
+1 % of its limit and varies run to run (265-384 ms across today's runs).
