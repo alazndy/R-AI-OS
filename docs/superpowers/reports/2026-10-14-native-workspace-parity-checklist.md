@@ -24,7 +24,7 @@ running daemon after the update), **CI** green on PR #45/#46 (Ubuntu, Arch, Wind
 | Policy-guarded daemon commands (deny / allow / confirm with exact payload, Enter never answers, decline/expire sends nothing) | T consent/workbench_headless |
 | Project registration (auto for unknown projects, remembered once confirmed) | T, R + D-live (dialog → Onayla → daemon "Proje zaten kayıtlı") |
 | Handoff: composer validation, queue, receipt tracking, receiver start only on a fresh pending receipt | T, D-iso (queue, receipt pending, NOT_FOUND), R + D-live (composer → dialog → Onayla → daemon held the approval; removed afterwards with `raios handoffs remove`) |
-| Agent launch: chooser, policy, validation, terminal running `raios run <agent>` | T, D-iso (validation Ok), R + D-live (Antigravity: dialog → Onayla → terminal with the wrapper's output; stopped on exit, no prompt sent) |
+| Agent launch and agent work: chooser, policy, validation, terminal running `raios run <agent>`, a prompt typed into it and answered | T, D-iso (validation Ok), R + D-live: Antigravity (dialog → Onayla → wrapper terminal; the Antigravity CLI itself reports "not signed in" on this machine) and **Codex end to end** (dialog → Onayla → `raios run codex` wrapper → typed prompt "Reply with the single word OK…" → Codex answered "OK", 2026-10-14 17:04; session closed with the window) |
 | Daemon token handling (owner-only file, 8 h, re-read per call), fail-closed with a banner when unreachable or stale | T, R (banner shown against a wrong token), D-live |
 | Performance gates U1–U5, E1–E2, A1–A2 | `docs/superpowers/reports/2026-10-13-workspace-native-ui-gates.md`: all pass on a quiet machine; A1 is tight (297.7 ms vs 300) |
 | CI for the native workspace (Ubuntu and Arch, headless), supply-chain check, `cargo audit` | CI |
@@ -32,7 +32,7 @@ running daemon after the update), **CI** green on PR #45/#46 (Ubuntu, Arch, Wind
 
 ## What was not verified, and why
 
-- An agent session *doing work* (a prompt sent, a model answering): it spends the owner's agent quota. The launch path up to and including the running wrapper terminal was exercised live.
+- Antigravity doing work: its CLI is not signed in on this machine, so only its launch was exercised. Codex was exercised end to end (see above) with a one-word prompt.
 - Wayland-native windows: the checks ran under XWayland.
 - Windows and macOS: only the headless suites run there (CI); the application targets Linux.
 - Approving or rejecting approvals from the workspace: out of scope by design (read-only until the contract carries an expected revision).
