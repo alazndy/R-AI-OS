@@ -12,7 +12,7 @@ This is the ratchet checklist for that growth — read-only today, checked by
 | Table / metric | Soft cap | On exceed |
 |---|---|---|
 | `mem_items` (per `project_key`) | 5,000 rows | **warn** — `raios health` prints the offending project(s); distillation/pruning should be catching this before it does |
-| `workspace.db` total file size | 2.5 GB | **warn** — `raios health` flags `OVER CAP`; nothing blocks yet |
+| `workspace.db` total file size | 2,500 MiB (2.441 GiB) | **warn** — `raios health` flags `OVER CAP`; nothing blocks yet |
 | `cp_tasks` | — (counted only) | none yet — establishing a baseline |
 | `cp_agent_runs` | — (counted only) | none yet — establishing a baseline |
 | `cp_wrapper_events` | — (counted only) | explicit wrapper-note evidence; bounded to 500 characters per row and retained for run auditability |
@@ -41,6 +41,23 @@ per-project list) or `raios health --json` (adds a top-level `db_budget` key
 alongside `projects`).
 
 ## Maintenance and recovery
+
+`raios db prune-search` previews missing or newly ineligible BM25/trigram cache
+files across **all cached roots**, including deleted temporary projects outside
+the main workspace. The default is read-only and does not run schema migrations.
+`raios db prune-search --apply` re-scans under a SQLite write transaction, checks
+file metadata again before deletion and removes only corresponding cache files
+and postings. Metadata errors fail the operation; absence is only inferred from
+`NotFound`. A maintenance audit event commits atomically with the deletion.
+Memory, sessions and control-plane records are preserved. The shared index policy
+excludes `.firebase`, `storybook-static` and `graphify-out` generated output.
+
+Before applying, review the preview and take a verified `raios db backup`. Deploy
+the updated exclusion policy, quiesce DB writers for maintenance, apply the prune,
+then compact with SQLite `VACUUM` and run `raios db check --full`. Pruning alone
+does not return free pages to the filesystem. Restart the daemon after maintenance
+and verify search plus `raios verify-chain`. VACUUM is an explicit operator action,
+not part of `prune-search`.
 
 `raios db check` runs SQLite `quick_check` and reports the main DB, WAL,
 shared-memory, freelist, journal mode, and managed snapshot count. Use
@@ -101,8 +118,7 @@ worktrees/clones before touching them, (2) delete the redundant/stale
 directories, (3) add the reference clones to `SKIP_DIRS`, (4) force a full
 BM25 + trigram reindex (`raios search "x" --reindex --dir ~/dev`, `raios
 locate "x" --reindex --dir ~/dev`) so already-cached rows for now-gone/now-
-skipped paths get pruned — an incremental (non-forced) reindex only compares
-mtimes and won't evict rows for paths that vanished, (5) stop `aiosd` and run
+skipped paths get pruned, (5) stop `aiosd` and run
 `sqlite3 workspace.db "VACUUM;"` — SQLite does not shrink the file on
 `DELETE` without an explicit `VACUUM`, restart `aiosd`.
 
@@ -112,6 +128,11 @@ trigram tables) — not further junk. The soft cap above was raised from
 500 MB to 2.5 GB accordingly: 500 MB was an initial guess made before any
 real measurement existed, and was never achievable for a workspace this
 size once actual data was in hand.
+
+Current source (verified 2026-10-10) also evicts missing/ineligible rows during
+incremental indexing **within the selected root**. This does not sweep deleted
+roots elsewhere; use the global `prune-search` preview for that case. The historical
+forced-reindex sequence above is not a replacement for global cache maintenance.
 
 ## PR review checklist
 

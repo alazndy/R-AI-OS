@@ -92,7 +92,7 @@ pub(crate) fn ensure_index(root: &Path, db_path: &Path, force: bool) -> Result<P
     let conn = open_trigram_db(db_path)?;
     let fs = fs_mtimes(&root);
     let mut cached = load_cached_trigram_files(&conn);
-    cached.retain(|path, _| Path::new(path).starts_with(&root));
+    cached.retain(|path, _| super::indexer::in_search_scope(Path::new(path), &root));
 
     let mut stale_ids: Vec<i64> = Vec::new();
     let mut warm_paths: HashSet<String> = HashSet::new();
@@ -220,7 +220,7 @@ fn candidates_for_trigrams(
     let mut candidates: Vec<PathBuf> = rows
         .flatten()
         .map(PathBuf::from)
-        .filter(|path| path.starts_with(root))
+        .filter(|path| super::indexer::in_search_scope(path, root))
         .collect();
     candidates.sort();
     candidates.dedup();

@@ -1,4 +1,4 @@
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Subcommand, Debug, Clone)]
@@ -250,6 +250,38 @@ pub enum AnkaAction {
     },
     /// Tombstone one ANKA cache record without modifying the source transcript
     Forget { id: String },
+    /// Initialize the ANKA privacy policy — explicit consent, no indexing side effects
+    PolicyInit {
+        /// HOME retention choice (required, no default): keep | exclude
+        #[arg(long, value_enum)]
+        home: HomeChoiceArg,
+    },
+    /// Show resolved policy rules, tombstone count, and the kept/excluded record breakdown
+    PolicyShow,
+    /// Install and enable the daily ANKA index user timer (units generated from live values)
+    TimerInstall,
+    /// Stop and remove the ANKA index timer; policy, tombstones, and cache are retained
+    TimerUninstall,
+}
+
+/// The `--home` argument of `policy-init`: clap's side of the choice. The
+/// runtime's `HomeChoice` carries no clap dependency, and neither side has a
+/// default — a missing flag is a usage error, never an inferred position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum HomeChoiceArg {
+    /// Retain HOME records; they never satisfy a project filter
+    Keep,
+    /// Drop HOME records (exact path or exact encoded slug; children untouched)
+    Exclude,
+}
+
+impl From<HomeChoiceArg> for raios_runtime::anka::HomeChoice {
+    fn from(value: HomeChoiceArg) -> Self {
+        match value {
+            HomeChoiceArg::Keep => Self::Keep,
+            HomeChoiceArg::Exclude => Self::Exclude,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug, Clone)]

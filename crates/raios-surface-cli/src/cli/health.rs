@@ -1,26 +1,34 @@
 use std::path::Path;
 
 pub(super) fn cmd_health(project: Option<String>, dev_ops: &Path, json: bool) {
-    let projects = raios_core::entities::load_entities(dev_ops);
-    let mut results = Vec::new();
-
-    if let Some(q) = project {
-        let query = q.to_lowercase();
-        for p in &projects {
-            if p.name.to_lowercase().contains(&query)
-                || p.local_path
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .contains(&query)
-            {
-                results.push(raios_runtime::health::check_project(p));
+    let projects = if let Some(query) = project {
+        let result = raios_core::db::open_db()
+            .and_then(|conn| raios_core::entities::select_registered_entities(&conn, &query));
+        match result {
+            Ok(projects) if !projects.is_empty() => projects,
+            result => {
+                let error = match result {
+                    Err(e) => format!("Project lookup failed: {e}"),
+                    _ => format!("Registered project not found: {query}"),
+                };
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"ok":false,"projects":[],"error":error})
+                    );
+                } else {
+                    eprintln!("{error}");
+                }
+                std::process::exit(1);
             }
         }
     } else {
-        for p in &projects {
-            results.push(raios_runtime::health::check_project(p));
-        }
-    }
+        raios_core::entities::load_entities(dev_ops)
+    };
+    let results: Vec<_> = projects
+        .iter()
+        .map(raios_runtime::health::check_project)
+        .collect();
 
     let db_budget = raios_runtime::system_scan::db_budget_check();
 

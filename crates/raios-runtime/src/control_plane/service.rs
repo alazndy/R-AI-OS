@@ -625,49 +625,17 @@ pub(super) fn dispatch_with_seams(
     let mut launch_request: Option<AgentLaunchRequest> = None;
     let result_val: Option<serde_json::Value> = match cmd {
         Command::ApproveHandoff { approval_id, .. } => {
-            let handoff = tx
-                .query_row(
-                    "SELECT task_id, agent_run_id, artifact_id
-                     FROM cp_approvals
-                     WHERE id = ?1 AND approval_type = 'handover' AND status = 'pending'
-                       AND owner_subject = ?2",
-                    params![approval_id, actor.subject()],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                        ))
-                    },
-                )
-                .optional()
-                .map_err(|e| Problem::internal(e.to_string()))?
-                .ok_or_else(|| Problem::not_found("Pending handoff approval not found"))?;
-            let now = Utc::now().to_rfc3339();
-            tx.execute(
-                "UPDATE cp_approvals
-                 SET status = 'approved', resolved_at = ?1, resolved_by = ?2
-                 WHERE id = ?3 AND status = 'pending' AND owner_subject = ?4",
-                params![now, actor.subject(), approval_id, actor.subject()],
+            if !raios_core::db::cp_resolve_handoff(
+                &tx,
+                approval_id,
+                actor.subject(),
+                actor.subject(),
+                None,
             )
-            .map_err(|e| Problem::internal(e.to_string()))?;
-            tx.execute(
-                "UPDATE cp_artifacts SET status = 'applied' WHERE id = ?1",
-                params![handoff.2],
-            )
-            .map_err(|e| Problem::internal(e.to_string()))?;
-            tx.execute(
-                "UPDATE cp_agent_runs
-                 SET status = 'succeeded', ended_at = ?1, exit_reason = 'handover_delivered'
-                 WHERE id = ?2",
-                params![now, handoff.1],
-            )
-            .map_err(|e| Problem::internal(e.to_string()))?;
-            tx.execute(
-                "UPDATE cp_tasks SET status = 'completed', updated_at = ?1 WHERE id = ?2",
-                params![now, handoff.0],
-            )
-            .map_err(|e| Problem::internal(e.to_string()))?;
+            .map_err(|e| Problem::internal(e.to_string()))?
+            {
+                return Err(Problem::not_found("Pending handoff approval not found"));
+            }
             Some(serde_json::json!({"approval_id": approval_id, "status": "approved"}))
         }
         Command::RejectHandoff {
@@ -680,18 +648,15 @@ pub(super) fn dispatch_with_seams(
                     "Rejection reason must contain at most 2000 characters",
                 ));
             }
-            let now = Utc::now().to_rfc3339();
-            let changed = tx
-                .execute(
-                    "UPDATE cp_approvals
-                 SET status = 'rejected', resolved_at = ?1, resolved_by = ?2,
-                     reason = reason || char(10) || 'Rejected: ' || ?3
-                 WHERE id = ?4 AND approval_type = 'handover' AND status = 'pending'
-                   AND owner_subject = ?5",
-                    params![now, actor.subject(), reason, approval_id, actor.subject()],
-                )
-                .map_err(|e| Problem::internal(e.to_string()))?;
-            if changed != 1 {
+            if !raios_core::db::cp_resolve_handoff(
+                &tx,
+                approval_id,
+                actor.subject(),
+                actor.subject(),
+                Some(reason),
+            )
+            .map_err(|e| Problem::internal(e.to_string()))?
+            {
                 return Err(Problem::not_found("Pending handoff approval not found"));
             }
             Some(serde_json::json!({"approval_id": approval_id, "status": "rejected"}))
@@ -965,7 +930,8 @@ mod tests {
         assert!(!snap.timestamp.is_empty());
         assert_eq!(snap.now.active_runs.len(), 0);
         assert_eq!(snap.work.factory.product_count, 0);
-        assert!(!snap.work.factory.enabled);
+        // An empty database does not imply the user's Factory feature is off.
+        // Default-off policy is tested using Config::default in raios-core.
     }
 
     #[test]
@@ -1049,7 +1015,7 @@ mod tests {
         .unwrap();
 
         let cmd1 = Command::RejectHandoff {
-            approval_id: workflow.approval_id,
+            approval_id: workflow.approval_id.clone(),
             reason: "Not needed".into(),
             idempotency_key: "idem-key-1".into(),
         };
@@ -1057,6 +1023,38 @@ mod tests {
         let actor = ControlActor::test_local();
         let res1 = dispatch_control_command(&mut conn, &actor, &cmd1);
         assert!(res1.is_ok());
+        // Rejection must close the entire delivery workflow, not just hide the
+        // approval while its task/run remain active forever.
+        let snapshot = load_system_snapshot(&conn).unwrap();
+        assert!(!snapshot
+            .work
+            .tasks
+            .iter()
+            .any(|task| task.id == workflow.task_id));
+        assert!(!snapshot
+            .now
+            .active_runs
+            .iter()
+            .any(|run| run.run_id == workflow.agent_run_id));
+        let states: (String, String, String, String) = conn
+            .query_row(
+                "SELECT ap.status, a.status, r.status, t.status
+             FROM cp_approvals ap JOIN cp_artifacts a ON a.id = ap.artifact_id
+             JOIN cp_agent_runs r ON r.id = ap.agent_run_id JOIN cp_tasks t ON t.id = ap.task_id
+             WHERE ap.id = ?1",
+                params![workflow.approval_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            states,
+            (
+                "rejected".into(),
+                "rejected".into(),
+                "cancelled".into(),
+                "cancelled".into()
+            )
+        );
 
         // Same key + same payload -> OK cached
         let res2 = dispatch_control_command(&mut conn, &actor, &cmd1);

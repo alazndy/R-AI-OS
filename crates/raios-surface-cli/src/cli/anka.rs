@@ -1,32 +1,24 @@
 use super::AnkaAction;
 
-/// Structural CLI boundary for ANKA. Indexing and recall are intentionally not
-/// implemented until the parser, redaction, cache schema, and promotion policy
-/// receive architectural approval.
+/// ANKA's CLI boundary. Every action delegates to `raios_runtime::anka` and
+/// serializes the shared contract types (hits, and `AnkaIndexStatusDto` for
+/// status/index) — the surface renders, it never computes state.
 pub(super) fn cmd_anka(action: AnkaAction, json: bool) {
     let result = match action {
-        AnkaAction::Status => raios_runtime::anka::status().map(|status| {
-            serde_json::json!({
-                "state": if status.last_indexed_at.is_some() { "ready" } else { "empty" },
-                "cache_path": status.cache_path,
-                "indexed_sources": status.indexed_sources,
-                "indexed_records": status.indexed_records,
-                "last_indexed_at": status.last_indexed_at,
-            })
+        // Status and Index serialize the shared `AnkaIndexStatusDto` — the same
+        // contract type the MCP surface speaks — instead of hand-building a
+        // mirror of it. `state` now comes from the runtime's coverage
+        // computation; it used to be guessed here from `last_indexed_at`.
+        AnkaAction::Status => raios_runtime::anka::status().and_then(|status| {
+            serde_json::to_value(raios_runtime::anka::status_dto(status)).map_err(Into::into)
         }),
         AnkaAction::Index { harness } => harness
             .as_deref()
             .map(raios_runtime::anka::parse_harness)
             .transpose()
             .and_then(raios_runtime::anka::index)
-            .map(|status| {
-                serde_json::json!({
-                    "state": "ready",
-                    "cache_path": status.cache_path,
-                    "indexed_sources": status.indexed_sources,
-                    "indexed_records": status.indexed_records,
-                    "last_indexed_at": status.last_indexed_at,
-                })
+            .and_then(|status| {
+                serde_json::to_value(raios_runtime::anka::status_dto(status)).map_err(Into::into)
             }),
         AnkaAction::Search {
             query,
@@ -51,6 +43,20 @@ pub(super) fn cmd_anka(action: AnkaAction, json: bool) {
         }
         AnkaAction::Forget { id } => raios_runtime::anka::forget(&id)
             .map(|forgotten| serde_json::json!({"forgotten": forgotten, "id": id})),
+        // Consent and diagnostics: `policy-init` returns the view of what it
+        // wrote (it never reads the cache), `policy-show` the resolved rules,
+        // tombstone count, and the kept/excluded breakdown of the current one.
+        AnkaAction::PolicyInit { home } => raios_runtime::anka::policy_init(home.into())
+            .and_then(|view| serde_json::to_value(view).map_err(Into::into)),
+        AnkaAction::PolicyShow => raios_runtime::anka::policy_show()
+            .and_then(|view| serde_json::to_value(view).map_err(Into::into)),
+        // Timer artifacts follow the `hub.rs` generator convention: units are
+        // built from live values at install time, never checked in. Both
+        // actions own their systemctl orchestration (best-effort disable on
+        // rollback) — the surface may shell out for service artifacts, it
+        // still never computes ANKA state.
+        AnkaAction::TimerInstall => super::anka_timer::install(),
+        AnkaAction::TimerUninstall => super::anka_timer::uninstall(),
     };
 
     match result {

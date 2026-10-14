@@ -161,6 +161,15 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
         -- Without this, a scoped reindex repeatedly scans the whole postings
         -- table while removing stale files.
         CREATE INDEX IF NOT EXISTS idx_bm25_postings_file ON bm25_postings(file_id);
+        CREATE TABLE IF NOT EXISTS bm25_lines (
+            file_id INTEGER NOT NULL REFERENCES bm25_files(id) ON DELETE CASCADE,
+            line_no INTEGER NOT NULL,
+            snippet TEXT NOT NULL,
+            PRIMARY KEY (file_id, line_no)
+        ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS bm25_storage_meta (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL
+        ) WITHOUT ROWID;
         ",
     )?;
 
@@ -278,6 +287,22 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_cp_runs_task ON cp_agent_runs(task_id);
         CREATE INDEX IF NOT EXISTS idx_cp_runs_status ON cp_agent_runs(status);
         CREATE INDEX IF NOT EXISTS idx_cp_runs_agent ON cp_agent_runs(agent_name);
+
+        -- Durable launch checkpoints; never depend on normal process shutdown.
+        CREATE TABLE IF NOT EXISTS cp_wrapper_resume (
+            agent_run_id TEXT PRIMARY KEY REFERENCES cp_agent_runs(id) ON DELETE CASCADE,
+            workspace_root TEXT NOT NULL,
+            native_session_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_cp_wrapper_resume_native ON cp_wrapper_resume(native_session_id);
+
+        -- Stable process witnesses for wrappers; legacy rows remain untracked.
+        CREATE TABLE IF NOT EXISTS cp_wrapper_processes (
+            agent_run_id TEXT PRIMARY KEY REFERENCES cp_agent_runs(id) ON DELETE CASCADE,
+            owner_json TEXT NOT NULL,
+            child_json TEXT,
+            child_attached INTEGER NOT NULL DEFAULT 0 CHECK(child_attached IN (0, 1))
+        );
 
         -- Explicit, wrapper-owned user notes. These deliberately remain
         -- separate from legacy `sessions`/`session_events`: wrapper runs are

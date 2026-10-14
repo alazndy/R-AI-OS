@@ -45,6 +45,10 @@ pub(crate) const SKIP_DIRS: &[&str] = &[
     ".svelte-kit",
     "out",
     ".fastembed_cache",
+    // Deployment bundles and generated reports are rebuildable output.
+    ".firebase",
+    "storybook-static",
+    "graphify-out",
     // PlatformIO's vendored dependency cache (embedded/ESP32 projects). Found
     // 2026-08-14: 3,362 files under `.pio/libdeps/**` (mostly LVGL's demo
     // asset .c files, which encode images as thousands of hex-byte tokens
@@ -59,6 +63,7 @@ pub(crate) const SKIP_DIRS: &[&str] = &[
     // match twice on GT-Launcher — once from the real source, once from a
     // stale 56MB worktree copy — because "worktrees" wasn't skipped.
     "worktrees",
+    ".worktrees",
     // Archive/backup trees are immutable history, not live workspace source.
     // Indexing them duplicates projects and can grow the shared search DB by GBs.
     "archives",
@@ -225,9 +230,10 @@ impl ProjectIndex {
     pub fn load_or_build(root: &Path, db_path: &Path, force: bool) -> Result<Self> {
         let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let conn = open_bm25_db(db_path)?;
+        let normalized = super::bm25_storage::normalized_storage(&conn)?;
         let fs = fs_mtimes(&root);
         let mut cached = load_cached_bm25_files(&conn);
-        cached.retain(|path, _| Path::new(path).starts_with(&root));
+        cached.retain(|path, _| in_search_scope(Path::new(path), &root));
 
         let mut idx = Self {
             files: Vec::new(),
@@ -255,14 +261,14 @@ impl ProjectIndex {
 
         let tx = conn.unchecked_transaction()?;
         for id in &stale_ids {
-            let _ = tx.execute("DELETE FROM bm25_files WHERE id = ?1", params![id]);
+            tx.execute("DELETE FROM bm25_files WHERE id = ?1", params![id])?;
         }
         // Drop the token index before a bulk insert of potentially millions of
         // postings rows — otherwise every single INSERT pays for an incremental
         // B-tree update. Rebuilt in one shot after the loop, before commit.
         // (idx_bm25_postings_file is kept: the DELETE above cascades through it
         // and needs it to stay fast.)
-        let _ = tx.execute("DROP INDEX IF EXISTS idx_bm25_token", []);
+        tx.execute("DROP INDEX IF EXISTS idx_bm25_token", [])?;
 
         let mut id_to_slot: HashMap<i64, usize> = HashMap::new();
         for (path, (file_id, _, doc_len)) in &cached {
@@ -274,30 +280,24 @@ impl ProjectIndex {
                 idx.doc_count += 1;
             }
         }
-        if let Ok(mut stmt) =
-            conn.prepare("SELECT token, file_id, line_no, snippet FROM bm25_postings")
         {
-            let _ = stmt
-                .query_map([], |row| {
+            let mut stmt = tx.prepare("SELECT p.token,p.line_no,CASE WHEN p.snippet!='' THEN p.snippet ELSE l.snippet END FROM bm25_postings p LEFT JOIN bm25_lines l ON l.file_id=p.file_id AND l.line_no=p.line_no WHERE p.file_id=?1 ORDER BY p.rowid")?;
+            for (&file_id, &slot) in &id_to_slot {
+                let rows = stmt.query_map([file_id], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(2)?,
                     ))
-                })
-                .map(|rows| {
-                    for row in rows.flatten() {
-                        let (token, file_id, line_no, snippet) = row;
-                        if let Some(&slot) = id_to_slot.get(&file_id) {
-                            idx.inverted.entry(token).or_default().push((
-                                slot,
-                                line_no as usize,
-                                snippet,
-                            ));
-                        }
-                    }
-                });
+                })?;
+                for row in rows {
+                    let (token, line_no, snippet) = row?;
+                    idx.inverted
+                        .entry(token)
+                        .or_default()
+                        .push((slot, line_no as usize, snippet));
+                }
+            }
         }
 
         {
@@ -310,6 +310,8 @@ impl ProjectIndex {
             let mut insert_posting_stmt = tx.prepare(
                 "INSERT INTO bm25_postings (token, file_id, line_no, snippet) VALUES (?1,?2,?3,?4)",
             )?;
+            let mut insert_line_stmt =
+                tx.prepare("INSERT INTO bm25_lines (file_id,line_no,snippet) VALUES (?1,?2,?3)")?;
 
             for (path_str, &fs_mtime) in &fs {
                 if warm_paths.contains(path_str) {
@@ -320,19 +322,19 @@ impl ProjectIndex {
                     let postings = idx.index_file(path.clone(), &content);
                     let doc_len = idx.doc_lengths.last().copied().unwrap_or(1);
 
-                    let _ = insert_file_stmt.execute(params![
-                        path_str,
-                        fs_mtime as i64,
-                        doc_len as i64
-                    ]);
+                    insert_file_stmt.execute(params![path_str, fs_mtime as i64, doc_len as i64])?;
                     let file_id = tx.last_insert_rowid();
+                    let mut stored_lines = std::collections::HashSet::new();
                     for (token, line_no, snippet) in &postings {
-                        let _ = insert_posting_stmt.execute(params![
+                        if normalized && stored_lines.insert(*line_no) {
+                            insert_line_stmt.execute(params![file_id, *line_no as i64, snippet])?;
+                        }
+                        insert_posting_stmt.execute(params![
                             token,
                             file_id,
                             *line_no as i64,
-                            snippet
-                        ]);
+                            if normalized { "" } else { snippet.as_str() }
+                        ])?;
                     }
                 }
             }
@@ -393,7 +395,22 @@ fn open_bm25_db(db_path: &Path) -> anyhow::Result<Connection> {
          CREATE INDEX IF NOT EXISTS idx_bm25_token ON bm25_postings(token);
          CREATE INDEX IF NOT EXISTS idx_bm25_postings_file ON bm25_postings(file_id);",
     )?;
+    conn.execute_batch(super::bm25_storage::LINE_SCHEMA)?;
+    conn.execute_batch(super::bm25_storage::META_SCHEMA)?;
+    // Only a completely empty cache opts in automatically. Existing databases
+    // keep legacy writes until the owner's explicit, coordinated conversion.
+    conn.execute("INSERT OR IGNORE INTO bm25_storage_meta(key,value) SELECT 'snippet_format','lines_v1' WHERE NOT EXISTS(SELECT 1 FROM bm25_files) AND NOT EXISTS(SELECT 1 FROM bm25_postings)",[])?;
     Ok(conn)
+}
+
+/// Nested checkouts have their own explicit search scopes. Parent scans must
+/// neither include their cached results nor evict their independent caches.
+pub(crate) fn in_search_scope(path: &Path, root: &Path) -> bool {
+    path.strip_prefix(root).is_ok_and(|relative| {
+        !relative
+            .components()
+            .any(|part| matches!(part.as_os_str().to_str(), Some(".worktrees" | "worktrees")))
+    })
 }
 
 pub(crate) fn fs_mtimes(root: &Path) -> HashMap<String, u64> {
@@ -467,6 +484,56 @@ mod tests {
     }
 
     #[test]
+    fn parent_search_excludes_nested_worktrees_without_evicting_explicit_scope() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("project");
+        let branch = root.join(".worktrees/feature");
+        fs::create_dir_all(&branch).unwrap();
+        fs::write(root.join("main.rs"), "parentmarker commonmarker").unwrap();
+        fs::write(branch.join("main.rs"), "branchmarker commonmarker").unwrap();
+        let db = tmp.path().join("cache.db");
+        assert_eq!(
+            ProjectIndex::load_or_build(&branch, &db, false)
+                .unwrap()
+                .doc_count,
+            1
+        );
+        assert_eq!(
+            super::super::trigram::locate(&branch, &db, "commonmarker", false, false)
+                .unwrap()
+                .len(),
+            1
+        );
+        let parent = ProjectIndex::load_or_build(&root, &db, true).unwrap();
+        assert_eq!(parent.doc_count, 1);
+        assert!(parent.search("branchmarker").is_empty());
+        let matches =
+            super::super::trigram::locate(&root, &db, "commonmarker", false, true).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, root.join("main.rs"));
+        let conn = Connection::open(&db).unwrap();
+        let branch_path = branch.join("main.rs").to_string_lossy().into_owned();
+        let preserved: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bm25_files WHERE path=?1",
+                [&branch_path],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved, 1);
+        assert_eq!(
+            ProjectIndex::load_or_build(&branch, &db, false)
+                .unwrap()
+                .search("branchmarker")
+                .len(),
+            1
+        );
+        let preview = super::super::cache_maintenance::prune_search_cache(&db, false).unwrap();
+        assert_eq!(preview.bm25.candidate_files, 0);
+        assert_eq!(preview.trigram.candidate_files, 0);
+    }
+
+    #[test]
     fn load_or_build_creates_index() {
         let tmp = TempDir::new().unwrap();
         let ws = make_workspace(&tmp);
@@ -475,6 +542,30 @@ mod tests {
         assert!(idx.doc_count >= 2);
         let results = idx.search("println");
         assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn generated_output_is_excluded_from_disk_scan_and_bm25_build() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(ws.join("live.rs"), "fn live_marker() {}\n").unwrap();
+        for name in [".firebase", "storybook-static", "graphify-out"] {
+            fs::create_dir_all(ws.join(name)).unwrap();
+            fs::write(ws.join(name).join("generated.js"), "generated_marker").unwrap();
+        }
+        // Similar names must remain searchable: exclusions are exact components.
+        fs::create_dir_all(ws.join("storybook-static-source")).unwrap();
+        fs::write(
+            ws.join("storybook-static-source/source.rs"),
+            "fn source_marker() {}\n",
+        )
+        .unwrap();
+        assert_eq!(fs_mtimes(&ws).len(), 2);
+        let index = ProjectIndex::build(&ws).unwrap();
+        assert_eq!(index.doc_count, 2);
+        assert!(index.search("generated").is_empty());
+        assert!(!index.search("source").is_empty());
     }
 
     #[test]

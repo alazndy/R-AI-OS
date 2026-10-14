@@ -68,6 +68,14 @@ pub async fn start_scheduler_worker(
             }
         };
 
+        // Only wrappers carrying stable process witnesses are auto-recovered.
+        // Legacy records require an owner-reviewed maintenance operation.
+        if let Err(error) =
+            crate::wrapper_liveness::reconcile_sessions(&raios_core::db::db_path(), true, false)
+        {
+            eprintln!("[Scheduler] Wrapper recovery failed: {error}");
+        }
+
         // Atomic claim — no two instances can claim the same job
         let jobs = match raios_core::db::cp_scheduled_jobs_claim_due(&conn) {
             Ok(j) => j,

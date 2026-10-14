@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAIOS Workspace — Ürün taslağı</title>
+  <meta name="description" content="RAIOS tabanlı masaüstü workspace uygulamasının etkileşimli ürün taslağı. Yalnızca örnek veriler içerir.">
+  <link rel="stylesheet" href="prototype.css">
+  <script src="prototype.js" defer></script>
+</head>
+<body>
+  <div class="preview-bar"><span>Tasarım önizlemesi <span class="muted">/ örnek veriler · v0.1</span></span><button id="reset">Taslağı sıfırla</button></div>
+  <header class="window-toolbar">
+    <div class="brand"><strong>RAIOS</strong><span>Workspace</span></div>
+    <span class="project-name">R-AI-OS <span class="muted">/ core</span></span>
+    <button id="palette-open" class="command-search">Dosya veya komut ara… <kbd>Ctrl K</kbd></button>
+    <button id="connection" aria-pressed="false" title="Bağlantı kesilmesi senaryosunu göster">Raios bağlı</button>
+    <button id="theme" aria-label="Açık temaya geç">Açık tema</button>
+  </header>
+  <div id="offline" class="offline-banner" hidden>Raios bağlantısı kesildi. Son bilinen veriler gösteriliyor; çalıştırma ve onay işlemleri duraklatıldı. <button id="reconnect">Yeniden bağlan</button></div>
+  <main class="workspace" data-layout="balanced">
+    <aside class="sidebar" aria-label="Proje dosyaları">
+      <div class="pane-heading"><h1>Proje</h1><span class="muted">6 dosya</span></div>
+      <div class="project-root">⌄ &nbsp; R-AI-OS</div>
+      <nav class="file-tree" aria-label="Dosya ağacı">
+        <p class="tree-folder">⌄ &nbsp; crates</p>
+        <p class="tree-folder indent">⌄ &nbsp; raios-core / src / db</p>
+        <button class="file selected" data-file="handoff" aria-current="true"><span class="file-kind">rs</span>wf_handoff.rs <span class="modified" title="Değiştirildi">M</span></button>
+        <p class="tree-folder indent">⌄ &nbsp; raios-runtime / src</p>
+        <button class="file" data-file="runner"><span class="file-kind">rs</span>agent_runner.rs <span class="modified" title="Değiştirildi">M</span></button>
+        <p class="tree-folder indent">⌄ &nbsp; raios-contracts / src</p>
+        <button class="file" data-file="command"><span class="file-kind">rs</span>command.rs</button>
+        <p class="tree-folder">⌄ &nbsp; docs</p>
+        <button class="file" data-file="design"><span class="file-kind">md</span>product-design.md</button>
+        <button class="file root-file" data-file="memory"><span class="file-kind">md</span>memory.md</button>
+        <button class="file root-file" data-file="readme"><span class="file-kind">md</span>README.md</button>
+      </nav>
+      <div class="sidebar-bottom"><span class="section-label">Proje bağlamı</span><p>Görev, ajanlar ve hafıza aynı proje kökünü kullanıyor.</p><code>/dev/core/R-AI-OS</code><button id="memory-open">Hafızayı görüntüle</button></div>
+    </aside>
+    <section class="center" aria-label="Kod ve ajan çalışma alanı">
+      <div class="work-toolbar"><span class="section-label">Çalışma alanı</span><div class="layout-controls" aria-label="Yerleşim"><button data-layout="balanced" aria-pressed="true">Dengeli</button><button data-layout="editor" aria-pressed="false">Editör</button><button data-layout="agents" aria-pressed="false">Ajanlar</button></div></div>
+      <section class="editor" aria-label="Salt okunur kod önizlemesi">
+        <div class="editor-tabs"><button id="code-tab" class="active" aria-pressed="true">wf_handoff.rs <span class="modified">M</span></button><button id="diff-tab" aria-pressed="false">Değişiklikler <span class="muted">2 satır</span></button><span class="read-only">Kod önizlemesi</span></div>
+        <div id="breadcrumb" class="breadcrumb">crates / raios-core / src / db / wf_handoff.rs</div>
+        <div class="editor-content" tabindex="0" aria-label="Kod; bu taslakta düzenlenemez"><pre id="code"></pre><div id="diff" hidden><div class="diff-summary">wf_handoff.rs <span>Proje köküne göre handoff seçimi</span></div><pre class="diff-code"><span class="context-line">  pub fn pending_for_project(root: &amp;Path, agent: &amp;str) {</span>
+<span class="removed-line">−     cp_take_pending_handoff(conn, None, agent)?;</span>
+<span class="added-line">+     cp_take_pending_handoff_for_path(conn, root, agent)?;</span>
+<span class="context-line">  }</span></pre><p class="diff-note">Kavramsal değişiklik örneği. Üretim kodu veya uygulanabilir patch değildir.</p><div class="diff-actions"><span id="diff-status">Karar bekleniyor</span><button id="review-approve" class="primary" data-runtime>Bu değişikliği onayla</button><button id="review-reject" data-runtime>Reddet</button></div></div></div>
+        <div class="editor-footer"><span id="editor-caption">Rust · örnek kod</span><span>UTF-8 &nbsp; LF</span></div>
+      </section>
+      <section class="agent-dock" aria-label="Ajan terminalleri">
+        <div class="dock-heading"><h2>Ajanlar <span class="muted">/ aynı proje</span></h2><div><button id="handoff-open" data-runtime>Handoff oluştur</button><button id="launch-open" class="primary" data-runtime>+ Ajan başlat</button></div></div>
+        <div class="terminal-grid">
+          <section class="terminal-pane" aria-label="Codex terminal önizlemesi"><div class="terminal-heading"><strong>Codex</strong><span id="codex-status" class="waiting">Onay bekliyor</span><button id="stop-codex" data-runtime aria-label="Codex örnek oturumunu durdur">Durdur</button></div><div class="terminal-body" tabindex="0"><p class="muted">raios run codex · R-AI-OS</p><p>› Handoff teslimini incele.</p><p>Proje sınırını koruyan seçim önerildi.</p><p class="terminal-success">✓ İnceleme için değişiklik hazır.</p><p id="codex-output" class="waiting">Dosya değişikliği onayı bekleniyor.</p><p class="terminal-prompt">› <span class="muted">Bu alan terminal önizlemesidir.</span></p></div></section>
+          <section class="terminal-pane" aria-label="Alıcı ajan terminal önizlemesi"><div class="terminal-heading"><strong id="recipient-name">Claude</strong><span id="recipient-status" class="muted">Başlamadı</span><button id="stop-recipient" data-runtime hidden> Durdur</button></div><div id="recipient-body" class="terminal-body" tabindex="0"><p class="muted">R-AI-OS · alıcı ajan</p><p>Bu projeye ait handoff kuyrukta.</p><p>Alıcı süreç henüz başlatılmadı.</p><p class="terminal-prompt">Görevi ve bağlamı sağ panelden incele.</p></div></section>
+        </div>
+      </section>
+    </section>
+    <aside class="inspector" aria-label="Raios proje bağlamı">
+      <div class="inspector-tabs" role="tablist" aria-label="Proje bağlamı"><button role="tab" id="tab-task" aria-controls="panel-task" aria-selected="true" data-inspector="task">Görev</button><button role="tab" id="tab-memory" aria-controls="panel-memory" aria-selected="false" tabindex="-1" data-inspector="memory">Hafıza</button><button role="tab" id="tab-activity" aria-controls="panel-activity" aria-selected="false" tabindex="-1" data-inspector="activity">Akış</button></div>
+      <section id="panel-task" role="tabpanel" aria-labelledby="tab-task" class="inspector-panel">
+        <div class="task-section"><span class="section-label">Aktif görev / #42</span><h2>Handoff teslimini düzelt</h2><p class="muted">Alıcı ajan doğru projede başlasın; bağlam teslimi görünür olsun.</p><dl><div><dt>Proje</dt><dd>R-AI-OS</dd></div><div><dt>Sorumlu</dt><dd>Codex</dd></div><div><dt>Durum</dt><dd id="task-state" class="waiting">İnsan kararı bekliyor</dd></div></dl></div>
+        <section id="approval-section" class="context-section"><div class="section-title"><h3>Onay bekliyor</h3><span class="waiting">1</span></div><p>Codex · dosya değişikliği</p><code>wf_handoff.rs</code><p class="muted">Handoff araması proje köküyle sınırlandırılacak.</p><button id="review-open">Değişikliği incele <span aria-hidden="true">↗</span></button></section>
+        <section class="context-section"><div class="section-title"><h3>Handoff</h3><span id="receipt-label" class="waiting">Kuyrukta</span></div><p id="handoff-route">Codex → Claude</p><ol id="receipt" class="receipt"><li class="current">Kuyruğa alındı</li><li>Alıcı başlatılmadı</li><li>Bağlam teslimi bekleniyor</li></ol><p id="receipt-detail" class="muted">Kuyruğa almak alıcıyı çalıştırmaz.</p><div id="receipt-actions" class="receipt-actions"><button id="start-recipient" class="primary" data-runtime>Alıcıyı başlat (örnek)</button><button id="delivery-scenario" data-runtime hidden>Teslim senaryosu</button><button id="failure-scenario" data-runtime hidden>Başlatma hatası senaryosu</button></div></section>
+        <div class="context-section next-step"><span class="section-label">Sonraki adım</span><p>Değişikliği incele, ardından alıcı ajana teslim et.</p></div>
+      </section>
+      <section id="panel-memory" role="tabpanel" aria-labelledby="tab-memory" class="inspector-panel" hidden><div class="task-section"><span class="section-label">Hafıza / proje kapsamı</span><h2>Ortak bağlam</h2><p class="muted">Ajan başlamadan önce hangi bağlamın verileceğini görebilirsin.</p><dl><div><dt>Kaynak</dt><dd>memory.md</dd></div><div><dt>İçerik</dt><dd>Örnek özet</dd></div></dl></div><section class="context-section"><h3>Hedef</h3><p>Handoff’un proje sınırını ve gerçek teslim durumunu korumak.</p><h3>Kurallar</h3><ul class="memory-rules"><li>Başka projedeki kuyruğu tüketme.</li><li>Handoff’a sır veya anahtar yazma.</li><li>Başlatma hatasında bağlamı koru.</li></ul><h3>Sıradaki iş</h3><p>Alıcı başlatma hatasını ve teslim makbuzunu doğrula.</p><button id="memory-file-open">memory.md dosyasını aç</button></section></section>
+      <section id="panel-activity" role="tabpanel" aria-labelledby="tab-activity" class="inspector-panel" hidden><div class="task-section"><span class="section-label">Olay geçmişi</span><h2>Proje akışı</h2><p class="muted">Önizlemedeki işlemler burada görünür. Gerçek audit günlüğü değildir.</p></div><ol id="activity" class="activity-list"><li><span class="muted">Örnek başlangıç</span><p>Dosya değişikliği incelemeye sunuldu.</p></li><li><span class="muted">Örnek başlangıç</span><p>Claude için handoff kuyrukta.</p></li></ol></section>
+    </aside>
+  </main>
+  <div id="notice" role="status" aria-live="polite">Önizleme hazır. Tüm işlemler bu sayfadaki örnek durumu değiştirir.</div>
+  <footer class="status-bar"><span>R-AI-OS &nbsp; / &nbsp; feature/handoff <span class="muted">· örnek branch</span></span><span id="status-layout">Dengeli yerleşim</span><span>Linux öncelikli · masaüstü taslağı</span></footer>
+
+  <dialog id="handoff-dialog" aria-labelledby="handoff-title"><form id="handoff-form"><div class="dialog-heading"><h2 id="handoff-title">Görevi başka ajana devret</h2><button type="button" data-close aria-label="Handoff penceresini kapat">✕</button></div><p class="muted">Aynı proje ve görev için yeni bir teslim denemesi oluştur.</p><dl class="dialog-scope"><div><dt>Proje</dt><dd>R-AI-OS</dd></div><div><dt>Görev</dt><dd>#42 · Handoff teslimini düzelt</dd></div><div><dt>Kaynak ajan</dt><dd>Codex</dd></div></dl><label for="handoff-agent">Alıcı ajan</label><select id="handoff-agent"><option value="Claude">Claude</option><option value="OpenCode">OpenCode</option><option value="Antigravity">Antigravity</option></select><label for="handoff-summary">Bağlam ve sonraki adım</label><textarea id="handoff-summary" rows="4" required maxlength="1500">Proje sınırlandırması incelendi. wf_handoff.rs değişikliğini gözden geçir; alıcı başlatma hatasında handoff’un kuyrukta kaldığını doğrula.</textarea><label class="checkbox-label"><input id="handoff-run" type="checkbox" checked> Alıcıyı şimdi başlat</label><p class="muted">İşaret kaldırılırsa yalnızca kuyruğa alınır. Başlatma, bağlam teslimi ve görev sonucu ayrı izlenir.</p><div class="dialog-footer"><button type="button" data-close>Vazgeç</button><button type="submit" class="primary">Handoff oluştur (örnek)</button></div></form></dialog>
+  <dialog id="launch-dialog" aria-labelledby="launch-title"><form id="launch-form"><div class="dialog-heading"><h2 id="launch-title">Ajan başlat</h2><button type="button" data-close aria-label="Ajan penceresini kapat">✕</button></div><p>Proje: <strong>R-AI-OS</strong> · Görev #42</p><label for="launch-agent">Ajan</label><select id="launch-agent"><option>Claude</option><option>OpenCode</option><option>Antigravity</option></select><label for="launch-prompt">İlk talimat</label><textarea id="launch-prompt" required rows="3" maxlength="1500">Handoff teslimini gözden geçir ve sonraki adımı raporla.</textarea><p class="muted">Bu önizlemede yeni bir süreç çalıştırılmaz; alıcı paneli örnek oturumu gösterir.</p><div class="dialog-footer"><button type="button" data-close>Vazgeç</button><button type="submit" class="primary">Oturumu göster</button></div></form></dialog>
+  <dialog id="decision-dialog" aria-labelledby="decision-title"><form id="decision-form"><div class="dialog-heading"><h2 id="decision-title">Değişiklik için karar ver</h2><button type="button" data-close aria-label="Karar penceresini kapat">✕</button></div><p id="decision-summary"></p><dl class="dialog-scope"><div><dt>İstek</dt><dd>#A17 · dosya değişikliği</dd></div><div><dt>Proje / ajan</dt><dd>R-AI-OS / Codex</dd></div><div><dt>Kapsam</dt><dd>wf_handoff.rs · örnek revizyon 1</dd></div></dl><label for="decision-reason">Karar notu <span class="muted">(isteğe bağlı)</span></label><textarea id="decision-reason" rows="2" maxlength="500"></textarea><p class="muted">Karar yalnızca bu istek içindir. Önizleme gerçek dosyayı değiştirmez.</p><div class="dialog-footer"><button type="button" data-close>Vazgeç</button><button id="decision-submit" type="submit" class="primary">Onayla</button></div></form></dialog>
+  <dialog id="palette-dialog" aria-label="Komut ve dosya arama"><div class="dialog-heading"><h2>Dosya veya komut ara</h2><button data-close aria-label="Aramayı kapat">✕</button></div><label class="sr-only" for="palette-input">Arama</label><input id="palette-input" type="search" placeholder="Dosya adı veya komut…" autocomplete="off"><div id="palette-results" class="palette-results"></div></dialog>
+</body>
+</html>

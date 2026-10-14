@@ -42,6 +42,53 @@ pub fn load_entities(dev_ops: &Path) -> Vec<EntityProject> {
 
 // ─── Save ─────────────────────────────────────────────────────────────────────
 
+/// Explicit health selection spans held and nested registered projects. The
+/// ordinary workspace scan retains its active-only filtering and deduplication.
+pub fn select_registered_entities(
+    conn: &rusqlite::Connection,
+    query: &str,
+) -> rusqlite::Result<Vec<EntityProject>> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "project query is empty".into(),
+        ));
+    }
+    let projects: Vec<_> = crate::db::load_all_projects(conn)?
+        .into_iter()
+        .map(row_to_entity)
+        .collect();
+    let path_query = Path::new(query);
+    if path_query.is_absolute() || query.contains(std::path::MAIN_SEPARATOR) || path_query.exists()
+    {
+        let path = path_query
+            .canonicalize()
+            .unwrap_or_else(|_| path_query.to_path_buf());
+        return Ok(projects
+            .into_iter()
+            .filter(|p| {
+                p.local_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| p.local_path.clone())
+                    == path
+            })
+            .collect());
+    }
+    let exact: Vec<_> = projects
+        .iter()
+        .filter(|p| p.name.eq_ignore_ascii_case(query))
+        .cloned()
+        .collect();
+    if !exact.is_empty() {
+        return Ok(exact);
+    }
+    let query = query.to_lowercase();
+    Ok(projects
+        .into_iter()
+        .filter(|p| p.name.to_lowercase().contains(&query))
+        .collect())
+}
+
 pub fn save_entities(_dev_ops: &Path, projects: Vec<EntityProject>) -> std::io::Result<()> {
     let conn = raios_core::db::open_db().map_err(std::io::Error::other)?;
 
@@ -233,6 +280,32 @@ fn load_entities_json_fallback(dev_ops: &Path) -> Vec<EntityProject> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_health_selection_includes_held_and_nested_projects_and_prefers_exact_names() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate_existing(&conn).unwrap();
+        for (name, path, status) in [
+            ("parent", "/health/parent", "beklemede"),
+            ("child", "/health/parent/child", "waiting"),
+            ("parent-tools", "/health/tools", "active"),
+        ] {
+            crate::db::upsert_project(
+                &conn, name, "core", path, None, status, None, None, None, None,
+            )
+            .unwrap();
+        }
+        let parent = select_registered_entities(&conn, "parent").unwrap();
+        assert_eq!(parent.len(), 1);
+        assert_eq!(parent[0].status, "beklemede");
+        let child = select_registered_entities(&conn, "/health/parent/child").unwrap();
+        assert_eq!(child.len(), 1);
+        assert_eq!(child[0].name, "child");
+        assert!(select_registered_entities(&conn, "absent")
+            .unwrap()
+            .is_empty());
+        assert!(select_registered_entities(&conn, " ").is_err());
+    }
 
     #[test]
     fn discover_all_entities_includes_every_project_regardless_of_status() {
