@@ -207,8 +207,14 @@ jobs:
         run: python3 tools/raios-workspace-native/scripts/verify_core_boundary.py tools/raios-workspace-native/Cargo.toml
       - name: Verify GPUI supply chain
         run: python3 tools/raios-workspace-native/scripts/verify_gpui_supply_chain.py tools/raios-workspace-native/Cargo.lock --expected-owner huacnlee --allowlist tools/raios-workspace-native/scripts/gpui-supply-chain-allowlist.toml
-      # Runner system dependencies must be established from this job's actual failure logs.
-      # No speculative apt package list: review the first native gh run before adding it.
+      # GPUI links fontconfig and the XKB/Wayland/XCB client libraries; the first real run named
+      # fontconfig, the rest are what its X11/Wayland backends need to compile.
+      - name: Install GPUI system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libfontconfig1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libx11-xcb-dev \
+            fonts-dejavu-core
       - name: Lint native workspace
         run: cargo clippy --manifest-path tools/raios-workspace-native/Cargo.toml --workspace --all-targets --locked -- -D warnings
       - name: Test native workspace without display gates
@@ -256,8 +262,8 @@ jobs:
         run: python3 tools/raios-workspace-native/scripts/verify_core_boundary.py tools/raios-workspace-native/Cargo.toml
       - name: Verify GPUI supply chain
         run: python3 tools/raios-workspace-native/scripts/verify_gpui_supply_chain.py tools/raios-workspace-native/Cargo.lock --expected-owner huacnlee --allowlist tools/raios-workspace-native/scripts/gpui-supply-chain-allowlist.toml
-      # Runner system dependencies must be established from this job's actual failure logs.
-      # No speculative library package list: review the first Arch gh run before adding it.
+      - name: Install GPUI system libraries
+        run: pacman -S --noconfirm --needed pkgconf fontconfig libxkbcommon libxkbcommon-x11 wayland libxcb
       - name: Lint native workspace
         run: cargo clippy --manifest-path tools/raios-workspace-native/Cargo.toml --workspace --all-targets --locked -- -D warnings
       - name: Test native workspace without display gates

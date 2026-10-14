@@ -143,6 +143,18 @@ mod tests {
         "/work/app"
     };
 
+    /// Other absolute project paths, also valid on Windows.
+    const NEVER: &str = if cfg!(windows) {
+        r"C:\never\registered"
+    } else {
+        "/never/registered"
+    };
+    const OTHER: &str = if cfg!(windows) {
+        r"C:\other\project"
+    } else {
+        "/other/project"
+    };
+
     fn handoff(key: &str, project: &str, summary: &str) -> Command {
         Command::CreateHandoff {
             project_path: project.into(),
@@ -192,7 +204,7 @@ mod tests {
     #[test]
     fn works_for_a_project_that_is_not_registered() {
         let mut conn = db();
-        let result = run(&mut conn, &handoff("h-2", "/never/registered", "ctx"))
+        let result = run(&mut conn, &handoff("h-2", NEVER, "ctx"))
             .unwrap()
             .unwrap();
         assert!(result["project_id"].is_null());
@@ -354,8 +366,7 @@ mod tests {
             .unwrap();
         let approval_id = queued["approval_id"].as_str().unwrap().to_owned();
 
-        let other_project =
-            query_handoff_receipt(&conn, &approval_id, "/other/project").unwrap_err();
+        let other_project = query_handoff_receipt(&conn, &approval_id, OTHER).unwrap_err();
         assert_eq!(other_project.code, "NOT_FOUND");
         let missing = query_handoff_receipt(&conn, "missing-id", APP).unwrap_err();
         assert_eq!(missing.code, "NOT_FOUND");
