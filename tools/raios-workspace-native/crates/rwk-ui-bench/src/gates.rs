@@ -93,12 +93,14 @@ pub const EDITOR_OPEN_500K: Gate = Gate {
     direction: Direction::AtMost,
 };
 
-/// `rwk-app` spawn to its first painted frame.
+/// `rwk-app` spawn to its first painted frame. The 300 ms hypothesis of the spec was raised to
+/// 350 ms by the owner on 2026-10-14 after native Wayland measured 306-352 ms, of which
+/// 230-290 ms is GPUI's own platform bring-up (see the gate report).
 pub const APP_COLD_START: Gate = Gate {
     id: "A1",
     name: "rwk-app spawn to first frame",
     unit: "ms",
-    limit: 300.0,
+    limit: 350.0,
     direction: Direction::AtMost,
 };
 
@@ -222,7 +224,7 @@ mod tests {
                 APP_COLD_START.limit,
                 APP_IDLE_PSS.limit
             ),
-            (350.0, 700.0, 300.0, 150.0)
+            (350.0, 700.0, 350.0, 150.0)
         );
         for gate in [
             EDITOR_OPEN_30K,
