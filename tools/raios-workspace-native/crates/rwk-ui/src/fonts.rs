@@ -34,19 +34,31 @@ pub fn pick_monospace(available: &[String]) -> &'static str {
 
 /// The family of the GT-LCARS display lettering: Antonio when it is registered, else the UI font.
 pub fn display_family(window: &Window) -> &'static str {
-    static FAMILY: OnceLock<&'static str> = OnceLock::new();
-    FAMILY.get_or_init(|| {
-        if window
-            .text_system()
-            .all_font_names()
-            .iter()
-            .any(|name| name == "Antonio")
-        {
-            "Antonio"
-        } else {
-            "Noto Sans"
-        }
-    })
+    if window
+        .text_system()
+        .all_font_names()
+        .iter()
+        .any(|name| name == "Antonio")
+    {
+        "Antonio"
+    } else {
+        "Noto Sans"
+    }
+}
+
+/// Registers the bundled Antonio font once, the first time a GT-LCARS surface needs it. The
+/// standard skin never pays for parsing it at start-up.
+pub fn ensure_display_font(cx: &gpui::App) {
+    static LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if LOADED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
+    if let Err(error) = cx
+        .text_system()
+        .add_fonts(vec![crate::assets::antonio_font()])
+    {
+        eprintln!("rwk-ui: could not load the display font: {error}");
+    }
 }
 
 /// The monospace family to draw code with (looked up once per process).

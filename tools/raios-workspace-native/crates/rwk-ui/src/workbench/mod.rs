@@ -225,6 +225,9 @@ impl Workbench {
         let host = SharedHost(pty);
         let sessions = Arc::new(SessionRegistry::new(Box::new(host.clone())));
         let theme = Theme::of(appearance);
+        if theme.lcars {
+            crate::fonts::ensure_display_font(cx);
+        }
         let files = cx.new(FileTreeView::new);
         files.update(cx, |files, cx| files.set_theme(theme, cx));
         let editor = cx.new(|cx| EditorView::themed(theme, window, cx));
@@ -682,6 +685,9 @@ impl Workbench {
     /// Tells every pane about a changed skin or tone, without recreating editors or sessions.
     fn apply_appearance(&mut self, cx: &mut Context<Self>) {
         let theme = self.theme();
+        if theme.lcars {
+            crate::fonts::ensure_display_font(cx);
+        }
         cx.emit(WorkbenchEvent::AppearanceChanged(self.appearance));
         self.files
             .update(cx, |files, cx| files.set_theme(theme, cx));
