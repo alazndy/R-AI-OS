@@ -290,6 +290,9 @@ lifecycle_interval_secs = 3600
 R-AI-OS ships a native VS Code extension that turns the IDE into a **Hybrid UI** — the control panel for your agent swarm directly in your sidebar.
 
 ```
+tools/raios-workspace-native/   # Nested workspace: rwk-core (headless logic), rwk-ui (GPUI views),
+│                                 # rwk-app (the binary), rwk-bench / rwk-ui-bench (performance gates)
+
 vscode-extension/
 ├── src/
 │   ├── extension.ts              # Activation + provider wiring
@@ -376,6 +379,21 @@ tools/raios-tray/
 - **Memory & Task Panels**: Shows recent `mem_items` and open tasks from the workspace database directly in the tray UI.
 - **Systemd User Integration**: Managed as a user service via `raios-tray.service` pointing to its canonical virtual environment (`tools/raios-tray/.venv/bin/python`). The unit is enabled under `graphical-session.target`, preventing Qt from starting before the Wayland/X11 session exists and stopping the tray before the display disappears.
 - **Structured Debug Logging**: Diagnostics written to `~/.config/raios/tray.log`.
+
+---
+
+## 🪟 Native Workspace (`tools/raios-workspace-native`)
+
+A native Linux development workspace written in Rust on GPUI (no web view): project file tree with KDE Breeze icons, an editor with tree-sitter highlighting, unified and side-by-side Git diff, up to four PTY terminals (agents run through `raios run`), a command palette, and the RAIOS control plane integrated into the window. It is a nested Cargo workspace with its own lockfile; see [tools/raios-workspace-native/README.md](tools/raios-workspace-native/README.md) and the design in `docs/superpowers/specs/2026-10-05-raios-workspace-native-design.md`.
+
+```bash
+cargo run --release --manifest-path tools/raios-workspace-native/Cargo.toml -p rwk-app -- /path/to/project
+```
+
+- **Control-plane commands go through `aiosd`.** Starting an agent, queueing a handoff and registering a project first read the daemon's policy (`GetCommandPolicy`); `confirm` shows a dialog with the exact payload and nothing is sent without a click. This needs an `aiosd` that knows `GetCommandPolicy`, `GetHandoffReceipt`, `CreateHandoff`, `RegisterProject` and `ValidateAgentLaunch` (this repository's build); an older daemon answers HTTP 422 and the workspace fails closed.
+- **Inspector, handoff composer, memory view**: tasks, runs and pending approvals of the open project (read-only), a handoff composer with receipt tracking, and `memory.md` plus the structured records with credentials redacted.
+- **Skins**: standard and GT-LCARS, dark and light.
+- Performance gates (`ui-bench`) and the parity evidence live in `docs/superpowers/reports/`.
 
 ---
 
