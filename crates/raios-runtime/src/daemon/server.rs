@@ -40,6 +40,11 @@ impl Server {
     }
 
     async fn run_inner(&self, tx: broadcast::Sender<String>) -> anyhow::Result<()> {
+        // Typed event bus: install the same sender every transport subscribes
+        // to, so control-plane transitions emitted in this process reach all
+        // of them (and direct `Server` users get the bus without the Kernel).
+        crate::events::install(&tx);
+
         // Telemetry channel: lossy, low-priority (FileChanged, port events).
         // Capacity 64 — lagged receivers are silently dropped rather than stalling control flow.
         let (telem_tx, _) = broadcast::channel::<String>(64);
