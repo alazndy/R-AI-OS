@@ -8,7 +8,8 @@ use std::time::Duration;
 use gpui::{AppContext, Context, Window};
 use rwk_core::consent::ConsentRequest;
 use rwk_core::control::{
-    ControlPlane, CreateHandoffRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction,
+    ControlPlane, CreateHandoffRequest, EventSource, HandoffDecisionRequest, IdempotencyKey,
+    LaunchAgentRequest, PolicyAction,
 };
 use rwk_core::error::AppError;
 use rwk_core::guarded::{Guarded, GuardedOutcome};
@@ -17,7 +18,7 @@ use rwk_core::handoff_state::Observation;
 use rwk_core::sessions::SessionKind;
 
 use super::{PendingAction, Workbench};
-use crate::handoff::{ComposerEvent, HandoffComposer};
+use crate::handoff::{ComposerEvent, HandoffComposer, RejectHandoffPrompt, RejectPromptEvent};
 
 /// How often open handoffs are read again.
 const RECEIPT_POLL: Duration = Duration::from_secs(3);
@@ -33,6 +34,17 @@ impl Workbench {
         self.inspector
             .update(cx, |inspector, cx| inspector.set_control_plane(plane, cx));
         cx.notify();
+    }
+
+    /// Connects (or removes) the daemon's live event stream: the inspector refreshes on typed
+    /// events and folds the stream state into its banner, the 3 s poll stays as the fallback.
+    pub fn set_event_source(
+        &mut self,
+        source: Option<Box<dyn EventSource>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.inspector
+            .update(cx, |inspector, cx| inspector.set_event_source(source, cx));
     }
 
     /// Projects the application remembers as registered, so they are not offered again.
@@ -112,6 +124,7 @@ impl Workbench {
         match policy {
             Ok(PolicyAction::Allow) => self.run_guarded(op, window, cx),
             Ok(PolicyAction::Deny) => {
+                self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say(
                     format!("Politika '{}' komutunu reddediyor", op.command_name()),
@@ -131,12 +144,14 @@ impl Workbench {
                         cx.notify();
                     }
                     Err(error) => {
+                        self.settle_resume(&op, cx);
                         self.receiver_launch_failed(cx);
                         self.say(error.message, cx);
                     }
                 }
             }
             Err(error) => {
+                self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say(error.message, cx);
             }
@@ -162,10 +177,12 @@ impl Workbench {
         match result {
             Ok(()) if approved => self.run_guarded(op, window, cx),
             Ok(()) => {
+                self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say("Vazgeçildi; hiçbir şey gönderilmedi", cx);
             }
             Err(error) => {
+                self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say(error.message, cx);
             }
@@ -201,6 +218,10 @@ impl Workbench {
                 self.new_terminal(request.agent, window, cx);
                 self.receiver_started(cx);
             }
+            (Guarded::ResumeAgent { key, .. }, Ok(GuardedOutcome::AgentLaunchValidated)) => {
+                self.resume_terminal(key, window, cx);
+                self.receiver_started(cx);
+            }
             (Guarded::CreateHandoff(request), Ok(GuardedOutcome::HandoffQueued(queued))) => {
                 self.handoffs.push(TrackedHandoff::queued(
                     queued.approval_id,
@@ -210,6 +231,17 @@ impl Workbench {
                 self.say("Devir notu kuyruğa alındı", cx);
                 self.publish_handoffs(cx);
                 self.start_receipt_polling(window, cx);
+            }
+            (Guarded::ApproveHandoff(request), Ok(GuardedOutcome::HandoffApproved)) => {
+                // Consent only: the note still has to be consumed by the addressed agent's run.
+                self.say(format!("Devir onaylandı: {}", request.approval_id), cx);
+                self.inspector
+                    .update(cx, |inspector, cx| inspector.refresh_now(cx));
+            }
+            (Guarded::RejectHandoff(request), Ok(GuardedOutcome::HandoffRejected)) => {
+                self.say(format!("Devir reddedildi: {}", request.approval_id), cx);
+                self.inspector
+                    .update(cx, |inspector, cx| inspector.refresh_now(cx));
             }
             (
                 Guarded::RegisterProject { root, .. },
@@ -226,8 +258,12 @@ impl Workbench {
                     cx,
                 );
             }
-            (_, Ok(_)) => self.say("Beklenmeyen daemon yanıtı", cx),
-            (_, Err(error)) => {
+            (op, Ok(_)) => {
+                self.settle_resume(&op, cx);
+                self.say("Beklenmeyen daemon yanıtı", cx);
+            }
+            (op, Err(error)) => {
+                self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say(error.message, cx);
             }
@@ -300,6 +336,102 @@ impl Workbench {
             idempotency_key: IdempotencyKey::fresh(),
         };
         self.start_guarded(Guarded::CreateHandoff(request), window, cx);
+    }
+
+    // ----- approvals ---------------------------------------------------------------------
+
+    /// Approves a pending handoff approval: the control-plane owner's consent, not delivery.
+    /// The addressed agent's own run still has to consume the note.
+    pub fn approve_handoff(
+        &mut self,
+        approval_id: String,
+        revision: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.start_guarded(
+            Guarded::ApproveHandoff(HandoffDecisionRequest {
+                project_root: project.info().root.clone(),
+                approval_id,
+                expected_revision: revision,
+                reason: None,
+                idempotency_key: IdempotencyKey::fresh(),
+            }),
+            window,
+            cx,
+        );
+    }
+
+    /// Asks for the reason to reject a pending handoff approval. The decision is sent only once
+    /// the reason passes validation and the policy/consent guard has allowed it.
+    pub fn request_reject_handoff(
+        &mut self,
+        approval_id: String,
+        revision: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.reject_prompt.is_some() {
+            return;
+        }
+        let theme = self.theme();
+        let target = approval_id.clone();
+        let prompt = cx.new(|cx| RejectHandoffPrompt::new(target, window, cx));
+        prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        self.reject_prompt_subscription = Some(cx.subscribe_in(
+            &prompt,
+            window,
+            move |this, _prompt, event: &RejectPromptEvent, window, cx| match event {
+                RejectPromptEvent::Reject { reason } => {
+                    this.close_reject_prompt(window, cx);
+                    this.send_rejection(approval_id.clone(), revision, reason.clone(), window, cx);
+                }
+                RejectPromptEvent::Close => this.close_reject_prompt(window, cx),
+            },
+        ));
+        self.reject_prompt = Some(prompt);
+        cx.notify();
+    }
+
+    /// Sends the rejection with the reason the user gave.
+    fn send_rejection(
+        &mut self,
+        approval_id: String,
+        revision: i64,
+        reason: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.start_guarded(
+            Guarded::RejectHandoff(HandoffDecisionRequest {
+                project_root: project.info().root.clone(),
+                approval_id,
+                expected_revision: revision,
+                reason: Some(reason),
+                idempotency_key: IdempotencyKey::fresh(),
+            }),
+            window,
+            cx,
+        );
+    }
+
+    /// Closes the reject prompt and returns focus to the workbench.
+    pub fn close_reject_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reject_prompt = None;
+        self.reject_prompt_subscription = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// The open reject prompt.
+    pub fn reject_prompt(&self) -> Option<&gpui::Entity<RejectHandoffPrompt>> {
+        self.reject_prompt.as_ref()
     }
 
     // ----- receipts --------------------------------------------------------------------

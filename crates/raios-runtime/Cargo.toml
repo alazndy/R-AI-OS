@@ -48,3 +48,5 @@ cortex = ["fastembed", "ort-sys", "hf-hub", "raios-core/cortex"]
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 raios-surface-tui = { path = "../raios-surface-tui" }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"

@@ -11,6 +11,7 @@ pub mod cortex;
 pub mod daemon;
 pub mod daemon_client;
 pub mod discovery;
+pub mod events;
 pub mod factory;
 pub mod filebrowser;
 pub mod git_utils;

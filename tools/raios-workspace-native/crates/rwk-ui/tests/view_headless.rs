@@ -14,7 +14,7 @@ use gpui::{
 use gpui_wgpu::CosmicTextSystem;
 use rwk_core::error::Result as CoreResult;
 use rwk_core::project::ProjectRoot;
-use rwk_core::sessions::{SessionId, SessionKind, TerminalHost, TerminalSize};
+use rwk_core::sessions::{SessionId, SessionKind, SessionLaunch, TerminalHost, TerminalSize};
 use rwk_core::terminal::{EngineOptions, TerminalEngine};
 use rwk_ui::terminal::view::wake_channel;
 use rwk_ui::terminal::{Appearance, FrameGate, TerminalView};
@@ -36,7 +36,7 @@ impl TerminalHost for RecordingHost {
         &self,
         _project: &ProjectRoot,
         _kind: SessionKind,
-        _prompt: Option<&str>,
+        _launch: &SessionLaunch,
         _size: TerminalSize,
     ) -> CoreResult<SessionId> {
         unimplemented!("the view tests never spawn")

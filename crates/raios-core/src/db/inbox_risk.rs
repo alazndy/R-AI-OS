@@ -145,17 +145,22 @@ pub fn score_approval(
 /// `cp_query_pending_approvals` enriched with risk score, file impact, and
 /// the requesting agent's historical success rate.
 pub fn cp_query_pending_approvals_scored(conn: &Connection) -> Result<Vec<ScoredApproval>> {
-    let mut stmt = conn.prepare(
+    let sql = format!(
         "SELECT ap.id, ap.approval_type, ap.reason, ap.status,
                 ap.task_id, t.title, ap.requested_at,
-                art.metadata_json, ar2.agent_name
+                art.metadata_json, ar2.agent_name,
+                {path} AS project_path, t.assignee_id, ap.revision
          FROM cp_approvals ap
          LEFT JOIN cp_tasks t ON t.id = ap.task_id
          LEFT JOIN cp_artifacts art ON art.id = ap.artifact_id
          LEFT JOIN cp_agent_runs ar2 ON ar2.id = ap.agent_run_id
+         LEFT JOIN projects p ON p.id = COALESCE(ap.project_id, t.project_id)
+         LEFT JOIN cp_task_list_items li ON li.task_id = t.id
          WHERE ap.status = 'pending'
          ORDER BY ap.requested_at DESC",
-    )?;
+        path = super::control_plane::PROJECT_PATH_EXPR
+    );
+    let mut stmt = conn.prepare(&sql)?;
 
     struct Raw {
         approval: ApprovalInboxRow,
@@ -174,6 +179,10 @@ pub fn cp_query_pending_approvals_scored(conn: &Connection) -> Result<Vec<Scored
                     task_id: row.get(4)?,
                     task_title: row.get(5)?,
                     requested_at: row.get(6)?,
+                    project_path: row.get(9)?,
+                    origin_agent: row.get(8)?,
+                    target_agent: row.get(10)?,
+                    revision: row.get(11)?,
                 },
                 metadata_json: row.get(7)?,
                 agent_name: row.get(8)?,

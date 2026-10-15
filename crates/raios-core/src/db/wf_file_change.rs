@@ -115,7 +115,8 @@ pub fn mark_file_change_workflow_applied(
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute(
         "UPDATE cp_approvals
-         SET status = 'approved', resolved_at = ?1, resolved_by = ?2
+         SET status = 'approved', resolved_at = ?1, resolved_by = ?2,
+             revision = revision + 1
          WHERE id = ?3",
         params![now, resolved_by, ids.approval_id],
     )?;
@@ -147,7 +148,8 @@ pub fn mark_file_change_workflow_rejected(
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute(
         "UPDATE cp_approvals
-         SET status = 'rejected', resolved_at = ?1, resolved_by = ?2
+         SET status = 'rejected', resolved_at = ?1, resolved_by = ?2,
+             revision = revision + 1
          WHERE id = ?3",
         params![now, resolved_by, ids.approval_id],
     )?;
@@ -179,7 +181,8 @@ pub fn mark_file_change_workflow_apply_failed(
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute(
         "UPDATE cp_approvals
-         SET status = 'approved', resolved_at = ?1, resolved_by = ?2
+         SET status = 'approved', resolved_at = ?1, resolved_by = ?2,
+             revision = revision + 1
          WHERE id = ?3",
         params![now, resolved_by, ids.approval_id],
     )?;

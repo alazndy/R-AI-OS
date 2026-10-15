@@ -64,6 +64,7 @@ impl ErrorCode {
         match code {
             "INVALID_INPUT" => ErrorCode::InvalidInput,
             "NOT_FOUND" => ErrorCode::NotFound,
+            "CONFLICT" => ErrorCode::Conflict,
             "UNAUTHORIZED" => ErrorCode::Unauthorized,
             "FORBIDDEN" => ErrorCode::Forbidden,
             "INTERNAL_ERROR" => ErrorCode::Internal,

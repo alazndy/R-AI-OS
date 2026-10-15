@@ -14,7 +14,7 @@ use gpui::{
     Styled, Window, WindowHandle, WindowOptions,
 };
 use rwk_core::project::ProjectRoot;
-use rwk_core::sessions::{SessionId, SessionKind, TerminalHost, TerminalSize};
+use rwk_core::sessions::{SessionId, SessionKind, SessionLaunch, TerminalHost, TerminalSize};
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
 use rwk_ui::terminal::{Appearance, FrameGate, FrameStats, TerminalView};
 
@@ -159,10 +159,11 @@ fn write_executable(path: &Path, text: &str) -> Result<(), String> {
 
 /// Spawns, retrying while the kernel reports the freshly written script as busy.
 fn spawn(rig: &Rig) -> Result<SessionId, String> {
+    let launch = SessionLaunch::default();
     for _ in 0..20 {
         match rig
             .host
-            .spawn(&rig.project, SessionKind::Shell, None, TERMINAL)
+            .spawn(&rig.project, SessionKind::Shell, &launch, TERMINAL)
         {
             Ok(id) => return Ok(id),
             Err(error) if error.message.contains("Text file busy") => {

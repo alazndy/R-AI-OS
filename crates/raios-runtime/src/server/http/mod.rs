@@ -13,6 +13,12 @@ mod auth;
 mod plans;
 mod routes;
 mod websocket;
+// Environment-redirecting integration tests, Unix-only for the same reason as
+// `auth::middleware_integration_tests`: `dirs::config_dir()` honours
+// `XDG_CONFIG_HOME`/`HOME` on Unix, but resolves `%APPDATA%` on Windows, which
+// these tests deliberately do not redirect.
+#[cfg(all(test, unix))]
+mod tests_ws;
 
 use a2a::{handle_a2a, handle_agent_card};
 use auth::auth_middleware;
@@ -62,15 +68,15 @@ pub fn detect_tailscale_ip() -> Option<std::net::IpAddr> {
     String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
-/// Start the Axum HTTP & WebSocket API Server.
-pub async fn start_http_server(
-    port: u16,
-    daemon_state: Arc<RwLock<DaemonState>>,
-    tx: broadcast::Sender<String>,
-) -> anyhow::Result<()> {
+/// Build the full HTTP/WebSocket router: routes, auth middleware, shared state.
+///
+/// Extracted from [`start_http_server`] so in-crate tests can serve the real
+/// router (same routes, same auth) on an ephemeral port with a temporary
+/// database and their own broadcast sender.
+fn build_router(daemon_state: Arc<RwLock<DaemonState>>, tx: broadcast::Sender<String>) -> Router {
     let app_state = AppState { daemon_state, tx };
 
-    let app = Router::new()
+    Router::new()
         .route("/health", get(handle_health))
         .route("/api/health", get(handle_health))
         .route("/api/projects", get(handle_projects))
@@ -98,7 +104,16 @@ pub async fn start_http_server(
         .route("/.well-known/agent.json", get(handle_agent_card))
         .route("/a2a", post(handle_a2a))
         .layer(axum::middleware::from_fn(auth_middleware))
-        .with_state(app_state);
+        .with_state(app_state)
+}
+
+/// Start the Axum HTTP & WebSocket API Server.
+pub async fn start_http_server(
+    port: u16,
+    daemon_state: Arc<RwLock<DaemonState>>,
+    tx: broadcast::Sender<String>,
+) -> anyhow::Result<()> {
+    let app = build_router(daemon_state, tx);
 
     let addr = resolve_bind_addr(port);
     println!("[Kernel] HTTP API Adapter listening on {}", addr);

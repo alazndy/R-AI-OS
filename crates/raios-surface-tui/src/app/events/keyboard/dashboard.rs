@@ -169,6 +169,7 @@ impl App {
                     let command = Command::ApproveHandoff {
                         idempotency_key: format!("approve-{approval_id}"),
                         approval_id,
+                        expected_revision: None,
                     };
                     if let Err(problem) = self.client.send_command(command) {
                         self.store.last_error = Some(problem.message);
@@ -185,6 +186,7 @@ impl App {
                         let command = Command::RejectHandoff {
                             idempotency_key: format!("reject-{approval_id}"),
                             approval_id,
+                            expected_revision: None,
                             reason: "Rejected by TUI user".into(),
                         };
                         if let Err(problem) = self.client.send_command(command) {

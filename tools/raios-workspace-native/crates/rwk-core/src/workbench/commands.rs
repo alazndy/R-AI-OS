@@ -11,8 +11,12 @@ pub enum CommandId {
     Project,
     /// Search files.
     Files,
+    /// Search the project's text through the RAIOS CLI's index.
+    Search,
     /// Save the open file.
     Save,
+    /// Close the active editor tab.
+    CloseTab,
     /// Git diff of the open file.
     Diff,
     /// Switch the diff between unified and side-by-side.
@@ -128,7 +132,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 34] = [
+const COMMANDS: [Command; 36] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -148,10 +152,22 @@ const COMMANDS: [Command; 34] = [
         &[bind("p"), bind("k")],
     ),
     cmd(
+        CommandId::Search,
+        "Projede ara",
+        Some("Ctrl Shift F"),
+        &[bind_terminal("f", true, false)],
+    ),
+    cmd(
         CommandId::Save,
         "Dosyayı kaydet",
         Some("Ctrl S"),
         &[bind("s")],
+    ),
+    cmd(
+        CommandId::CloseTab,
+        "Sekmeyi kapat",
+        Some("Ctrl W"),
+        &[bind("w")],
     ),
     cmd(
         CommandId::Diff,
@@ -459,13 +475,13 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
     match id {
         Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
         | AgentsLayout => allow(),
-        Files | Refresh | FocusFiles | Memory | Inspector => needs_project(),
+        Files | Search | Refresh | FocusFiles | Memory | Inspector => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor => {
+        Diff | DiffSplit | FocusEditor | CloseTab => {
             if state.file_open {
                 allow()
             } else {
@@ -546,7 +562,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 34);
+        assert_eq!(catalog().len(), 36);
     }
 
     #[test]
@@ -562,6 +578,34 @@ mod tests {
             resolve_shortcut(&stroke, TERMINAL, false),
             Some(CommandId::Inspector)
         );
+    }
+
+    #[test]
+    fn ctrl_shift_f_searches_the_project_from_every_pane() {
+        let mut stroke = stroke("f");
+        stroke.shift = true;
+        assert_eq!(
+            resolve_shortcut(&stroke, EDITOR, false),
+            Some(CommandId::Search)
+        );
+        assert_eq!(
+            resolve_shortcut(&stroke, TERMINAL, false),
+            Some(CommandId::Search)
+        );
+    }
+
+    #[test]
+    fn search_needs_a_project() {
+        let closed = WorkbenchState::default();
+        assert_eq!(
+            available(CommandId::Search, &closed).reason,
+            Some("Önce bir proje klasörü açın")
+        );
+        let open = WorkbenchState {
+            project_open: true,
+            ..WorkbenchState::default()
+        };
+        assert!(available(CommandId::Search, &open).enabled);
     }
 
     #[test]

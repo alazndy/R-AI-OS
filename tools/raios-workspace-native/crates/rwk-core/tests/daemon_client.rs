@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use raios_contracts::{GovernSnapshot, NowSnapshot, WorkSnapshot};
 use rwk_core::control::daemon::{DaemonClient, TokenSource};
 use rwk_core::control::{
-    ControlPlane, CreateHandoffRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction,
+    ControlPlane, CreateHandoffRequest, HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest,
+    PolicyAction,
 };
 use rwk_core::error::{AppError, ErrorCode, Result};
 use rwk_core::sessions::SessionKind;
@@ -291,6 +292,108 @@ fn creating_a_handoff_sends_agent_identities_and_returns_the_queued_receipt() {
 /// (`crates/raios-contracts/tests/launch_contract.rs` holds the same literal), so a rename on
 /// either side fails a test.
 const VALIDATE_AGENT_LAUNCH_WIRE_JSON: &str = r#"{"command_type":"ValidateAgentLaunch","payload":{"agent_name":"opencode","project_path":"/work/app","prompt":"inspect the build","idempotency_key":"v-1"}}"#;
+
+fn decision(reason: Option<&str>) -> HandoffDecisionRequest {
+    HandoffDecisionRequest {
+        project_root: PathBuf::from("/work/app"),
+        approval_id: "a-7".into(),
+        expected_revision: 4,
+        reason: reason.map(str::to_owned),
+        idempotency_key: IdempotencyKey::new("d-1"),
+    }
+}
+
+#[test]
+fn approving_a_handoff_sends_approve_handoff_with_the_revision_the_user_saw() {
+    let (url, server) = spawn_daemon(vec![ok(json!({"status": "ok", "result": {
+        "approval_id": "a-7", "status": "approved"
+    }}))]);
+
+    client(&url).approve_handoff(&decision(None)).unwrap();
+
+    let requests = server.join().unwrap();
+    assert!(
+        requests[0].starts_with("POST /api/v1/control/command "),
+        "{}",
+        requests[0]
+    );
+    assert!(has_bearer(&requests[0], "test-token"));
+    let body = json_body(&requests[0]);
+    assert_eq!(body["command_type"], "ApproveHandoff");
+    assert_eq!(body["payload"]["approval_id"], "a-7");
+    assert_eq!(body["payload"]["expected_revision"], 4);
+    assert_eq!(body["payload"]["idempotency_key"], "d-1");
+}
+
+#[test]
+fn rejecting_a_handoff_sends_the_reason_and_the_revision() {
+    let (url, server) = spawn_daemon(vec![ok(json!({"status": "ok", "result": {
+        "approval_id": "a-7", "status": "rejected"
+    }}))]);
+
+    client(&url)
+        .reject_handoff(&decision(Some("kapsam dışı")))
+        .unwrap();
+
+    let requests = server.join().unwrap();
+    let body = json_body(&requests[0]);
+    assert_eq!(body["command_type"], "RejectHandoff");
+    assert_eq!(body["payload"]["reason"], "kapsam dışı");
+    assert_eq!(body["payload"]["expected_revision"], 4);
+}
+
+#[test]
+fn a_stale_decision_is_reported_as_a_conflict() {
+    // The daemon refuses a decision whose revision is older than the stored one.
+    let stale = || {
+        ok(problem(
+            "CONFLICT",
+            "Approval 'a-7' changed since it was read (revision 4 is stale, current is 5)",
+        ))
+    };
+    let (url, server) = spawn_daemon(vec![stale(), stale()]);
+    let daemon = client(&url);
+
+    let approved = daemon.approve_handoff(&decision(None)).unwrap_err();
+    let rejected = daemon
+        .reject_handoff(&decision(Some("artık gerekmiyor")))
+        .unwrap_err();
+
+    server.join().unwrap();
+    assert_eq!(approved.code, ErrorCode::Conflict);
+    assert_eq!(rejected.code, ErrorCode::Conflict);
+}
+
+#[test]
+fn a_decision_result_other_than_the_expected_status_is_refused() {
+    // `ApproveHandoff` answered with the wrong status: treating it as success would claim
+    // consent that was never recorded.
+    let (url, server) = spawn_daemon(vec![
+        ok(json!({"status": "ok", "result": {"approval_id": "a-7", "status": "rejected"}})),
+        ok(json!({"status": "ok"})),
+    ]);
+    let daemon = client(&url);
+
+    let wrong = daemon.approve_handoff(&decision(None)).unwrap_err();
+    let missing = daemon
+        .reject_handoff(&decision(Some("kapsam dışı")))
+        .unwrap_err();
+
+    server.join().unwrap();
+    assert_eq!(wrong.code, ErrorCode::Daemon);
+    assert!(wrong.message.contains("rejected"), "{}", wrong.message);
+    assert_eq!(missing.code, ErrorCode::Daemon);
+}
+
+#[test]
+fn a_rejection_without_a_reason_is_refused_locally() {
+    let daemon = client(&closed_port_url());
+
+    let error = daemon.reject_handoff(&decision(None)).unwrap_err();
+
+    // `InvalidInput`, not `DaemonUnreachable`: the request was never attempted.
+    assert_eq!(error.code, ErrorCode::InvalidInput);
+}
 
 fn launch_request(agent: SessionKind, key: &str) -> LaunchAgentRequest {
     LaunchAgentRequest {

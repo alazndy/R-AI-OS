@@ -3,10 +3,10 @@
 
 use gpui::{
     div, Context, EventEmitter, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Window,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
 };
 use gpui::{AppContext, Entity};
-use gpui_base::input::{Input, InputState};
+use gpui_base::input::{Input, InputEvent, InputState};
 use rwk_core::handoff_input::{looks_like_secret, validate_summary};
 use rwk_core::sessions::SessionKind;
 use rwk_core::workbench::{Appearance, Theme};
@@ -164,5 +164,184 @@ impl Render for HandoffComposer {
                     .child("Not bir BLOCKER devri olarak kuyruğa alınır; parola ve anahtar yazmayın. Esc kapatır."),
             )
             .child(div().flex().flex_row().gap_2().children(buttons))
+    }
+}
+
+/// The longest rejection reason the daemon accepts, in bytes.
+const MAX_REASON_BYTES: usize = 2_000;
+
+/// What the reject prompt asks of the workbench.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RejectPromptEvent {
+    /// The user confirmed the reason.
+    Reject {
+        /// The rejection reason, trimmed.
+        reason: String,
+    },
+    /// The user closed the prompt.
+    Close,
+}
+
+impl EventEmitter<RejectPromptEvent> for RejectHandoffPrompt {}
+
+/// The reject prompt: a small modal asking why a pending handoff approval is refused. It only
+/// validates and reports; the workbench runs consent and sends.
+pub struct RejectHandoffPrompt {
+    approval_id: String,
+    input: Entity<InputState>,
+    problem: Option<SharedString>,
+    theme: Theme,
+    _subscription: Subscription,
+}
+
+impl RejectHandoffPrompt {
+    /// A prompt for `approval_id`; the text box takes focus.
+    pub fn new(approval_id: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let input = cx.new(|cx| InputState::new(window, cx).submit_on_enter(true));
+        input.update(cx, |input, cx| input.focus(window, cx));
+        let subscription = cx.subscribe(&input, |this, _input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.submit(cx);
+            }
+        });
+        Self {
+            approval_id,
+            input,
+            problem: None,
+            theme: Theme::of(Appearance::default()),
+            _subscription: subscription,
+        }
+    }
+
+    /// The approval being decided.
+    pub fn approval_id(&self) -> &str {
+        &self.approval_id
+    }
+
+    /// Repaints the prompt with another skin or tone.
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
+    /// The text typed so far.
+    pub fn text(&self, cx: &gpui::App) -> String {
+        self.input.read(cx).value().to_string()
+    }
+
+    /// Replaces the text (as typing would).
+    pub fn set_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.input
+            .update(cx, |input, cx| input.set_value(text, window, cx));
+    }
+
+    /// The message shown under the text box.
+    pub fn problem(&self) -> Option<String> {
+        self.problem.as_ref().map(ToString::to_string)
+    }
+
+    /// Validates the reason and, when it passes, asks the workbench to reject the handoff. The
+    /// daemon accepts at most 2000 bytes, and the reason lands in the audit ledger, so a
+    /// credential-shaped text is refused here too.
+    pub fn submit(&mut self, cx: &mut Context<Self>) {
+        let text = self.text(cx);
+        let reason = text.trim();
+        if reason.is_empty() {
+            self.problem = Some("Reddetmek için bir gerekçe gerekli.".into());
+        } else if reason.len() > MAX_REASON_BYTES {
+            self.problem =
+                Some(format!("Gerekçe en fazla {MAX_REASON_BYTES} bayt olabilir.").into());
+        } else if looks_like_secret(reason) {
+            self.problem =
+                Some("Metin bir kimlik bilgisi gibi görünüyor; gerekçeden çıkarın.".into());
+        } else {
+            self.problem = None;
+            cx.emit(RejectPromptEvent::Reject {
+                reason: reason.to_owned(),
+            });
+        }
+        cx.notify();
+    }
+
+    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if event.keystroke.key == "escape" {
+            cx.emit(RejectPromptEvent::Close);
+            cx.stop_propagation();
+        }
+    }
+}
+
+impl Render for RejectHandoffPrompt {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        div()
+            .id("reject-handoff-prompt")
+            .absolute()
+            .top_16()
+            .left_0()
+            .right_0()
+            .mx_auto()
+            .w(gpui::px(520.0))
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .bg(gpui::rgb(theme.panel))
+            .border_1()
+            .border_color(gpui::rgb(theme.line))
+            .text_color(gpui::rgb(theme.text))
+            .capture_key_down(cx.listener(Self::on_key_down))
+            .child(SharedString::from(format!(
+                "Devir reddi · onay {}",
+                self.approval_id
+            )))
+            .child(
+                div()
+                    .h(gpui::px(30.0))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(gpui::rgb(theme.line))
+                    .child(Input::new(&self.input)),
+            )
+            .children(self.problem.clone().map(|problem| {
+                div()
+                    .text_xs()
+                    .text_color(gpui::rgb(theme.bad))
+                    .child(problem)
+            }))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(gpui::rgb(theme.muted))
+                    .child("Gerekçe denetim kaydına geçer; parola ve anahtar yazmayın. Enter reddeder, Esc kapatır."),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("reject-handoff-confirm")
+                            .px_3()
+                            .py_1()
+                            .border_1()
+                            .border_color(gpui::rgb(theme.bad))
+                            .child(SharedString::from("Reddet"))
+                            .on_click(cx.listener(|this, _, _window, cx| this.submit(cx))),
+                    )
+                    .child(
+                        div()
+                            .id("reject-handoff-cancel")
+                            .px_3()
+                            .py_1()
+                            .border_1()
+                            .border_color(gpui::rgb(theme.line))
+                            .child(SharedString::from("Vazgeç"))
+                            .on_click(cx.listener(|_, _, _window, cx| {
+                                cx.emit(RejectPromptEvent::Close);
+                            })),
+                    ),
+            )
     }
 }

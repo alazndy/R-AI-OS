@@ -942,6 +942,7 @@ mod tests {
         assert_eq!(unresolved.source.project, "codex-history");
     }
 
+    #[cfg(unix)]
     #[test]
     fn home_is_home_unscoped_not_a_ordinary_project() {
         let temp = tempfile::tempdir().expect("tempdir");

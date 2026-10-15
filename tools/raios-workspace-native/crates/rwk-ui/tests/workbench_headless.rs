@@ -1,15 +1,18 @@
 //! The workbench on GPUI's test platform: real project, real editor, real PTY sessions.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui::{Entity, TestAppContext, TestDispatcher, VisualTestContext};
 use gpui_wgpu::CosmicTextSystem;
+use rwk_core::search::{SearchHit, SearchResult, SearchSource};
 use rwk_core::terminal::ProgramPaths;
 use rwk_core::workbench::Tone;
-use rwk_core::workbench::{Appearance, CommandId};
+use rwk_core::workbench::{
+    Appearance, CommandId, SavedTab, SavedTerminal, SavedWorkspace, WorkspaceStateSource,
+};
 use rwk_ui::workbench::layout::LayoutPreset;
 use rwk_ui::workbench::{Decision, PendingAction, Workbench, WorkbenchEvent};
 
@@ -24,6 +27,26 @@ struct Rig {
     dir: tempfile::TempDir,
 }
 
+/// A workspace source that hands back whatever state it was given, for any project: the
+/// workbench itself is the one that decides whether the state belongs to the open project.
+struct FixedWorkspaceStore {
+    state: Mutex<Option<SavedWorkspace>>,
+}
+
+impl FixedWorkspaceStore {
+    fn new(state: Option<SavedWorkspace>) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(state),
+        })
+    }
+}
+
+impl WorkspaceStateSource for FixedWorkspaceStore {
+    fn load(&self, _project: &Path) -> Option<SavedWorkspace> {
+        self.state.lock().expect("lock").clone()
+    }
+}
+
 fn rig() -> Rig {
     let serial = SERIAL
         .lock()
@@ -32,7 +55,20 @@ fn rig() -> Rig {
     std::fs::write(dir.path().join("a.txt"), "one").expect("a");
     std::fs::write(dir.path().join("b.txt"), "two").expect("b");
     let script = dir.path().join(".session.sh");
-    std::fs::write(&script, "#!/bin/bash\nexec sleep 100000\n").expect("script");
+    // Every call is logged for tests that check what a pane or the session catalog was run
+    // with; a `resume --list` answers from `.catalog` when a test put one there, and every
+    // other invocation (a pane) stays alive.
+    let argv_log = dir.path().join(".argv");
+    let catalog = dir.path().join(".catalog");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/bash\nprintf '%s\\n' \"$*\" >> {argv}\nif [ \"$1\" = \"resume\" ] && [ \"$2\" = \"--list\" ]; then\n  if [ -f {catalog} ]; then cat {catalog}; fi\n  exit 0\nfi\nexec sleep 100000\n",
+            argv = argv_log.display(),
+            catalog = catalog.display(),
+        ),
+    )
+    .expect("script");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let app = Box::leak(Box::new(TestAppContext::build_with_text_system(
         TestDispatcher::new(0),
@@ -109,6 +145,62 @@ impl Rig {
         self.read(|wb, cx| wb.editor().read(cx).text(cx))
     }
 
+    fn editor_paths(&mut self) -> Vec<String> {
+        self.read(|wb, cx| wb.editor().read(cx).paths())
+    }
+
+    fn editor_dirty_paths(&mut self) -> Vec<String> {
+        self.read(|wb, cx| wb.editor().read(cx).dirty_paths())
+    }
+
+    fn activate_tab(&mut self, path: &str) {
+        let path = path.to_owned();
+        self.with(|wb, window, cx| {
+            wb.editor()
+                .clone()
+                .update(cx, |editor, cx| editor.activate_tab(&path, window, cx))
+        });
+        self.cx.run_until_parked();
+    }
+
+    fn close_tab(&mut self, path: &str) {
+        let path = path.to_owned();
+        self.with(|wb, window, cx| wb.request_close_tab(path, window, cx));
+    }
+
+    fn set_workspace_source(&mut self, source: Arc<dyn WorkspaceStateSource>) {
+        self.with(|wb, _window, _cx| wb.set_workspace_source(Some(source)));
+    }
+
+    /// Puts the JSON `raios resume --list --json` answers with into the project directory. The
+    /// rows have to name the project root themselves, as the CLI's do.
+    fn script_catalog(&mut self, json: &str) {
+        std::fs::write(self.dir.path().join(".catalog"), json).expect("catalog");
+    }
+
+    /// Every argument list the scripted `raios` has been called with so far, oldest first.
+    fn script_calls(&mut self) -> Vec<String> {
+        std::fs::read_to_string(self.dir.path().join(".argv"))
+            .map(|log| log.lines().map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
+    /// Records every `WorkspaceChanged` the workbench hands to the application.
+    fn record_workspace_changes(&mut self) -> Arc<Mutex<Vec<SavedWorkspace>>> {
+        let saved = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&saved);
+        let view = self.view.clone();
+        self.cx.update(|_w, cx| {
+            cx.subscribe(&view, move |_wb, event: &WorkbenchEvent, _cx| {
+                if let WorkbenchEvent::WorkspaceChanged(workspace) = event {
+                    recorder.lock().expect("lock").push(workspace.clone());
+                }
+            })
+            .detach();
+        });
+        saved
+    }
+
     fn type_text(&mut self, text: &str) {
         let text = text.to_owned();
         self.with(|wb, window, cx| {
@@ -121,6 +213,51 @@ impl Rig {
 
     fn run(&mut self, id: CommandId) {
         self.with(|wb, window, cx| wb.run(id, window, cx));
+    }
+
+    /// Connects a scripted search source; every `locate` call takes the next queued answer.
+    fn script_search(
+        &mut self,
+        answers: Vec<(Duration, Vec<SearchHit>)>,
+    ) -> Arc<Mutex<Vec<(String, bool)>>> {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source = FakeSearch {
+            answers: Mutex::new(answers.into()),
+            calls: Arc::clone(&calls),
+        };
+        self.with(|wb, _window, _cx| wb.set_search_source(Some(Arc::new(source))));
+        calls
+    }
+
+    /// Types `text` into the open search view, as a person would.
+    fn search_query(&mut self, text: &str) {
+        let text = text.to_owned();
+        self.with(|wb, window, cx| {
+            let view = wb.search().expect("the search view is open").clone();
+            view.update(cx, |view, cx| view.set_query(&text, window, cx));
+        });
+        self.cx.run_until_parked();
+    }
+
+    fn search_open(&mut self) -> bool {
+        self.read(|wb, _| wb.search().is_some())
+    }
+
+    /// The hits on screen as `path:line`, empty while nothing has answered.
+    fn search_hits(&mut self) -> Vec<String> {
+        self.read(|wb, cx| {
+            wb.search()
+                .and_then(|view| {
+                    view.read(cx).result().map(|result| {
+                        result
+                            .hits
+                            .iter()
+                            .map(|hit| format!("{}:{}", hit.path, hit.line))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default()
+        })
     }
 }
 
@@ -188,49 +325,57 @@ fn hiding_the_dock_keeps_the_terminals_alive() {
 }
 
 #[test]
-fn switching_files_with_unsaved_edits_asks_first() {
+fn opening_another_file_keeps_the_unsaved_edits_in_their_tab() {
     let mut rig = rig();
     rig.open_project();
     rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
     rig.open_file("b.txt");
-    assert_eq!(
-        rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile("b.txt".to_owned()))
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two"));
+    assert!(
+        rig.read(|wb, _| wb.pending().is_none()),
+        "opening a tab loses nothing, so nothing is asked"
     );
-    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
-    // Cancel changes nothing.
-    rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
-    assert!(rig.read(|wb, _| wb.pending().is_none()));
+    assert_eq!(rig.editor_paths(), vec!["a.txt", "b.txt"]);
+    assert_eq!(rig.editor_dirty_paths(), vec!["a.txt"]);
+    // The edits are still there, in their own tab.
+    rig.activate_tab("a.txt");
     assert!(rig.editor_text().contains('!'));
 }
 
 #[test]
-fn saving_then_continuing_writes_the_file_and_opens_the_next_one() {
+fn closing_a_dirty_tab_asks_and_can_save_it() {
     let mut rig = rig();
     rig.open_project();
     rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
-    rig.type_text("!");
     rig.open_file("b.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two"));
+    rig.activate_tab("a.txt");
+    rig.type_text("!");
+    rig.close_tab("a.txt");
+    assert_eq!(
+        rig.read(|wb, _| wb.pending().cloned()),
+        Some(PendingAction::CloseTab("a.txt".to_owned()))
+    );
     rig.with(|wb, window, cx| wb.resolve(Decision::Save, window, cx));
-    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("b.txt")));
+    let closed = rig.settle_until(|rig| rig.editor_paths() == vec!["b.txt".to_owned()]);
+    assert!(closed, "the tab must close after its save succeeded");
     let saved = std::fs::read_to_string(rig.dir.path().join("a.txt")).expect("read");
     assert!(saved.contains('!'), "{saved}");
-    assert_eq!(rig.editor_text(), "two");
 }
 
 #[test]
-fn discarding_drops_the_edits_and_opens_the_next_file() {
+fn discarding_a_dirty_tab_closes_it_and_keeps_the_disk_content() {
     let mut rig = rig();
     rig.open_project();
     rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
-    rig.open_file("b.txt");
+    rig.close_tab("a.txt");
     rig.with(|wb, window, cx| wb.resolve(Decision::Discard, window, cx));
-    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("b.txt")));
+    assert!(rig.settle_until(|rig| rig.editor_paths().is_empty()));
     assert_eq!(
         std::fs::read_to_string(rig.dir.path().join("a.txt")).expect("read"),
         "one",
@@ -239,18 +384,59 @@ fn discarding_drops_the_edits_and_opens_the_next_file() {
 }
 
 #[test]
-fn a_failed_save_cancels_the_pending_switch_and_keeps_the_edits() {
+fn the_close_tab_command_and_its_shortcut_close_the_active_tab() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    rig.run(CommandId::CloseTab);
+    assert!(rig.editor_paths().is_empty(), "the command closes the tab");
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    focus_workbench(&mut rig);
+    rig.cx.simulate_keystrokes("ctrl-w");
+    assert!(rig.editor_paths().is_empty(), "ctrl-w closes the tab");
+}
+
+#[test]
+fn closing_the_window_saves_every_dirty_tab_in_order() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    rig.type_text("!");
+    rig.open_file("b.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two"));
+    rig.type_text("?");
+    assert_eq!(rig.editor_dirty_paths(), vec!["a.txt", "b.txt"]);
+    let allowed = rig.with(|wb, window, cx| wb.request_close(window, cx));
+    assert!(!allowed);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Save, window, cx));
+    let closed = rig.settle_until(|rig| rig.read(|wb, _| wb.close_confirmed()));
+    assert!(closed, "the close must finish after both saves");
+    let a = std::fs::read_to_string(rig.dir.path().join("a.txt")).expect("read");
+    let b = std::fs::read_to_string(rig.dir.path().join("b.txt")).expect("read");
+    assert!(a.contains('!'), "{a}");
+    assert!(b.contains('?'), "{b}");
+}
+
+#[test]
+fn a_conflicting_save_cancels_the_close_and_keeps_the_edits() {
     let mut rig = rig();
     rig.open_project();
     rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
     std::fs::write(rig.dir.path().join("a.txt"), "changed elsewhere").expect("write");
-    rig.open_file("b.txt");
+    let allowed = rig.with(|wb, window, cx| wb.request_close(window, cx));
+    assert!(!allowed);
     rig.with(|wb, window, cx| wb.resolve(Decision::Save, window, cx));
     rig.settle_for(500);
-    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
     assert!(rig.editor_text().contains('!'));
+    assert!(
+        !rig.read(|wb, _| wb.close_confirmed()),
+        "a failed save must not close the window"
+    );
     assert!(rig.read(|wb, _| wb.toast()).is_some());
 }
 
@@ -428,7 +614,7 @@ fn the_unsaved_changes_dialog_offers_save_discard_and_cancel() {
     rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
-    rig.open_file("b.txt");
+    rig.close_tab("a.txt");
     let dialog = rig.read(|wb, _| wb.dialog()).expect("a dialog is waiting");
     let decisions: Vec<Decision> = dialog
         .buttons
@@ -439,7 +625,7 @@ fn the_unsaved_changes_dialog_offers_save_discard_and_cancel() {
         decisions,
         [Decision::Save, Decision::Discard, Decision::Cancel]
     );
-    assert!(dialog.message.contains("b.txt"));
+    assert!(dialog.message.contains("a.txt"));
 }
 
 #[test]
@@ -450,18 +636,18 @@ fn escape_cancels_the_dialog_and_enter_takes_the_default_button() {
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
     focus_workbench(&mut rig);
-    rig.open_file("b.txt");
+    rig.close_tab("a.txt");
     rig.cx.simulate_keystrokes("escape");
     assert!(rig.read(|wb, _| wb.pending().is_none()));
-    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
+    assert_eq!(rig.editor_paths(), vec!["a.txt".to_owned()]);
     assert!(
         rig.editor_text().contains('!'),
         "cancelling must change nothing"
     );
-    // Enter picks the default, which is Save.
-    rig.open_file("b.txt");
+    // Enter picks the default, which is Save: the tab closes and the edits are written.
+    rig.close_tab("a.txt");
     rig.cx.simulate_keystrokes("enter");
-    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("b.txt")));
+    assert!(rig.settle_until(|rig| rig.editor_paths().is_empty()));
     assert!(std::fs::read_to_string(rig.dir.path().join("a.txt"))
         .expect("read")
         .contains('!'));
@@ -475,7 +661,7 @@ fn no_shortcut_runs_while_a_dialog_is_open() {
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
     focus_workbench(&mut rig);
-    rig.open_file("b.txt");
+    rig.close_tab("a.txt");
     assert!(rig.read(|wb, _| wb.pending().is_some()));
     rig.cx.simulate_keystrokes("ctrl-2");
     assert_eq!(rig.read(|wb, _| wb.layout()), LayoutPreset::Balanced);
@@ -548,7 +734,7 @@ fn switching_projects_with_running_sessions_asks_first() {
 }
 
 #[test]
-fn reopening_the_open_file_with_unsaved_edits_asks_instead_of_overwriting_them() {
+fn reopening_an_open_dirty_file_just_brings_its_tab_forward() {
     let mut rig = rig();
     rig.open_project();
     rig.open_file("a.txt");
@@ -561,15 +747,15 @@ fn reopening_the_open_file_with_unsaved_edits_asks_instead_of_overwriting_them()
         rig.editor_text().contains('!'),
         "the edits were overwritten"
     );
-    assert_eq!(
-        rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile("a.txt".to_owned()))
-    );
-    // Discard is the way to reload from disk, for example after a conflict.
+    assert!(rig.read(|wb, _| wb.pending().is_none()));
+    // Back to the disk content: close the tab and open it again.
     std::fs::write(rig.dir.path().join("a.txt"), "changed on disk").expect("write");
+    rig.close_tab("a.txt");
     rig.with(|wb, window, cx| wb.resolve(Decision::Discard, window, cx));
+    assert!(rig.settle_until(|rig| rig.editor_paths().is_empty()));
+    rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "changed on disk"));
-    assert!(!rig.read(|wb, cx| wb.state(cx).dirty));
+    assert!(rig.editor_dirty_paths().is_empty());
 }
 
 #[test]
@@ -630,23 +816,15 @@ fn quick_open_finds_nested_files_and_respects_unsaved_edits() {
     );
     rig.cx
         .update(|_, cx| palette.update(cx, |p, cx| p.confirm(cx)));
-    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
-    assert_eq!(
-        rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile("nested/needle.rs".into()))
-    );
-    rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
-    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
-    rig.run(CommandId::Files);
-    let palette = rig
-        .read(|wb, _| wb.palette().cloned())
-        .expect("file palette");
-    assert!(rig.settle_until(|rig| rig.read(|_, cx| !palette.read(cx).file_paths().is_empty())));
-    rig.with(|_, window, cx| palette.update(cx, |p, cx| p.set_query("needle", window, cx)));
-    rig.cx
-        .update(|_, cx| palette.update(cx, |p, cx| p.confirm(cx)));
-    rig.with(|wb, window, cx| wb.resolve(Decision::Discard, window, cx));
     assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("nested/needle.rs")));
+    assert!(
+        rig.read(|wb, _| wb.pending().is_none()),
+        "opening a tab loses nothing, so nothing is asked"
+    );
+    assert_eq!(rig.editor_paths(), vec!["a.txt", "nested/needle.rs"]);
+    assert_eq!(rig.editor_dirty_paths(), vec!["a.txt"]);
+    rig.activate_tab("a.txt");
+    assert!(rig.editor_text().contains("edited"));
 }
 
 #[test]
@@ -760,7 +938,7 @@ fn enter_never_adds_a_newline_to_the_palette_query() {
 // ----- guarded daemon commands ---------------------------------------------------------
 
 use rwk_core::control::fake::{FakeControlPlane, RecordedCall};
-use rwk_core::control::{ControlPlane, PolicyAction, QueuedHandoff};
+use rwk_core::control::{ControlEvent, ControlPlane, EventSource, PolicyAction, QueuedHandoff};
 use rwk_core::sessions::SessionKind;
 
 fn connected(rig: &mut Rig, policy: PolicyAction) -> Arc<FakeControlPlane> {
@@ -768,6 +946,8 @@ fn connected(rig: &mut Rig, policy: PolicyAction) -> Arc<FakeControlPlane> {
     fake.set_policy("launch_agent", policy);
     fake.set_policy("create_handoff", policy);
     fake.set_policy("register_project", policy);
+    fake.set_policy("approve_handoff", policy);
+    fake.set_policy("reject_handoff", policy);
     // The first inspector poll finds the daemon healthy; only then are agent commands offered.
     fake.push_work_snapshot(Ok(raios_contracts::WorkSnapshot::default()))
         .push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()));
@@ -795,6 +975,20 @@ fn sends(fake: &FakeControlPlane) -> usize {
             )
         })
         .count()
+}
+
+/// Every handoff decision the fake received, in order.
+fn decisions(fake: &FakeControlPlane) -> Vec<RecordedCall> {
+    fake.calls()
+        .iter()
+        .filter(|call| {
+            matches!(
+                call,
+                RecordedCall::ApproveHandoff(_) | RecordedCall::RejectHandoff(_)
+            )
+        })
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -1028,6 +1222,124 @@ fn starting_the_receiver_reads_the_receipt_again_and_tracks_the_process() {
         !rig.read(|wb, _| wb.handoffs()[0].can_start_receiver()),
         "a running receiver blocks a second start"
     );
+}
+
+// ----- approval decisions --------------------------------------------------------------
+
+#[test]
+fn approving_a_handoff_sends_the_revision_the_user_saw() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_approval(Ok(()));
+
+    rig.with(|wb, window, cx| wb.approve_handoff("a-1".into(), 7, window, cx));
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb
+        .toast()
+        .is_some_and(|toast| toast.contains("Devir onaylandı")))));
+    assert!(matches!(
+        &decisions(&fake)[..],
+        [RecordedCall::ApproveHandoff(request)]
+        if request.approval_id == "a-1"
+            && request.expected_revision == 7
+            && request.reason.is_none()
+    ));
+    // Consent is not delivery: no receiver was started and no agent terminal opened.
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+}
+
+#[test]
+fn a_confirm_policy_asks_before_a_handoff_decision_is_sent() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Confirm);
+    fake.push_approval(Ok(()));
+
+    rig.with(|wb, window, cx| wb.approve_handoff("a-1".into(), 7, window, cx));
+
+    assert!(rig.settle_until(|rig| matches!(
+        rig.read(|wb, _| wb.pending().cloned()),
+        Some(PendingAction::Consent(..))
+    )));
+    assert!(decisions(&fake).is_empty(), "nothing before the answer");
+    let message = rig.read(|wb, _| wb.dialog().map(|dialog| dialog.message));
+    // The dialog says what consent means: the addressed agent still delivers the note.
+    assert!(message.is_some_and(|text| text.contains("teslim")));
+
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+
+    assert!(rig.settle_until(|_rig| decisions(&fake).len() == 1));
+}
+
+#[test]
+fn rejecting_a_handoff_asks_for_a_reason_and_sends_it() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_rejection(Ok(()));
+
+    rig.with(|wb, window, cx| wb.request_reject_handoff("a-1".into(), 7, window, cx));
+    let prompt = rig
+        .read(|wb, _| wb.reject_prompt().cloned())
+        .expect("the prompt opens");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("  kapsam dışı  ", window, cx);
+            prompt.submit(cx);
+        })
+    });
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.reject_prompt().is_none())));
+    assert!(rig.settle_until(|_rig| decisions(&fake).len() == 1));
+    assert!(matches!(
+        &decisions(&fake)[..],
+        [RecordedCall::RejectHandoff(request)]
+        if request.reason.as_deref() == Some("kapsam dışı")
+            && request.expected_revision == 7
+    ));
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Devir reddedildi: a-1".to_owned())
+    );
+}
+
+#[test]
+fn an_empty_or_secret_reject_reason_never_reaches_the_daemon() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+
+    for text in ["   ", "anahtar sk-abcdefghijklmnopqrstuvwx"] {
+        rig.with(|wb, window, cx| wb.request_reject_handoff("a-1".into(), 7, window, cx));
+        let prompt = rig
+            .read(|wb, _| wb.reject_prompt().cloned())
+            .expect("the prompt opens");
+        rig.with(|_wb, window, cx| {
+            prompt.update(cx, |prompt, cx| {
+                prompt.set_text(text, window, cx);
+                prompt.submit(cx);
+            })
+        });
+        rig.settle_for(50);
+
+        assert!(rig.read(|wb, cx| wb
+            .reject_prompt()
+            .is_some_and(|prompt| prompt.read(cx).problem().is_some())));
+        assert!(decisions(&fake).is_empty(), "{text:?} must not be sent");
+        rig.with(|wb, window, cx| wb.close_reject_prompt(window, cx));
+    }
+}
+
+#[test]
+fn escape_closes_the_reject_prompt_without_sending() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+
+    rig.with(|wb, window, cx| wb.request_reject_handoff("a-1".into(), 7, window, cx));
+    assert!(rig.read(|wb, _| wb.reject_prompt().is_some()));
+
+    rig.cx.simulate_keystrokes("escape");
+    rig.cx.run_until_parked();
+
+    assert!(rig.read(|wb, _| wb.reject_prompt().is_none()));
+    assert!(decisions(&fake).is_empty());
 }
 
 // ----- memory view ---------------------------------------------------------------------
@@ -1302,4 +1614,500 @@ fn a_confirmed_registration_is_announced_so_the_application_can_remember_it() {
         .expect("events")
         .iter()
         .any(|event| matches!(event, WorkbenchEvent::ProjectRegistered(_)))));
+}
+
+/// The task titles the inspector currently shows.
+fn inspector_titles(rig: &mut Rig) -> Vec<String> {
+    rig.read(|wb, cx| {
+        wb.inspector()
+            .read(cx)
+            .model()
+            .tasks
+            .iter()
+            .map(|task| task.title.clone())
+            .collect()
+    })
+}
+
+#[test]
+fn a_typed_stream_event_refreshes_the_inspector_before_the_next_poll() {
+    use std::sync::mpsc;
+
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    let task = |title: &str| raios_contracts::WorkSnapshot {
+        tasks: vec![raios_contracts::UnifiedTaskDto {
+            id: title.to_owned(),
+            title: title.to_owned(),
+            project_path: Some(root.to_string_lossy().into_owned()),
+            ..raios_contracts::UnifiedTaskDto::default()
+        }],
+        ..raios_contracts::WorkSnapshot::default()
+    };
+
+    // One read for the first poll, then the new state. The project counts as known, so opening
+    // it never probes the daemon: the inspector is the only reader of the script.
+    let fake = Arc::new(FakeControlPlane::new());
+    fake.push_work_snapshot(Ok(task("ilk durum")));
+    for _ in 0..100 {
+        fake.push_work_snapshot(Ok(task("yeni durum")));
+        fake.push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()));
+    }
+    let plane: Arc<dyn ControlPlane> = fake.clone();
+    rig.with(|wb, _, cx| {
+        wb.set_known_projects([root.clone()]);
+        wb.set_control_plane(Some(plane), cx);
+    });
+    rig.open_project();
+    assert!(
+        rig.settle_until(|rig| inspector_titles(rig)
+            .iter()
+            .any(|title| title == "ilk durum")),
+        "the first poll must show the first snapshot"
+    );
+
+    // A gated stream: the monitor delivers only what the test sends.
+    struct GatedEvents {
+        gate: mpsc::Receiver<ControlEvent>,
+    }
+    impl EventSource for GatedEvents {
+        fn next_event(&mut self, timeout: Duration) -> rwk_core::Result<Option<ControlEvent>> {
+            Ok(self.gate.recv_timeout(timeout).ok())
+        }
+    }
+    let (occurrences, gate) = mpsc::channel();
+    rig.with(|wb, _, cx| wb.set_event_source(Some(Box::new(GatedEvents { gate })), cx));
+
+    occurrences
+        .send(ControlEvent::RunChanged {
+            run_id: "r1".into(),
+            agent_name: "codex_kaira".into(),
+            status: "running".into(),
+        })
+        .expect("send the event");
+
+    // The next poll is three seconds away: only an event-triggered refresh can switch the
+    // model to the new snapshot this fast.
+    let deadline = Instant::now() + Duration::from_millis(2500);
+    let mut refreshed = false;
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        rig.cx.run_until_parked();
+        if inspector_titles(&mut rig)
+            .iter()
+            .any(|title| title == "yeni durum")
+        {
+            refreshed = true;
+            break;
+        }
+    }
+    assert!(
+        refreshed,
+        "a typed stream event must refresh the inspector before the next poll"
+    );
+}
+
+/// A scripted search source: queued answers with their delays, and a log of the calls.
+struct FakeSearch {
+    answers: Mutex<std::collections::VecDeque<(Duration, Vec<SearchHit>)>>,
+    calls: Arc<Mutex<Vec<(String, bool)>>>,
+}
+
+impl SearchSource for FakeSearch {
+    fn locate(
+        &self,
+        _root: &std::path::Path,
+        pattern: &str,
+        ignore_case: bool,
+    ) -> rwk_core::error::Result<SearchResult> {
+        self.calls
+            .lock()
+            .expect("calls")
+            .push((pattern.to_owned(), ignore_case));
+        let (delay, hits) = self
+            .answers
+            .lock()
+            .expect("answers")
+            .pop_front()
+            .unwrap_or((Duration::ZERO, Vec::new()));
+        std::thread::sleep(delay);
+        Ok(SearchResult {
+            hits,
+            truncated: false,
+        })
+    }
+}
+
+fn hits(entries: &[(&str, usize, &str)]) -> Vec<SearchHit> {
+    entries
+        .iter()
+        .map(|(path, line, text)| SearchHit {
+            path: (*path).to_owned(),
+            line: *line,
+            text: (*text).to_owned(),
+        })
+        .collect()
+}
+
+#[test]
+fn a_search_runs_on_enter_and_a_hit_opens_the_file_at_its_line() {
+    let mut rig = rig();
+    rig.open_project();
+    std::fs::write(rig.dir.path().join("c.txt"), "alpha\nbeta\ngamma").expect("c");
+    let calls = rig.script_search(vec![(Duration::ZERO, hits(&[("c.txt", 2, "beta")]))]);
+    rig.run(CommandId::Search);
+    assert!(rig.search_open());
+    rig.search_query("beta");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.search_hits().as_slice() == ["c.txt:2"]));
+    assert_eq!(
+        calls.lock().expect("calls").as_slice(),
+        [("beta".to_owned(), false)]
+    );
+    // The first Enter ran the query; a second one opens the highlighted hit.
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("c.txt")));
+    assert!(!rig.search_open(), "opening a hit closes the overlay");
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(2)
+    );
+}
+
+#[test]
+fn escape_closes_the_search_overlay() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::Search);
+    assert!(rig.search_open());
+    rig.cx.simulate_keystrokes("escape");
+    assert!(!rig.search_open());
+}
+
+#[test]
+fn the_case_toggle_runs_the_query_again_with_ignore_case() {
+    let mut rig = rig();
+    rig.open_project();
+    let calls = rig.script_search(vec![
+        (Duration::ZERO, hits(&[("a.txt", 1, "one")])),
+        (Duration::ZERO, hits(&[("a.txt", 1, "ONE")])),
+    ]);
+    rig.run(CommandId::Search);
+    rig.search_query("one");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| !rig.search_hits().is_empty()));
+    rig.with(|wb, _window, cx| {
+        let view = wb.search().expect("the search view is open").clone();
+        view.update(cx, |view, cx| view.toggle_case(cx));
+    });
+    assert!(rig.settle_until(|_rig| calls.lock().expect("calls").len() == 2));
+    assert_eq!(
+        calls.lock().expect("calls").as_slice(),
+        [("one".to_owned(), false), ("one".to_owned(), true)]
+    );
+}
+
+#[test]
+fn an_answer_for_a_superseded_search_is_dropped() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.script_search(vec![
+        (Duration::from_millis(400), hits(&[("a.txt", 1, "slow")])),
+        (Duration::ZERO, hits(&[("b.txt", 1, "fast")])),
+    ]);
+    rig.run(CommandId::Search);
+    rig.search_query("slow");
+    rig.cx.simulate_keystrokes("enter");
+    rig.search_query("fast");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.search_hits().as_slice() == ["b.txt:1"]));
+    // The slow answer arrives after the fast one and must not replace it.
+    rig.settle_for(500);
+    assert_eq!(rig.search_hits().as_slice(), ["b.txt:1"]);
+}
+
+#[test]
+fn switching_projects_closes_the_search_overlay() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::Search);
+    assert!(rig.search_open());
+    let root = rig.dir.path().join("nested");
+    std::fs::create_dir(&root).expect("nested dir");
+    rig.with(|wb, window, cx| wb.open_project(root, window, cx));
+    assert!(!rig.search_open());
+}
+
+#[test]
+fn a_project_reopens_with_its_saved_tabs_layout_and_shells() {
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    let store = FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root,
+        tabs: vec![
+            SavedTab {
+                path: "a.txt".into(),
+                line: 1,
+            },
+            SavedTab {
+                path: "b.txt".into(),
+                line: 1,
+            },
+        ],
+        active: 1,
+        layout: LayoutPreset::Editor,
+        terminals: vec![SavedTerminal::Shell],
+    }));
+    rig.set_workspace_source(store);
+    rig.open_project();
+    assert!(
+        rig.settle_until(|rig| rig.editor_paths() == vec!["a.txt".to_owned(), "b.txt".to_owned()])
+    );
+    assert_eq!(
+        rig.editor_path().as_deref(),
+        Some("b.txt"),
+        "the saved active tab"
+    );
+    assert_eq!(rig.read(|wb, _| wb.layout()), LayoutPreset::Editor);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+}
+
+#[test]
+fn a_saved_agent_session_is_offered_and_resuming_runs_raios_resume() {
+    const KEY: &str = "claude:3294c005-aee0-4e95-860f-5800e045b624";
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    rig.script_catalog(&format!(
+        r#"{{"sessions":[{{"key":"{KEY}","agent":"claude","native_session_id":"3294c005-aee0-4e95-860f-5800e045b624","project_path":"{}","name":"gece oturumu","resumable":true}}],"warnings":[]}}"#,
+        root.display()
+    ));
+    rig.set_workspace_source(FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root.clone(),
+        tabs: Vec::new(),
+        active: 0,
+        layout: LayoutPreset::Balanced,
+        terminals: vec![SavedTerminal::Agent {
+            kind: SessionKind::Claude,
+            native_session: None,
+        }],
+    })));
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_launch(Ok(()));
+    let saved = rig.record_workspace_changes();
+    rig.open_project();
+
+    // Opening the project reads the catalog and turns the saved agent into an offer. Nothing
+    // is started before the user takes it.
+    assert!(
+        rig.settle_until(|rig| rig.read(|wb, _| wb.offers().len() == 1)),
+        "the offer never appeared"
+    );
+    assert_eq!(
+        rig.read(|wb, _| wb.terminal_count()),
+        0,
+        "offers are not panes"
+    );
+    let offer = rig.read(|wb, _| wb.offers()[0].clone());
+    assert_eq!(offer.kind, SessionKind::Claude);
+    assert_eq!(
+        offer.matched.as_ref().map(|matched| matched.name.as_str()),
+        Some("gece oturumu"),
+        "the offer names the catalog's session"
+    );
+
+    rig.with(|wb, window, cx| wb.resume_offer(&offer, window, cx));
+
+    // The continuation is validated as an agent launch and its pane runs the CLI's resume.
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert!(
+        fake.calls().iter().any(|call| matches!(
+            call,
+            RecordedCall::LaunchAgent(request)
+                if request.agent == SessionKind::Claude && request.prompt.is_none()
+        )),
+        "{:?}",
+        fake.calls()
+    );
+    assert!(
+        rig.script_calls()
+            .iter()
+            .any(|call| call == &format!("resume {KEY}")),
+        "{:?}",
+        rig.script_calls()
+    );
+    assert!(
+        rig.read(|wb, _| wb.offers().is_empty()),
+        "a taken offer is done"
+    );
+
+    // The state remembers which conversation the pane continues, so the next open offers
+    // exactly that one.
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let last = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a saved state");
+    assert_eq!(
+        last.terminals,
+        vec![SavedTerminal::Agent {
+            kind: SessionKind::Claude,
+            native_session: Some("3294c005-aee0-4e95-860f-5800e045b624".into()),
+        }]
+    );
+}
+
+#[test]
+fn an_offer_without_a_catalog_entry_can_only_be_dismissed() {
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    // No catalog file: the CLI reports nothing to continue.
+    rig.set_workspace_source(FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root,
+        tabs: Vec::new(),
+        active: 0,
+        layout: LayoutPreset::Balanced,
+        terminals: vec![SavedTerminal::Agent {
+            kind: SessionKind::Codex,
+            native_session: None,
+        }],
+    })));
+    let saved = rig.record_workspace_changes();
+    rig.open_project();
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.offers().len() == 1)));
+    let offer = rig.read(|wb, _| wb.offers()[0].clone());
+    assert!(
+        offer.matched.is_none(),
+        "nothing matched, so nothing to run"
+    );
+
+    rig.with(|wb, _window, cx| wb.dismiss_offer(&offer, cx));
+
+    assert!(rig.read(|wb, _| wb.offers().is_empty()));
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let last = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a saved state");
+    assert!(
+        last.terminals.is_empty(),
+        "a dismissed offer is not offered again: {:?}",
+        last.terminals
+    );
+}
+
+#[test]
+fn a_denied_resume_keeps_the_offer_for_another_try() {
+    const KEY: &str = "codex:9ac8a20a-7f0d-4c11-9f31-6b6e2f2ab111";
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    rig.script_catalog(&format!(
+        r#"{{"sessions":[{{"key":"{KEY}","agent":"codex","native_session_id":"9ac8a20a-7f0d-4c11-9f31-6b6e2f2ab111","project_path":"{}","name":"codex oturumu","resumable":true}}],"warnings":[]}}"#,
+        root.display()
+    ));
+    rig.set_workspace_source(FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root,
+        tabs: Vec::new(),
+        active: 0,
+        layout: LayoutPreset::Balanced,
+        terminals: vec![SavedTerminal::Agent {
+            kind: SessionKind::Codex,
+            native_session: None,
+        }],
+    })));
+    let fake = connected(&mut rig, PolicyAction::Deny);
+    rig.open_project();
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.offers().len() == 1)));
+    let offer = rig.read(|wb, _| wb.offers()[0].clone());
+    rig.with(|wb, window, cx| wb.resume_offer(&offer, window, cx));
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.toast()).is_some()));
+    assert_eq!(sends(&fake), 0, "a denied resume sends nothing");
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+    assert_eq!(
+        rig.read(|wb, _| wb.offers().len()),
+        1,
+        "the offer waits for another try"
+    );
+    assert!(
+        !rig.script_calls()
+            .iter()
+            .any(|call| call == &format!("resume {KEY}")),
+        "a denied resume never starts: {:?}",
+        rig.script_calls()
+    );
+}
+
+#[test]
+fn a_saved_workspace_of_another_project_is_not_restored() {
+    let mut rig = rig();
+    let store = FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: PathBuf::from("/elsewhere/other"),
+        tabs: vec![SavedTab {
+            path: "a.txt".into(),
+            line: 1,
+        }],
+        active: 0,
+        layout: LayoutPreset::Agents,
+        terminals: Vec::new(),
+    }));
+    rig.set_workspace_source(store);
+    rig.open_project();
+    rig.settle_for(300);
+    assert!(
+        rig.editor_paths().is_empty(),
+        "a state file that names another project must not seed tabs"
+    );
+    assert_eq!(rig.read(|wb, _| wb.layout()), LayoutPreset::Balanced);
+}
+
+#[test]
+fn workspace_changes_are_saved_after_the_delay_and_on_close() {
+    let mut rig = rig();
+    let saved = rig.record_workspace_changes();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    rig.type_text("!");
+    assert!(
+        saved.lock().expect("lock").is_empty(),
+        "the state waits for the delay"
+    );
+    // The write delay passes: the state is handed over with the tab and its cursor line.
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a saved state");
+    assert_eq!(workspace.project, rig.dir.path());
+    assert_eq!(workspace.tabs.len(), 1);
+    assert_eq!(workspace.tabs[0].path, "a.txt");
+    // A close hands over what is pending without waiting for the delay.
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    let before = saved.lock().expect("lock").len();
+    let allowed = rig.with(|wb, window, cx| wb.request_close(window, cx));
+    assert!(!allowed, "the unsaved edit is asked about first");
+    rig.with(|wb, window, cx| wb.resolve(Decision::Discard, window, cx));
+    let states = saved.lock().expect("lock");
+    assert!(
+        states.len() > before,
+        "the close must flush the pending state"
+    );
+    let last = states.last().expect("a saved state");
+    assert_eq!(last.terminals, vec![SavedTerminal::Shell]);
+    assert_eq!(last.tabs.len(), 1, "the open tab is part of the state");
 }

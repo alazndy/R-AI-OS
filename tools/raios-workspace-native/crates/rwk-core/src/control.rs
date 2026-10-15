@@ -5,6 +5,7 @@
 
 pub mod daemon;
 pub mod fake;
+pub mod stream;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -92,6 +93,24 @@ pub struct CreateHandoffRequest {
     pub idempotency_key: IdempotencyKey,
 }
 
+/// A decision on a pending handoff approval. The revision the user saw travels with the
+/// decision, so a decision based on a stale read is refused by the daemon (`CONFLICT`) instead
+/// of being applied to state that changed since.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoffDecisionRequest {
+    /// The open project the decision is made from. Used for the consent context; the daemon
+    /// addresses the approval by its id alone.
+    pub project_root: PathBuf,
+    /// Target approval identifier.
+    pub approval_id: String,
+    /// Revision of the approval as it was displayed to the user.
+    pub expected_revision: i64,
+    /// Rejection reason; `None` when approving.
+    pub reason: Option<String>,
+    /// Retry key.
+    pub idempotency_key: IdempotencyKey,
+}
+
 /// A handoff the daemon accepted into its queue. The receiver has not started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedHandoff {
@@ -137,6 +156,20 @@ pub enum ControlEvent {
     },
     /// The daemon's reachability changed.
     ConnectionChanged(ConnectionState),
+    /// An agent run's execution state changed (typed `AgentRunStateChanged` frame).
+    RunChanged {
+        /// Target run identifier.
+        run_id: String,
+        /// Name of the agent harness.
+        agent_name: String,
+        /// New execution status string.
+        status: String,
+    },
+    /// An approval was requested or resolved (typed `ApprovalRequested`/`ApprovalResolved`).
+    ApprovalChanged {
+        /// Target approval identifier.
+        approval_id: String,
+    },
 }
 
 /// Everything the workspace asks of the daemon. Blocking; call from a background executor.
@@ -170,12 +203,19 @@ pub trait ControlPlane: Send + Sync {
     /// Queues a handoff.
     fn create_handoff(&self, request: &CreateHandoffRequest) -> Result<QueuedHandoff>;
 
+    /// Approves a pending handoff approval: the control-plane owner's consent. This is not
+    /// delivery — the addressed agent's own run still has to consume the handoff.
+    fn approve_handoff(&self, request: &HandoffDecisionRequest) -> Result<()>;
+
+    /// Rejects a pending handoff approval; `request.reason` must carry the reason.
+    fn reject_handoff(&self, request: &HandoffDecisionRequest) -> Result<()>;
+
     /// Reads the delivery receipt of one handoff, scoped to `project_root`.
     fn handoff_receipt(&self, approval_id: &str, project_root: &Path) -> Result<HandoffReceiptDto>;
 }
 
-/// Source of [`ControlEvent`]s. The first implementation polls snapshots; a WebSocket source
-/// can replace it without touching callers.
+/// Source of [`ControlEvent`]s. [`stream::WebSocketEvents`] subscribes to the daemon's typed
+/// event stream; callers keep their own snapshot poll as the fallback.
 pub trait EventSource: Send {
     /// Waits up to `timeout` for the next event; `Ok(None)` means nothing happened.
     fn next_event(&mut self, timeout: Duration) -> Result<Option<ControlEvent>>;

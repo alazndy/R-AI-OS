@@ -10,9 +10,18 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "command_type", content = "payload")]
 pub enum Command {
     /// Approve a pending handoff approval request.
+    ///
+    /// This is the owner's consent, not the delivery of the handoff: the run ends as
+    /// `handover_approved_by_owner` and the task stays open until the addressed agent's own
+    /// wrapper consumes the handoff.
     ApproveHandoff {
         /// Target approval identifier.
         approval_id: String,
+        /// Revision the caller observed for this approval. When present, the daemon refuses
+        /// with `CONFLICT` if the approval changed since it was read. Optional for callers
+        /// that have no revision to name.
+        #[serde(default)]
+        expected_revision: Option<i64>,
         /// Unique key to prevent duplicate execution.
         idempotency_key: String,
     },
@@ -20,6 +29,9 @@ pub enum Command {
     RejectHandoff {
         /// Target approval identifier.
         approval_id: String,
+        /// Revision the caller observed for this approval; see [`Command::ApproveHandoff`].
+        #[serde(default)]
+        expected_revision: Option<i64>,
         /// Human or automated reason for rejection.
         reason: String,
         /// Unique key to prevent duplicate execution.

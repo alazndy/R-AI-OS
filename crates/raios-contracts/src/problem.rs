@@ -47,6 +47,13 @@ impl Problem {
         Self::new("NOT_FOUND", msg, false)
     }
 
+    /// Creates a `CONFLICT` non-retryable error for a client whose optimistic-concurrency
+    /// revision no longer matches the stored record; retrying the same stale input cannot
+    /// succeed, only re-reading and deciding again can.
+    pub fn conflict(msg: impl Into<String>) -> Self {
+        Self::new("CONFLICT", msg, false)
+    }
+
     /// Creates an `INTERNAL_ERROR` retryable error.
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::new("INTERNAL_ERROR", msg, true)

@@ -236,6 +236,7 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
     use std::sync::Arc;
 
     #[cfg(unix)]
@@ -408,6 +409,7 @@ mod tests {
     /// be reported as "nothing was published". The caller is told the content changed
     /// but its durability is unconfirmed — which is exactly the state a crash would
     /// leave behind.
+    #[cfg(unix)]
     #[test]
     fn a_failing_directory_sync_after_the_rename_reports_the_content_as_replaced() {
         let temp = tempfile::tempdir().expect("tempdir");

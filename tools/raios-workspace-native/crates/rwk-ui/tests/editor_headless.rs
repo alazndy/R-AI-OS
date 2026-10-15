@@ -10,7 +10,7 @@ use gpui::{Entity, TestAppContext, TestDispatcher, VisualTestContext};
 use gpui_base::input::{EditorState, InputHighlighter, Rope};
 use gpui_wgpu::CosmicTextSystem;
 use rwk_core::project::ProjectRoot;
-use rwk_core::workbench::{SwitchDecision, Tone};
+use rwk_core::workbench::Tone;
 use rwk_ui::editor::highlight::{SyntaxHighlighter, HIGHLIGHT_LIMIT_BYTES};
 use rwk_ui::editor::styles::SyntaxStyles;
 use rwk_ui::editor::view::EditorView;
@@ -116,6 +116,24 @@ impl Rig {
         self.cx
             .update(|_w, cx| view.update(cx, |editor, cx| editor.save(project, cx)));
     }
+
+    fn activate(&mut self, path: &str) {
+        let (view, path) = (self.view.clone(), path.to_owned());
+        self.cx.update(|window, cx| {
+            view.update(cx, |editor, cx| editor.activate_tab(&path, window, cx))
+        });
+    }
+
+    fn close_tab(&mut self, path: &str) {
+        let (view, path) = (self.view.clone(), path.to_owned());
+        self.cx
+            .update(|window, cx| view.update(cx, |editor, cx| editor.close_tab(&path, window, cx)));
+    }
+
+    fn paths(&mut self) -> Vec<String> {
+        let view = self.view.clone();
+        self.cx.update(|_w, cx| view.read(cx).paths())
+    }
 }
 
 #[test]
@@ -189,22 +207,73 @@ fn opening_a_file_over_two_mib_shows_a_message_and_keeps_the_open_file() {
 }
 
 #[test]
-fn opening_another_file_never_replaces_unsaved_edits() {
+fn opening_another_file_keeps_the_unsaved_edits_in_their_tab() {
     let fixture = fixture(&[("a.txt", b"one"), ("b.txt", b"two")]);
     let mut rig = rig();
     rig.open(&fixture, "a.txt");
     assert!(rig.settle_until(|rig| rig.text() == "one"));
     rig.type_text("!");
     rig.open(&fixture, "b.txt");
-    rig.settle_until(|_| false);
-    assert_eq!(rig.path().as_deref(), Some("a.txt"));
+    assert!(rig.settle_until(|rig| rig.path().as_deref() == Some("b.txt")));
+    assert_eq!(rig.text(), "two");
+    assert_eq!(rig.paths(), vec!["a.txt", "b.txt"]);
+    // The edits are still there, in their own tab.
+    rig.activate("a.txt");
     assert!(rig.text().contains('!'));
-    assert!(rig.status().is_some());
-    let (view, project_id) = (rig.view.clone(), fixture.project.info().id.clone());
-    let decision = rig
-        .cx
-        .update(|_w, cx| view.read(cx).request_open(&project_id, "b.txt"));
-    assert_eq!(decision, SwitchDecision::NeedsDecision);
+    assert!(rig.dirty());
+    rig.activate("b.txt");
+    assert!(!rig.dirty());
+}
+
+#[test]
+fn closing_a_tab_keeps_the_others_and_moves_to_a_neighbour() {
+    let fixture = fixture(&[("a.txt", b"one"), ("b.txt", b"two")]);
+    let mut rig = rig();
+    rig.open(&fixture, "a.txt");
+    assert!(rig.settle_until(|rig| rig.path().as_deref() == Some("a.txt")));
+    rig.open(&fixture, "b.txt");
+    assert!(rig.settle_until(|rig| rig.path().as_deref() == Some("b.txt")));
+    rig.close_tab("b.txt");
+    assert_eq!(rig.path().as_deref(), Some("a.txt"));
+    assert_eq!(rig.text(), "one");
+    assert_eq!(rig.paths(), vec!["a.txt"]);
+    rig.close_tab("a.txt");
+    assert_eq!(rig.path().as_deref(), None);
+    assert!(rig.paths().is_empty());
+}
+
+#[test]
+fn a_dirty_tab_is_never_reloaded_from_disk() {
+    let fixture = fixture(&[("a.txt", b"one")]);
+    let mut rig = rig();
+    rig.open(&fixture, "a.txt");
+    assert!(rig.settle_until(|rig| rig.text() == "one"));
+    rig.type_text("!");
+    // A read for the same path would replace the buffer; the editor refuses it.
+    rig.open(&fixture, "a.txt");
+    rig.settle_until(|_| false);
+    assert!(rig.text().contains('!'));
+    assert!(rig.paths() == vec!["a.txt"], "no duplicate tab");
+}
+
+#[test]
+fn a_hit_line_moves_the_cursor_and_an_open_tab_is_activated() {
+    let fixture = fixture(&[("a.txt", b"one\ntwo\nthree\n")]);
+    let mut rig = rig();
+    rig.open(&fixture, "a.txt");
+    assert!(rig.settle_until(|rig| rig.text().contains("three")));
+    let (view, project) = (rig.view.clone(), fixture.project.clone());
+    rig.cx.update(|window, cx| {
+        view.update(cx, |editor, cx| {
+            editor.open_path_at(project, "a.txt".to_owned(), Some(3), window, cx)
+        })
+    });
+    assert!(rig.settle_until(|rig| {
+        let view = rig.view.clone();
+        rig.cx
+            .update(|_w, cx| view.read(cx).cursor_line(cx) == Some(3))
+    }));
+    assert_eq!(rig.paths(), vec!["a.txt"], "the reload keeps its tab");
 }
 
 #[test]

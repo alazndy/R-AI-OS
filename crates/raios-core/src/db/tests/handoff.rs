@@ -619,3 +619,276 @@ fn user_handoff_removal_blocks_stale_delivery_and_audit_failure_rolls_back() {
     assert_eq!(row.delivery_status, "rejected");
     assert_eq!(row.user_status.as_deref(), Some("removed"));
 }
+
+#[test]
+fn approval_revisions_move_with_every_transition() {
+    let conn = in_memory();
+    let queue = |path, from, to, status| {
+        create_handoff_workflow(
+            &conn,
+            HandoffWorkflowInput {
+                project_path: path,
+                from_agent: from,
+                to_agent: to,
+                status,
+                msg: "work",
+                diff_stat: None,
+                report: None,
+            },
+        )
+        .unwrap()
+    };
+
+    let ids = queue("/repo", "claude_kaira", "codex_kaira", "BLOCKER");
+    assert_eq!(
+        cp_approval_revision(&conn, &ids.approval_id).unwrap(),
+        Some(1)
+    );
+    assert_eq!(
+        cp_approval_revision(&conn, "missing-approval").unwrap(),
+        None
+    );
+
+    // Resolution moves the revision, so a decision made on revision 1 is refused afterwards.
+    assert!(cp_resolve_handoff(
+        &conn,
+        &ids.approval_id,
+        "local_control_owner",
+        "local_control_owner",
+        None
+    )
+    .unwrap());
+    assert_eq!(
+        cp_approval_revision(&conn, &ids.approval_id).unwrap(),
+        Some(2)
+    );
+
+    // Superseding an older pending handoff moves its revision too.
+    let first = queue("/repo-b", "claude_kaira", "codex_kaira", "BLOCKER");
+    let _second = queue("/repo-b", "claude_kaira", "codex_kaira", "BLOCKER");
+    assert_eq!(
+        cp_approval_revision(&conn, &first.approval_id).unwrap(),
+        Some(2)
+    );
+}
+
+#[test]
+fn owner_approval_is_not_delivery_and_the_wrapper_still_delivers() {
+    let conn = in_memory();
+    let ids = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo",
+            from_agent: "claude_kaira",
+            to_agent: "codex_kaira",
+            status: "BLOCKER",
+            msg: "Queued",
+            diff_stat: None,
+            report: None,
+        },
+    )
+    .unwrap();
+
+    assert!(cp_approve_handoff_by_owner(
+        &conn,
+        &ids.approval_id,
+        "local_control_owner",
+        "local_control_owner"
+    )
+    .unwrap());
+
+    // Consent closes the queue but not the task: the wrapper still takes the handoff and
+    // knows it was owner-approved, so it delivers without asking again.
+    let ctx = cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+        .unwrap()
+        .expect("owner-approved handoff is still deliverable");
+    assert!(ctx.approved_by_owner);
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM cp_tasks WHERE id = ?1",
+            rusqlite::params![ids.task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "awaiting_approval"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
+            rusqlite::params![ids.agent_run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "handover_approved_by_owner"
+    );
+
+    // A stranger cannot mark the delivery, and a resolved approval cannot be approved again.
+    assert!(!cp_mark_handoff_delivered(&conn, &ids.approval_id, "claude_kaira").unwrap());
+    assert!(!cp_approve_handoff_by_owner(
+        &conn,
+        &ids.approval_id,
+        "local_control_owner",
+        "local_control_owner"
+    )
+    .unwrap());
+
+    cp_consume_handoff(&conn, &ctx, "codex_kaira").unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM cp_tasks WHERE id = ?1",
+            rusqlite::params![ids.task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "completed"
+    );
+    // The run's reason stays what it was: the owner's approval ended the wait; delivery is
+    // recorded on the approval, artifact, task and audit — not by re-labelling the run.
+    assert_eq!(
+        conn.query_row(
+            "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
+            rusqlite::params![ids.agent_run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "handover_approved_by_owner"
+    );
+    assert!(
+        cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+            .unwrap()
+            .is_none()
+    );
+    let receipt = cp_handoff_receipt(&conn, &ids.approval_id, "/repo")
+        .unwrap()
+        .expect("receipt");
+    assert!(receipt.delivered_by_target());
+    assert_eq!(receipt.resolved_by.as_deref(), Some("codex_kaira"));
+}
+
+#[test]
+fn a_newer_handoff_supersedes_an_owner_approved_one_that_was_never_delivered() {
+    let conn = in_memory();
+    let queue = |msg: &str| {
+        create_handoff_workflow(
+            &conn,
+            HandoffWorkflowInput {
+                project_path: "/repo",
+                from_agent: "claude_kaira",
+                to_agent: "codex_kaira",
+                status: "BLOCKER",
+                msg,
+                diff_stat: None,
+                report: None,
+            },
+        )
+        .unwrap()
+    };
+    let approved = queue("First");
+    assert!(cp_approve_handoff_by_owner(
+        &conn,
+        &approved.approval_id,
+        "local_control_owner",
+        "local_control_owner"
+    )
+    .unwrap());
+
+    let _newer = queue("Second");
+
+    // The old note must not deliver later: it is expired, its task cancelled, and the
+    // newer handoff is the one waiting for the wrapper.
+    let ctx = cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+        .unwrap()
+        .expect("newer handoff is deliverable");
+    assert!(!ctx.approved_by_owner);
+    assert!(!cp_mark_handoff_delivered(&conn, &approved.approval_id, "codex_kaira").unwrap());
+    let receipt = cp_handoff_receipt(&conn, &approved.approval_id, "/repo")
+        .unwrap()
+        .expect("receipt");
+    assert_eq!(receipt.status, "expired");
+    assert!(!receipt.delivered_by_target());
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM cp_tasks WHERE id = ?1",
+            rusqlite::params![approved.task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "cancelled"
+    );
+}
+
+#[test]
+fn a_user_completed_handoff_is_never_superseded() {
+    let conn = in_memory();
+    let queue = |msg: &str| {
+        create_handoff_workflow(
+            &conn,
+            HandoffWorkflowInput {
+                project_path: "/repo",
+                from_agent: "claude_kaira",
+                to_agent: "codex_kaira",
+                status: "BLOCKER",
+                msg,
+                diff_stat: None,
+                report: None,
+            },
+        )
+        .unwrap()
+    };
+    let completed = queue("First");
+    cp_manage_handoff(&conn, &completed.approval_id, false).unwrap();
+
+    let _newer = queue("Second");
+
+    // The user closed this handoff explicitly; a later handoff must not rewrite that.
+    let receipt = cp_handoff_receipt(&conn, &completed.approval_id, "/repo")
+        .unwrap()
+        .expect("receipt");
+    assert_eq!(receipt.status, "approved");
+    assert_eq!(receipt.resolved_by.as_deref(), Some("local_user"));
+}
+
+#[test]
+fn pending_approvals_carry_project_agents_and_revision() {
+    let conn = in_memory();
+    let ids = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo-approvals",
+            from_agent: "claude_kaira",
+            to_agent: "codex_kaira",
+            status: "BLOCKER",
+            msg: "Carry context",
+            diff_stat: None,
+            report: None,
+        },
+    )
+    .unwrap();
+
+    for row in [
+        cp_query_pending_approvals(&conn).unwrap().remove(0),
+        cp_query_pending_approvals_scored(&conn)
+            .unwrap()
+            .remove(0)
+            .approval,
+    ] {
+        assert_eq!(row.id, ids.approval_id);
+        assert_eq!(row.project_path.as_deref(), Some("/repo-approvals"));
+        assert_eq!(row.origin_agent.as_deref(), Some("claude_kaira"));
+        assert_eq!(row.target_agent.as_deref(), Some("codex_kaira"));
+        assert_eq!(row.revision, 1);
+    }
+
+    // The revision read here is what a surface sends back with its decision.
+    assert!(cp_approve_handoff_by_owner(
+        &conn,
+        &ids.approval_id,
+        "local_control_owner",
+        "local_control_owner"
+    )
+    .unwrap());
+    assert_eq!(
+        cp_approval_revision(&conn, &ids.approval_id).unwrap(),
+        Some(2)
+    );
+}

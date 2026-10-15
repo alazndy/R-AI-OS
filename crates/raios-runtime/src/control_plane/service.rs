@@ -1,6 +1,6 @@
 use chrono::Utc;
 use raios_contracts::{
-    ActiveRunDto, AuditSummaryDto, BlockedTaskDto, Command, ExploreSnapshot,
+    ActiveRunDto, AuditSummaryDto, BlockedTaskDto, Command, Event, ExploreSnapshot,
     FactoryOverviewSnapshot, FactoryProductSummaryDto, GovernSnapshot, LogEntryDto, NowSnapshot,
     PolicySummaryDto, Problem, ProjectDto, ScheduledJobDto, ScoredApprovalDto, SnapshotEnvelope,
     ToolTraceDto, UnifiedTaskDto, WorkSnapshot,
@@ -97,12 +97,13 @@ pub fn load_now_snapshot(conn: &Connection) -> Result<NowSnapshot, String> {
             task_id: a.approval.task_id.unwrap_or_default(),
             kind: a.approval.approval_type,
             title: a.approval.task_title.unwrap_or_default(),
-            origin_agent: "agent".into(),
-            target_agent: "human".into(),
-            project_path: None,
+            origin_agent: a.approval.origin_agent.unwrap_or_else(|| "agent".into()),
+            target_agent: a.approval.target_agent.unwrap_or_else(|| "human".into()),
+            project_path: a.approval.project_path,
             created_at: a.approval.requested_at,
             score: a.risk_score as i32,
             reason: a.approval.reason,
+            revision: a.approval.revision,
         })
         .collect();
 
@@ -176,7 +177,8 @@ pub fn load_work_snapshot(conn: &Connection) -> Result<WorkSnapshot, String> {
         .map(|t| UnifiedTaskDto {
             id: t.id,
             title: t.title,
-            project_path: t.project_name,
+            project_path: t.project_path,
+            project_name: t.registered_name.or(t.project_name),
             assignee: t.assignee_id,
             status: t.status,
             priority: t.priority.clamp(0, i64::from(u8::MAX)) as u8,
@@ -532,6 +534,130 @@ fn launch_agent_in_terminal(request: &AgentLaunchRequest) -> Result<(), Problem>
     }
 }
 
+/// Reads the run linked to a handoff approval, if any, while the approval row
+/// is still observable inside the dispatch transaction.
+fn handoff_run_id(tx: &Connection, approval_id: &str) -> Result<Option<String>, Problem> {
+    tx.query_row(
+        "SELECT agent_run_id FROM cp_approvals WHERE id = ?1",
+        params![approval_id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map_err(|e| Problem::internal(e.to_string()))
+    .map(Option::flatten)
+}
+
+/// Refuses a decision made on a stale read. When the caller names the revision it saw and the
+/// stored revision has moved on, the answer is `CONFLICT` — never a silent decision on newer
+/// state. A named revision that matches no approval at all stays `NOT_FOUND`. Callers that
+/// name no revision (older surfaces) are unaffected.
+fn require_expected_revision(
+    conn: &Connection,
+    approval_id: &str,
+    expected: Option<i64>,
+) -> Result<(), Problem> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    match raios_core::db::cp_approval_revision(conn, approval_id)
+        .map_err(|e| Problem::internal(e.to_string()))?
+    {
+        Some(current) if current != expected => Err(Problem::conflict(format!(
+            "Approval '{}' changed since it was read (revision {} is stale, current is {})",
+            approval_id, expected, current
+        ))),
+        Some(_) => Ok(()),
+        None => Err(Problem::not_found("Pending handoff approval not found")),
+    }
+}
+
+/// Appends the typed events for a resolved handoff approval: the resolution
+/// itself plus the linked run's *observed* post-resolution state. The status
+/// string is read back from the database rather than assumed, so the event
+/// always mirrors the durable transition.
+fn push_handoff_resolution_events(
+    tx: &Connection,
+    approval_id: &str,
+    run_id: Option<&str>,
+    resolution: &str,
+    pending: &mut Vec<Event>,
+) -> Result<(), Problem> {
+    pending.push(Event::ApprovalResolved {
+        approval_id: approval_id.to_owned(),
+        status: resolution.to_owned(),
+    });
+    let Some(run_id) = run_id else {
+        return Ok(());
+    };
+    let run = tx
+        .query_row(
+            "SELECT agent_name, status FROM cp_agent_runs WHERE id = ?1",
+            params![run_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|e| Problem::internal(e.to_string()))?;
+    if let Some((agent_name, status)) = run {
+        pending.push(Event::AgentRunStateChanged {
+            run_id: run_id.to_owned(),
+            agent_name,
+            status,
+        });
+    }
+    Ok(())
+}
+
+/// Appends the typed events for a queued handoff: the new approval request
+/// plus the run's observed creation state. `result` is the `CreateHandoff`
+/// result payload; its ids come from the same transaction.
+fn push_handoff_created_events(
+    tx: &Connection,
+    result: &serde_json::Value,
+    target: &str,
+    pending: &mut Vec<Event>,
+) -> Result<(), Problem> {
+    let Some(approval_id) = result["approval_id"].as_str() else {
+        return Ok(());
+    };
+    let title = match result["task_id"].as_str() {
+        Some(task_id) => tx
+            .query_row(
+                "SELECT title FROM cp_tasks WHERE id = ?1",
+                params![task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| Problem::internal(e.to_string()))?
+            .unwrap_or_else(|| format!("Handoff to {target}")),
+        None => format!("Handoff to {target}"),
+    };
+    pending.push(Event::ApprovalRequested {
+        approval_id: approval_id.to_owned(),
+        // Canonical `cp_approvals.approval_type` value for handoffs.
+        kind: "handover".to_owned(),
+        title,
+        target: target.to_owned(),
+    });
+    if let Some(run_id) = result["agent_run_id"].as_str() {
+        let run = tx
+            .query_row(
+                "SELECT agent_name, status FROM cp_agent_runs WHERE id = ?1",
+                params![run_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(|e| Problem::internal(e.to_string()))?;
+        if let Some((agent_name, status)) = run {
+            pending.push(Event::AgentRunStateChanged {
+                run_id: run_id.to_owned(),
+                agent_name,
+                status,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Dispatches a control-plane command with payload-bound idempotency, atomic DB
 /// execution, explicit unsupported-command errors, and a transactional audit entry.
 ///
@@ -623,31 +749,50 @@ pub(super) fn dispatch_with_seams(
         .map_err(|e| Problem::internal(format!("Failed starting transaction: {}", e)))?;
 
     let mut launch_request: Option<AgentLaunchRequest> = None;
+    let mut pending_events: Vec<Event> = Vec::new();
     let result_val: Option<serde_json::Value> = match cmd {
-        Command::ApproveHandoff { approval_id, .. } => {
-            if !raios_core::db::cp_resolve_handoff(
+        Command::ApproveHandoff {
+            approval_id,
+            expected_revision,
+            ..
+        } => {
+            require_expected_revision(&tx, approval_id, *expected_revision)?;
+            let run_id = handoff_run_id(&tx, approval_id)?;
+            // The owner's consent: the approval resolves as approved and the run leaves the
+            // queue, but the task stays open. Only the addressed agent's own wrapper marks
+            // delivery (`handover_delivered`).
+            if !raios_core::db::cp_approve_handoff_by_owner(
                 &tx,
                 approval_id,
                 actor.subject(),
                 actor.subject(),
-                None,
             )
             .map_err(|e| Problem::internal(e.to_string()))?
             {
                 return Err(Problem::not_found("Pending handoff approval not found"));
             }
+            push_handoff_resolution_events(
+                &tx,
+                approval_id,
+                run_id.as_deref(),
+                "approved",
+                &mut pending_events,
+            )?;
             Some(serde_json::json!({"approval_id": approval_id, "status": "approved"}))
         }
         Command::RejectHandoff {
             approval_id,
             reason,
+            expected_revision,
             ..
         } => {
+            require_expected_revision(&tx, approval_id, *expected_revision)?;
             if reason.trim().is_empty() || reason.len() > 2_000 {
                 return Err(Problem::invalid_input(
                     "Rejection reason must contain at most 2000 characters",
                 ));
             }
+            let run_id = handoff_run_id(&tx, approval_id)?;
             if !raios_core::db::cp_resolve_handoff(
                 &tx,
                 approval_id,
@@ -659,6 +804,13 @@ pub(super) fn dispatch_with_seams(
             {
                 return Err(Problem::not_found("Pending handoff approval not found"));
             }
+            push_handoff_resolution_events(
+                &tx,
+                approval_id,
+                run_id.as_deref(),
+                "rejected",
+                &mut pending_events,
+            )?;
             Some(serde_json::json!({"approval_id": approval_id, "status": "rejected"}))
         }
         Command::TriggerCronJob { job_id, .. } => {
@@ -823,13 +975,12 @@ pub(super) fn dispatch_with_seams(
             to_agent,
             summary,
             ..
-        } => Some(super::handoff::create_handoff(
-            &tx,
-            project_path,
-            from_agent,
-            to_agent,
-            summary,
-        )?),
+        } => {
+            let result =
+                super::handoff::create_handoff(&tx, project_path, from_agent, to_agent, summary)?;
+            push_handoff_created_events(&tx, &result, to_agent, &mut pending_events)?;
+            Some(result)
+        }
         unhandled => {
             return Err(Problem::not_implemented(format!(
                 "Command '{:?}' is not implemented",
@@ -857,6 +1008,14 @@ pub(super) fn dispatch_with_seams(
 
     tx.commit()
         .map_err(|e| Problem::internal(format!("Commit failed: {}", e)))?;
+
+    // Typed events are published only after the transaction is durable, so a
+    // subscriber that reacts by querying a snapshot always observes the
+    // committed state. A replayed command (idempotency cache hit) returned
+    // earlier and deliberately emits nothing a second time.
+    for event in pending_events {
+        crate::events::emit(event);
+    }
 
     if let Some(request) = launch_request {
         if let Err(problem) = launcher(&request) {
@@ -1016,6 +1175,7 @@ mod tests {
 
         let cmd1 = Command::RejectHandoff {
             approval_id: workflow.approval_id.clone(),
+            expected_revision: None,
             reason: "Not needed".into(),
             idempotency_key: "idem-key-1".into(),
         };
@@ -1063,6 +1223,7 @@ mod tests {
         // Same key + different payload -> Error (invalid input / collision)
         let cmd2 = Command::RejectHandoff {
             approval_id: "app-different".into(),
+            expected_revision: None,
             reason: "Different reason".into(),
             idempotency_key: "idem-key-1".into(),
         };
@@ -1090,14 +1251,25 @@ mod tests {
         .unwrap();
 
         let before = load_system_snapshot(&conn).unwrap();
-        assert!(before
+        let listed = before
             .now
             .approvals
             .iter()
-            .any(|approval| approval.id == workflow.approval_id));
+            .find(|approval| approval.id == workflow.approval_id)
+            .expect("pending approval must be listed");
+        // The surface can only present (and decide) what carries its project root, both
+        // agents and the revision the decision must echo back.
+        assert_eq!(
+            listed.project_path.as_deref(),
+            Some("/tmp/control-plane-flow")
+        );
+        assert_eq!(listed.origin_agent, "codex_kaira");
+        assert_eq!(listed.target_agent, "antigravity_kaira");
+        assert_eq!(listed.revision, 1);
 
         let command = Command::ApproveHandoff {
             approval_id: workflow.approval_id.clone(),
+            expected_revision: None,
             idempotency_key: "approve-control-plane-flow".into(),
         };
         let result = dispatch_control_command(&mut conn, &ControlActor::test_local(), &command)
@@ -1111,6 +1283,54 @@ mod tests {
             .approvals
             .iter()
             .any(|approval| approval.id == workflow.approval_id));
+
+        // The owner's approval is consent, not delivery: the run leaves the queue, but the
+        // task stays open and the receipt must not read "delivered by the target".
+        assert_eq!(
+            conn.query_row(
+                "SELECT status FROM cp_tasks WHERE id = ?1",
+                params![workflow.task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "awaiting_approval"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
+                params![workflow.agent_run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "handover_approved_by_owner"
+        );
+        let receipt = raios_core::db::cp_handoff_receipt(
+            &conn,
+            &workflow.approval_id,
+            "/tmp/control-plane-flow",
+        )
+        .unwrap()
+        .expect("receipt");
+        assert_eq!(receipt.status, "approved");
+        assert!(!receipt.delivered_by_target());
+        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 2);
+
+        // Only the addressed agent's own delivery closes the task and flips the receipt.
+        assert!(raios_core::db::cp_mark_handoff_delivered(
+            &conn,
+            &workflow.approval_id,
+            "antigravity_kaira"
+        )
+        .unwrap());
+        let delivered = raios_core::db::cp_handoff_receipt(
+            &conn,
+            &workflow.approval_id,
+            "/tmp/control-plane-flow",
+        )
+        .unwrap()
+        .expect("receipt");
+        assert_eq!(delivered.status, "approved");
+        assert!(delivered.delivered_by_target());
         assert_eq!(
             conn.query_row(
                 "SELECT status FROM cp_tasks WHERE id = ?1",
@@ -1120,7 +1340,232 @@ mod tests {
             .unwrap(),
             "completed"
         );
-        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 1);
+        // A run that already ended by owner approval keeps that reason: delivery is recorded
+        // on the approval, artifact and task, never by re-labelling the run.
+        assert_eq!(
+            conn.query_row(
+                "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
+                params![workflow.agent_run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "handover_approved_by_owner"
+        );
+        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 3);
+    }
+
+    #[test]
+    fn stale_expected_revision_is_refused_with_conflict() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let workflow = raios_core::db::create_handoff_workflow(
+            &conn,
+            raios_core::db::HandoffWorkflowInput {
+                project_path: "/tmp/control-plane-conflict",
+                from_agent: "codex_kaira",
+                to_agent: "antigravity_kaira",
+                status: "blocker",
+                msg: "Conflict coverage",
+                diff_stat: None,
+                report: None,
+            },
+        )
+        .unwrap();
+        let actor = ControlActor::test_local();
+
+        // A decision on a revision the row never had is refused without touching the row.
+        let stale = Command::RejectHandoff {
+            approval_id: workflow.approval_id.clone(),
+            expected_revision: Some(99),
+            reason: "stale decision".into(),
+            idempotency_key: "conflict-stale".into(),
+        };
+        let error = dispatch_control_command(&mut conn, &actor, &stale).unwrap_err();
+        assert_eq!(error.code, "CONFLICT");
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM cp_approvals WHERE id = ?1",
+                params![workflow.approval_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "pending");
+
+        // The revision read before the decision is accepted once.
+        let fresh = Command::ApproveHandoff {
+            approval_id: workflow.approval_id.clone(),
+            expected_revision: Some(1),
+            idempotency_key: "conflict-fresh".into(),
+        };
+        let result = dispatch_control_command(&mut conn, &actor, &fresh)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["status"], "approved");
+
+        // Re-deciding on the same, now stale revision is a conflict, not a silent success.
+        let again = Command::ApproveHandoff {
+            approval_id: workflow.approval_id.clone(),
+            expected_revision: Some(1),
+            idempotency_key: "conflict-again".into(),
+        };
+        let error = dispatch_control_command(&mut conn, &actor, &again).unwrap_err();
+        assert_eq!(error.code, "CONFLICT");
+
+        // A named revision that matches no approval at all stays `NOT_FOUND`.
+        let missing = Command::RejectHandoff {
+            approval_id: "no-such-approval".into(),
+            expected_revision: Some(1),
+            reason: "nowhere".into(),
+            idempotency_key: "conflict-missing".into(),
+        };
+        let error = dispatch_control_command(&mut conn, &actor, &missing).unwrap_err();
+        assert_eq!(error.code, "NOT_FOUND");
+    }
+
+    /// Drains the typed-event bus for `expected` messages matching `matching`.
+    ///
+    /// `emit` sends synchronously inside dispatch, so by the time a dispatch
+    /// call returns its events are already queued. Other tests may dispatch
+    /// control-plane commands concurrently on the same process-wide bus, hence
+    /// the filter.
+    fn collect_typed_events(
+        rx: &mut tokio::sync::broadcast::Receiver<String>,
+        expected: usize,
+        matching: impl Fn(&serde_json::Value) -> bool,
+    ) -> Vec<serde_json::Value> {
+        let mut found = Vec::new();
+        while found.len() < expected {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    let value: serde_json::Value = serde_json::from_str(&msg).unwrap();
+                    if matching(&value) {
+                        found.push(value);
+                    }
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    panic!(
+                        "expected {expected} matching typed events, got {}: {found:?}",
+                        found.len()
+                    );
+                }
+                Err(error) => panic!("typed event bus receive failed: {error}"),
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn handoff_lifecycle_emits_typed_events_only_after_commit() {
+        // The typed bus is process-wide; tests that install it serialize on
+        // the crate's shared global-state lock.
+        let _lock = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(64);
+        crate::events::install(&tx);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+
+        // 1. A queued handoff publishes the approval request plus the run's
+        // observed creation state. The dispatcher requires an absolute path;
+        // a POSIX literal like `/workspace/...` is not `Path::is_absolute` on
+        // Windows, so the fixture comes from the platform temp root.
+        let fixture_path = std::env::temp_dir()
+            .join("raios-typed-events-fixture")
+            .to_string_lossy()
+            .into_owned();
+        let create = Command::CreateHandoff {
+            project_path: fixture_path,
+            from_agent: "claude_kaira".into(),
+            to_agent: "codex_kaira".into(),
+            summary: "Typed event coverage".into(),
+            idempotency_key: "typed-events-create".into(),
+        };
+        let created = dispatch_control_command(&mut conn, &ControlActor::test_local(), &create)
+            .unwrap()
+            .unwrap();
+        let approval_id = created["approval_id"].as_str().unwrap().to_owned();
+        let run_id = created["agent_run_id"].as_str().unwrap().to_owned();
+
+        let own_ids = |value: &serde_json::Value| {
+            value["payload"]["approval_id"].as_str() == Some(approval_id.as_str())
+                || value["payload"]["run_id"].as_str() == Some(run_id.as_str())
+        };
+        let created_events = collect_typed_events(&mut rx, 2, own_ids);
+        let requested = created_events
+            .iter()
+            .find(|v| v["event_type"] == "ApprovalRequested")
+            .expect("ApprovalRequested must be emitted");
+        assert_eq!(requested["payload"]["kind"], "handover");
+        assert_eq!(requested["payload"]["target"], "codex_kaira");
+        assert!(requested["payload"]["title"]
+            .as_str()
+            .unwrap()
+            .contains("Handoff"));
+        let run_created = created_events
+            .iter()
+            .find(|v| v["event_type"] == "AgentRunStateChanged")
+            .expect("run creation must be emitted");
+        assert_eq!(run_created["payload"]["agent_name"], "claude_kaira");
+        let db_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_agent_runs WHERE id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            run_created["payload"]["status"].as_str(),
+            Some(db_status.as_str()),
+            "the emitted run status must mirror the committed row"
+        );
+
+        // 2. Approving publishes the resolution plus the run's observed end
+        // state (never an assumed constant).
+        let approve = Command::ApproveHandoff {
+            approval_id: approval_id.clone(),
+            expected_revision: None,
+            idempotency_key: "typed-events-approve".into(),
+        };
+        dispatch_control_command(&mut conn, &ControlActor::test_local(), &approve)
+            .unwrap()
+            .unwrap();
+        let resolved_events = collect_typed_events(&mut rx, 2, own_ids);
+        let resolved = resolved_events
+            .iter()
+            .find(|v| v["event_type"] == "ApprovalResolved")
+            .expect("ApprovalResolved must be emitted");
+        assert_eq!(resolved["payload"]["approval_id"], approval_id);
+        assert_eq!(resolved["payload"]["status"], "approved");
+        let run_ended = resolved_events
+            .iter()
+            .find(|v| v["event_type"] == "AgentRunStateChanged")
+            .expect("run end must be emitted");
+        let db_status: String = conn
+            .query_row(
+                "SELECT status FROM cp_agent_runs WHERE id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            run_ended["payload"]["status"].as_str(),
+            Some(db_status.as_str())
+        );
+
+        // 3. An idempotent replay returns the cached result and must not emit
+        // the same transition a second time.
+        dispatch_control_command(&mut conn, &ControlActor::test_local(), &approve)
+            .unwrap()
+            .unwrap();
+        while let Ok(msg) = rx.try_recv() {
+            let value: serde_json::Value = serde_json::from_str(&msg).unwrap();
+            assert!(
+                !own_ids(&value),
+                "a replayed command must not re-emit its events: {value:?}"
+            );
+        }
     }
 
     #[test]
@@ -1143,6 +1588,7 @@ mod tests {
 
         let command = Command::ApproveHandoff {
             approval_id: workflow.approval_id.clone(),
+            expected_revision: None,
             idempotency_key: "remote-owner-check".into(),
         };
         let error = dispatch_control_command(

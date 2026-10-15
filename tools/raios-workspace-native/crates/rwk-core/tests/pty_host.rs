@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use rwk_core::error::ErrorCode;
 use rwk_core::project::ProjectRoot;
-use rwk_core::sessions::{SessionId, SessionKind, TerminalHost, TerminalSize};
+use rwk_core::sessions::{
+    ResumeKey, SessionId, SessionKind, SessionLaunch, TerminalHost, TerminalSize,
+};
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
 
 const WAIT: Duration = Duration::from_secs(15);
@@ -76,8 +78,22 @@ fn spawn(
     prompt: Option<&str>,
     terminal: TerminalSize,
 ) -> SessionId {
+    let launch = SessionLaunch::Fresh {
+        prompt: prompt.map(str::to_owned),
+    };
+    spawn_launch(host, project, kind, &launch, terminal)
+}
+
+/// Like [`spawn`], for a launch that is not a fresh run (a resume, say).
+fn spawn_launch(
+    host: &PtyTerminalHost,
+    project: &ProjectRoot,
+    kind: SessionKind,
+    launch: &SessionLaunch,
+    terminal: TerminalSize,
+) -> SessionId {
     for _ in 0..20 {
-        match host.spawn(project, kind, prompt, terminal) {
+        match host.spawn(project, kind, launch, terminal) {
             Ok(id) => return id,
             Err(error) if error.message.contains("Text file busy") => {
                 thread::sleep(Duration::from_millis(25));
@@ -289,6 +305,34 @@ fn stopping_an_agent_lets_the_wrapper_finish_before_it_is_killed() {
 }
 
 #[test]
+fn a_resume_pane_runs_raios_resume_with_the_exact_key() {
+    let fixture = Fixture::new();
+    let wrapper = fixture.script("raios", "echo \"args: $*\"\nsleep 600");
+    let host = host(ProgramPaths {
+        shell: None,
+        raios: Some(wrapper),
+    });
+    let project = fixture.project();
+    let key = ResumeKey::parse("claude:3294c005-aee0-4e95-860f-5800e045b624").expect("key");
+    let id = spawn_launch(
+        &host,
+        &project,
+        SessionKind::Claude,
+        &SessionLaunch::Resume(key),
+        size(140, 24),
+    );
+
+    wait_for_screen(
+        &host,
+        &id,
+        "args: resume claude:3294c005-aee0-4e95-860f-5800e045b624",
+    );
+
+    host.stop(&id).unwrap();
+    wait_for("the session to end", || !host.is_running(&id));
+}
+
+#[test]
 fn a_detached_background_process_cannot_hold_the_exit_hostage() {
     let fixture = Fixture::new();
     let pid_file = fixture.file("detached.pid");
@@ -334,7 +378,14 @@ fn a_bad_prompt_or_unknown_session_is_refused() {
     let project = fixture.project();
     for prompt in ["--dangerous", "bad\0prompt", &"x".repeat(601)] {
         let error = host
-            .spawn(&project, SessionKind::Codex, Some(prompt), size(80, 24))
+            .spawn(
+                &project,
+                SessionKind::Codex,
+                &SessionLaunch::Fresh {
+                    prompt: Some(prompt.to_owned()),
+                },
+                size(80, 24),
+            )
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidInput, "{prompt:?}");
     }
