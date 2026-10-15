@@ -19,7 +19,10 @@ running daemon after the update), **CI** green on PR #45/#46 (Ubuntu, Arch, Wind
 | Shortcuts: palette, new terminal, terminal toggle, focus editor/files, agent, handoff, inspector (Ctrl+Shift+D), layouts 1/2/3, settings, dock resize | T commands, R (Ctrl+Shift+P/T/A/H/D/J/E) |
 | Dock divider: drag and keyboard | T |
 | Skins standard and GT-LCARS × dark and light, Antonio font, terminal and editor follow the theme, persisted | T theme/skin, R (all four appearances) |
-| Inspector: tasks, runs, pending approvals (read-only) of the open project by exact path, connection banner | T inspector, R, D-live |
+| Inspector: live on the daemon event stream (tasks, runs, pending approvals of the open project by resolved project root), connection banner | T inspector, R + D-live (installed Plan 7 `aiosd`: 143 of 144 tasks carry an absolute `project_path`; inspector showed ONAYLAR (0) and ÇALIŞANLAR (6) with real agents/task ids, 2026-10-15) |
+| Project search (`Ctrl+Shift+F`, via `raios locate`, results open at the line) | T workbench_headless, R + D-live (query "fn main" → 29 matches listed with path:line and previews, 2026-10-15) |
+| Tabs and session restore; agent resume is offer-only | T workbench_headless (not exercised live) |
+| In-app approvals (approve/reject through the consent gate) | T workbench_headless (not exercised live: no pending approval existed to act on without creating real state) |
 | Memory view: memory.md outline with checklist progress and search, RAIOS records with type/layer filters, credentials redacted, inert links/HTML | T memory_model/workbench_headless, R, D-live (reads the live database read-only) |
 | Policy-guarded daemon commands (deny / allow / confirm with exact payload, Enter never answers, decline/expire sends nothing) | T consent/workbench_headless |
 | Project registration (auto for unknown projects, remembered once confirmed) | T, R + D-live (dialog → Onayla → daemon "Proje zaten kayıtlı") |
@@ -35,5 +38,5 @@ running daemon after the update), **CI** green on PR #45/#46 (Ubuntu, Arch, Wind
 - Antigravity doing work: its CLI is not signed in on this machine, so only its launch was exercised. Codex was exercised end to end (see above) with a one-word prompt.
 - Wayland-native windows: the checks ran under XWayland.
 - Windows and macOS: only the headless suites run there (CI); the application targets Linux.
-- Approving or rejecting approvals from the workspace: out of scope by design (read-only until the contract carries an expected revision).
-- The installed `raios` CLI binary was not rebuilt; only `aiosd` was updated (backup `~/.local/bin/aiosd.bak-20261014`).
+- Approving or rejecting approvals, tab restore across restarts: implemented in Plan 7 and covered by headless tests only; no live exercise.
+- `aiosd` and `raios` were rebuilt from master (Plan 7) and installed on 2026-10-15; backups are in `~/.local/bin/*.bak-*`.
