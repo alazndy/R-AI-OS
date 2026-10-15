@@ -1,4 +1,11 @@
 //! ANKA read-only transcript recall with a rebuildable sidecar cache.
+//!
+//! Platform: the path model is POSIX-only by design. `provenance::normalize_path`
+//! accepts only paths rooted at `/`, and directory `fsync` follows unix semantics,
+//! so on Windows `AnkaPolicy::init` fails closed with "ANKA cannot normalize the
+//! home path …" and a publish would report its durability as unconfirmed. Tests
+//! that assert those semantics are `#[cfg(unix)]`; a Windows-aware path mode is a
+//! deliberate follow-up, not silent partial support.
 
 pub mod provenance;
 
@@ -1202,6 +1209,7 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
     use std::time::Duration;
 
     fn spec(content: &str) -> RecordSpec {
@@ -1254,6 +1262,7 @@ mod tests {
 
     /// Synthetic history, cache, and config: these tests may not touch the real home,
     /// so every path is derived from a temp directory rather than from the environment.
+    #[cfg(unix)]
     struct Fixture {
         roots: AnkaRoots,
         cache: PathBuf,
@@ -1261,6 +1270,7 @@ mod tests {
         _temp: tempfile::TempDir,
     }
 
+    #[cfg(unix)]
     fn fixture() -> Fixture {
         let temp = tempfile::tempdir().expect("tempdir");
         let home = temp.path().join("home");
@@ -1298,6 +1308,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn only_record_id(fixture: &Fixture) -> String {
         read_index(&fixture.cache)
             .expect("read index")
@@ -1311,6 +1322,7 @@ mod tests {
     /// A pre-`forget_key` install's history record as it was actually written:
     /// `id` computed over `(harness, project, session, occurred_at, content)`, a
     /// `"<file-stem>:<line>"` session, no `forget_key`, no `provenance`.
+    #[cfg(unix)]
     fn legacy_history_id() -> String {
         hash(&[
             AnkaHarness::Opencode.as_str(),
@@ -1323,6 +1335,7 @@ mod tests {
 
     /// The key the importer derives for the fixture's history record — what the
     /// migrated tombstone has to contain to keep filtering it after a rebuild.
+    #[cfg(unix)]
     fn expected_history_forget_key(session_id: &str) -> String {
         hash(&[
             AnkaHarness::Opencode.as_str(),
@@ -1336,6 +1349,7 @@ mod tests {
 
     /// The same id shape for a Codex history record: `~/.codex/history.jsonl` stems
     /// to `history`, and the old importer hashed exactly these five inputs.
+    #[cfg(unix)]
     fn legacy_codex_id() -> String {
         hash(&[
             AnkaHarness::Codex.as_str(),
@@ -1349,6 +1363,7 @@ mod tests {
     /// The key the importer derives for the Codex fixture record — identity
     /// project is the file stem (`history`), the rest matches
     /// [`expected_history_forget_key`]'s shape.
+    #[cfg(unix)]
     fn expected_codex_forget_key(session_id: &str) -> String {
         hash(&[
             AnkaHarness::Codex.as_str(),
@@ -1363,6 +1378,7 @@ mod tests {
     /// Write the exact on-disk state a pre-versioned install leaves behind: an index
     /// whose records carry only `id`/`source`/`content`, plus the config directory
     /// for the caller to drop a line-based tombstone file into.
+    #[cfg(unix)]
     fn write_legacy_cache(fixture: &Fixture, legacy_id: &str) {
         write_legacy_cache_with_source(
             fixture,
@@ -1378,6 +1394,7 @@ mod tests {
 
     /// [`write_legacy_cache`] with the record's `source` supplied by the caller —
     /// the legacy cache spoke for whichever harness wrote it.
+    #[cfg(unix)]
     fn write_legacy_cache_with_source(
         fixture: &Fixture,
         legacy_id: &str,
@@ -1401,6 +1418,7 @@ mod tests {
         .expect("write the legacy cache");
     }
 
+    #[cfg(unix)]
     fn write_v1_tombstones(fixture: &Fixture, ids: &[&str]) {
         let mut body = String::new();
         for id in ids {
@@ -1410,6 +1428,7 @@ mod tests {
         fs::write(fixture.config.join(TOMBSTONE_FILE), body).expect("v1 tombstones");
     }
 
+    #[cfg(unix)]
     fn coverage_of(status: &AnkaIndexStatus, harness: AnkaHarness) -> &AnkaHarnessCoverage {
         status
             .coverage
@@ -1422,6 +1441,7 @@ mod tests {
     /// it must read the tombstones *after* taking it. The tombstone is written while
     /// the rebuild waits — exactly the state a `forget` completing first would leave —
     /// so a rebuild that had read tombstones up front would publish the record back.
+    #[cfg(unix)]
     #[test]
     fn an_index_run_takes_the_lock_before_it_reads_tombstones() {
         let fixture = fixture();
@@ -1465,6 +1485,7 @@ mod tests {
 
     /// `forget` is the other half of the same lock: nothing of its read-modify-write
     /// may happen while a rebuild is inside its own critical section.
+    #[cfg(unix)]
     #[test]
     fn forget_waits_while_an_index_run_holds_the_lock() {
         let fixture = fixture();
@@ -1505,6 +1526,7 @@ mod tests {
     /// End to end, whichever order the two writers win: a record the user forgot must
     /// not be sitting in the published index when both are done. Without the shared
     /// lock this is the resurrection bug the plan calls out.
+    #[cfg(unix)]
     #[test]
     fn a_rebuild_and_a_forget_racing_each_other_never_republish_a_forgotten_record() {
         let fixture = fixture();
@@ -1589,6 +1611,7 @@ mod tests {
 
     /// `forget` writes the `forget_key` to the tombstone, not the `record_id`. The
     /// tombstone is durable across rebuilds, so it must reference the stable identity.
+    #[cfg(unix)]
     #[test]
     fn forget_writes_the_forget_key_to_the_tombstone() {
         let fixture = fixture();
@@ -1620,6 +1643,7 @@ mod tests {
     /// a forget that shrinks the record set shrinks its harness coverage too,
     /// instead of leaving the tombstoned record numerically present until the
     /// next full refresh.
+    #[cfg(unix)]
     #[test]
     fn forget_recounts_the_harness_coverage_of_the_record_set_it_shrinks() {
         let fixture = fixture();
@@ -1685,6 +1709,7 @@ mod tests {
 
     /// A forgotten record stays hidden even after a rebuild that would have republished
     /// it — the tombstone is checked on recall, not only during the rebuild.
+    #[cfg(unix)]
     #[test]
     fn a_forgotten_record_stays_hidden_after_a_rebuild() {
         let fixture = fixture();
@@ -1709,6 +1734,7 @@ mod tests {
     /// The rebuild itself must not republish a forgotten record — not just hide it from
     /// recall. The published index is the source of truth for `status` and for any
     /// future reader that trusts it, so the filter belongs in `index_in` too.
+    #[cfg(unix)]
     #[test]
     fn a_rebuild_does_not_republish_a_forgotten_record() {
         let fixture = fixture();
@@ -1800,6 +1826,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     fn query(text: &str) -> AnkaSearchQuery {
         AnkaSearchQuery {
             text: text.to_string(),
@@ -1946,6 +1973,7 @@ mod tests {
     /// identical for every line in the file — and nothing event-specific is
     /// claimed. The record migrates instead of being blocked on an event the old
     /// importer never recorded.
+    #[cfg(unix)]
     #[test]
     fn a_legacy_tombstone_migrates_through_the_old_cache_record() {
         let fixture = fixture();
@@ -1990,6 +2018,7 @@ mod tests {
     /// "resolving" it by dropping the tombstone, which would resurrect the record on
     /// the next rebuild. Nothing is published: tombstone file byte-identical, index
     /// untouched, and `forget` held to the same rule while migration is blocked.
+    #[cfg(unix)]
     #[test]
     fn an_unresolvable_legacy_tombstone_blocks_the_migration_and_publishes_nothing() {
         let fixture = fixture();
@@ -2053,6 +2082,7 @@ mod tests {
     /// user hid. Hash appearance is not a format: a versioned file that fails
     /// validation, an unknown schema version, and a headerless non-hash line are all
     /// corruption.
+    #[cfg(unix)]
     #[test]
     fn a_corrupt_tombstone_file_is_reported_instead_of_ignored() {
         let fixture = fixture();
@@ -2098,6 +2128,7 @@ mod tests {
     /// converges on byte-identical tombstones — a versioned file is never
     /// re-translated, only re-published, so every later run re-runs the fsync chain
     /// instead of assuming a previous sync landed.
+    #[cfg(unix)]
     #[test]
     fn a_crash_between_the_tombstone_and_index_publish_is_safe_and_retries_idempotently() {
         let fixture = fixture();
@@ -2303,6 +2334,7 @@ mod tests {
     /// recovery runs through a *verified* event: the line carries the exact
     /// timestamp the cache recorded, so the session — and with it the forget key —
     /// is proven to belong to this record's event.
+    #[cfg(unix)]
     #[test]
     fn a_legacy_history_tombstone_recovers_the_native_session_id() {
         let fixture = fixture();
@@ -2356,6 +2388,7 @@ mod tests {
     /// prompt group), a wrong guess here is detectable only by refusing: the
     /// migration stops with nothing published, and mtime is never consulted as
     /// substitute event evidence.
+    #[cfg(unix)]
     #[test]
     fn a_legacy_migration_stops_when_a_native_session_cannot_be_tied_to_an_event() {
         let fixture = fixture();
@@ -2393,6 +2426,7 @@ mod tests {
     /// hiding the record after the next rebuild, so for Codex the re-read line must
     /// carry the exact event time the cache stored; an indistinguishable match
     /// stops the migration with nothing published until the source is resolved.
+    #[cfg(unix)]
     #[test]
     fn a_legacy_migration_stops_when_the_same_prompt_sits_under_another_event() {
         let fixture = fixture();
@@ -2468,6 +2502,7 @@ mod tests {
     /// what it does not recognize but cannot invent what is missing, so the old
     /// reader fails on this file with its own corrupt-index message instead of
     /// accepting a cache it only half understands.
+    #[cfg(unix)]
     #[test]
     fn an_old_cache_reader_cannot_accept_the_versioned_envelope() {
         let fixture = fixture();
@@ -2497,6 +2532,7 @@ mod tests {
     /// and even a rebuild declines to overwrite it — that file may hold data
     /// only a newer build understands, so destroying it is the user's explicit
     /// move, never a side effect of asking what time it is.
+    #[cfg(unix)]
     #[test]
     fn an_unknown_cache_schema_version_is_refused_described_and_never_overwritten() {
         let fixture = fixture();
@@ -2564,6 +2600,7 @@ mod tests {
     /// `incompatible`, and a rebuild declines rather than overwrite a file this
     /// build cannot even interpret — unlike corrupt bytes, an identifiable version
     /// field means *something else wrote this*.
+    #[cfg(unix)]
     #[test]
     fn an_invalid_schema_version_type_is_refused_described_and_never_overwritten() {
         let fixture = fixture();
@@ -2631,6 +2668,7 @@ mod tests {
     /// tombstones and exclusions — and their coverage entries stay verbatim, so
     /// their `full_refresh` flags survive and the scoped run stays visible as
     /// scoped instead of the whole cache pretending to have been refreshed.
+    #[cfg(unix)]
     #[test]
     fn a_harness_scoped_refresh_preserves_the_other_harnesses_and_their_coverage() {
         let fixture = fixture();
@@ -2731,6 +2769,7 @@ mod tests {
     /// `oversized` is its own exclusion reason in the coverage, not folded into
     /// malformed: the line was never parsed — its content never materialized —
     /// so counting it as malformed would describe an event that did not happen.
+    #[cfg(unix)]
     #[test]
     fn oversized_lines_are_reported_as_their_own_coverage_reason() {
         let fixture = fixture();
@@ -2786,6 +2825,7 @@ mod tests {
     /// state comes from coverage rather than `last_indexed_at`, a legacy cache
     /// whose records came from one harness reads as `partial`, not as the
     /// `ready` the old timestamp-based guess would have claimed.
+    #[cfg(unix)]
     #[test]
     fn a_legacy_cache_reports_partial_status_with_reconstructed_coverage() {
         let fixture = fixture();
@@ -2826,11 +2866,13 @@ mod tests {
 
     /// Drop the fixture's consent and write a fresh one with the requested
     /// choice — `init` refuses an existing policy, by design.
+    #[cfg(unix)]
     fn reinit_policy(fixture: &Fixture, home: HomeChoice) {
         fs::remove_file(fixture.config.join(policy::POLICY_FILE)).expect("drop fixture policy");
         policy::AnkaPolicy::init(&fixture.config, home, &fixture.roots).expect("policy-init");
     }
 
+    #[cfg(unix)]
     #[test]
     fn policy_init_writes_a_versioned_consent_and_refuses_to_overwrite_it() {
         let fixture = fixture();
@@ -2865,6 +2907,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn policy_init_creates_nothing_but_the_policy_file() {
         let fixture = fixture();
@@ -2915,6 +2958,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn recall_index_and_forget_refuse_to_run_without_an_initialized_policy() {
         let fixture = fixture();
@@ -2963,6 +3007,7 @@ mod tests {
         assert!(status_dto(status).policy.home.is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_malformed_policy_is_refused_rather_than_fallback() {
         let fixture = fixture();
@@ -2986,6 +3031,7 @@ mod tests {
         assert!(error.to_string().contains("unknown key"), "{error}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn exclusion_rules_take_effect_at_recall_before_any_rebuild() {
         let fixture = fixture();
@@ -3044,6 +3090,7 @@ mod tests {
         assert_eq!(status.policy.exclude_rules, 1);
     }
 
+    #[cfg(unix)]
     #[test]
     fn unknown_provenance_is_excluded_by_default_at_index_and_recall() {
         let fixture = fixture();
@@ -3102,6 +3149,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn home_exclude_drops_the_exact_home_record_but_keeps_child_projects() {
         let fixture = fixture();
@@ -3138,6 +3186,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn home_exclude_also_drops_the_exact_encoded_home_slug() {
         let fixture = fixture();
@@ -3179,6 +3228,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn home_keep_retains_unscoped_records_but_never_matches_a_project_filter() {
         let fixture = fixture(); // the fixture inits `keep`
@@ -3243,6 +3293,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn substring_rules_are_case_insensitive_and_literal() {
         let fixture = fixture();
@@ -3286,6 +3337,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn policy_show_reports_rules_tombstones_and_the_kept_excluded_breakdown() {
         let fixture = fixture();
@@ -3367,6 +3419,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn policy_show_reports_the_missing_state_without_failing() {
         let fixture = fixture();
@@ -3398,6 +3451,7 @@ mod tests {
     /// slug while the trustworthy directory exists only in the provenance. An
     /// exclusion naming that directory must still exclude the record — the
     /// display label alone is not the whole project claim.
+    #[cfg(unix)]
     #[test]
     fn substring_rules_match_the_resolved_path_and_the_raw_slug_not_only_the_display() {
         let fixture = fixture();
@@ -3458,6 +3512,7 @@ mod tests {
     /// process later runs with a different `$HOME`, the record at the consented
     /// home must still be excluded — and the new process home is simply not the
     /// consented subject.
+    #[cfg(unix)]
     #[test]
     fn the_home_decision_follows_the_consent_path_not_the_process_home() {
         let fixture = fixture();
@@ -3520,6 +3575,7 @@ mod tests {
     /// `/tmp/x//home` names `/tmp/x/home` — POSIX resolves an interior `//`
     /// exactly like a single `/`. Such a spelling must not slip past the exact
     /// home comparison as an ordinary scoped project.
+    #[cfg(unix)]
     #[test]
     fn an_asserted_home_with_interior_double_slashes_is_normalized_before_the_home_comparison() {
         let fixture = fixture();
@@ -3565,6 +3621,7 @@ mod tests {
     /// The consent's subject feeds exact comparisons, so it must arrive in the
     /// canonical form `init` writes: a relative path or a non-normalized
     /// spelling would let formatting decide what HOME means.
+    #[cfg(unix)]
     #[test]
     fn a_policy_home_path_that_is_not_already_normalized_is_malformed() {
         let fixture = fixture();
@@ -3643,6 +3700,7 @@ mod tests {
     /// the policy filtered out at its first index left no trace there. The
     /// discovery breakdown applies the same policy to the sources themselves,
     /// so what a rebuild would drop is countable before publication.
+    #[cfg(unix)]
     #[test]
     fn policy_show_counts_discovery_against_the_policy_before_publication() {
         let fixture = fixture();
