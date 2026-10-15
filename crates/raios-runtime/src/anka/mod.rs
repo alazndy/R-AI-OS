@@ -1770,6 +1770,7 @@ mod tests {
     /// `add_tombstone` must only treat `NotFound` as an empty start. Any other read
     /// error (permissions, I/O) must leave the file untouched rather than being
     /// silently treated as empty and then overwritten.
+    #[cfg(unix)]
     #[test]
     fn add_tombstone_propagates_read_errors_other_than_not_found() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1817,6 +1818,7 @@ mod tests {
     /// The sequence is `forget_in`'s own, replayed step by step under the same lock so
     /// the index publish can be made to fail deterministically: the cache directory is
     /// made unwritable between the tombstone and the publish. No threads, no timing.
+    #[cfg(unix)]
     #[test]
     fn a_durable_tombstone_hides_a_record_even_when_the_index_publish_fails() {
         let fixture = fixture();
@@ -1899,6 +1901,7 @@ mod tests {
     /// file byte for byte — the "rollback" is the atomic publish itself: nothing reaches
     /// the destination until the replacement is complete, so there is no partial state
     /// to clean up and no old data to restore by hand.
+    #[cfg(unix)]
     #[test]
     fn a_failed_tombstone_add_leaves_the_previous_tombstones_untouched() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2208,6 +2211,7 @@ mod tests {
     /// it (records are hidden by durability, not visibility), and the retry must
     /// re-publish the versioned file — re-running the fsync chain — instead of
     /// treating "already versioned" as "already durable".
+    #[cfg(unix)]
     #[test]
     fn an_unconfirmed_tombstone_publish_stops_the_index_and_a_retry_confirms_durability() {
         use std::os::unix::fs::MetadataExt;
@@ -2534,6 +2538,7 @@ mod tests {
     /// cannot read must stop the rebuild — otherwise a permission problem would be
     /// mistaken for an absent cache and the file would be silently replaced, losing
     /// whatever it held.
+    #[cfg(unix)]
     #[test]
     fn an_unreadable_cache_blocks_the_rebuild_instead_of_being_replaced() {
         let fixture = fixture();
@@ -2605,6 +2610,7 @@ mod tests {
     /// The unreadable-file and invalid-version refusals must not swallow the
     /// behavior that motivates `raios anka index` in the first place: bytes that
     /// parse as nothing at all are corrupt, and a full rebuild fixes them.
+    #[cfg(unix)]
     #[test]
     fn a_corrupt_index_stays_rebuildable() {
         let fixture = fixture();
@@ -3596,6 +3602,7 @@ mod tests {
 
     /// An unreadable cache is not an empty one: reporting `absent` with zero
     /// records would claim a total loss that never happened.
+    #[cfg(unix)]
     #[test]
     fn policy_show_reports_an_unreadable_cache_as_unreadable_not_as_absent() {
         let fixture = fixture();

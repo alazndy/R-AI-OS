@@ -486,7 +486,9 @@ mod tests {
     #[test]
     fn parent_search_excludes_nested_worktrees_without_evicting_explicit_scope() {
         let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("project");
+        // Search reports canonical paths; macOS temporary directories sit behind a symlink
+        // (/var -> /private/var), so the expected paths must be canonical as well.
+        let root = tmp.path().canonicalize().unwrap().join("project");
         let branch = root.join(".worktrees/feature");
         fs::create_dir_all(&branch).unwrap();
         fs::write(root.join("main.rs"), "parentmarker commonmarker").unwrap();

@@ -96,6 +96,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    #[cfg(unix)]
     fn file_mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
         fs::metadata(path).expect("metadata").permissions().mode() & 0o777
@@ -103,6 +104,7 @@ mod tests {
 
     use std::fs;
 
+    #[cfg(unix)]
     #[test]
     fn the_lock_file_is_owner_only_when_it_is_first_created() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -201,6 +203,7 @@ mod tests {
 
     /// A symlink where the lock file should be is rejected, not followed: locking a
     /// file the caller does not own would hand out guarantees it cannot make.
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_lock_file_is_refused_instead_of_locked() {
         let temp = tempfile::tempdir().expect("tempdir");

@@ -213,8 +213,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_successful_local_execution_is_only_a_local_probe() {
-        assert!(bounded_local_probe(Path::new("/bin/true"), "--version").unwrap());
-        assert!(!bounded_local_probe(Path::new("/bin/false"), "--version").unwrap());
+        // `true` and `false` live in /bin on Linux and in /usr/bin on macOS.
+        let find = |name: &str| {
+            ["/bin", "/usr/bin"]
+                .iter()
+                .map(|dir| Path::new(dir).join(name))
+                .find(|path| path.exists())
+                .expect("true/false exist on every Unix")
+        };
+        assert!(bounded_local_probe(&find("true"), "--version").unwrap());
+        assert!(!bounded_local_probe(&find("false"), "--version").unwrap());
     }
 
     #[test]

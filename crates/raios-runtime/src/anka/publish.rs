@@ -238,6 +238,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
 
+    #[cfg(unix)]
     fn file_mode(path: &Path) -> u32 {
         fs::metadata(path).expect("metadata").permissions().mode() & 0o777
     }
@@ -257,6 +258,7 @@ mod tests {
 
     /// The property the create-then-chmod sequence could not offer: at the moment the
     /// file first exists, before anything is written to it, it is already `0600`.
+    #[cfg(unix)]
     #[test]
     fn a_temporary_file_is_owner_only_before_a_byte_is_written() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -277,6 +279,7 @@ mod tests {
         assert_eq!(file_mode(&target), 0o600);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_published_file_is_owner_only_and_leaves_no_temporary_behind() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -296,6 +299,7 @@ mod tests {
     /// Directory hardening is its own responsibility, tested on its own helper rather
     /// than smuggled in as a side effect of a file write: a fresh chain comes out
     /// `0700`, and one made permissive by older code is brought back to `0700`.
+    #[cfg(unix)]
     #[test]
     fn directories_are_owner_only_when_created_and_hardened_when_already_permissive() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -317,6 +321,7 @@ mod tests {
 
     /// An existing permissive target is replaced by an owner-only one rather than
     /// inheriting its mode.
+    #[cfg(unix)]
     #[test]
     fn publishing_over_a_world_readable_file_makes_it_owner_only() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -333,6 +338,7 @@ mod tests {
 
     /// Concurrency is the reason the temporary name cannot be a constant: N writers
     /// race on one destination, and the result must be exactly one writer's bytes.
+    #[cfg(unix)]
     #[test]
     fn concurrent_publishes_never_interleave_bytes() {
         let temp = tempfile::tempdir().expect("tempdir");
