@@ -191,8 +191,11 @@ fn button(
 ) -> gpui::Stateful<gpui::Div> {
     let base = div()
         .id(id)
-        .px_2()
+        .px_3()
         .py_0p5()
+        .rounded_sm()
+        .cursor_pointer()
+        .hover(move |style| style.bg(gpui::rgb(theme.raised)))
         .border_1()
         .border_color(gpui::rgb(if active {
             theme.accent_ink
@@ -238,8 +241,11 @@ impl Render for SearchView {
         let rows = hits.into_iter().enumerate().map(|(ix, hit)| {
             let row = div()
                 .id(("search-hit", ix))
-                .px_2()
-                .py_0p5()
+                .px_3()
+                .py_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(move |style| style.bg(gpui::rgb(theme.raised)))
                 .flex()
                 .flex_col()
                 .gap_0p5()
@@ -276,7 +282,9 @@ impl Render for SearchView {
             .flex()
             .flex_col()
             .gap_2()
-            .p_3()
+            .p_4()
+            .rounded_md()
+            .shadow_lg()
             .bg(gpui::rgb(theme.panel))
             .border_1()
             .border_color(gpui::rgb(theme.line))
@@ -320,6 +328,7 @@ impl Render for SearchView {
                 div()
                     .h(px(32.0))
                     .overflow_hidden()
+                    .rounded_sm()
                     .border_1()
                     .border_color(gpui::rgb(theme.line))
                     .child(Input::new(&self.query)),

@@ -334,8 +334,9 @@ fn signal_for(event: &ControlEvent) -> Option<StreamSignal> {
 
 fn heading(theme: Theme, text: &str, count: usize) -> impl IntoElement {
     div()
-        .px_2()
-        .pt_2()
+        .px_3()
+        .pt_3()
+        .pb_1()
         .text_xs()
         .text_color(gpui::rgb(if theme.lcars {
             theme.accent_ink
@@ -350,8 +351,9 @@ fn heading(theme: Theme, text: &str, count: usize) -> impl IntoElement {
 
 fn row(theme: Theme, primary: String, secondary: String) -> impl IntoElement {
     div()
-        .px_2()
-        .py_0p5()
+        .px_3()
+        .py_1()
+        .hover(move |style| style.bg(gpui::rgb(theme.raised)))
         .child(div().child(SharedString::from(primary)))
         .child(
             div()
@@ -409,14 +411,17 @@ impl Render for InspectorView {
                     .flex()
                     .flex_row()
                     .gap_2()
-                    .px_2()
-                    .pb_1()
+                    .px_3()
+                    .pb_2()
                     .child(
                         div()
                             .id(SharedString::from(format!("approve-handoff-{approve_id}")))
-                            .px_2()
+                            .px_3()
+                            .py_0p5()
+                            .rounded_sm()
                             .border_1()
                             .border_color(gpui::rgb(theme.accent_ink))
+                            .hover(move |style| style.bg(gpui::rgb(theme.raised)))
                             .text_xs()
                             .child("Onayla")
                             .on_click(cx.listener(move |_, _, _window, cx| {
@@ -429,9 +434,12 @@ impl Render for InspectorView {
                     .child(
                         div()
                             .id(SharedString::from(format!("reject-handoff-{reject_id}")))
-                            .px_2()
+                            .px_3()
+                            .py_0p5()
+                            .rounded_sm()
                             .border_1()
                             .border_color(gpui::rgb(theme.bad))
+                            .hover(move |style| style.bg(gpui::rgb(theme.raised)))
                             .text_xs()
                             .child("Reddet")
                             .on_click(cx.listener(move |_, _, _window, cx| {
@@ -485,7 +493,7 @@ impl Render for InspectorView {
             .child(
                 div()
                     .h(gpui::px(28.0))
-                    .px_2()
+                    .px_3()
                     .flex()
                     .items_center()
                     .border_b_1()
