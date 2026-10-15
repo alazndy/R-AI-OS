@@ -537,11 +537,7 @@ pub fn cp_consume_handoff(
     Ok(())
 }
 
-fn audit_handoff_delivery(
-    tx: &Connection,
-    approval_id: &str,
-    resolved_by: &str,
-) -> Result<()> {
+fn audit_handoff_delivery(tx: &Connection, approval_id: &str, resolved_by: &str) -> Result<()> {
     crate::security::record_audit_event(
         tx,
         "handover_delivered",

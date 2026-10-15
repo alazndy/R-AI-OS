@@ -1118,9 +1118,11 @@ mod tests {
         let swap_at = session.clone();
         let swap_to = planted.clone();
         super::super::provenance::after_path_check_once(move || {
-            let planted_bytes = fs::read(&swap_to).expect("planted bytes");
-            let _ = fs::remove_file(&swap_at);
-            fs::write(&swap_at, planted_bytes).expect("swap to another regular file");
+            // Rename the already existing planted file over the path: it keeps its own inode,
+            // which differs from the original's. Removing the original and writing a new file
+            // can hand the freed inode number straight back on some filesystems, which would
+            // make the identity check legitimately unable to tell the two apart.
+            fs::rename(&swap_to, &swap_at).expect("swap to another regular file");
         });
 
         let (records, report) = discover_claude(&roots).expect("claude import");

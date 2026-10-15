@@ -88,11 +88,11 @@ impl std::error::Error for PublishError {}
 /// from the instant it exists — the umask can only remove bits from the requested mode,
 /// never add them. This is the property the old create-then-chmod sequence lacked.
 pub(super) fn create_owner_only(path: &Path) -> std::io::Result<File> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path)
 }
 
 /// Replace `path` with `content`, atomically and without a permissions window.
