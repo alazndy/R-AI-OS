@@ -100,7 +100,7 @@ fn editor_open(scenario: Scenario, lines: usize, cx: &mut App) {
         let signal = Rc::clone(&done);
         let started = Instant::now();
         let opened = cx.update_window(handle.into(), |_root, window, cx| {
-            editor.update(cx, |editor, cx| editor.open(document, window, cx));
+            editor.update(cx, |editor, cx| editor.open_document(document, window, cx));
             window.on_next_frame(move |_window, _cx| signal.set(Some(started.elapsed())));
         });
         if opened.is_err() {

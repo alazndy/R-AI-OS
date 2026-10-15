@@ -7,11 +7,24 @@ use std::sync::{Arc, Mutex};
 use rwk_core::error::{AppError, ErrorCode, Result};
 use rwk_core::project::ProjectRoot;
 use rwk_core::sessions::{
-    SessionId, SessionKind, SessionRegistry, TerminalHost, TerminalSize, MAX_SESSIONS,
+    ResumeKey, SessionId, SessionKind, SessionLaunch, SessionRegistry, TerminalHost, TerminalSize,
+    MAX_SESSIONS,
 };
 use tempfile::TempDir;
 
-type Spawn = (SessionKind, Option<String>, TerminalSize, PathBuf);
+type Spawn = (SessionKind, SessionLaunch, TerminalSize, PathBuf);
+
+/// A fresh run with no first prompt.
+fn fresh() -> SessionLaunch {
+    SessionLaunch::default()
+}
+
+/// A fresh run with one first prompt.
+fn fresh_with(prompt: &str) -> SessionLaunch {
+    SessionLaunch::Fresh {
+        prompt: Some(prompt.to_owned()),
+    }
+}
 
 #[derive(Default)]
 struct HostState {
@@ -50,7 +63,7 @@ impl TerminalHost for Handle {
         &self,
         project: &ProjectRoot,
         kind: SessionKind,
-        prompt: Option<&str>,
+        launch: &SessionLaunch,
         size: TerminalSize,
     ) -> Result<SessionId> {
         let mut state = self.0.state.lock().unwrap();
@@ -60,12 +73,9 @@ impl TerminalHost for Handle {
         state.next += 1;
         let id = format!("s{}", state.next);
         state.running.insert(id.clone());
-        state.spawned.push((
-            kind,
-            prompt.map(str::to_owned),
-            size,
-            project.info().root.clone(),
-        ));
+        state
+            .spawned
+            .push((kind, launch.clone(), size, project.info().root.clone()));
         Ok(SessionId::new(id))
     }
 
@@ -107,7 +117,7 @@ fn a_started_session_is_listed_with_its_project_and_kind() {
     let (_directory, project, host, registry) = fixture();
 
     let started = registry
-        .start(&project, SessionKind::Claude, Some("hello"), SIZE)
+        .start(&project, SessionKind::Claude, &fresh_with("hello"), SIZE)
         .unwrap();
 
     assert_eq!(started.kind, SessionKind::Claude);
@@ -118,7 +128,33 @@ fn a_started_session_is_listed_with_its_project_and_kind() {
         host.spawned(),
         vec![(
             SessionKind::Claude,
-            Some("hello".to_owned()),
+            fresh_with("hello"),
+            SIZE,
+            project.info().root.clone()
+        )]
+    );
+}
+
+#[test]
+fn a_resume_reaches_the_host_with_its_validated_key() {
+    let (_directory, project, host, registry) = fixture();
+    let key = ResumeKey::parse("claude:3294c005-aee0-4e95-860f-5800e045b624").expect("key");
+
+    let started = registry
+        .start(
+            &project,
+            SessionKind::Claude,
+            &SessionLaunch::Resume(key.clone()),
+            SIZE,
+        )
+        .unwrap();
+
+    assert_eq!(started.kind, SessionKind::Claude);
+    assert_eq!(
+        host.spawned(),
+        vec![(
+            SessionKind::Claude,
+            SessionLaunch::Resume(key),
             SIZE,
             project.info().root.clone()
         )]
@@ -132,20 +168,20 @@ fn at_most_four_sessions_run_at_once_and_a_finished_one_frees_a_slot() {
     for _ in 0..MAX_SESSIONS {
         started.push(
             registry
-                .start(&project, SessionKind::Shell, None, SIZE)
+                .start(&project, SessionKind::Shell, &fresh(), SIZE)
                 .unwrap(),
         );
     }
 
     let refused = registry
-        .start(&project, SessionKind::Shell, None, SIZE)
+        .start(&project, SessionKind::Shell, &fresh(), SIZE)
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidInput);
     assert_eq!(host.spawned().len(), MAX_SESSIONS, "nothing was spawned");
 
     host.finish(&started[0].id);
     let replacement = registry
-        .start(&project, SessionKind::Codex, None, SIZE)
+        .start(&project, SessionKind::Codex, &fresh(), SIZE)
         .unwrap();
 
     let listed = registry.list();
@@ -158,7 +194,7 @@ fn at_most_four_sessions_run_at_once_and_a_finished_one_frees_a_slot() {
 fn the_host_reporting_an_exit_marks_the_session_as_not_running() {
     let (_directory, project, host, registry) = fixture();
     let session = registry
-        .start(&project, SessionKind::Shell, None, SIZE)
+        .start(&project, SessionKind::Shell, &fresh(), SIZE)
         .unwrap();
 
     host.finish(&session.id);
@@ -172,7 +208,7 @@ fn the_host_reporting_an_exit_marks_the_session_as_not_running() {
 fn stopping_a_session_stops_it_on_the_host() {
     let (_directory, project, host, registry) = fixture();
     let session = registry
-        .start(&project, SessionKind::Shell, None, SIZE)
+        .start(&project, SessionKind::Shell, &fresh(), SIZE)
         .unwrap();
 
     registry.stop(&session.id).unwrap();
@@ -197,7 +233,7 @@ fn a_failed_spawn_leaves_the_registry_unchanged() {
     host.state.lock().unwrap().fail_spawn = true;
 
     let error = registry
-        .start(&project, SessionKind::Shell, None, SIZE)
+        .start(&project, SessionKind::Shell, &fresh(), SIZE)
         .unwrap_err();
 
     assert_eq!(error.code, ErrorCode::Io);
@@ -208,10 +244,10 @@ fn a_failed_spawn_leaves_the_registry_unchanged() {
 fn shutdown_stops_every_session_and_refuses_new_ones() {
     let (_directory, project, host, registry) = fixture();
     let first = registry
-        .start(&project, SessionKind::Shell, None, SIZE)
+        .start(&project, SessionKind::Shell, &fresh(), SIZE)
         .unwrap();
     let second = registry
-        .start(&project, SessionKind::Claude, None, SIZE)
+        .start(&project, SessionKind::Claude, &fresh(), SIZE)
         .unwrap();
 
     registry.stop_all();
@@ -222,7 +258,7 @@ fn shutdown_stops_every_session_and_refuses_new_ones() {
     assert!(stopped.contains(&second.id.as_str().to_owned()));
     assert!(registry.list().iter().all(|session| !session.running));
     let error = registry
-        .start(&project, SessionKind::Shell, None, SIZE)
+        .start(&project, SessionKind::Shell, &fresh(), SIZE)
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::WorkspaceClosed);
 }
@@ -232,10 +268,10 @@ fn shutdown_stops_the_remaining_sessions_even_when_one_stop_fails() {
     let (_directory, project, host, registry) = fixture();
     host.state.lock().unwrap().fail_stop_first = true;
     let first = registry
-        .start(&project, SessionKind::Shell, None, SIZE)
+        .start(&project, SessionKind::Shell, &fresh(), SIZE)
         .unwrap();
     let second = registry
-        .start(&project, SessionKind::Shell, None, SIZE)
+        .start(&project, SessionKind::Shell, &fresh(), SIZE)
         .unwrap();
 
     registry.stop_all();

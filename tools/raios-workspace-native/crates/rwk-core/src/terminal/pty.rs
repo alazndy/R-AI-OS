@@ -18,7 +18,7 @@ use super::command::{build_command, ProgramPaths};
 use super::engine::{EngineOptions, TerminalEngine};
 use crate::error::{AppError, ErrorCode, Result};
 use crate::project::ProjectRoot;
-use crate::sessions::{SessionId, SessionKind, TerminalHost, TerminalSize};
+use crate::sessions::{SessionId, SessionKind, SessionLaunch, TerminalHost, TerminalSize};
 
 /// How long a stopped agent wrapper gets to close its own run before it is killed too.
 const AGENT_GRACE: Duration = Duration::from_secs(5);
@@ -129,10 +129,10 @@ impl TerminalHost for PtyTerminalHost {
         &self,
         project: &ProjectRoot,
         kind: SessionKind,
-        prompt: Option<&str>,
+        launch: &SessionLaunch,
         size: TerminalSize,
     ) -> Result<SessionId> {
-        let command = build_command(&self.programs, &project.info().root, kind, prompt)?;
+        let command = build_command(&self.programs, &project.info().root, kind, launch)?;
         let pair = native_pty_system()
             .openpty(pty_size(size))
             .map_err(pty_error)?;

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use rwk_core::project::ProjectRoot;
-use rwk_core::sessions::{SessionId, SessionKind, TerminalHost, TerminalSize};
+use rwk_core::sessions::{SessionId, SessionKind, SessionLaunch, TerminalHost, TerminalSize};
 use rwk_core::terminal::{EngineOptions, ProgramPaths, PtyTerminalHost, TerminalEngine};
 
 use crate::stats::{summarize, LatencySummary};
@@ -259,8 +259,9 @@ fn spawn_floor_child(
 
 /// Spawns, retrying when the kernel reports the freshly written script as busy.
 fn spawn_retrying(host: &PtyTerminalHost, project: &ProjectRoot) -> Result<SessionId, String> {
+    let launch = SessionLaunch::default();
     for _ in 0..20 {
-        match host.spawn(project, SessionKind::Shell, None, TERMINAL) {
+        match host.spawn(project, SessionKind::Shell, &launch, TERMINAL) {
             Ok(id) => return Ok(id),
             Err(error) if error.message.contains("Text file busy") => {
                 thread::sleep(Duration::from_millis(25));

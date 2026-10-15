@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rwk_core::error::Result;
 use rwk_core::project::ProjectRoot;
-use rwk_core::sessions::{SessionId, SessionKind, TerminalHost, TerminalSize};
+use rwk_core::sessions::{SessionId, SessionKind, SessionLaunch, TerminalHost, TerminalSize};
 use rwk_core::terminal::PtyTerminalHost;
 
 /// A cloneable handle on one [`PtyTerminalHost`].
@@ -17,10 +17,10 @@ impl TerminalHost for SharedHost {
         &self,
         project: &ProjectRoot,
         kind: SessionKind,
-        prompt: Option<&str>,
+        launch: &SessionLaunch,
         size: TerminalSize,
     ) -> Result<SessionId> {
-        self.0.spawn(project, kind, prompt, size)
+        self.0.spawn(project, kind, launch, size)
     }
 
     fn write(&self, id: &SessionId, data: &[u8]) -> Result<()> {

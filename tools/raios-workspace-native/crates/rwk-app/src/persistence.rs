@@ -5,7 +5,10 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use rwk_core::workbench::{parse_appearance, serialize_appearance, Appearance};
+use rwk_core::workbench::{
+    parse_appearance, parse_workspace, serialize_appearance, serialize_workspace, state_file_name,
+    Appearance, SavedWorkspace, WorkspaceStateSource,
+};
 
 /// Directory name under the config home.
 const APP_DIR: &str = "raios-workspace-native";
@@ -89,6 +92,65 @@ pub fn save_appearance(path: &Path, appearance: &Appearance) -> std::io::Result<
     file.write_all(serialize_appearance(appearance).as_bytes())?;
     file.sync_all()?;
     std::fs::rename(&temporary, path)
+}
+
+/// Directory under the app dir holding one state file per project.
+const WORKSPACES_DIR: &str = "workspaces";
+
+/// The state file of `project` inside a config home.
+pub fn workspace_path(config_home: &Path, project: &Path) -> PathBuf {
+    config_home
+        .join(APP_DIR)
+        .join(WORKSPACES_DIR)
+        .join(state_file_name(project))
+}
+
+/// The stored workspace of `project`, or `None` when there is none, it is unreadable, or it is
+/// invalid (the parser refuses anything a hand-edited file could smuggle in).
+pub fn load_workspace(path: &Path) -> Option<SavedWorkspace> {
+    parse_workspace(std::fs::read_to_string(path).ok()?.as_str())
+}
+
+/// Writes one project's workspace atomically (temporary file, then rename), owner-only.
+pub fn save_workspace(path: &Path, workspace: &SavedWorkspace) -> std::io::Result<()> {
+    let Some(directory) = path.parent() else {
+        return Err(std::io::Error::other("the workspace path has no directory"));
+    };
+    create_private_dir(directory)?;
+    let Some(name) = path.file_name() else {
+        return Err(std::io::Error::other("the workspace path has no file name"));
+    };
+    let temporary = directory.join(format!(".{}.tmp", name.to_string_lossy()));
+    let mut file = open_private(&temporary)?;
+    file.write_all(serialize_workspace(workspace).as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, path)
+}
+
+/// The store the workbench reads from: one state file per project under the config home.
+pub struct FsWorkspaceStore {
+    config_home: PathBuf,
+}
+
+impl FsWorkspaceStore {
+    /// A store rooted at `config_home`.
+    pub fn new(config_home: PathBuf) -> Self {
+        Self { config_home }
+    }
+
+    /// Writes the state of the project it describes, atomically and owner-only.
+    pub fn save(&self, workspace: &SavedWorkspace) -> std::io::Result<()> {
+        save_workspace(
+            &workspace_path(&self.config_home, &workspace.project),
+            workspace,
+        )
+    }
+}
+
+impl WorkspaceStateSource for FsWorkspaceStore {
+    fn load(&self, project: &Path) -> Option<SavedWorkspace> {
+        load_workspace(&workspace_path(&self.config_home, project))
+    }
 }
 
 #[cfg(unix)]
@@ -227,5 +289,79 @@ mod tests {
         assert_eq!(load_registered(&file), vec![PathBuf::from("/ok")]);
         std::fs::write(&file, "not json").expect("write");
         assert!(load_registered(&file).is_empty());
+    }
+
+    #[test]
+    fn the_workspace_file_lives_under_the_config_home_with_one_per_project() {
+        let home = Path::new("/xdg");
+        let one = workspace_path(home, Path::new("/work/app"));
+        let two = workspace_path(home, Path::new("/work/other"));
+        assert_eq!(
+            one.parent(),
+            Some(Path::new("/xdg/raios-workspace-native/workspaces"))
+        );
+        assert!(one.to_string_lossy().ends_with(".json"), "{one:?}");
+        assert_ne!(one, two, "one state file per project");
+    }
+
+    #[test]
+    fn a_saved_workspace_round_trips_through_the_store() {
+        use rwk_core::workbench::{LayoutPreset, SavedTab, SavedTerminal};
+
+        let directory = tempfile::tempdir().expect("dir");
+        let store = FsWorkspaceStore::new(directory.path().to_path_buf());
+        let project = Path::new("/work/app");
+        assert!(store.load(project).is_none(), "nothing saved yet");
+
+        let workspace = SavedWorkspace {
+            project: project.to_path_buf(),
+            tabs: vec![SavedTab {
+                path: "src/main.rs".into(),
+                line: 7,
+            }],
+            active: 0,
+            layout: LayoutPreset::Editor,
+            terminals: vec![
+                SavedTerminal::Shell,
+                SavedTerminal::Agent {
+                    kind: rwk_core::sessions::SessionKind::Claude,
+                    native_session: None,
+                },
+            ],
+        };
+        store.save(&workspace).expect("save");
+        assert_eq!(store.load(project), Some(workspace));
+        assert!(store.load(Path::new("/work/other")).is_none());
+    }
+
+    #[test]
+    fn a_workspace_save_creates_the_directory_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("dir");
+        let store = FsWorkspaceStore::new(directory.path().to_path_buf());
+        let state = SavedWorkspace {
+            project: PathBuf::from("/work/app"),
+            tabs: Vec::new(),
+            active: 0,
+            layout: rwk_core::workbench::LayoutPreset::Balanced,
+            terminals: Vec::new(),
+        };
+        store.save(&state).expect("save");
+        assert_eq!(
+            WorkspaceStateSource::load(&store, &state.project),
+            Some(state)
+        );
+        let path = workspace_path(directory.path(), Path::new("/work/app"));
+        let dir_mode = std::fs::metadata(path.parent().expect("parent"))
+            .expect("dir meta")
+            .permissions()
+            .mode();
+        let file_mode = std::fs::metadata(&path)
+            .expect("file meta")
+            .permissions()
+            .mode();
+        assert_eq!(dir_mode & 0o077, 0, "{dir_mode:o}");
+        assert_eq!(file_mode & 0o077, 0, "{file_mode:o}");
     }
 }

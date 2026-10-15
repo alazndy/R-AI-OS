@@ -5,8 +5,10 @@ pub mod control;
 pub mod host;
 pub mod layout;
 pub mod memory;
+pub mod offers;
 pub mod palette;
 pub mod search;
+pub mod workspace;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,11 +24,14 @@ use rwk_core::control::ControlPlane;
 use rwk_core::guarded::Guarded;
 use rwk_core::handoff_flow::TrackedHandoff;
 use rwk_core::project::ProjectRoot;
-use rwk_core::sessions::{SessionId, SessionKind, SessionRegistry, TerminalHost, TerminalSize};
+use rwk_core::sessions::{
+    ResumeKey, SessionId, SessionKind, SessionLaunch, SessionRegistry, TerminalHost, TerminalSize,
+    MAX_SESSIONS,
+};
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
 use rwk_core::workbench::{
-    available, resolve_shortcut, Appearance, CommandId, KeyboardContext, Keystroke, Skin,
-    SwitchDecision, Theme, Tone, WorkbenchState,
+    available, resolve_shortcut, Appearance, CommandId, KeyboardContext, Keystroke, SavedWorkspace,
+    SessionOffer, Skin, SwitchDecision, Theme, Tone, WorkbenchState, WorkspaceStateSource,
 };
 
 use crate::editor::view::{EditorEvent, EditorView};
@@ -45,6 +50,10 @@ const NEW_TERMINAL_SIZE: TerminalSize = TerminalSize {
     rows: 30,
 };
 
+/// How long a workspace change waits for the user to stop fiddling before it is handed to the
+/// application for storage. A project switch or a close flushes it immediately.
+const WORKSPACE_SAVE_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// What the workbench tells the application around it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkbenchEvent {
@@ -53,6 +62,9 @@ pub enum WorkbenchEvent {
     /// The daemon confirmed this project is registered (newly or before); the application
     /// remembers it so the registration is not offered again at every start.
     ProjectRegistered(PathBuf),
+    /// The open project's workspace changed (tabs, layout, sessions); the application writes
+    /// it so the next start reopens the project as it was left.
+    WorkspaceChanged(SavedWorkspace),
 }
 
 impl gpui::EventEmitter<WorkbenchEvent> for Workbench {}
@@ -68,6 +80,8 @@ pub enum PendingAction {
         /// 1-based line to put the cursor on.
         line: Option<usize>,
     },
+    /// Close this editor tab (unsaved edits are being asked about).
+    CloseTab(String),
     /// Open this folder as the project (unsaved edits are being asked about).
     OpenProject(PathBuf),
     /// Open this folder as the project; running sessions will be stopped, which needs a
@@ -146,6 +160,9 @@ impl PendingAction {
                     PendingAction::OpenFile { path, .. } => {
                         format!("Açık dosyada kaydedilmemiş değişiklikler var; {path} açılmadan önce ne yapılsın?")
                     }
+                    PendingAction::CloseTab(path) => {
+                        format!("{path} dosyasında kaydedilmemiş değişiklikler var; sekme kapanmadan önce ne yapılsın?")
+                    }
                     PendingAction::OpenProject(_) => {
                         "Açık dosyada kaydedilmemiş değişiklikler var; proje değişmeden önce ne yapılsın? Çalışan terminal oturumları da durdurulacak.".to_owned()
                     }
@@ -164,6 +181,8 @@ impl PendingAction {
 struct TerminalPane {
     kind: SessionKind,
     id: SessionId,
+    /// The saved conversation this pane continues, when it was started from an offer.
+    resume: Option<ResumeKey>,
     view: Entity<TerminalView>,
 }
 
@@ -208,8 +227,24 @@ pub struct Workbench {
     pending: Option<PendingAction>,
     palette: Option<Entity<PaletteView>>,
     palette_subscription: Option<Subscription>,
-    /// An action to run once the save started by `Decision::Save` has succeeded.
+    /// An action to run once the saves started by `Decision::Save` have all succeeded.
     after_save: Option<PendingAction>,
+    /// The tabs still to save, in strip order (a save answer may cover several dirty files).
+    save_queue: Vec<String>,
+    /// Where the saved workspace of each project is read from (the application sets it).
+    workspace_source: Option<Arc<dyn WorkspaceStateSource>>,
+    /// The workspace state waiting for the write delay to pass.
+    pending_workspace: Option<SavedWorkspace>,
+    /// The debounce task that hands `pending_workspace` to the application.
+    workspace_save_task: Option<Task<()>>,
+    /// Previous agent sessions offered for continuation, in saved order.
+    offers: Vec<SessionOffer>,
+    /// Bumped by every offer plan; a plan that finishes after a project switch is dropped.
+    offers_generation: u64,
+    /// Offers whose continuation is being validated or started right now.
+    resuming: std::collections::HashSet<ResumeKey>,
+    /// The programs terminals (and the session catalog) run with.
+    programs: ProgramPaths,
     toast: Option<SharedString>,
     toast_task: Option<Task<()>>,
     file_search_task: Option<Task<()>>,
@@ -233,7 +268,7 @@ impl Workbench {
         let gates = Arc::new(GateRegistry::new());
         let wake_gates = Arc::clone(&gates);
         let pty = Arc::new(PtyTerminalHost::new(
-            programs,
+            programs.clone(),
             Arc::new(move |id: &SessionId| wake_gates.wake(id)),
         ));
         let host = SharedHost(pty);
@@ -325,6 +360,14 @@ impl Workbench {
             palette: None,
             palette_subscription: None,
             after_save: None,
+            save_queue: Vec::new(),
+            workspace_source: None,
+            pending_workspace: None,
+            workspace_save_task: None,
+            offers: Vec::new(),
+            offers_generation: 0,
+            resuming: std::collections::HashSet::new(),
+            programs,
             toast: None,
             toast_task: None,
             file_search_task: None,
@@ -427,6 +470,11 @@ impl Workbench {
         self.selected
     }
 
+    /// Previous agent sessions waiting in the dock, in saved order.
+    pub fn offers(&self) -> &[SessionOffer] {
+        &self.offers
+    }
+
     /// The command that ran last (including ones refused as unavailable).
     pub fn last_command(&self) -> Option<CommandId> {
         self.last_command
@@ -510,6 +558,11 @@ impl Workbench {
         match id {
             CommandId::Project => self.pick_project(window, cx),
             CommandId::Save => self.save(cx),
+            CommandId::CloseTab => {
+                if let Some(path) = self.editor.read(cx).path().map(str::to_owned) {
+                    self.request_close_tab(path, window, cx);
+                }
+            }
             CommandId::Diff => {
                 if let Some(project) = self.project.clone() {
                     self.editor
@@ -790,6 +843,7 @@ impl Workbench {
             sizes.resize_panel(0, px(files), window, cx);
             sizes.resize_panel(2, px(dock), window, cx);
         });
+        self.note_workspace_change(cx);
         cx.notify();
     }
 
@@ -811,13 +865,15 @@ impl Workbench {
         self.perform(PendingAction::OpenProject(root), window, cx);
     }
 
-    /// Opens a file of the project. Unsaved edits in the open file are asked about first.
+    /// Opens a file of the project. A file that is already open is brought forward instead of
+    /// being read again; nothing the user typed can be lost by opening a new tab.
     pub fn request_open_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         self.request_open_file_at(path, None, window, cx);
     }
 
     /// Opens a file of the project with the cursor on `line` (1-based), as a search hit asks.
-    /// Unsaved edits in the open file are asked about first.
+    /// A clean file that is already open is reloaded to move the cursor; a dirty one is only
+    /// brought forward, never reloaded.
     pub fn request_open_file_at(
         &mut self,
         path: String,
@@ -825,30 +881,39 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(project) = self.project.clone() else {
+        if self.project.is_none() {
             return;
+        }
+        let (already_open, clean) = {
+            let editor = self.editor.read(cx);
+            (
+                editor.contains(&path),
+                !editor.dirty_paths().contains(&path),
+            )
         };
-        let editor = self.editor.read(cx);
-        let decision = editor.request_open(&project.info().id, &path);
-        // The session treats reopening the open file as free, but doing it would reload the
-        // file from disk: harmless when clean (nothing to do), a loss when dirty (ask). A hit
-        // with a line is not a no-op though: the clean file is reopened to move the cursor.
-        let same_file = editor.path() == Some(path.as_str());
-        if same_file && decision == SwitchDecision::Allowed {
-            if editor.is_dirty() {
-                self.pending = Some(PendingAction::OpenFile { path, line });
-                cx.notify();
-            } else if line.is_some() {
+        if already_open {
+            if clean && line.is_some() {
+                // A hit with a line: read the file again and put the cursor there.
                 self.perform(PendingAction::OpenFile { path, line }, window, cx);
+            } else {
+                // Already open: bring its tab forward without touching the buffer.
+                self.editor
+                    .update(cx, |editor, cx| editor.activate_tab(&path, window, cx));
             }
             return;
         }
-        if decision == SwitchDecision::NeedsDecision {
-            self.pending = Some(PendingAction::OpenFile { path, line });
+        self.perform(PendingAction::OpenFile { path, line }, window, cx);
+    }
+
+    /// Closes an editor tab; a tab with unsaved edits is asked about first.
+    pub fn request_close_tab(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let dirty = self.editor.read(cx).dirty_paths().contains(&path);
+        if dirty {
+            self.pending = Some(PendingAction::CloseTab(path));
             cx.notify();
             return;
         }
-        self.perform(PendingAction::OpenFile { path, line }, window, cx);
+        self.perform(PendingAction::CloseTab(path), window, cx);
     }
 
     /// Asks whether the window may close. Returns true when it may (sessions are stopped);
@@ -887,13 +952,21 @@ impl Workbench {
                 | PendingAction::ChooseAgent
                 | PendingAction::Consent(..),
             ) => {}
-            (Decision::Save, _) => {
+            (Decision::Save, PendingAction::CloseTab(path)) => {
+                self.save_queue = vec![path.clone()];
                 self.after_save = Some(action);
-                self.save(cx);
+                self.save_next(window, cx);
+            }
+            (Decision::Save, _) => {
+                self.save_queue = self.editor.read(cx).dirty_paths();
+                self.after_save = Some(action);
+                self.save_next(window, cx);
+            }
+            (Decision::Discard, PendingAction::CloseTab(path)) => {
+                self.editor
+                    .update(cx, |editor, cx| editor.close_tab(path, window, cx));
             }
             (Decision::Discard, _) => {
-                self.editor
-                    .update(cx, |editor, cx| editor.discard(window, cx));
                 self.perform(action, window, cx);
             }
             (
@@ -917,18 +990,53 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         match event {
-            EditorEvent::Saved(_) => {
-                if let Some(action) = self.after_save.take() {
-                    self.perform(action, window, cx);
-                }
+            EditorEvent::Saved(saved) => {
+                self.save_queue.retain(|path| path != &saved.path);
+                self.save_next(window, cx);
             }
             EditorEvent::Conflict | EditorEvent::SaveFailed(_) => {
                 // The edits are still there: the pending action must not proceed.
-                if self.after_save.take().is_some() {
+                if !self.save_queue.is_empty() || self.after_save.is_some() {
+                    self.save_queue.clear();
+                    self.after_save = None;
                     self.say("Kaydedilemedi; işlem iptal edildi", cx);
                 }
             }
-            EditorEvent::Edited | EditorEvent::Opened(_) => {}
+            EditorEvent::CloseRequested(path) => {
+                self.request_close_tab(path.clone(), window, cx);
+            }
+            EditorEvent::Edited
+            | EditorEvent::Opened(_)
+            | EditorEvent::Closed(_)
+            | EditorEvent::Activated(_) => self.note_workspace_change(cx),
+        }
+    }
+
+    /// Saves the next queued tab; when none is left the action that waited for the saves runs.
+    /// Tabs that were closed or are no longer dirty are skipped, so the queue always drains.
+    fn save_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            self.save_queue.clear();
+            self.after_save = None;
+            return;
+        };
+        loop {
+            let Some(path) = self.save_queue.first().cloned() else {
+                if let Some(action) = self.after_save.take() {
+                    self.perform(action, window, cx);
+                }
+                return;
+            };
+            let saveable = {
+                let editor = self.editor.read(cx);
+                editor.contains(&path) && editor.dirty_paths().contains(&path)
+            };
+            if saveable {
+                self.editor
+                    .update(cx, |editor, cx| editor.save_path(&path, project, cx));
+                return;
+            }
+            self.save_queue.remove(0);
         }
     }
 
@@ -941,16 +1049,22 @@ impl Workbench {
                     });
                 }
             }
+            PendingAction::CloseTab(path) => {
+                self.editor
+                    .update(cx, |editor, cx| editor.close_tab(&path, window, cx));
+            }
             PendingAction::OpenProjectStoppingSessions(root) => {
                 self.perform(PendingAction::OpenProject(root), window, cx);
             }
             PendingAction::OpenProject(root) => match ProjectRoot::open(root) {
                 Ok(project) => {
+                    // The state of the project being left is written before anything is torn down.
+                    self.flush_workspace(cx);
                     self.close_palette(window, cx);
                     self.close_search(window, cx);
                     self.stop_terminals(false);
                     self.editor
-                        .update(cx, |editor, cx| editor.discard(window, cx));
+                        .update(cx, |editor, cx| editor.clear(window, cx));
                     let project = Arc::new(project);
                     self.files
                         .update(cx, |files, cx| files.set_project(Arc::clone(&project), cx));
@@ -959,6 +1073,7 @@ impl Workbench {
                     self.inspector
                         .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));
                     self.register_if_unknown(window, cx);
+                    self.restore_workspace(window, cx);
                     if let Some(command) = self.after_pick.take() {
                         self.run(command, window, cx);
                     }
@@ -967,6 +1082,8 @@ impl Workbench {
                 Err(error) => self.say(error.message, cx),
             },
             PendingAction::CloseWindow => {
+                // Next time the project opens with what was open now, sessions included.
+                self.flush_workspace(cx);
                 self.stop_terminals(true);
                 self.close_confirmed = true;
             }
@@ -974,6 +1091,7 @@ impl Workbench {
                 if let Err(error) = self.sessions.stop(&id) {
                     self.say(error.message, cx);
                 }
+                self.note_workspace_change(cx);
             }
             // These two are answered through `resolve`, never performed directly.
             PendingAction::ChooseAgent | PendingAction::Consent(..) => {}
@@ -1022,38 +1140,72 @@ impl Workbench {
         self.selected = self.selected.min(self.terminals.len().saturating_sub(1));
     }
 
-    fn new_terminal(&mut self, kind: SessionKind, window: &mut Window, cx: &mut Context<Self>) {
+    /// Starts one terminal pane for the open project. `false` (with a message) when it could not
+    /// start. Silent about layout and the saved workspace: a restore seeds panes without
+    /// nudging the layout or noting a change it is itself restoring.
+    fn spawn_terminal(
+        &mut self,
+        kind: SessionKind,
+        launch: SessionLaunch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(project) = self.project.clone() else {
-            return;
+            return false;
         };
         self.prune_dead_panes();
-        let info = match self.sessions.start(&project, kind, None, NEW_TERMINAL_SIZE) {
+        if self.terminals.len() >= MAX_SESSIONS {
+            return false;
+        }
+        let info = match self
+            .sessions
+            .start(&project, kind, &launch, NEW_TERMINAL_SIZE)
+        {
             Ok(info) => info,
             Err(error) => {
                 self.say(error.message, cx);
-                return;
+                return false;
             }
         };
         let Some(engine) = self.host.0.engine(&info.id) else {
             self.say("Terminal oturumu başlatılamadı", cx);
-            return;
+            return false;
         };
         let (gate, receiver) = self.gates.attach(&info.id);
         let host: Arc<dyn TerminalHost> = Arc::new(self.host.clone());
         let appearance = terminal_appearance(self.theme());
         let id = info.id.clone();
         let view = cx.new(|cx| TerminalView::new(engine, host, id, appearance, gate, receiver, cx));
+        let resume = match &launch {
+            SessionLaunch::Resume(key) => Some(key.clone()),
+            SessionLaunch::Fresh { .. } => None,
+        };
         self.terminals.push(TerminalPane {
             kind,
             id: info.id,
+            resume,
             view,
         });
         self.dock_visible = true;
+        let last = self.terminals.len() - 1;
+        self.select_terminal(last, window, cx);
+        true
+    }
+
+    fn new_terminal(&mut self, kind: SessionKind, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.spawn_terminal(kind, SessionLaunch::default(), window, cx) {
+            return;
+        }
+        self.after_started_terminal(window, cx);
+    }
+
+    /// What every user-started terminal does after its pane exists: nudge the layout once the
+    /// dock is crowded, and remember the new state. A restore calls neither.
+    fn after_started_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.terminals.len() >= 3 && self.layout != LayoutPreset::Agents {
             self.apply_layout(LayoutPreset::Agents, window, cx);
         }
-        let last = self.terminals.len() - 1;
-        self.select_terminal(last, window, cx);
+        self.note_workspace_change(cx);
     }
 
     fn select_terminal(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -1165,6 +1317,7 @@ impl Render for Workbench {
                     .border_color(gpui::rgb(theme.line))
                     .child(self.inspector.clone())
             }))
+            .children(self.offer_rows(cx))
             .children(self.terminals.iter().enumerate().map(|(index, pane)| {
                 div()
                     .flex_1()

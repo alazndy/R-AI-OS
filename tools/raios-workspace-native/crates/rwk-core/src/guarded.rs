@@ -10,12 +10,23 @@ use crate::control::{
 };
 use crate::error::Result;
 use crate::handoff_input::handoff_operation_text;
+use crate::sessions::ResumeKey;
 
 /// A mutating command waiting for policy and consent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Guarded {
     /// Validate and audit starting an agent in the project.
     LaunchAgent(LaunchAgentRequest),
+    /// Continue a saved conversation. Policy and audit are the launch's: the daemon records the
+    /// pane as an agent launch in the project all the same.
+    ResumeAgent {
+        /// Project root the conversation continues in.
+        root: PathBuf,
+        /// The saved conversation, validated.
+        key: ResumeKey,
+        /// Retry key.
+        idempotency_key: IdempotencyKey,
+    },
     /// Queue a `BLOCKER` handoff.
     CreateHandoff(CreateHandoffRequest),
     /// Approve a pending handoff approval: owner consent, not delivery.
@@ -54,6 +65,7 @@ impl Guarded {
     pub fn command_name(&self) -> &'static str {
         match self {
             Self::LaunchAgent(_) => "launch_agent",
+            Self::ResumeAgent { .. } => "launch_agent",
             Self::CreateHandoff(_) => "create_handoff",
             Self::ApproveHandoff(_) => "approve_handoff",
             Self::RejectHandoff(_) => "reject_handoff",
@@ -65,6 +77,7 @@ impl Guarded {
     pub fn project_root(&self) -> &Path {
         match self {
             Self::LaunchAgent(request) => &request.project_root,
+            Self::ResumeAgent { root, .. } => root,
             Self::CreateHandoff(request) => &request.project_root,
             Self::ApproveHandoff(request) => &request.project_root,
             Self::RejectHandoff(request) => &request.project_root,
@@ -85,6 +98,12 @@ impl Guarded {
                 }
             ),
             Self::CreateHandoff(request) => handoff_operation_text(request),
+            Self::ResumeAgent { root, key, .. } => format!(
+                "{} oturumu {} projesinde sürdürülecek ({}).",
+                key.agent().identity().unwrap_or("ajan"),
+                root.display(),
+                key
+            ),
             Self::ApproveHandoff(request) => format!(
                 "{} numaralı devir onayı onaylanacak ({}). Onay teslim değildir: notu adreslenen ajan kendi çalıştırmasında teslim alacak.",
                 request.approval_id,
@@ -111,6 +130,19 @@ impl Guarded {
         match self {
             Self::LaunchAgent(request) => {
                 plane.launch_agent(request)?;
+                Ok(GuardedOutcome::AgentLaunchValidated)
+            }
+            Self::ResumeAgent {
+                root,
+                key,
+                idempotency_key,
+            } => {
+                plane.launch_agent(&LaunchAgentRequest {
+                    project_root: root.clone(),
+                    agent: key.agent(),
+                    prompt: None,
+                    idempotency_key: idempotency_key.clone(),
+                })?;
                 Ok(GuardedOutcome::AgentLaunchValidated)
             }
             Self::CreateHandoff(request) => plane
@@ -160,9 +192,44 @@ mod tests {
         })
     }
 
+    fn resume() -> Guarded {
+        Guarded::ResumeAgent {
+            root: PathBuf::from("/work/app"),
+            key: ResumeKey::parse("claude:3294c005-aee0-4e95-860f-5800e045b624").expect("key"),
+            idempotency_key: IdempotencyKey::new("r1"),
+        }
+    }
+
+    #[test]
+    fn a_resume_is_audited_as_a_launch_of_its_agent() {
+        let plane = FakeControlPlane::new();
+        plane.push_launch(Ok(()));
+
+        let outcome = resume().execute(&plane).expect("executed");
+
+        assert_eq!(outcome, GuardedOutcome::AgentLaunchValidated);
+        assert!(
+            matches!(
+                &plane.calls()[..],
+                [RecordedCall::LaunchAgent(request)]
+                if request.agent == SessionKind::Claude
+                    && request.prompt.is_none()
+                    && request.project_root == Path::new("/work/app")
+            ),
+            "a resume reaches the daemon as the agent's launch"
+        );
+        let summary = resume().summary();
+        assert!(
+            summary.contains("claude_kaira") && summary.contains("sürdürülecek"),
+            "{summary}"
+        );
+        assert_eq!(resume().project_root(), Path::new("/work/app"));
+    }
+
     #[test]
     fn command_names_match_the_daemons_policy_keys() {
         assert_eq!(launch().command_name(), "launch_agent");
+        assert_eq!(resume().command_name(), "launch_agent", "same policy key");
         assert_eq!(handoff().command_name(), "create_handoff");
         assert_eq!(
             Guarded::ApproveHandoff(decision(None)).command_name(),

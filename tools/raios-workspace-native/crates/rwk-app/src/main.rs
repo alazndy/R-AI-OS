@@ -102,6 +102,17 @@ fn main() {
                 let known = persistence::load_registered(file);
                 let _ = window.update(cx, |workbench, _, _| workbench.set_known_projects(known));
             }
+            // Per-project workspace state: editor tabs, layout and sessions are stored so the
+            // next start reopens a project where it was left.
+            let workspace_store =
+                config_home().map(|home| Arc::new(persistence::FsWorkspaceStore::new(home)));
+            if let Some(store) = &workspace_store {
+                let source: Arc<dyn rwk_core::workbench::WorkspaceStateSource> = store.clone();
+                workbench.update(cx, |workbench, _| {
+                    workbench.set_workspace_source(Some(source))
+                });
+            }
+            let workspace_store_for_events = workspace_store.clone();
             cx.subscribe(
                 &workbench,
                 move |_workbench, event: &WorkbenchEvent, _cx| match event {
@@ -116,6 +127,13 @@ fn main() {
                         if let Some(file) = &registered_file {
                             if let Err(error) = persistence::remember_registered(file, project) {
                                 eprintln!("rwk-app: could not remember the registration: {error}");
+                            }
+                        }
+                    }
+                    WorkbenchEvent::WorkspaceChanged(workspace) => {
+                        if let Some(store) = &workspace_store_for_events {
+                            if let Err(error) = store.save(workspace) {
+                                eprintln!("rwk-app: could not save the workspace: {error}");
                             }
                         }
                     }

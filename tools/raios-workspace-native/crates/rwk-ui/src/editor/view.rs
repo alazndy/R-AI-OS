@@ -1,19 +1,21 @@
-//! The editor view: one open file, its edit/save state and the read-only diff view.
+//! The editor view: several open files as tabs, each with its own edit/save state, and the
+//! read-only Git diff of the active one.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    div, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, Window,
+    div, AppContext, Context, Entity, EventEmitter, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
 };
 use gpui_base::input::{Editor, EditorState, InputEvent, InputHighlighter, Position};
 use rwk_core::documents::Document;
 use rwk_core::error::{AppError, ErrorCode};
-use rwk_core::project::{ProjectId, ProjectRoot};
+use rwk_core::project::ProjectRoot;
 use rwk_core::workbench::{
-    side_by_side, Appearance, DocumentSession, SaveBlocked, SaveTicket, Skin, SwitchDecision,
-    Theme, Tone,
+    side_by_side, Appearance, DocumentSession, SaveBlocked, SaveTicket, SavedTab, Skin,
+    SwitchDecision, Theme, Tone, MAX_SAVED_TABS,
 };
 
 use super::diff::DiffHighlighter;
@@ -35,6 +37,13 @@ pub enum EditorEvent {
     SaveFailed(AppError),
     /// The file changed on disk; the edits are kept.
     Conflict,
+    /// The user asked to close a tab through its strip button; the workbench decides (a dirty
+    /// tab needs an answer about its edits first).
+    CloseRequested(String),
+    /// A tab was closed.
+    Closed(String),
+    /// The active tab changed.
+    Activated(String),
 }
 
 /// Builds an editor state with the settings every editor in the workspace uses: soft wrap off
@@ -52,25 +61,42 @@ fn new_editor_state(
     state
 }
 
-/// One file open for editing, plus the optional Git diff of it.
-pub struct EditorView {
-    theme: Theme,
+/// One open file: its editor state, its guard and its optional Git diff.
+struct Tab {
     state: Entity<EditorState>,
+    session: DocumentSession,
+    /// False when the file is above the highlight limit.
+    highlighting: bool,
     diff: Option<Entity<EditorState>>,
     /// The right column while the diff is shown side by side (`diff` is then the left one).
     diff_right: Option<Entity<EditorState>>,
-    diff_split: bool,
     diff_raw: String,
     diff_visible: bool,
-    session: DocumentSession,
-    status: Option<SharedString>,
-    highlighting: bool,
-    /// Bumped by every open request; a read that finishes for an older request is dropped.
-    open_generation: u64,
-    /// The 1-based line the next successful open puts the cursor on (a search hit's line).
-    pending_line: Option<usize>,
-    diff_generation: u64,
     _subscription: Subscription,
+}
+
+impl Tab {
+    /// Path of the tab's file, relative to its project.
+    fn path(&self) -> Option<&str> {
+        self.session.path()
+    }
+}
+
+/// The editor: a strip of open files over one editor, plus the diff of the active file.
+pub struct EditorView {
+    theme: Theme,
+    tabs: Vec<Tab>,
+    active: usize,
+    diff_split: bool,
+    /// The message under the editor (last action's outcome).
+    status: Option<SharedString>,
+    /// Bumped by every read request; a read that finishes for a superseded request is dropped.
+    next_request: u64,
+    /// In-flight read per path; a closed tab's entry is removed so its read cannot reopen it.
+    requests: HashMap<String, u64>,
+    diff_generation: u64,
+    /// Bumped by every restore; a restore that finishes after a project switch is dropped.
+    restore_generation: u64,
 }
 
 impl EventEmitter<EditorEvent> for EditorView {}
@@ -89,58 +115,75 @@ impl EditorView {
     }
 
     /// An editor painted with `theme`.
-    pub fn themed(theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let state = cx.new(|cx| new_editor_state(theme, window, cx));
-        let subscription = cx.subscribe(&state, |this, _state, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                this.session.edited();
-                cx.emit(EditorEvent::Edited);
-                cx.notify();
-            }
-        });
+    pub fn themed(theme: Theme, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
         Self {
             theme,
-            state,
-            diff: None,
-            diff_right: None,
+            tabs: Vec::new(),
+            active: 0,
             diff_split: false,
-            diff_raw: String::new(),
-            diff_visible: false,
-            session: DocumentSession::new(),
             status: None,
-            highlighting: true,
-            open_generation: 0,
-            pending_line: None,
+            next_request: 0,
+            requests: HashMap::new(),
             diff_generation: 0,
-            _subscription: subscription,
+            restore_generation: 0,
         }
     }
 
-    /// The text in the editor.
+    /// The text in the active editor.
     pub fn text(&self, cx: &gpui::App) -> String {
-        self.state.read(cx).value().to_string()
+        self.tabs
+            .get(self.active)
+            .map(|tab| tab.state.read(cx).value().to_string())
+            .unwrap_or_default()
     }
 
     /// The 1-based line of the cursor, when a document is open.
     pub fn cursor_line(&self, cx: &gpui::App) -> Option<usize> {
-        self.path()?;
-        let position = self.state.read(cx).cursor_position();
+        let tab = self.tabs.get(self.active)?;
+        tab.path()?;
+        let position = tab.state.read(cx).cursor_position();
         Some(usize::try_from(position.line).unwrap_or(usize::MAX) + 1)
     }
 
-    /// Path of the open file, relative to its project.
+    /// Path of the active file, relative to its project.
     pub fn path(&self) -> Option<&str> {
-        self.session.path()
+        self.tabs.get(self.active).and_then(Tab::path)
     }
 
-    /// True when the open file has unsaved edits.
+    /// Paths of every open tab, in strip order.
+    pub fn paths(&self) -> Vec<String> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| tab.path().map(str::to_owned))
+            .collect()
+    }
+
+    /// True when `path` is open in a tab.
+    pub fn contains(&self, path: &str) -> bool {
+        self.position_of(path).is_some()
+    }
+
+    /// True when the active file has unsaved edits.
     pub fn is_dirty(&self) -> bool {
-        self.session.is_dirty()
+        self.tabs
+            .get(self.active)
+            .is_some_and(|tab| tab.session.is_dirty())
     }
 
-    /// True when the last save found the file changed on disk.
+    /// Paths of the tabs with unsaved edits, in strip order: what a guard must ask about.
+    pub fn dirty_paths(&self) -> Vec<String> {
+        self.tabs
+            .iter()
+            .filter(|tab| tab.session.is_dirty())
+            .filter_map(|tab| tab.path().map(str::to_owned))
+            .collect()
+    }
+
+    /// True when the last save of the active file found it changed on disk.
     pub fn has_conflict(&self) -> bool {
-        self.session.has_conflict()
+        self.tabs
+            .get(self.active)
+            .is_some_and(|tab| tab.session.has_conflict())
     }
 
     /// The message shown under the editor.
@@ -148,19 +191,24 @@ impl EditorView {
         self.status.as_ref().map(ToString::to_string)
     }
 
-    /// False when the open file is above the highlight limit.
+    /// False when the active file is above the highlight limit.
     pub fn highlighting_enabled(&self) -> bool {
-        self.highlighting
-    }
-
-    /// Whether the user may open `path` of `project` now.
-    pub fn request_open(&self, project: &ProjectId, path: &str) -> SwitchDecision {
-        self.session.request_open(project, path)
+        self.tabs
+            .get(self.active)
+            .is_none_or(|tab| tab.highlighting)
     }
 
     /// Whether the window or project may close now.
     pub fn request_leave(&self) -> SwitchDecision {
-        self.session.request_leave()
+        if self.dirty_paths().is_empty() {
+            SwitchDecision::Allowed
+        } else {
+            SwitchDecision::NeedsDecision
+        }
+    }
+
+    fn position_of(&self, path: &str) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.path() == Some(path))
     }
 
     fn set_status(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -171,23 +219,57 @@ impl EditorView {
     /// Inserts text at the cursor, as typing does.
     pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let text = text.to_owned();
-        self.state
-            .update(cx, |state, cx| state.insert(text.as_str(), window, cx));
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.state
+                .update(cx, |state, cx| state.insert(text.as_str(), window, cx));
+        }
     }
 
-    /// Throws the open file's text away and closes it (the user chose to discard).
-    pub fn discard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.session.close();
-        self.state
-            .update(cx, |state, cx| state.set_value("", window, cx));
+    /// Closes every tab (a project switch discards them all).
+    pub fn clear(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.tabs.clear();
+        self.requests.clear();
+        self.active = 0;
         self.status = None;
-        self.diff_visible = false;
+        self.diff_generation += 1;
         cx.notify();
     }
 
-    /// Gives the editor keyboard focus.
+    /// Closes the tab of `path`. The caller has already answered any unsaved-edits question:
+    /// closing drops the edits with the tab.
+    pub fn close_tab(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.position_of(path) else {
+            return;
+        };
+        self.requests.remove(path);
+        let was_active = index == self.active;
+        self.tabs.remove(index);
+        if index < self.active || self.active >= self.tabs.len() {
+            self.active = self.active.saturating_sub(1);
+        }
+        if was_active {
+            self.focus(window, cx);
+        }
+        cx.emit(EditorEvent::Closed(path.to_owned()));
+        cx.notify();
+    }
+
+    /// Makes the tab of `path` the active one.
+    pub fn activate_tab(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.position_of(path) else {
+            return;
+        };
+        self.active = index;
+        self.focus(window, cx);
+        cx.emit(EditorEvent::Activated(path.to_owned()));
+        cx.notify();
+    }
+
+    /// Gives the active editor keyboard focus.
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        self.state.update(cx, |state, cx| state.focus(window, cx));
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.state.update(cx, |state, cx| state.focus(window, cx));
+        }
     }
 
     /// Switches the tone: editor colours and syntax colours, without recreating the editors.
@@ -205,24 +287,59 @@ impl EditorView {
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.theme = theme;
         let style = editor_style(theme);
-        self.state
-            .update(cx, |state, _| state.set_editor_style(style.clone()));
-        if let Some(right) = &self.diff_right {
-            right.update(cx, |state, _| state.set_editor_style(style.clone()));
-        }
-        if let Some(diff) = &self.diff {
-            diff.update(cx, |state, _| state.set_editor_style(style));
+        for tab in &self.tabs {
+            tab.state
+                .update(cx, |state, _| state.set_editor_style(style.clone()));
+            if let Some(right) = &tab.diff_right {
+                right.update(cx, |state, _| state.set_editor_style(style.clone()));
+            }
+            if let Some(diff) = &tab.diff {
+                diff.update(cx, |state, _| state.set_editor_style(style.clone()));
+            }
         }
         cx.notify();
     }
 
-    /// Loads a document into the editor. Callers ask [`Self::request_open`] first.
-    pub fn open(&mut self, document: Document, window: &mut Window, cx: &mut Context<Self>) {
+    /// Loads a document into its tab: a new tab when the path is not open, a reload when it is.
+    fn install_document(
+        &mut self,
+        document: Document,
+        line: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let enabled = highlight_enabled(document.content.len());
         let language = language_for_path(&document.path);
         let content = document.content.clone();
-        let pending_line = self.pending_line.take();
-        self.state.update(cx, |state, cx| {
+        let path = document.path.clone();
+
+        let index = match self.position_of(&path) {
+            Some(index) => index,
+            None => {
+                let state = cx.new(|cx| new_editor_state(self.theme, window, cx));
+                let tab_path = path.clone();
+                let subscription =
+                    cx.subscribe(&state, move |this, _state, event: &InputEvent, cx| {
+                        if matches!(event, InputEvent::Change) {
+                            this.on_edited(&tab_path, cx);
+                        }
+                    });
+                self.tabs.push(Tab {
+                    state,
+                    session: DocumentSession::new(),
+                    highlighting: true,
+                    diff: None,
+                    diff_right: None,
+                    diff_raw: String::new(),
+                    diff_visible: false,
+                    _subscription: subscription,
+                });
+                self.tabs.len() - 1
+            }
+        };
+
+        let tab = &mut self.tabs[index];
+        tab.state.update(cx, |state, cx| {
             state.set_highlighter_factory(highlighter_factory(), cx);
             // An unknown language name has no grammar, so the factory answers `None`.
             let name = match (enabled, language) {
@@ -231,22 +348,23 @@ impl EditorView {
             };
             state.set_highlighter(name, cx);
             state.set_value(content.as_str(), window, cx);
-            if let Some(line) = pending_line {
+            if let Some(line) = line {
                 // A search hit's line is 1-based; an editor position is 0-based.
                 let line = u32::try_from(line.saturating_sub(1)).unwrap_or(u32::MAX);
                 state.set_cursor_position(Position::new(line, 0), window, cx);
             }
         });
-        self.highlighting = enabled;
+        tab.highlighting = enabled;
+        tab.session.opened(&document);
+        tab.diff_visible = false;
         self.status = (!enabled).then(|| {
             SharedString::from(format!(
                 "Büyük dosya ({} KiB üstü): renklendirme kapalı",
                 HIGHLIGHT_LIMIT_BYTES / 1024
             ))
         });
-        self.session.opened(&document);
-        self.diff_visible = false;
-        cx.emit(EditorEvent::Opened(document.path));
+        self.active = index;
+        cx.emit(EditorEvent::Opened(path));
         cx.notify();
         // The editor lays a new text out during paint; without input nothing else would ask for
         // the frame that shows it.
@@ -255,8 +373,30 @@ impl EditorView {
         self.focus(window, cx);
     }
 
-    /// Reads `path` on the background executor and opens it. A file that cannot be edited
-    /// (binary, not UTF-8, over 2 MiB) leaves the open file untouched and shows a message.
+    fn on_edited(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some(index) = self.position_of(path) else {
+            return;
+        };
+        self.tabs[index].session.edited();
+        cx.emit(EditorEvent::Edited);
+        cx.notify();
+    }
+
+    /// Loads a document directly into its tab (tests and the bench use this; the workbench goes
+    /// through [`Self::open_path_at`], which reads on the background executor).
+    pub fn open_document(
+        &mut self,
+        document: Document,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.install_document(document, None, window, cx);
+    }
+
+    /// Reads `path` on the background executor and opens it (a new tab, or a reload of its own
+    /// tab). A file that cannot be edited (binary, not UTF-8, over 2 MiB) leaves every tab
+    /// untouched and shows a message. Reloading a tab with unsaved edits is refused: callers
+    /// ask the user first.
     pub fn open_path(
         &mut self,
         project: Arc<ProjectRoot>,
@@ -276,19 +416,21 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Fail-safe: callers are expected to have asked the user, but unsaved edits are never
-        // replaced without a decision, whoever calls and whichever file is meant (reloading the
-        // open file would overwrite them as well). Discarding first makes the file clean.
-        if self.session.is_dirty() {
-            self.set_status(
-                "Kaydedilmemiş değişiklikler var; önce kaydedin veya vazgeçin",
-                cx,
-            );
+        if let Some(index) = self.position_of(&path) {
+            if self.tabs[index].session.is_dirty() {
+                self.set_status(
+                    "Kaydedilmemiş değişiklikler var; önce kaydedin veya vazgeçin",
+                    cx,
+                );
+                return;
+            }
+        } else if self.tabs.len() >= MAX_SAVED_TABS {
+            self.set_status(format!("Sekme sınırına ulaşıldı ({MAX_SAVED_TABS})"), cx);
             return;
         }
-        self.pending_line = line;
-        self.open_generation += 1;
-        let generation = self.open_generation;
+        self.next_request += 1;
+        let request = self.next_request;
+        self.requests.insert(path.clone(), request);
         cx.spawn_in(window, async move |this, cx| {
             let read_path = path.clone();
             let result = cx
@@ -296,15 +438,13 @@ impl EditorView {
                 .spawn(async move { project.read_document(&read_path) })
                 .await;
             this.update_in(cx, |view, window, cx| {
-                if view.open_generation != generation {
+                if view.requests.get(&path) != Some(&request) {
                     return;
                 }
+                view.requests.remove(&path);
                 match result {
-                    Ok(document) => view.open(document, window, cx),
-                    Err(error) => {
-                        view.pending_line = None;
-                        view.set_status(error.message, cx);
-                    }
+                    Ok(document) => view.install_document(document, line, window, cx),
+                    Err(error) => view.set_status(error.message, cx),
                 }
             })
             .ok();
@@ -312,10 +452,91 @@ impl EditorView {
         .detach();
     }
 
-    /// Saves the open file through the revision-checked path.
+    /// Path and 1-based cursor line of every tab, in strip order: what the saved workspace
+    /// stores so a project reopens as it was left.
+    pub fn tabs_snapshot(&self, cx: &gpui::App) -> Vec<SavedTab> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| {
+                let path = tab.path()?.to_owned();
+                let position = tab.state.read(cx).cursor_position();
+                let line = usize::try_from(position.line).unwrap_or(usize::MAX) + 1;
+                Some(SavedTab { path, line })
+            })
+            .collect()
+    }
+
+    /// Index of the active tab (what the saved workspace stores).
+    pub fn active_index(&self) -> usize {
+        self.active
+    }
+
+    /// Restores a saved set of tabs: every file is read on the background executor, the ones
+    /// that read cleanly become tabs in the saved order and `active` picks the active tab.
+    /// Files that no longer read (gone, binary, over the size limit) are skipped silently.
+    /// A restore that finishes after a project switch is dropped.
+    pub fn restore_tabs(
+        &mut self,
+        project: Arc<ProjectRoot>,
+        tabs: Vec<SavedTab>,
+        active: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tabs: Vec<SavedTab> = tabs.into_iter().take(MAX_SAVED_TABS).collect();
+        if tabs.is_empty() {
+            return;
+        }
+        self.restore_generation += 1;
+        let generation = self.restore_generation;
+        cx.spawn_in(window, async move |this, cx| {
+            let mut read = Vec::new();
+            for tab in tabs {
+                let project = project.clone();
+                let path = tab.path.clone();
+                let document = cx
+                    .background_executor()
+                    .spawn(async move { project.read_document(&path) })
+                    .await;
+                read.push((tab, document));
+            }
+            this.update_in(cx, |view, window, cx| {
+                if view.restore_generation != generation {
+                    return;
+                }
+                let mut installed: Vec<String> = Vec::new();
+                for (tab, document) in read {
+                    if let Ok(document) = document {
+                        let path = document.path.clone();
+                        view.install_document(document, Some(tab.line), window, cx);
+                        installed.push(path);
+                    }
+                }
+                if let Some(path) = installed.get(active) {
+                    view.activate_tab(path, window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Saves the active file through the revision-checked path.
     pub fn save(&mut self, project: Arc<ProjectRoot>, cx: &mut Context<Self>) {
-        let text = self.text(cx);
-        let (document, ticket) = match self.session.begin_save(&text) {
+        let Some(path) = self.path().map(str::to_owned) else {
+            self.set_status("Açık dosya yok", cx);
+            return;
+        };
+        self.save_path(&path, project, cx);
+    }
+
+    /// Saves one tab through the revision-checked path.
+    pub fn save_path(&mut self, path: &str, project: Arc<ProjectRoot>, cx: &mut Context<Self>) {
+        let Some(index) = self.position_of(path) else {
+            return;
+        };
+        let text = self.tabs[index].state.read(cx).value().to_string();
+        let (document, ticket) = match self.tabs[index].session.begin_save(&text) {
             Ok(started) => started,
             Err(SaveBlocked::NoDocument) => {
                 self.set_status("Açık dosya yok", cx);
@@ -334,12 +555,13 @@ impl EditorView {
                 return;
             }
         };
+        let path = path.to_owned();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { project.save_document(document) })
                 .await;
-            this.update(cx, |view, cx| view.finish_save(result, ticket, cx))
+            this.update(cx, |view, cx| view.finish_save(&path, result, ticket, cx))
                 .ok();
         })
         .detach();
@@ -347,18 +569,22 @@ impl EditorView {
 
     fn finish_save(
         &mut self,
+        path: &str,
         result: Result<Document, AppError>,
         ticket: SaveTicket,
         cx: &mut Context<Self>,
     ) {
+        let Some(index) = self.position_of(path) else {
+            return;
+        };
         match result {
             Ok(saved) => {
-                self.session.save_succeeded(&saved, ticket);
+                self.tabs[index].session.save_succeeded(&saved, ticket);
                 self.set_status("Kaydedildi", cx);
                 cx.emit(EditorEvent::Saved(saved));
             }
             Err(error) if error.code == ErrorCode::Conflict => {
-                self.session.save_failed(&error);
+                self.tabs[index].session.save_failed(&error);
                 self.set_status(
                     "Dosya diskte değişti. Düzenlemeleriniz korundu; yeniden yükleyin.",
                     cx,
@@ -366,37 +592,43 @@ impl EditorView {
                 cx.emit(EditorEvent::Conflict);
             }
             Err(error) => {
-                self.session.save_failed(&error);
+                self.tabs[index].session.save_failed(&error);
                 self.set_status(error.message.clone(), cx);
                 cx.emit(EditorEvent::SaveFailed(error));
             }
         }
     }
 
-    /// Shows the Git diff of the open file in a read-only editor.
+    /// Shows the Git diff of the active file in a read-only editor.
     pub fn show_diff(
         &mut self,
         project: Arc<ProjectRoot>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = self.session.path().map(str::to_owned) else {
+        let Some(path) = self.path().map(str::to_owned) else {
             self.set_status("Açık dosya yok", cx);
             return;
         };
         self.diff_generation += 1;
         let generation = self.diff_generation;
         cx.spawn_in(window, async move |this, cx| {
+            let read_path = path.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { project.git_diff(&path) })
+                .spawn(async move { project.git_diff(&read_path) })
                 .await;
             this.update_in(cx, |view, window, cx| {
                 if view.diff_generation != generation {
                     return;
                 }
+                // The diff belongs to its file: a tab switch while the read ran must not put it
+                // under another one.
+                let Some(index) = view.position_of(&path) else {
+                    return;
+                };
                 match result {
-                    Ok(text) => view.install_diff(text, window, cx),
+                    Ok(text) => view.install_diff(index, text, window, cx),
                     Err(error) => view.set_status(error.message, cx),
                 }
             })
@@ -436,37 +668,44 @@ impl EditorView {
         });
     }
 
-    fn install_diff(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.diff_raw = text;
-        self.render_diff(window, cx);
-        self.diff_visible = true;
+    fn install_diff(
+        &mut self,
+        index: usize,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tabs[index].diff_raw = text;
+        self.render_diff(index, window, cx);
+        self.tabs[index].diff_visible = true;
         cx.notify();
     }
 
-    /// Fills the diff editors from the stored diff: one unified column, or two aligned ones.
-    fn render_diff(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let left = match &self.diff {
+    /// Fills the diff editors of a tab from the stored diff: one unified column, or two aligned
+    /// ones.
+    fn render_diff(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let left = match &self.tabs[index].diff {
             Some(diff) => diff.clone(),
             None => {
                 let diff = self.new_diff_state(window, cx);
-                self.diff = Some(diff.clone());
+                self.tabs[index].diff = Some(diff.clone());
                 diff
             }
         };
         if self.diff_split {
-            let columns = side_by_side(&self.diff_raw);
-            let right = match &self.diff_right {
+            let columns = side_by_side(&self.tabs[index].diff_raw);
+            let right = match &self.tabs[index].diff_right {
                 Some(right) => right.clone(),
                 None => {
                     let right = self.new_diff_state(window, cx);
-                    self.diff_right = Some(right.clone());
+                    self.tabs[index].diff_right = Some(right.clone());
                     right
                 }
             };
             self.fill_diff_state(&left, &columns.left, window, cx);
             self.fill_diff_state(&right, &columns.right, window, cx);
         } else {
-            let raw = self.diff_raw.clone();
+            let raw = self.tabs[index].diff_raw.clone();
             self.fill_diff_state(&left, &raw, window, cx);
         }
     }
@@ -474,8 +713,12 @@ impl EditorView {
     /// Switches the diff between one unified column and two side-by-side columns.
     pub fn set_diff_split(&mut self, split: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.diff_split = split;
-        if self.diff.is_some() {
-            self.render_diff(window, cx);
+        if self
+            .tabs
+            .get(self.active)
+            .is_some_and(|tab| tab.diff.is_some())
+        {
+            self.render_diff(self.active, window, cx);
         }
         cx.notify();
     }
@@ -487,57 +730,141 @@ impl EditorView {
 
     /// The text of the right column while the diff is side by side.
     pub fn diff_right_text(&self, cx: &gpui::App) -> Option<String> {
-        self.diff_right
-            .as_ref()
-            .filter(|_| self.diff_split)
+        self.tabs
+            .get(self.active)
+            .and_then(|tab| tab.diff_right.as_ref().filter(|_| self.diff_split))
             .map(|right| right.read(cx).value().to_string())
     }
 
     /// Returns to the editor from the diff view.
     pub fn hide_diff(&mut self, cx: &mut Context<Self>) {
         self.diff_generation += 1;
-        self.diff_visible = false;
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.diff_visible = false;
+        }
         cx.notify();
     }
 
-    /// True while the diff view is shown.
+    /// True while the diff view of the active file is shown.
     pub fn diff_visible(&self) -> bool {
-        self.diff_visible
+        self.tabs
+            .get(self.active)
+            .is_some_and(|tab| tab.diff_visible)
     }
 
     /// The text of the diff view.
     pub fn diff_text(&self, cx: &gpui::App) -> String {
-        self.diff
-            .as_ref()
+        self.tabs
+            .get(self.active)
+            .and_then(|tab| tab.diff.as_ref())
             .map(|diff| diff.read(cx).value().to_string())
             .unwrap_or_default()
     }
 
     /// True when the diff view cannot be edited.
     pub fn diff_is_read_only(&self, cx: &gpui::App) -> bool {
-        self.diff
-            .as_ref()
+        self.tabs
+            .get(self.active)
+            .and_then(|tab| tab.diff.as_ref())
             .is_some_and(|diff| !diff.read(cx).is_editable())
     }
 }
 
 impl Render for EditorView {
-    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let shown = match (&self.diff, self.diff_visible) {
-            (Some(diff), true) => diff,
-            _ => &self.state,
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let strip = (!self.tabs.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .bg(gpui::rgb(theme.panel))
+                .border_b_1()
+                .border_color(gpui::rgb(theme.line))
+                .children(self.tabs.iter().enumerate().map(|(index, tab)| {
+                    let path = tab.path().unwrap_or_default().to_owned();
+                    let title = match tab.session.is_dirty() {
+                        true => format!("{path} ●"),
+                        false => path.clone(),
+                    };
+                    let active = index == self.active;
+                    let activate = path.clone();
+                    let close = path.clone();
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .py_1()
+                        .max_w(gpui::px(220.0))
+                        .overflow_hidden()
+                        .text_xs()
+                        .whitespace_nowrap()
+                        .bg(gpui::rgb(if active { theme.editor } else { theme.panel }))
+                        .text_color(gpui::rgb(if active { theme.text } else { theme.muted }))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("tab-{path}")))
+                                .overflow_hidden()
+                                .cursor_pointer()
+                                .child(title)
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.activate_tab(&activate, window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("tab-close-{path}")))
+                                .px_1()
+                                .cursor_pointer()
+                                .child("×")
+                                .on_click(cx.listener(move |_, _, _window, cx| {
+                                    cx.emit(EditorEvent::CloseRequested(close.clone()));
+                                })),
+                        )
+                }))
+        });
+
+        let shown = match (self.tabs.get(self.active), self.diff_visible()) {
+            (Some(tab), true) => match &tab.diff {
+                Some(diff) => diff,
+                None => &tab.state,
+            },
+            (Some(tab), false) => &tab.state,
+            (None, _) => {
+                return div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .children(strip)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .p_2()
+                            .text_sm()
+                            .text_color(gpui::rgb(theme.muted))
+                            .child("Dosya açmak için soldaki ağaçtan seçin"),
+                    )
+                    .child(self.status_bar(None, theme));
+            }
         };
-        let second = match (&self.diff_right, self.diff_visible && self.diff_split) {
-            (Some(right), true) => Some(right),
-            _ => None,
-        };
-        let title = self.session.path().unwrap_or("").to_owned();
-        let marker = if self.session.is_dirty() { " ●" } else { "" };
-        let status = self.status.clone().unwrap_or_default();
+        let second = self.tabs.get(self.active).and_then(|tab| {
+            tab.diff_right
+                .as_ref()
+                .filter(|_| tab.diff_visible && self.diff_split)
+        });
+        let title = self.path().unwrap_or("").to_owned();
+
         div()
             .size_full()
             .flex()
             .flex_col()
+            .children(strip)
             .child(
                 div()
                     .flex_1()
@@ -551,18 +878,27 @@ impl Render for EditorView {
                             .flex_1()
                             .min_w_0()
                             .border_l_1()
-                            .border_color(gpui::rgb(self.theme.line))
+                            .border_color(gpui::rgb(theme.line))
                             .child(Editor::new(right))
                     })),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_3()
-                    .px_2()
-                    .child(format!("{title}{marker}"))
-                    .child(status),
-            )
+            .child(self.status_bar(Some(title), theme))
+    }
+}
+
+impl EditorView {
+    fn status_bar(&self, title: Option<String>, theme: Theme) -> impl IntoElement {
+        let title = title.unwrap_or_default();
+        let marker = if self.is_dirty() { " ●" } else { "" };
+        let status = self.status.clone().unwrap_or_default();
+        div()
+            .flex()
+            .flex_row()
+            .gap_3()
+            .px_2()
+            .text_xs()
+            .text_color(gpui::rgb(theme.muted))
+            .child(format!("{title}{marker}"))
+            .child(status)
     }
 }
