@@ -83,6 +83,9 @@ pub struct ApprovalRow {
     pub to_agent: String,
     /// Why approval is required.
     pub reason: String,
+    /// Revision the row was read at; a decision must echo it so the daemon can refuse a
+    /// decision based on a stale read.
+    pub revision: i64,
 }
 
 /// Everything the inspector shows.
@@ -174,6 +177,7 @@ pub fn project_view(
             from_agent: approval.origin_agent.clone(),
             to_agent: approval.target_agent.clone(),
             reason: approval.reason.clone(),
+            revision: approval.revision,
         })
         .collect();
     let unscoped = work
@@ -252,7 +256,10 @@ mod tests {
         ScoredApprovalDto {
             id: id.into(),
             kind: "handoff".into(),
+            origin_agent: "claude_kaira".into(),
+            target_agent: "codex_kaira".into(),
             project_path: path.map(str::to_owned),
+            revision: 7,
             ..ScoredApprovalDto::default()
         }
     }
@@ -296,6 +303,10 @@ mod tests {
         assert_eq!(task_ids, ["t1", "t4"]);
         assert_eq!(model.approvals.len(), 1);
         assert_eq!(model.approvals[0].id, "a1");
+        // The row carries everything a decision needs: both agents and the revision to echo.
+        assert_eq!(model.approvals[0].from_agent, "claude_kaira");
+        assert_eq!(model.approvals[0].to_agent, "codex_kaira");
+        assert_eq!(model.approvals[0].revision, 7);
     }
 
     #[test]

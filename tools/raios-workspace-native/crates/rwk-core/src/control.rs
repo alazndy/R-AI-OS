@@ -93,6 +93,24 @@ pub struct CreateHandoffRequest {
     pub idempotency_key: IdempotencyKey,
 }
 
+/// A decision on a pending handoff approval. The revision the user saw travels with the
+/// decision, so a decision based on a stale read is refused by the daemon (`CONFLICT`) instead
+/// of being applied to state that changed since.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoffDecisionRequest {
+    /// The open project the decision is made from. Used for the consent context; the daemon
+    /// addresses the approval by its id alone.
+    pub project_root: PathBuf,
+    /// Target approval identifier.
+    pub approval_id: String,
+    /// Revision of the approval as it was displayed to the user.
+    pub expected_revision: i64,
+    /// Rejection reason; `None` when approving.
+    pub reason: Option<String>,
+    /// Retry key.
+    pub idempotency_key: IdempotencyKey,
+}
+
 /// A handoff the daemon accepted into its queue. The receiver has not started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedHandoff {
@@ -184,6 +202,13 @@ pub trait ControlPlane: Send + Sync {
 
     /// Queues a handoff.
     fn create_handoff(&self, request: &CreateHandoffRequest) -> Result<QueuedHandoff>;
+
+    /// Approves a pending handoff approval: the control-plane owner's consent. This is not
+    /// delivery — the addressed agent's own run still has to consume the handoff.
+    fn approve_handoff(&self, request: &HandoffDecisionRequest) -> Result<()>;
+
+    /// Rejects a pending handoff approval; `request.reason` must carry the reason.
+    fn reject_handoff(&self, request: &HandoffDecisionRequest) -> Result<()>;
 
     /// Reads the delivery receipt of one handoff, scoped to `project_root`.
     fn handoff_receipt(&self, approval_id: &str, project_root: &Path) -> Result<HandoffReceiptDto>;
