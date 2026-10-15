@@ -11,6 +11,8 @@ pub enum CommandId {
     Project,
     /// Search files.
     Files,
+    /// Search the project's text through the RAIOS CLI's index.
+    Search,
     /// Save the open file.
     Save,
     /// Git diff of the open file.
@@ -128,7 +130,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 34] = [
+const COMMANDS: [Command; 35] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -146,6 +148,12 @@ const COMMANDS: [Command; 34] = [
         "Dosya ara",
         Some("Ctrl P / Ctrl K"),
         &[bind("p"), bind("k")],
+    ),
+    cmd(
+        CommandId::Search,
+        "Projede ara",
+        Some("Ctrl Shift F"),
+        &[bind_terminal("f", true, false)],
     ),
     cmd(
         CommandId::Save,
@@ -459,7 +467,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
     match id {
         Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
         | AgentsLayout => allow(),
-        Files | Refresh | FocusFiles | Memory | Inspector => needs_project(),
+        Files | Search | Refresh | FocusFiles | Memory | Inspector => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
@@ -546,7 +554,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 34);
+        assert_eq!(catalog().len(), 35);
     }
 
     #[test]

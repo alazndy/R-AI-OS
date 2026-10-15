@@ -197,7 +197,10 @@ fn switching_files_with_unsaved_edits_asks_first() {
     rig.open_file("b.txt");
     assert_eq!(
         rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile("b.txt".to_owned()))
+        Some(PendingAction::OpenFile {
+            path: "b.txt".to_owned(),
+            line: None
+        })
     );
     assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
     // Cancel changes nothing.
@@ -563,7 +566,10 @@ fn reopening_the_open_file_with_unsaved_edits_asks_instead_of_overwriting_them()
     );
     assert_eq!(
         rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile("a.txt".to_owned()))
+        Some(PendingAction::OpenFile {
+            path: "a.txt".to_owned(),
+            line: None
+        })
     );
     // Discard is the way to reload from disk, for example after a conflict.
     std::fs::write(rig.dir.path().join("a.txt"), "changed on disk").expect("write");
@@ -633,7 +639,10 @@ fn quick_open_finds_nested_files_and_respects_unsaved_edits() {
     assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
     assert_eq!(
         rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile("nested/needle.rs".into()))
+        Some(PendingAction::OpenFile {
+            path: "nested/needle.rs".into(),
+            line: None
+        })
     );
     rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
     assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));

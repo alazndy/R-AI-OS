@@ -19,6 +19,7 @@ use rwk_core::control::stream::WebSocketEvents;
 use rwk_core::control::ControlPlane;
 use rwk_core::handoff_input::redact_secrets;
 use rwk_core::memory::{MemorySource, SqliteMemorySource};
+use rwk_core::search::CliSearch;
 use rwk_core::terminal::ProgramPaths;
 use rwk_ui::workbench::{Workbench, WorkbenchEvent};
 use token::FileTokenSource;
@@ -130,6 +131,11 @@ fn main() {
                 let source: Arc<dyn MemorySource> = Arc::new(source);
                 workbench.update(cx, |workbench, _| workbench.set_memory_source(Some(source)));
             }
+            // Project search shells out to the `raios` CLI's trigram index, so it works with or
+            // without the daemon; without the CLI on PATH the view says so when a search runs.
+            workbench.update(cx, |workbench, _| {
+                workbench.set_search_source(Some(Arc::new(CliSearch::default())));
+            });
             // The daemon connection: without a config home there is no token file, so the inspector
             // keeps showing "not configured" instead of guessing a path. The event stream travels
             // on the same base URL and bearer token; the inspector keeps polling either way.
