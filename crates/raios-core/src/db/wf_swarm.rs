@@ -164,7 +164,8 @@ pub fn mark_swarm_workflow_merged(
     if let Some(approval_id) = approval_id.filter(|id| !id.is_empty()) {
         conn.execute(
             "UPDATE cp_approvals
-             SET status = 'approved', resolved_at = ?1, resolved_by = 'human'
+             SET status = 'approved', resolved_at = ?1, resolved_by = 'human',
+                 revision = revision + 1
              WHERE id = ?2",
             params![now, approval_id],
         )?;
@@ -199,7 +200,8 @@ pub fn mark_swarm_workflow_rejected(
     if let Some(approval_id) = approval_id.filter(|id| !id.is_empty()) {
         conn.execute(
             "UPDATE cp_approvals
-             SET status = 'rejected', resolved_at = ?1, resolved_by = 'human'
+             SET status = 'rejected', resolved_at = ?1, resolved_by = 'human',
+                 revision = revision + 1
              WHERE id = ?2",
             params![now, approval_id],
         )?;

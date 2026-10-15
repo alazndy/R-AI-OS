@@ -244,7 +244,8 @@ pub fn create_handoff_workflow_in_tx(
     // instead of letting stale pending handovers pile up for the same agent.
     tx.execute(
         "UPDATE cp_approvals
-         SET status = 'expired', resolved_at = ?1, resolved_by = 'superseded'
+         SET status = 'expired', resolved_at = ?1, resolved_by = 'superseded',
+             revision = revision + 1
          WHERE approval_type = 'handover' AND status = 'pending'
            AND task_id IN (
                SELECT id FROM cp_tasks
@@ -429,6 +430,20 @@ fn select_pending_handoff(
     }))
 }
 
+/// Current optimistic-concurrency revision of an approval, or `None` when no such row exists.
+///
+/// Every transition of an approval bumps this value, so a surface can send back what it saw
+/// (`expected_revision` on the handoff commands) and be refused with `CONFLICT` instead of
+/// acting on state that changed since it was read.
+pub fn cp_approval_revision(conn: &Connection, approval_id: &str) -> Result<Option<i64>> {
+    conn.query_row(
+        "SELECT revision FROM cp_approvals WHERE id = ?1",
+        params![approval_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
 /// Resolve every linked delivery record inside the caller's transaction.
 /// Returns false for a stale or foreign-owned approval, without reviving it.
 pub fn cp_resolve_handoff(
@@ -478,7 +493,8 @@ pub fn cp_resolve_handoff(
         };
     tx.execute(
         "UPDATE cp_approvals SET status = ?1, resolved_at = ?2, resolved_by = ?3,
-         reason = CASE WHEN ?4 IS NULL THEN reason ELSE reason || char(10) || 'Rejected: ' || ?4 END
+         reason = CASE WHEN ?4 IS NULL THEN reason ELSE reason || char(10) || 'Rejected: ' || ?4 END,
+         revision = revision + 1
          WHERE id = ?5",
         params![
             approval_status,

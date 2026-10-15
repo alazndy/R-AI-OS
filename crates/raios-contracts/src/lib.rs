@@ -47,12 +47,47 @@ mod tests {
     fn command_serialization_roundtrip() {
         let cmd = Command::ApproveHandoff {
             approval_id: "app-123".into(),
+            expected_revision: None,
             idempotency_key: "key-456".into(),
         };
         assert_eq!(cmd.idempotency_key(), "key-456");
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: Command = serde_json::from_str(&json).unwrap();
         assert_eq!(cmd, deserialized);
+    }
+
+    #[test]
+    fn handoff_decision_payloads_stay_backward_compatible() {
+        // A payload written before `expected_revision` existed still deserializes; the
+        // revision is then simply unknown and never blocks the decision.
+        let legacy = r#"{
+            "command_type": "ApproveHandoff",
+            "payload": {"approval_id": "app-1", "idempotency_key": "key-1"}
+        }"#;
+        let parsed: Command = serde_json::from_str(legacy).unwrap();
+        match parsed {
+            Command::ApproveHandoff {
+                approval_id,
+                expected_revision,
+                idempotency_key,
+            } => {
+                assert_eq!(approval_id, "app-1");
+                assert_eq!(expected_revision, None);
+                assert_eq!(idempotency_key, "key-1");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+
+        // A current payload names the revision it saw and round-trips unchanged.
+        let current = Command::RejectHandoff {
+            approval_id: "app-2".into(),
+            expected_revision: Some(7),
+            reason: "stale work".into(),
+            idempotency_key: "key-2".into(),
+        };
+        let json = serde_json::to_string(&current).unwrap();
+        assert!(json.contains("\"expected_revision\":7"));
+        assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), current);
     }
 
     #[test]

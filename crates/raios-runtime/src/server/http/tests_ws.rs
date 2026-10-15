@@ -346,6 +346,7 @@ async fn typed_events_and_task_paths_reach_http_ws_clients() {
         token.clone(),
         serde_json::to_value(Command::ApproveHandoff {
             approval_id: approval_a.clone(),
+            expected_revision: None,
             idempotency_key: "ws-events-approve-a".into(),
         })
         .unwrap(),
@@ -375,6 +376,7 @@ async fn typed_events_and_task_paths_reach_http_ws_clients() {
         token.clone(),
         serde_json::to_value(Command::RejectHandoff {
             approval_id: approval_b.clone(),
+            expected_revision: None,
             reason: "not needed for this workspace".into(),
             idempotency_key: "ws-events-reject-b".into(),
         })

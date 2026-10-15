@@ -561,12 +561,14 @@ pub fn run_agent_with_session_labels(
                 let command = if action == HandoffAction::Reject {
                     raios_contracts::Command::RejectHandoff {
                         approval_id: ctx.approval_id.clone(),
+                        expected_revision: None,
                         reason: "Rejected by user in agent wrapper".into(),
                         idempotency_key,
                     }
                 } else {
                     raios_contracts::Command::ApproveHandoff {
                         approval_id: ctx.approval_id.clone(),
+                        expected_revision: None,
                         idempotency_key,
                     }
                 };

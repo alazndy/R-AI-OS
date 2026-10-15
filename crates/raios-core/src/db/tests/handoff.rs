@@ -619,3 +619,55 @@ fn user_handoff_removal_blocks_stale_delivery_and_audit_failure_rolls_back() {
     assert_eq!(row.delivery_status, "rejected");
     assert_eq!(row.user_status.as_deref(), Some("removed"));
 }
+
+#[test]
+fn approval_revisions_move_with_every_transition() {
+    let conn = in_memory();
+    let queue = |path, from, to, status| {
+        create_handoff_workflow(
+            &conn,
+            HandoffWorkflowInput {
+                project_path: path,
+                from_agent: from,
+                to_agent: to,
+                status,
+                msg: "work",
+                diff_stat: None,
+                report: None,
+            },
+        )
+        .unwrap()
+    };
+
+    let ids = queue("/repo", "claude_kaira", "codex_kaira", "BLOCKER");
+    assert_eq!(
+        cp_approval_revision(&conn, &ids.approval_id).unwrap(),
+        Some(1)
+    );
+    assert_eq!(
+        cp_approval_revision(&conn, "missing-approval").unwrap(),
+        None
+    );
+
+    // Resolution moves the revision, so a decision made on revision 1 is refused afterwards.
+    assert!(cp_resolve_handoff(
+        &conn,
+        &ids.approval_id,
+        "local_control_owner",
+        "local_control_owner",
+        None
+    )
+    .unwrap());
+    assert_eq!(
+        cp_approval_revision(&conn, &ids.approval_id).unwrap(),
+        Some(2)
+    );
+
+    // Superseding an older pending handoff moves its revision too.
+    let first = queue("/repo-b", "claude_kaira", "codex_kaira", "BLOCKER");
+    let _second = queue("/repo-b", "claude_kaira", "codex_kaira", "BLOCKER");
+    assert_eq!(
+        cp_approval_revision(&conn, &first.approval_id).unwrap(),
+        Some(2)
+    );
+}
