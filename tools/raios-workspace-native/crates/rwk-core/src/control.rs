@@ -5,6 +5,7 @@
 
 pub mod daemon;
 pub mod fake;
+pub mod stream;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -137,6 +138,20 @@ pub enum ControlEvent {
     },
     /// The daemon's reachability changed.
     ConnectionChanged(ConnectionState),
+    /// An agent run's execution state changed (typed `AgentRunStateChanged` frame).
+    RunChanged {
+        /// Target run identifier.
+        run_id: String,
+        /// Name of the agent harness.
+        agent_name: String,
+        /// New execution status string.
+        status: String,
+    },
+    /// An approval was requested or resolved (typed `ApprovalRequested`/`ApprovalResolved`).
+    ApprovalChanged {
+        /// Target approval identifier.
+        approval_id: String,
+    },
 }
 
 /// Everything the workspace asks of the daemon. Blocking; call from a background executor.
@@ -174,8 +189,8 @@ pub trait ControlPlane: Send + Sync {
     fn handoff_receipt(&self, approval_id: &str, project_root: &Path) -> Result<HandoffReceiptDto>;
 }
 
-/// Source of [`ControlEvent`]s. The first implementation polls snapshots; a WebSocket source
-/// can replace it without touching callers.
+/// Source of [`ControlEvent`]s. [`stream::WebSocketEvents`] subscribes to the daemon's typed
+/// event stream; callers keep their own snapshot poll as the fallback.
 pub trait EventSource: Send {
     /// Waits up to `timeout` for the next event; `Ok(None)` means nothing happened.
     fn next_event(&mut self, timeout: Duration) -> Result<Option<ControlEvent>>;

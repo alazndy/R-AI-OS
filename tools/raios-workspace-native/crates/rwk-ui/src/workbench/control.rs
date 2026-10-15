@@ -8,7 +8,8 @@ use std::time::Duration;
 use gpui::{AppContext, Context, Window};
 use rwk_core::consent::ConsentRequest;
 use rwk_core::control::{
-    ControlPlane, CreateHandoffRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction,
+    ControlPlane, CreateHandoffRequest, EventSource, IdempotencyKey, LaunchAgentRequest,
+    PolicyAction,
 };
 use rwk_core::error::AppError;
 use rwk_core::guarded::{Guarded, GuardedOutcome};
@@ -33,6 +34,17 @@ impl Workbench {
         self.inspector
             .update(cx, |inspector, cx| inspector.set_control_plane(plane, cx));
         cx.notify();
+    }
+
+    /// Connects (or removes) the daemon's live event stream: the inspector refreshes on typed
+    /// events and folds the stream state into its banner, the 3 s poll stays as the fallback.
+    pub fn set_event_source(
+        &mut self,
+        source: Option<Box<dyn EventSource>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.inspector
+            .update(cx, |inspector, cx| inspector.set_event_source(source, cx));
     }
 
     /// Projects the application remembers as registered, so they are not offered again.

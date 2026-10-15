@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use gpui::{App, AppContext, WindowOptions};
 use rwk_core::control::daemon::DaemonClient;
+use rwk_core::control::stream::WebSocketEvents;
 use rwk_core::control::ControlPlane;
 use rwk_core::handoff_input::redact_secrets;
 use rwk_core::memory::{MemorySource, SqliteMemorySource};
@@ -130,15 +131,22 @@ fn main() {
                 workbench.update(cx, |workbench, _| workbench.set_memory_source(Some(source)));
             }
             // The daemon connection: without a config home there is no token file, so the inspector
-            // keeps showing "not configured" instead of guessing a path.
+            // keeps showing "not configured" instead of guessing a path. The event stream travels
+            // on the same base URL and bearer token; the inspector keeps polling either way.
             if let Some(config_home) = config_home() {
+                let base = format!("http://127.0.0.1:{}", DaemonClient::DEFAULT_PORT);
                 let client = DaemonClient::new(
-                    format!("http://127.0.0.1:{}", DaemonClient::DEFAULT_PORT),
+                    base.clone(),
                     Box::new(FileTokenSource::new(token::token_path(&config_home))),
                 );
                 let plane: Arc<dyn ControlPlane> = Arc::new(client);
+                let events = WebSocketEvents::new(
+                    &base,
+                    Box::new(FileTokenSource::new(token::token_path(&config_home))),
+                );
                 workbench.update(cx, |workbench, cx| {
                     workbench.set_control_plane(Some(plane), cx);
+                    workbench.set_event_source(Some(Box::new(events)), cx);
                 });
             }
             if let Some(root) = project.clone() {
