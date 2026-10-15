@@ -97,12 +97,13 @@ pub fn load_now_snapshot(conn: &Connection) -> Result<NowSnapshot, String> {
             task_id: a.approval.task_id.unwrap_or_default(),
             kind: a.approval.approval_type,
             title: a.approval.task_title.unwrap_or_default(),
-            origin_agent: "agent".into(),
-            target_agent: "human".into(),
-            project_path: None,
+            origin_agent: a.approval.origin_agent.unwrap_or_else(|| "agent".into()),
+            target_agent: a.approval.target_agent.unwrap_or_else(|| "human".into()),
+            project_path: a.approval.project_path,
             created_at: a.approval.requested_at,
             score: a.risk_score as i32,
             reason: a.approval.reason,
+            revision: a.approval.revision,
         })
         .collect();
 
@@ -1250,11 +1251,21 @@ mod tests {
         .unwrap();
 
         let before = load_system_snapshot(&conn).unwrap();
-        assert!(before
+        let listed = before
             .now
             .approvals
             .iter()
-            .any(|approval| approval.id == workflow.approval_id));
+            .find(|approval| approval.id == workflow.approval_id)
+            .expect("pending approval must be listed");
+        // The surface can only present (and decide) what carries its project root, both
+        // agents and the revision the decision must echo back.
+        assert_eq!(
+            listed.project_path.as_deref(),
+            Some("/tmp/control-plane-flow")
+        );
+        assert_eq!(listed.origin_agent, "codex_kaira");
+        assert_eq!(listed.target_agent, "antigravity_kaira");
+        assert_eq!(listed.revision, 1);
 
         let command = Command::ApproveHandoff {
             approval_id: workflow.approval_id.clone(),

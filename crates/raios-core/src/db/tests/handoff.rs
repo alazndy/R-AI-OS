@@ -847,3 +847,48 @@ fn a_user_completed_handoff_is_never_superseded() {
     assert_eq!(receipt.status, "approved");
     assert_eq!(receipt.resolved_by.as_deref(), Some("local_user"));
 }
+
+#[test]
+fn pending_approvals_carry_project_agents_and_revision() {
+    let conn = in_memory();
+    let ids = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo-approvals",
+            from_agent: "claude_kaira",
+            to_agent: "codex_kaira",
+            status: "BLOCKER",
+            msg: "Carry context",
+            diff_stat: None,
+            report: None,
+        },
+    )
+    .unwrap();
+
+    for row in [
+        cp_query_pending_approvals(&conn).unwrap().remove(0),
+        cp_query_pending_approvals_scored(&conn)
+            .unwrap()
+            .remove(0)
+            .approval,
+    ] {
+        assert_eq!(row.id, ids.approval_id);
+        assert_eq!(row.project_path.as_deref(), Some("/repo-approvals"));
+        assert_eq!(row.origin_agent.as_deref(), Some("claude_kaira"));
+        assert_eq!(row.target_agent.as_deref(), Some("codex_kaira"));
+        assert_eq!(row.revision, 1);
+    }
+
+    // The revision read here is what a surface sends back with its decision.
+    assert!(cp_approve_handoff_by_owner(
+        &conn,
+        &ids.approval_id,
+        "local_control_owner",
+        "local_control_owner"
+    )
+    .unwrap());
+    assert_eq!(
+        cp_approval_revision(&conn, &ids.approval_id).unwrap(),
+        Some(2)
+    );
+}

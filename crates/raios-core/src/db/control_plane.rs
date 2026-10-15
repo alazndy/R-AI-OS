@@ -136,6 +136,14 @@ pub struct ApprovalInboxRow {
     pub task_id: Option<String>,
     pub task_title: Option<String>,
     pub requested_at: String,
+    /// Absolute project root this approval belongs to, when one is known.
+    pub project_path: Option<String>,
+    /// Agent that requested the approval (the linked run's agent), when known.
+    pub origin_agent: Option<String>,
+    /// Agent the approval addresses (the task's assignee), when known.
+    pub target_agent: Option<String>,
+    /// Optimistic-concurrency revision; see `expected_revision` on the handoff commands.
+    pub revision: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -174,7 +182,7 @@ const ORIGIN_EXPR: &str = "
 /// in the run contract, so the newest such workspace is the second choice.
 /// The legacy `cp_task_list_items.project_name` slot stays last for
 /// back-compat with pre-registration personal tasks.
-const PROJECT_PATH_EXPR: &str = "
+pub(super) const PROJECT_PATH_EXPR: &str = "
     COALESCE(p.path, (
       SELECT rc.workspace_root
       FROM cp_agent_runs r
@@ -250,16 +258,23 @@ pub fn cp_query_blocked_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> 
     rows.collect()
 }
 
-/// All pending approvals, joined with task titles.
+/// All pending approvals, joined with task titles and the context a surface needs to
+/// present (or decide) them: the project root, both agents and the row's revision.
 pub fn cp_query_pending_approvals(conn: &Connection) -> Result<Vec<ApprovalInboxRow>> {
-    let mut stmt = conn.prepare(
+    let sql = format!(
         "SELECT ap.id, ap.approval_type, ap.reason, ap.status,
-                ap.task_id, t.title, ap.requested_at
+                ap.task_id, t.title, ap.requested_at,
+                {path} AS project_path, ar2.agent_name, t.assignee_id, ap.revision
          FROM cp_approvals ap
          LEFT JOIN cp_tasks t ON t.id = ap.task_id
+         LEFT JOIN cp_agent_runs ar2 ON ar2.id = ap.agent_run_id
+         LEFT JOIN projects p ON p.id = COALESCE(ap.project_id, t.project_id)
+         LEFT JOIN cp_task_list_items li ON li.task_id = t.id
          WHERE ap.status = 'pending'
          ORDER BY ap.requested_at DESC",
-    )?;
+        path = PROJECT_PATH_EXPR
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
         Ok(ApprovalInboxRow {
             id: row.get(0)?,
@@ -269,6 +284,10 @@ pub fn cp_query_pending_approvals(conn: &Connection) -> Result<Vec<ApprovalInbox
             task_id: row.get(4)?,
             task_title: row.get(5)?,
             requested_at: row.get(6)?,
+            project_path: row.get(7)?,
+            origin_agent: row.get(8)?,
+            target_agent: row.get(9)?,
+            revision: row.get(10)?,
         })
     })?;
     rows.collect()
