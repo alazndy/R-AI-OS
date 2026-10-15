@@ -760,7 +760,7 @@ fn enter_never_adds_a_newline_to_the_palette_query() {
 // ----- guarded daemon commands ---------------------------------------------------------
 
 use rwk_core::control::fake::{FakeControlPlane, RecordedCall};
-use rwk_core::control::{ControlPlane, PolicyAction, QueuedHandoff};
+use rwk_core::control::{ControlEvent, ControlPlane, EventSource, PolicyAction, QueuedHandoff};
 use rwk_core::sessions::SessionKind;
 
 fn connected(rig: &mut Rig, policy: PolicyAction) -> Arc<FakeControlPlane> {
@@ -1302,4 +1302,95 @@ fn a_confirmed_registration_is_announced_so_the_application_can_remember_it() {
         .expect("events")
         .iter()
         .any(|event| matches!(event, WorkbenchEvent::ProjectRegistered(_)))));
+}
+
+/// The task titles the inspector currently shows.
+fn inspector_titles(rig: &mut Rig) -> Vec<String> {
+    rig.read(|wb, cx| {
+        wb.inspector()
+            .read(cx)
+            .model()
+            .tasks
+            .iter()
+            .map(|task| task.title.clone())
+            .collect()
+    })
+}
+
+#[test]
+fn a_typed_stream_event_refreshes_the_inspector_before_the_next_poll() {
+    use std::sync::mpsc;
+
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    let task = |title: &str| raios_contracts::WorkSnapshot {
+        tasks: vec![raios_contracts::UnifiedTaskDto {
+            id: title.to_owned(),
+            title: title.to_owned(),
+            project_path: Some(root.to_string_lossy().into_owned()),
+            ..raios_contracts::UnifiedTaskDto::default()
+        }],
+        ..raios_contracts::WorkSnapshot::default()
+    };
+
+    // One read for the first poll, then the new state. The project counts as known, so opening
+    // it never probes the daemon: the inspector is the only reader of the script.
+    let fake = Arc::new(FakeControlPlane::new());
+    fake.push_work_snapshot(Ok(task("ilk durum")));
+    for _ in 0..100 {
+        fake.push_work_snapshot(Ok(task("yeni durum")));
+        fake.push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()));
+    }
+    let plane: Arc<dyn ControlPlane> = fake.clone();
+    rig.with(|wb, _, cx| {
+        wb.set_known_projects([root.clone()]);
+        wb.set_control_plane(Some(plane), cx);
+    });
+    rig.open_project();
+    assert!(
+        rig.settle_until(|rig| inspector_titles(rig)
+            .iter()
+            .any(|title| title == "ilk durum")),
+        "the first poll must show the first snapshot"
+    );
+
+    // A gated stream: the monitor delivers only what the test sends.
+    struct GatedEvents {
+        gate: mpsc::Receiver<ControlEvent>,
+    }
+    impl EventSource for GatedEvents {
+        fn next_event(&mut self, timeout: Duration) -> rwk_core::Result<Option<ControlEvent>> {
+            Ok(self.gate.recv_timeout(timeout).ok())
+        }
+    }
+    let (occurrences, gate) = mpsc::channel();
+    rig.with(|wb, _, cx| wb.set_event_source(Some(Box::new(GatedEvents { gate })), cx));
+
+    occurrences
+        .send(ControlEvent::RunChanged {
+            run_id: "r1".into(),
+            agent_name: "codex_kaira".into(),
+            status: "running".into(),
+        })
+        .expect("send the event");
+
+    // The next poll is three seconds away: only an event-triggered refresh can switch the
+    // model to the new snapshot this fast.
+    let deadline = Instant::now() + Duration::from_millis(2500);
+    let mut refreshed = false;
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        rig.cx.run_until_parked();
+        if inspector_titles(&mut rig)
+            .iter()
+            .any(|title| title == "yeni durum")
+        {
+            refreshed = true;
+            break;
+        }
+    }
+    assert!(
+        refreshed,
+        "a typed stream event must refresh the inspector before the next poll"
+    );
 }
