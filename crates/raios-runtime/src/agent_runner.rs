@@ -1,9 +1,6 @@
 use crate::instinct::InstinctEngine;
 use raios_core::shield::AgentShield;
-#[cfg(test)]
-use std::io;
-#[cfg(unix)]
-use std::io::Write;
+use std::io::{self, IsTerminal, Write};
 #[cfg(unix)]
 use std::io::{BufRead, BufReader};
 #[cfg(unix)]
@@ -315,12 +312,84 @@ fn pending_handoff_for_project(
     raios_core::db::cp_take_pending_handoff_for_path(conn, project_path, identity)
 }
 
+/// Explicit wrapper decision; Auto asks only when attached to an interactive TTY.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffAction {
+    Auto,
+    Accept,
+    Reject,
+    Complete,
+    Defer,
+}
+
+fn read_handoff_action(
+    input: &mut impl io::BufRead,
+    output: &mut impl Write,
+) -> io::Result<HandoffAction> {
+    loop {
+        write!(
+            output,
+            "Handoff: [a] Accept / [r] Reject / [c] Already completed / [l] Later (default): "
+        )?;
+        output.flush()?;
+        let mut line = String::new();
+        if input.read_line(&mut line)? == 0 {
+            return Ok(HandoffAction::Defer);
+        }
+        match line.trim().to_ascii_lowercase().as_str() {
+            "a" | "accept" => return Ok(HandoffAction::Accept),
+            "r" | "reject" => return Ok(HandoffAction::Reject),
+            "c" | "complete" => return Ok(HandoffAction::Complete),
+            "" | "l" | "later" | "defer" => return Ok(HandoffAction::Defer),
+            _ => writeln!(output, "Choose a, r, c or l.")?,
+        }
+    }
+}
+
 pub fn run_agent(
     agent: &str,
     project_dir: Option<String>,
     timeout_secs: Option<u64>,
     extra_args: Vec<String>,
 ) -> Result<(), String> {
+    run_agent_with_handoff(
+        agent,
+        project_dir,
+        timeout_secs,
+        extra_args,
+        HandoffAction::Auto,
+    )
+}
+
+pub fn run_agent_with_handoff(
+    agent: &str,
+    project_dir: Option<String>,
+    timeout_secs: Option<u64>,
+    extra_args: Vec<String>,
+    handoff_action: HandoffAction,
+) -> Result<(), String> {
+    run_agent_with_session_labels(
+        agent,
+        project_dir,
+        timeout_secs,
+        extra_args,
+        handoff_action,
+        None,
+        None,
+    )
+}
+
+pub fn run_agent_with_session_labels(
+    agent: &str,
+    project_dir: Option<String>,
+    timeout_secs: Option<u64>,
+    extra_args: Vec<String>,
+    handoff_action: HandoffAction,
+    name: Option<String>,
+    work: Option<String>,
+) -> Result<(), String> {
+    raios_core::db::validate_session_labels(name.as_deref(), work.as_deref())
+        .map_err(|e| e.to_string())?;
     let shield = AgentShield::init();
     let mut instinct = InstinctEngine::init();
     let run_started = Instant::now();
@@ -385,17 +454,24 @@ pub fn run_agent(
     }
 
     // Resolve effective project dir: explicit flag > CWD
-    let project_dir = project_dir.or_else(|| {
-        std::env::current_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned())
-    });
+    let project_dir = project_dir
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        })
+        .map(|p| {
+            Path::new(&p)
+                .canonicalize()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or(p)
+        });
 
     // 3. Look up any pending control-plane handoff addressed to this agent identity
     // (see AGENT_CONSTITUTION.md Section 10 — no STATE.json involved). Resolved here,
     // before the Command is built, so each agent's native prompt-injection flag can be
     // used instead of an env var no CLI actually reads.
-    let pending_handoff = if is_informational_invocation(&extra_args) {
+    let mut pending_handoff = if is_informational_invocation(&extra_args) {
         None
     } else {
         canonical_agent_identity(agent).and_then(|identity| {
@@ -434,12 +510,12 @@ pub fn run_agent(
             Some((conn, identity, ctx, block))
         })
     };
-    let handover_block = pending_handoff
+    let mut handover_block = pending_handoff
         .as_ref()
         .map(|(_, _, _, block)| block.clone());
 
     // 4. Build the Command, wiring the handover into each agent's native prompt flag.
-    // The banner is informational; native prompt delivery below starts immediately.
+    // Interactive callers decide before any prompt reaches the child.
     if let Some(block) = &handover_block {
         let width = 62usize;
         let border = "═".repeat(width);
@@ -462,7 +538,65 @@ pub fn run_agent(
         println!();
     }
 
-    let mut cmd = handoff_agent_command(agent, handover_block.as_deref(), &extra_args)?;
+    if pending_handoff.is_some() {
+        let action = match handoff_action {
+            HandoffAction::Auto if io::stdin().is_terminal() && io::stdout().is_terminal() => {
+                read_handoff_action(&mut io::stdin().lock(), &mut io::stdout().lock())
+                    .map_err(|e| format!("Could not read handoff decision: {e}"))?
+            }
+            HandoffAction::Auto => HandoffAction::Accept,
+            action => action,
+        };
+        if matches!(action, HandoffAction::Reject | HandoffAction::Complete) {
+            if let Some((conn, _, ctx, _)) = &mut pending_handoff {
+                let idempotency_key = format!(
+                    "wrapper-handoff-{}-{}",
+                    ctx.approval_id,
+                    if action == HandoffAction::Reject {
+                        "reject"
+                    } else {
+                        "complete"
+                    }
+                );
+                let command = if action == HandoffAction::Reject {
+                    raios_contracts::Command::RejectHandoff {
+                        approval_id: ctx.approval_id.clone(),
+                        reason: "Rejected by user in agent wrapper".into(),
+                        idempotency_key,
+                    }
+                } else {
+                    raios_contracts::Command::ApproveHandoff {
+                        approval_id: ctx.approval_id.clone(),
+                        idempotency_key,
+                    }
+                };
+                crate::control_plane::service::dispatch_control_command(
+                    conn,
+                    &crate::control_plane::service::ControlActor::local_session(),
+                    &command,
+                )
+                .map_err(|e| format!("Could not resolve handoff: {}", e.message))?;
+            }
+            println!(
+                "Handoff {}. Starting without handoff context.",
+                if action == HandoffAction::Reject {
+                    "rejected"
+                } else {
+                    "marked completed"
+                }
+            );
+        } else if action == HandoffAction::Defer {
+            println!("Handoff left pending. Starting without handoff context.");
+        }
+        if action != HandoffAction::Accept {
+            pending_handoff = None;
+            handover_block = None;
+        }
+    }
+
+    let mut recovery_args = extra_args.clone();
+    let native_id = crate::session_recovery::prepare_native_checkpoint(agent, &mut recovery_args);
+    let mut cmd = handoff_agent_command(agent, handover_block.as_deref(), &recovery_args)?;
 
     // Inject Instincts & Budget Info
     let instinct_prompt = instinct.get_instinct_prompt();
@@ -484,6 +618,7 @@ pub fn run_agent(
     // Open a session row in the DB so wrapper-routed sessions are always traceable.
     let session_start_time = SystemTime::now();
     let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let wrapper_owner = crate::wrapper_liveness::current_wrapper_identity();
     let session_ids = {
         let identity = canonical_agent_identity(agent).unwrap_or(agent);
         let conn_res = raios_core::db::open_db();
@@ -492,14 +627,36 @@ pub fn run_agent(
                 let project_id = project_dir
                     .as_deref()
                     .and_then(|dir| raios_core::db::project_id_for_file_path(&conn, dir));
-                match raios_core::db::cp_session_start(&conn, identity, project_id) {
+                match raios_core::db::cp_session_start_named(
+                    &conn,
+                    identity,
+                    project_id,
+                    project_dir.as_deref().unwrap_or("/"),
+                    wrapper_owner.as_ref(),
+                    name.as_deref(),
+                    work.as_deref(),
+                ) {
                     Ok(ids) => Some((ids.0, ids.1)),
-                    Err(_) => None,
+                    Err(error) => {
+                        return Err(format!("Could not persist session before launch: {error}"));
+                    }
                 }
             }
-            Err(_) => None,
+            Err(error) => {
+                return Err(format!("Could not persist session before launch: {error}"));
+            }
         }
     };
+
+    if let (Some((task_id, run_id)), Some(native_id)) = (&session_ids, &native_id) {
+        let conn = raios_core::db::open_db().map_err(|e| e.to_string())?;
+        if let Err(error) = raios_core::db::cp_bind_wrapper_resume(&conn, run_id, native_id) {
+            let _ = raios_core::db::cp_session_end(&conn, task_id, run_id, false);
+            return Err(format!(
+                "Could not persist native recovery identity: {error}"
+            ));
+        }
+    }
 
     // For claude: inject session block into ~/.claude/CLAUDE.md so it's visible
     // inside Claude Code's own UI (system context, /status). Stripped on exit.
@@ -539,6 +696,16 @@ pub fn run_agent(
         session_label
     );
 
+    if let Some(native_id) = &native_id {
+        println!("  saved conversation: {native_id}");
+    }
+    if let Some(name) = &name {
+        println!("  name: {}", name.trim());
+    }
+    if let Some(work) = &work {
+        println!("  work: {}", work.trim());
+    }
+
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -562,6 +729,19 @@ pub fn run_agent(
             return Err(format!("Failed to spawn agent: {e}"));
         }
     };
+    if let (Some((_, run_id)), Some(owner)) = (&session_ids, &wrapper_owner) {
+        let child_identity = crate::wrapper_liveness::child_identity(child.id());
+        if let Ok(conn) = raios_core::db::open_db() {
+            if let Err(error) = raios_core::db::cp_attach_wrapper_child(
+                &conn,
+                run_id,
+                owner,
+                child_identity.as_ref(),
+            ) {
+                eprintln!("Warning: failed to track wrapper child process: {error}");
+            }
+        }
+    }
     if let Some((conn, identity, ctx, _)) = &pending_handoff {
         println!(
             "📨 Handover delivered from {} ({}).",
@@ -619,6 +799,7 @@ pub fn run_agent(
                     if start.elapsed().as_secs() > timeout {
                         println!("💀 TIMEOUT! Killing agent ({}) for budget safety...", agent);
                         let _ = child.kill();
+                        let _ = child.wait();
                         break Err(format!("Agent {} timed out.", agent));
                     }
                     thread::sleep(Duration::from_millis(250));
@@ -960,6 +1141,25 @@ fn get_dir_size(path: &Path) -> std::io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handoff_menu_requires_an_explicit_choice_and_defers_on_eof() {
+        for (input, expected) in [
+            ("a\n", HandoffAction::Accept),
+            ("r\n", HandoffAction::Reject),
+            ("c\n", HandoffAction::Complete),
+            ("l\n", HandoffAction::Defer),
+            ("\n", HandoffAction::Defer),
+            ("", HandoffAction::Defer),
+            ("invalid\nreject\n", HandoffAction::Reject),
+        ] {
+            let mut output = Vec::new();
+            assert_eq!(
+                read_handoff_action(&mut io::Cursor::new(input), &mut output).unwrap(),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn detached_child_reaper_waits_for_short_lived_processes() {

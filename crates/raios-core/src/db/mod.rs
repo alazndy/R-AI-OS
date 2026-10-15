@@ -4,6 +4,7 @@ use std::path::Path;
 pub mod activity_events;
 pub mod agent_stats;
 pub mod budget_gate;
+pub mod contract_recovery;
 pub mod control_plane;
 pub mod factory_cycles;
 pub mod factory_evidence;
@@ -27,13 +28,16 @@ pub mod tool_traces;
 pub mod wf_file_change;
 pub mod wf_handoff;
 pub mod wf_handoff_receipt;
+pub mod wf_session_resume;
 pub mod wf_sessions;
 pub mod wf_swarm;
 pub mod wf_task_graph;
+pub mod workspace;
 
 pub use activity_events::*;
 pub use agent_stats::*;
 pub use budget_gate::*;
+pub use contract_recovery::*;
 pub use control_plane::*;
 pub use factory_cycles::*;
 pub use factory_evidence::*;
@@ -56,9 +60,22 @@ pub use tool_traces::*;
 pub use wf_file_change::*;
 pub use wf_handoff::*;
 pub use wf_handoff_receipt::*;
+pub use wf_session_resume::*;
 pub use wf_sessions::*;
 pub use wf_swarm::*;
 pub use wf_task_graph::*;
+pub use workspace::*;
+
+/// An absolute path in the test's Unix notation, valid on the host: a bare `/workspace` is
+/// relative on Windows, so there it gains a drive and backslashes.
+#[cfg(test)]
+pub(crate) fn abs(path: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", path.replace('/', "\\"))
+    } else {
+        path.to_owned()
+    }
+}
 
 #[cfg(test)]
 mod tests;
@@ -71,12 +88,15 @@ pub fn open_db() -> Result<Connection> {
         let _ = std::fs::create_dir_all(parent);
     }
     let conn = Connection::open(&db_path)?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
+    )?;
     migrate_existing(&conn)?;
     Ok(conn)
 }
 
-fn db_path() -> std::path::PathBuf {
+/// Shared database location, including the isolated-test RAIOS_DB_PATH override.
+pub fn db_path() -> std::path::PathBuf {
     if let Ok(path) = std::env::var("RAIOS_DB_PATH") {
         return std::path::PathBuf::from(path);
     }

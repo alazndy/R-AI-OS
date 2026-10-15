@@ -2,6 +2,103 @@ use super::{HandoffStatus, HandoffTarget};
 use raios_core::db::HandoffReport;
 use std::path::{Path, PathBuf};
 
+pub(super) fn cmd_handoffs(command: super::HandoffsCmd, json: bool) -> anyhow::Result<()> {
+    use std::io::IsTerminal;
+    let conn = raios_core::db::open_db()?;
+    match command {
+        super::HandoffsCmd::List { all, project, top } => {
+            let project = project.map(|p| {
+                Path::new(&p)
+                    .canonicalize()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or(p)
+            });
+            let mut rows = raios_core::db::cp_list_handoffs(&conn, all, project.as_deref(), top)?;
+            for row in &mut rows {
+                row.message = raios_core::security::redact_secrets(&row.message)
+                    .chars()
+                    .filter(|c| !c.is_control() || *c == '\n')
+                    .collect();
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+                return Ok(());
+            }
+            let color = std::io::stdout().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none()
+                && std::env::var("TERM").as_deref() != Ok("dumb");
+            let (bold, dim, reset) = if color {
+                ("\x1b[1m", "\x1b[90m", "\x1b[0m")
+            } else {
+                ("", "", "")
+            };
+            println!("\n{bold}HANDOFFS{reset} — {} shown\n", rows.len());
+            for row in rows {
+                let status =
+                    row.user_status
+                        .as_deref()
+                        .unwrap_or(match row.delivery_status.as_str() {
+                            "pending" => "queued",
+                            "approved" => "delivered (work not confirmed)",
+                            "rejected" => "rejected",
+                            other => other,
+                        });
+                let status_color = if !color {
+                    ""
+                } else if status == "completed" {
+                    "\x1b[32m"
+                } else {
+                    "\x1b[33m"
+                };
+                println!(
+                    "{bold}{} → {}{reset}  {status_color}{status}{reset}",
+                    row.from_agent, row.to_agent
+                );
+                println!(
+                    "  Project: {}",
+                    row.project.as_deref().unwrap_or("unregistered")
+                );
+                println!("  Directory: {}", row.directory);
+                println!("  Created: {}", row.created_at);
+                for line in row.message.lines().take(3) {
+                    let preview: String = line.chars().take(160).collect();
+                    println!(
+                        "  {preview}{}",
+                        if line.chars().count() > 160 {
+                            "…"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+                if row.message.lines().count() > 3
+                    || row.message.lines().any(|line| line.chars().count() > 160)
+                {
+                    println!("  {dim}Use --json to read the full message.{reset}");
+                }
+                println!("  {dim}ID: {}{reset}\n", row.id);
+            }
+        }
+        super::HandoffsCmd::Done { id } => {
+            raios_core::db::cp_manage_handoff(&conn, &id, false)?;
+            if json {
+                println!("{}", serde_json::json!({"id":id,"user_status":"completed"}));
+            } else {
+                println!("Work confirmed completed: {id}");
+            }
+        }
+        super::HandoffsCmd::Remove { id } => {
+            raios_core::db::cp_manage_handoff(&conn, &id, true)?;
+            if json {
+                println!("{}", serde_json::json!({"id":id,"user_status":"removed"}));
+            } else {
+                println!("Handoff removed from queue and default list: {id}. History retained with --all.");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Scans every free-text field of a `HandoffReport` for secrets, not just
 /// `findings` — evidence/edge-cases/open-questions/not-checked are all
 /// agent-authored free text and can just as easily carry a pasted token.

@@ -205,7 +205,7 @@ impl Cortex {
         let candidates = self.engine.query(&emb, top_k.saturating_mul(10));
         let mut filtered: Vec<VectorResult> = candidates
             .into_iter()
-            .filter(|r| Path::new(&r.path).starts_with(scope_dir))
+            .filter(|r| crate::search::indexer::in_search_scope(Path::new(&r.path), scope_dir))
             .collect();
         filtered.sort_by(|a, b| {
             b.score

@@ -122,11 +122,26 @@ fn receipt_marks_delivery_only_when_the_target_consumed_it() {
 fn receipt_resolved_by_someone_else_is_not_target_delivery() {
     let conn = in_memory();
     let ids = create_handoff_workflow(&conn, input("/repo-a", "codex_kaira", "ctx")).unwrap();
+    // A human approval (ApproveHandoff) resolves the handoff as the control owner. Consuming it
+    // through the wrapper path requires the receiver itself, so that path cannot be used by
+    // anyone else.
     let pending = cp_take_pending_handoff_for_path(&conn, "/repo-a", "codex_kaira")
         .unwrap()
         .expect("pending handoff");
-
     cp_consume_handoff(&conn, &pending, "local_control_owner").unwrap();
+    let still_pending = cp_handoff_receipt(&conn, &ids.approval_id, "/repo-a")
+        .unwrap()
+        .expect("receipt");
+    assert_eq!(still_pending.status, "pending");
+
+    assert!(cp_resolve_handoff(
+        &conn,
+        &ids.approval_id,
+        "local_control_owner",
+        "local_control_owner",
+        None
+    )
+    .unwrap());
     let receipt = cp_handoff_receipt(&conn, &ids.approval_id, "/repo-a")
         .unwrap()
         .expect("receipt");

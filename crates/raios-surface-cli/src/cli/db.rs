@@ -2,6 +2,24 @@ use super::DbCmd;
 
 pub fn cmd_db(command: DbCmd, json: bool) {
     let result = match command {
+        DbCmd::RepairOrphanContracts { apply } => run_repair_orphan_contracts(apply, json),
+        DbCmd::ReconcileSessions {
+            apply,
+            include_legacy,
+        } => run_reconcile_sessions(apply, include_legacy, json),
+        DbCmd::PruneSearch { apply } => run_prune_search(apply, json),
+        DbCmd::NormalizeBm25 { apply } => {
+            raios_runtime::search::bm25_storage::normalize_bm25(&raios_core::db::db_path(),apply).and_then(|report| {
+                if json { println!("{}",serde_json::to_string_pretty(&report)?); }
+                else {
+                    println!("BM25 normalization: {} legacy postings, {} distinct lines",report.legacy_postings,report.distinct_legacy_lines);
+                    println!("Estimated snippet payload savings: {}",human_bytes(report.estimated_payload_savings));
+                    println!("Converted postings: {}",report.converted_postings);
+                    if !apply { println!("Read-only preview. Back up and update CLI/daemon before --apply. Compaction is a separate operation."); }
+                }
+                Ok(())
+            })
+        }
         DbCmd::Check { full } => run_check(full, json),
         DbCmd::Backup { keep } => run_backup(keep, json),
         DbCmd::Checkpoint { truncate } => run_checkpoint(truncate, json),
@@ -20,17 +38,71 @@ pub fn cmd_db(command: DbCmd, json: bool) {
     }
 }
 
-fn run_check(full: bool, json: bool) -> anyhow::Result<()> {
-    let report = raios_core::db::check_workspace_database(full)?;
-    if !report.healthy {
-        anyhow::bail!(
-            "SQLite {} check failed: {}",
-            report.check_mode,
-            report.integrity_messages.join("; ")
-        );
-    }
+fn run_reconcile_sessions(apply: bool, include_legacy: bool, json: bool) -> anyhow::Result<()> {
+    let report = raios_runtime::wrapper_liveness::reconcile_sessions(
+        &raios_core::db::db_path(),
+        apply,
+        include_legacy,
+    )?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "Wrapper recovery: {} candidates, {} closed, {} live/unverified",
+            report.candidates.len(),
+            report.closed,
+            report.kept_alive_or_unverified
+        );
+        if !apply {
+            println!("Read-only preview. Review candidates and back up before using --apply.");
+        }
+    }
+    Ok(())
+}
+
+fn run_repair_orphan_contracts(apply: bool, json: bool) -> anyhow::Result<()> {
+    let report = raios_core::db::repair_orphan_contracts(&raios_core::db::db_path(), apply)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "Contract recovery: {} candidates, {} detached",
+            report.candidates.len(),
+            report.detached
+        );
+        if !apply {
+            println!("Read-only preview. Review and back up before using --apply.");
+        }
+    }
+    Ok(())
+}
+
+fn run_prune_search(apply: bool, json: bool) -> anyhow::Result<()> {
+    let report = raios_runtime::search::cache_maintenance::prune_search_cache(
+        &raios_core::db::db_path(),
+        apply,
+    )?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("Search cache maintenance ({})", report.scanned_at_utc);
+        println!("  Mode: {}", if apply { "apply" } else { "dry-run" });
+        println!("  BM25: {:?}", report.bm25);
+        println!("  Trigram: {:?}", report.trigram);
+        if !apply {
+            println!("  No rows deleted. Use --apply after reviewing and backing up.");
+        }
+    }
+    Ok(())
+}
+
+fn run_check(full: bool, json: bool) -> anyhow::Result<()> {
+    let report = raios_core::db::check_workspace_database(full)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        if !report.healthy {
+            std::process::exit(1);
+        }
     } else {
         println!("workspace.db maintenance check");
         println!("  Path: {}", report.database_path.display());
@@ -45,6 +117,18 @@ fn run_check(full: bool, json: bool) -> anyhow::Result<()> {
         println!("  Journal: {}", report.journal_mode);
         println!("  Free pages: {}", report.freelist_pages);
         println!("  Managed snapshots: {}", report.snapshot_count);
+        println!(
+            "  Foreign-key violations: {}",
+            report.foreign_key_violations.len()
+        );
+    }
+    if !report.healthy {
+        anyhow::bail!(
+            "SQLite {} check: {}; foreign-key violations: {}",
+            report.check_mode,
+            report.integrity_messages.join("; "),
+            report.foreign_key_violations.len()
+        );
     }
     Ok(())
 }

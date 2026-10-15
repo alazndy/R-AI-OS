@@ -1,3 +1,5 @@
+pub mod bm25_storage;
+pub mod cache_maintenance;
 pub mod hybrid;
 pub mod indexer;
 pub mod trigram;

@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension, Result};
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,6 +38,9 @@ pub struct DoctorResult {
     pub tier_reached: DoctorTier,
     pub notes: Vec<String>,
     pub checked_at: String,
+    /// Local credential discovery and CLI execution cannot verify backend auth.
+    #[serde(default)]
+    pub authentication_verified: bool,
 }
 
 pub fn save_doctor_result(conn: &Connection, res: &DoctorResult) -> Result<()> {
@@ -63,12 +66,14 @@ pub fn get_doctor_result(conn: &Connection, agent: &str) -> Result<Option<Doctor
             let tier_str: String = row.get(1)?;
             let notes_json: String = row.get(2)?;
             let notes: Vec<String> = serde_json::from_str(&notes_json).unwrap_or_default();
-            let tier_reached = tier_str.parse().unwrap_or(DoctorTier::Offline);
+            let _legacy_tier = tier_str;
+            let tier_reached = DoctorTier::Offline;
             Ok(DoctorResult {
                 agent: row.get(0)?,
                 tier_reached,
                 notes,
                 checked_at: row.get(3)?,
+                authentication_verified: false,
             })
         },
     )
@@ -88,6 +93,8 @@ fn tmux_presence_note() -> String {
     }
 }
 
+/// A local diagnostic never claims authenticated reachability. No provider
+/// model call is made. Auth/full requests expose what remains unverified.
 pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> DoctorResult {
     let canonical_agent = match agent.to_lowercase().as_str() {
         "claude" | "claude_kaira" => "claude",
@@ -96,183 +103,127 @@ pub fn run_doctor_check(agent: &str, requested_tier: Option<DoctorTier>) -> Doct
         "agy" | "antigravity" | "antigravity_kaira" => "agy",
         _ => agent,
     };
-
-    let target_tier = requested_tier.unwrap_or(DoctorTier::Full);
-    let home = dirs::home_dir().unwrap_or_default();
-    let mut notes = Vec::new();
-    let mut tier_reached = DoctorTier::Offline;
-
-    // 1. Offline Tier: Check installation / binary path
-    let binary_name = canonical_agent;
-
-    let binary_found = raios_core::core::process::resolve_command_path(binary_name).is_some();
-    let config_dir_found = match canonical_agent {
-        "claude" => home.join(".claude").exists(),
-        "codex" => home.join(".codex").exists(),
-        "opencode" => home.join(".config/opencode").exists(),
-        "agy" => home.join(".gemini/antigravity-cli").exists(),
-        _ => false,
-    };
-
-    if !binary_found && !config_dir_found {
-        notes.push(format!(
-            "Binary '{}' not found on PATH and config dir missing",
-            binary_name
-        ));
-        return DoctorResult {
-            agent: canonical_agent.to_string(),
-            tier_reached: DoctorTier::Offline,
-            notes,
-            checked_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        };
-    }
-
-    notes.push(format!(
-        "Offline check passed: binary '{}' detected",
-        binary_name
-    ));
-
-    notes.push(tmux_presence_note());
-
-    if target_tier == DoctorTier::Offline {
-        return DoctorResult {
-            agent: canonical_agent.to_string(),
-            tier_reached,
-            notes,
-            checked_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        };
-    }
-
-    // 2. Auth Tier: Check credentials / API key / cache age
-    let auth_valid = match canonical_agent {
-        "claude" => {
-            let env_key = std::env::var_os("ANTHROPIC_API_KEY").is_some();
-            let creds_path = home.join(".claude/.credentials.json");
-            let cache_path = home.join(".claude/raios-usage-cache.json");
-
-            if env_key {
-                notes.push("ANTHROPIC_API_KEY environment variable set".into());
-            }
-
-            if creds_path.exists() {
-                if check_file_stale(&creds_path, 24) {
-                    notes.push(
-                        "Credentials file found but older than 24h: stale, re-check needed".into(),
-                    );
-                } else {
-                    notes.push("Fresh credentials file found (.credentials.json)".into());
-                }
-            }
-
-            if cache_path.exists() && check_file_stale(&cache_path, 24) {
-                notes.push("Usage cache file is older than 24h: stale, re-check".into());
-            }
-
-            env_key || creds_path.exists()
-        }
-        "codex" => {
-            let env_key = std::env::var_os("OPENAI_API_KEY").is_some();
-            let auth_path = home.join(".codex/auth.json");
-
-            if env_key {
-                notes.push("OPENAI_API_KEY environment variable set".into());
-            }
-
-            if auth_path.exists() {
-                if check_file_stale(&auth_path, 24) {
-                    notes.push(
-                        "Codex auth file found but older than 24h: stale, re-check needed".into(),
-                    );
-                } else {
-                    notes.push("Fresh auth file found (auth.json)".into());
-                }
-            }
-
-            env_key || auth_path.exists()
-        }
-        "agy" => {
-            let token_path = home.join(".gemini/antigravity-cli/antigravity-oauth-token");
-            if token_path.exists() {
-                if check_file_stale(&token_path, 24) {
-                    notes.push(
-                        "Antigravity token file older than 24h: stale, re-check needed".into(),
-                    );
-                } else {
-                    notes.push("Fresh Antigravity OAuth token file found".into());
-                }
-                true
-            } else {
-                notes.push("No OAuth token found in ~/.gemini/antigravity-cli/".into());
-                false
-            }
-        }
-        _ => true,
-    };
-
-    if !auth_valid {
-        notes.push("Auth check failed: credentials missing or expired".into());
-        return DoctorResult {
-            agent: canonical_agent.to_string(),
-            tier_reached,
-            notes,
-            checked_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        };
-    }
-
-    tier_reached = DoctorTier::Auth;
-    if target_tier == DoctorTier::Auth {
-        return DoctorResult {
-            agent: canonical_agent.to_string(),
-            tier_reached,
-            notes,
-            checked_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        };
-    }
-
-    // 3. Full Tier: Verify CLI binary execution
-    let output = Command::new(binary_name).arg("--version").output();
-    match output {
-        Ok(out) if out.status.success() => {
-            let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            notes.push(format!("Full roundtrip check succeeded: {}", ver));
-            tier_reached = DoctorTier::Full;
-        }
-        Ok(out) => {
-            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            notes.push(format!(
-                "Full roundtrip --version returned non-zero: {}",
-                err
-            ));
-        }
-        Err(e) => {
-            notes.push(format!("Full roundtrip execution failed to spawn: {}", e));
-        }
-    }
-
-    DoctorResult {
-        agent: canonical_agent.to_string(),
-        tier_reached,
-        notes,
+    let target = requested_tier.unwrap_or(DoctorTier::Full);
+    let mut result = DoctorResult {
+        agent: canonical_agent.into(),
+        tier_reached: DoctorTier::Offline,
+        notes: vec![],
         checked_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        authentication_verified: false,
+    };
+    let Some(binary) = raios_core::core::process::resolve_command_path(canonical_agent) else {
+        result
+            .notes
+            .push(format!("Binary '{canonical_agent}' not found on PATH"));
+        return result;
+    };
+    result.notes.push(format!(
+        "Offline check: binary detected at {}",
+        binary.display()
+    ));
+    result.notes.push(tmux_presence_note());
+    if target == DoctorTier::Offline {
+        return result;
     }
+    let home = dirs::home_dir().unwrap_or_default();
+    match canonical_agent {
+        "claude" => result.notes.push(local_credentials_note(
+            std::env::var("ANTHROPIC_API_KEY").is_ok_and(|v| !v.trim().is_empty()),
+            home.join(".claude/.credentials.json").is_file(),
+        )),
+        "codex" => result.notes.push(local_credentials_note(
+            std::env::var("OPENAI_API_KEY").is_ok_and(|v| !v.trim().is_empty()),
+            home.join(".codex/auth.json").is_file(),
+        )),
+        // These providers may use their own stores/keyrings. Missing legacy
+        // Gemini files, or an unsupported probe, cannot establish auth failure.
+        _ => result
+            .notes
+            .push("Local credential discovery: unverified for this provider".into()),
+    }
+    result.notes.push("Authentication: unverified; local files and their modification age do not establish token validity".into());
+    if target == DoctorTier::Full {
+        let arg = if canonical_agent == "agy" {
+            "--help"
+        } else {
+            "--version"
+        };
+        result.notes.push(match bounded_local_probe(&binary, arg) {
+            Ok(true) => "Local CLI execution: successful; authenticated backend reachability remains unverified".into(),
+            Ok(false) => "Local CLI execution: nonzero exit; authenticated backend reachability remains unverified".into(),
+            Err(e) => format!("Local CLI execution: {e}; authenticated backend reachability remains unverified"),
+        });
+    }
+    result
 }
 
-fn check_file_stale(path: &PathBuf, max_hours: i64) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return true;
-    };
-    let Ok(mtime) = metadata.modified() else {
-        return true;
-    };
-    let Ok(elapsed) = mtime.elapsed() else {
-        return false;
-    };
-    elapsed.as_secs() > (max_hours as u64 * 3600)
+fn local_credentials_note(env_present: bool, file_present: bool) -> String {
+    format!(
+        "Local credentials: {}; authentication remains unverified",
+        if env_present || file_present {
+            "detected"
+        } else {
+            "not detected in the checked locations"
+        }
+    )
+}
+
+fn bounded_local_probe(binary: &Path, arg: &str) -> std::io::Result<bool> {
+    let mut child = Command::new(binary)
+        .arg(arg)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status.success()),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return match result {
+                    Err(e) => Err(e),
+                    _ => Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "local CLI probe timed out",
+                    )),
+                };
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_discovery_never_claims_expiration_or_authentication() {
+        for (env, file) in [(true, false), (false, true), (false, false)] {
+            let note = local_credentials_note(env, file);
+            assert!(note.contains("unverified"));
+            assert!(!note.contains("expired") && !note.contains("stale"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_successful_local_execution_is_only_a_local_probe() {
+        // `true` and `false` live in /bin on Linux and in /usr/bin on macOS.
+        let find = |name: &str| {
+            ["/bin", "/usr/bin"]
+                .iter()
+                .map(|dir| Path::new(dir).join(name))
+                .find(|path| path.exists())
+                .expect("true/false exist on every Unix")
+        };
+        assert!(bounded_local_probe(&find("true"), "--version").unwrap());
+        assert!(!bounded_local_probe(&find("false"), "--version").unwrap());
+    }
 
     #[test]
     fn doctor_check_missing_binary_returns_offline_tier() {
@@ -304,19 +255,21 @@ mod tests {
 
         let res = DoctorResult {
             agent: "claude".into(),
-            tier_reached: DoctorTier::Auth,
+            tier_reached: DoctorTier::Offline,
             notes: vec![
                 "Offline check passed".into(),
                 "Stale auth check flagged".into(),
             ],
             checked_at: "2026-07-15 12:00:00".into(),
+            authentication_verified: false,
         };
 
         save_doctor_result(&conn, &res).unwrap();
 
         let loaded = get_doctor_result(&conn, "claude").unwrap().unwrap();
         assert_eq!(loaded.agent, "claude");
-        assert_eq!(loaded.tier_reached, DoctorTier::Auth);
+        assert_eq!(loaded.tier_reached, DoctorTier::Offline);
+        assert!(!loaded.authentication_verified);
         assert_eq!(loaded.notes.len(), 2);
     }
 }

@@ -25,8 +25,17 @@ pub struct DbMaintenanceCheck {
     pub journal_mode: String,
     pub check_mode: String,
     pub integrity_messages: Vec<String>,
+    pub foreign_key_violations: Vec<DbForeignKeyViolation>,
     pub healthy: bool,
     pub snapshot_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DbForeignKeyViolation {
+    pub table: String,
+    pub row_id: Option<i64>,
+    pub parent_table: String,
+    pub constraint_index: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,6 +46,7 @@ pub struct DbSnapshotReport {
     pub sha256: String,
     pub check_mode: String,
     pub integrity_messages: Vec<String>,
+    pub foreign_key_violations: Vec<DbForeignKeyViolation>,
     pub retained_snapshots: usize,
     pub pruned_snapshots: Vec<PathBuf>,
 }
@@ -76,6 +86,18 @@ pub fn check_database(
 ) -> Result<DbMaintenanceCheck> {
     let conn = open_read_only(database_path)?;
     let integrity_messages = integrity_check(&conn, full)?;
+    let foreign_key_violations = {
+        let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(DbForeignKeyViolation {
+                table: r.get(0)?,
+                row_id: r.get(1)?,
+                parent_table: r.get(2)?,
+                constraint_index: r.get(3)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
     let page_size = pragma_i64(&conn, "PRAGMA page_size")?;
     let page_count = pragma_i64(&conn, "PRAGMA page_count")?;
     let freelist_pages = pragma_i64(&conn, "PRAGMA freelist_count")?;
@@ -93,8 +115,11 @@ pub fn check_database(
         freelist_pages,
         journal_mode,
         check_mode: if full { "full" } else { "quick" }.to_string(),
-        healthy: integrity_messages.len() == 1 && integrity_messages[0] == "ok",
+        healthy: integrity_messages.len() == 1
+            && integrity_messages[0] == "ok"
+            && foreign_key_violations.is_empty(),
         integrity_messages,
+        foreign_key_violations,
         snapshot_count: managed_snapshots(snapshot_dir)?.len(),
     })
 }
@@ -109,7 +134,9 @@ pub fn backup_database(
     }
 
     let source_check = check_database(database_path, snapshot_dir, false)?;
-    if !source_check.healthy {
+    // A referentially inconsistent database still needs a recovery snapshot.
+    // Copy it faithfully; do not silently repair it or block backup creation.
+    if source_check.integrity_messages != ["ok"] {
         bail!(
             "refusing to back up a database that failed integrity_check: {}",
             source_check.integrity_messages.join("; ")
@@ -145,7 +172,7 @@ pub fn backup_database(
 
         set_private_file_permissions(&snapshot_path)?;
         let snapshot = check_database(&snapshot_path, snapshot_dir, false)?;
-        if !snapshot.healthy {
+        if snapshot.integrity_messages != ["ok"] {
             bail!(
                 "snapshot failed integrity_check: {}",
                 snapshot.integrity_messages.join("; ")
@@ -172,6 +199,7 @@ pub fn backup_database(
             sha256,
             check_mode: snapshot.check_mode,
             integrity_messages: snapshot.integrity_messages,
+            foreign_key_violations: snapshot.foreign_key_violations,
             retained_snapshots,
             pruned_snapshots,
         })
@@ -501,6 +529,27 @@ mod tests {
         assert!(report.database_bytes > 0);
         assert!(report.page_count > 0);
         assert_eq!(report.snapshot_count, 0);
+    }
+
+    #[test]
+    fn foreign_key_violations_make_health_fail_but_can_still_be_backed_up() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = source_database(temp.path());
+        let conn = Connection::open(&database).unwrap();
+        conn.pragma_update(None, "foreign_keys", false).unwrap();
+        conn.execute_batch("CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id)); INSERT INTO child VALUES(1,99);").unwrap();
+        let snapshots = temp.path().join("backups");
+        let report = check_database(&database, &snapshots, false).unwrap();
+        assert_eq!(report.integrity_messages, vec!["ok"]);
+        assert!(!report.healthy);
+        assert_eq!(report.foreign_key_violations.len(), 1);
+        let snapshot = backup_database(&database, &snapshots, 3).unwrap();
+        assert_eq!(snapshot.foreign_key_violations.len(), 1);
+        assert!(
+            !check_database(&snapshot.snapshot_path, &snapshots, false)
+                .unwrap()
+                .healthy
+        );
     }
 
     #[test]

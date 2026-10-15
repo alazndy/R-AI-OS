@@ -31,6 +31,11 @@ walkdir = "2"
 shlex = "1"
 ureq = "2"
 
+# O_NOFOLLOW for the provenance file-open race check (TOCTOU): std exposes
+# `OpenOptions::custom_flags` but not the flag constants themselves.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = ["cortex"]
 # Forwards to raios-core/cortex so DaemonConfig::startup_cortex_indexing

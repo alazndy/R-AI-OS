@@ -202,3 +202,99 @@ fn json_before_handoff_rejects_run_before_any_state_write() {
             .unwrap();
     assert_eq!(count, 0);
 }
+
+#[test]
+fn wrapper_reject_complete_and_defer_do_not_inject_handoff_or_touch_other_projects() {
+    for (action, expected) in [
+        ("reject", ("rejected", "rejected", "cancelled", "cancelled")),
+        (
+            "complete",
+            ("approved", "applied", "succeeded", "completed"),
+        ),
+        (
+            "defer",
+            (
+                "pending",
+                "submitted",
+                "awaiting_approval",
+                "awaiting_approval",
+            ),
+        ),
+    ] {
+        let f = Fixture::new();
+        f.fake_claude();
+        f.queue(&f.project, "do not execute this note");
+        f.queue(&f.root.join("other-project"), "unrelated project");
+        let output = f.run(&[
+            "run",
+            "claude",
+            "--handoff",
+            action,
+            "--",
+            "user's own task",
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let args = fs::read_to_string(f.root.join("arguments")).unwrap();
+        assert!(!args.contains("do not execute this note"));
+        assert!(!args.contains("--append-system-prompt"));
+        assert!(args.contains("user's own task"));
+        let states: (String, String, String, String) = f.db.query_row(
+            "SELECT ap.status, a.status, r.status, t.status FROM cp_approvals ap
+             JOIN cp_artifacts a ON a.id = ap.artifact_id JOIN cp_agent_runs r ON r.id = ap.agent_run_id
+             JOIN cp_tasks t ON t.id = ap.task_id JOIN cp_run_contracts c ON c.id = r.run_contract_id
+             WHERE c.workspace_root = ?1", [f.project.to_str().unwrap()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).unwrap();
+        assert_eq!(
+            (
+                states.0.as_str(),
+                states.1.as_str(),
+                states.2.as_str(),
+                states.3.as_str()
+            ),
+            expected
+        );
+        assert!(raios_core::db::cp_take_pending_handoff_for_path(
+            &f.db,
+            f.root.join("other-project").to_str().unwrap(),
+            "claude_kaira"
+        )
+        .unwrap()
+        .is_some());
+        if action != "defer" {
+            let active = raios_core::db::cp_query_active_tasks(&f.db).unwrap();
+            assert_eq!(
+                active.len(),
+                1,
+                "only the unrelated handoff may remain active"
+            );
+            assert_eq!(raios_core::security::verify_chain(&f.db).unwrap(), 3);
+            let bindings: i64 =
+                f.db.query_row(
+                    "SELECT count(*) FROM audit_log WHERE event_type='wrapper_resume_bound'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                bindings, 1,
+                "native conversation identity is persisted and audited before spawn"
+            );
+            let session_events: i64 =
+                f.db.query_row(
+                    "SELECT count(*) FROM audit_log WHERE event_type='wrapper_session_finished'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                session_events, 1,
+                "normal wrapper exit also has its own audited transition"
+            );
+        }
+    }
+}

@@ -1,6 +1,182 @@
 use super::*;
 
 #[test]
+fn successful_return_closes_incoming_only_in_the_same_workspace() {
+    let conn = in_memory();
+    let queue = |path, from, to, status| {
+        create_handoff_workflow(
+            &conn,
+            HandoffWorkflowInput {
+                project_path: path,
+                from_agent: from,
+                to_agent: to,
+                status,
+                msg: "work",
+                diff_stat: None,
+                report: None,
+            },
+        )
+        .unwrap()
+    };
+    let incoming = queue("/repo", "claude_kaira", "codex_kaira", "success");
+    queue("/other", "claude_kaira", "codex_kaira", "success");
+    queue("/repo", "codex_kaira", "claude_kaira", "blocker");
+    assert!(
+        cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+            .unwrap()
+            .is_some()
+    );
+    let outgoing = queue("/repo", "codex_kaira", "claude_kaira", "success");
+    assert!(
+        cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        cp_take_pending_handoff_for_path(&conn, "/other", "codex_kaira")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        cp_take_pending_handoff_for_path(&conn, "/repo", "claude_kaira")
+            .unwrap()
+            .unwrap()
+            .task_id,
+        outgoing.task_id
+    );
+    assert!(!cp_query_active_tasks(&conn)
+        .unwrap()
+        .iter()
+        .any(|t| t.id == incoming.task_id));
+    assert_eq!(crate::security::verify_chain(&conn).unwrap(), 1);
+}
+
+#[test]
+fn stale_delivery_cannot_resurrect_a_rejected_handoff() {
+    let conn = in_memory();
+    let ids = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo",
+            from_agent: "claude_kaira",
+            to_agent: "codex_kaira",
+            status: "SUCCESS",
+            msg: "old work",
+            diff_stat: None,
+            report: None,
+        },
+    )
+    .unwrap();
+    let ctx = cp_take_pending_handoff(&conn, None, "codex_kaira")
+        .unwrap()
+        .unwrap();
+    let tx = conn.unchecked_transaction().unwrap();
+    assert!(cp_resolve_handoff(
+        &tx,
+        &ids.approval_id,
+        "local_control_owner",
+        "local_control_owner",
+        Some("Already handled elsewhere")
+    )
+    .unwrap());
+    tx.commit().unwrap();
+    cp_consume_handoff(&conn, &ctx, "codex_kaira").unwrap();
+    assert!(cp_query_active_tasks(&conn).unwrap().is_empty());
+    assert!(cp_query_active_runs(&conn).unwrap().is_empty());
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM cp_approvals WHERE id = ?1",
+            params![ids.approval_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "rejected");
+}
+
+#[test]
+fn delivery_is_atomic_and_audited_and_bound_to_receiver() {
+    let conn = in_memory();
+    let ids = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo",
+            from_agent: "claude_kaira",
+            to_agent: "codex_kaira",
+            status: "SUCCESS",
+            msg: "review",
+            diff_stat: None,
+            report: None,
+        },
+    )
+    .unwrap();
+    let ctx = cp_take_pending_handoff(&conn, None, "codex_kaira")
+        .unwrap()
+        .unwrap();
+    cp_consume_handoff(&conn, &ctx, "opencode_kaira").unwrap();
+    assert!(cp_take_pending_handoff(&conn, None, "codex_kaira")
+        .unwrap()
+        .is_some());
+    conn.execute_batch("CREATE TRIGGER fail_handoff_task BEFORE UPDATE ON cp_tasks BEGIN SELECT RAISE(ABORT, 'failure'); END;").unwrap();
+    assert!(cp_consume_handoff(&conn, &ctx, "codex_kaira").is_err());
+    let states: (String, String, String, String) = conn
+        .query_row(
+            "SELECT ap.status, a.status, r.status, t.status FROM cp_approvals ap
+         JOIN cp_artifacts a ON a.id = ap.artifact_id JOIN cp_agent_runs r ON r.id = ap.agent_run_id
+         JOIN cp_tasks t ON t.id = ap.task_id WHERE ap.id = ?1",
+            params![ids.approval_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        states,
+        (
+            "pending".into(),
+            "submitted".into(),
+            "awaiting_approval".into(),
+            "awaiting_approval".into()
+        )
+    );
+    conn.execute_batch("DROP TRIGGER fail_handoff_task;")
+        .unwrap();
+    cp_consume_handoff(&conn, &ctx, "codex_kaira").unwrap();
+    cp_consume_handoff(&conn, &ctx, "codex_kaira").unwrap();
+    assert_eq!(crate::security::verify_chain(&conn).unwrap(), 1);
+    assert!(cp_query_active_tasks(&conn).unwrap().is_empty());
+    assert!(cp_query_active_runs(&conn).unwrap().is_empty());
+}
+
+#[test]
+fn superseding_handoff_preserves_unrelated_awaiting_task() {
+    let conn = in_memory();
+    let project_id = upsert_project(
+        &conn, "RAIOS", "kernel", "/repo", None, "active", None, None, None, None,
+    )
+    .unwrap();
+    conn.execute("INSERT INTO cp_tasks (id, project_id, title, description, status, assignee_id, created_at, updated_at) VALUES ('other-workflow', ?1, 'Unrelated approval', '', 'awaiting_approval', 'codex_kaira', '2026-10-10', '2026-10-10')", params![project_id]).unwrap();
+    create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo",
+            from_agent: "claude_kaira",
+            to_agent: "codex_kaira",
+            status: "SUCCESS",
+            msg: "review",
+            diff_stat: None,
+            report: None,
+        },
+    )
+    .unwrap();
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM cp_tasks WHERE id = 'other-workflow'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "awaiting_approval");
+}
+
+#[test]
 fn handoff_workflow_round_trip_consumed() {
     let conn = in_memory();
     let project_id = upsert_project(
@@ -365,4 +541,81 @@ fn verify_gate_blocks_handoff_success_until_completed() {
         res_after.is_ok(),
         "handoff SUCCESS must pass once verify gate is completed"
     );
+}
+
+#[test]
+fn user_handoff_management_closes_queue_preserves_history_and_is_idempotent() {
+    let conn = in_memory();
+    let ids = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo",
+            from_agent: "claude_kaira",
+            to_agent: "codex_kaira",
+            status: "SUCCESS",
+            msg: "Ready to handle",
+            diff_stat: None,
+            report: None,
+        },
+    )
+    .unwrap();
+    cp_manage_handoff(&conn, &ids.approval_id, false).unwrap();
+    assert!(
+        cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        cp_list_handoffs(&conn, false, None, 30).unwrap()[0]
+            .user_status
+            .as_deref(),
+        Some("completed")
+    );
+    cp_manage_handoff(&conn, &ids.approval_id, false).unwrap();
+    assert_eq!(crate::security::verify_chain(&conn).unwrap(), 1);
+    cp_manage_handoff(&conn, &ids.approval_id, true).unwrap();
+    assert!(cp_list_handoffs(&conn, false, None, 30).unwrap().is_empty());
+    assert_eq!(
+        cp_list_handoffs(&conn, true, Some("/repo"), 30).unwrap()[0]
+            .user_status
+            .as_deref(),
+        Some("removed")
+    );
+    assert!(cp_manage_handoff(&conn, &ids.approval_id, false).is_err());
+    assert_eq!(crate::security::verify_chain(&conn).unwrap(), 2);
+}
+
+#[test]
+fn user_handoff_removal_blocks_stale_delivery_and_audit_failure_rolls_back() {
+    let conn = in_memory();
+    let ids = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo",
+            from_agent: "claude_kaira",
+            to_agent: "codex_kaira",
+            status: "SUCCESS",
+            msg: "Queued",
+            diff_stat: None,
+            report: None,
+        },
+    )
+    .unwrap();
+    let stale = cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+        .unwrap()
+        .unwrap();
+    conn.execute_batch("CREATE TRIGGER refuse_handoff_audit BEFORE INSERT ON audit_log BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END;").unwrap();
+    assert!(cp_manage_handoff(&conn, &ids.approval_id, true).is_err());
+    assert!(
+        cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+            .unwrap()
+            .is_some()
+    );
+    conn.execute_batch("DROP TRIGGER refuse_handoff_audit")
+        .unwrap();
+    cp_manage_handoff(&conn, &ids.approval_id, true).unwrap();
+    cp_consume_handoff(&conn, &stale, "codex_kaira").unwrap();
+    let row = cp_list_handoffs(&conn, true, None, 30).unwrap().remove(0);
+    assert_eq!(row.delivery_status, "rejected");
+    assert_eq!(row.user_status.as_deref(), Some("removed"));
 }

@@ -1,6 +1,7 @@
 mod agent_stats;
 mod agent_wrapper;
 mod anka;
+mod anka_timer;
 mod audit;
 mod cron;
 mod db;
@@ -117,10 +118,22 @@ pub fn run(cli: Cli) {
             agent,
             project,
             timeout,
+            handoff,
+            name,
+            work,
             extra,
         } => {
-            if let Err(e) = raios_runtime::agent_runner::run_agent(&agent, project, timeout, extra)
-            {
+            use raios_runtime::agent_runner::HandoffAction;
+            let action = match handoff.as_str() {
+                "accept" => HandoffAction::Accept,
+                "reject" => HandoffAction::Reject,
+                "complete" => HandoffAction::Complete,
+                "defer" => HandoffAction::Defer,
+                _ => HandoffAction::Auto,
+            };
+            if let Err(e) = raios_runtime::agent_runner::run_agent_with_session_labels(
+                &agent, project, timeout, extra, action, name, work,
+            ) {
                 eprintln!("Agent Runner Error: {}", e);
                 std::process::exit(1);
             }
@@ -248,6 +261,12 @@ pub fn run(cli: Cli) {
                 }
             }
         }
+        Commands::Handoffs { command } => {
+            if let Err(error) = handoff::cmd_handoffs(command, cli.json) {
+                eprintln!("Handoff management failed: {error}");
+                std::process::exit(1);
+            }
+        }
         Commands::Steer { agent_id, message } => steer::cmd_steer(agent_id, message, cli.json),
         Commands::Bootstrap { dry_run, yes } => new::cmd_bootstrap(&cfg.bootstrap, dry_run, yes),
         Commands::VersionBump {
@@ -315,8 +334,52 @@ pub fn run(cli: Cli) {
             };
             agent_wrapper::cmd_agent_wrapper(a, cli.json);
         }
-        Commands::Sessions { agent, top, canvas } => {
-            cmd_sessions(agent.as_deref(), top, canvas.as_deref(), cli.json)
+        Commands::Sessions {
+            agent,
+            top,
+            canvas,
+            active,
+            project,
+            search,
+        } => cmd_sessions(
+            agent.as_deref(),
+            top,
+            canvas.as_deref(),
+            active,
+            project.as_deref(),
+            search.as_deref(),
+            cli.json,
+        ),
+        Commands::Resume {
+            session,
+            list,
+            agent,
+            project,
+            search,
+            top,
+            dry_run,
+        } => {
+            if let Err(e) = session::cmd_resume(
+                session.as_deref(),
+                list,
+                agent.as_deref(),
+                project.as_deref(),
+                search.as_deref(),
+                top as usize,
+                dry_run,
+                cli.json,
+            ) {
+                eprintln!("Session recovery error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::SessionLabel { run_id, name, work } => {
+            if let Err(e) =
+                session::cmd_session_label(&run_id, name.as_deref(), work.as_deref(), cli.json)
+            {
+                eprintln!("Session label error: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::AgentStats { agent } => agent_stats::cmd_agent_stats(agent, cli.json),
         Commands::MemoryGen { project } => {
@@ -354,6 +417,25 @@ pub fn run(cli: Cli) {
 mod tests {
     use super::resolve_project_path;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn search_cache_pruning_requires_explicit_apply_flag() {
+        use clap::Parser;
+        let preview = super::Cli::try_parse_from(["raios", "db", "prune-search"]).unwrap();
+        assert!(matches!(
+            preview.command,
+            Some(super::Commands::Db {
+                command: super::DbCmd::PruneSearch { apply: false }
+            })
+        ));
+        let apply = super::Cli::try_parse_from(["raios", "db", "prune-search", "--apply"]).unwrap();
+        assert!(matches!(
+            apply.command,
+            Some(super::Commands::Db {
+                command: super::DbCmd::PruneSearch { apply: true }
+            })
+        ));
+    }
 
     #[test]
     fn handoff_run_is_explicit_and_conflicts_with_json_output() {

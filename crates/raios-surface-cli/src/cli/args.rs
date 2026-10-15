@@ -24,6 +24,24 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+pub enum HandoffsCmd {
+    /// List handoffs across projects (removed records require --all).
+    List {
+        #[arg(long)]
+        all: bool,
+        /// Project name or absolute directory.
+        #[arg(short, long)]
+        project: Option<String>,
+        #[arg(short = 'n', long, default_value = "30", value_parser = clap::value_parser!(u32).range(1..=20000))]
+        top: u32,
+    },
+    /// Confirm that the handoff work is completed.
+    Done { id: String },
+    /// Remove a handoff from the queue and default list, preserving its history.
+    Remove { id: String },
+}
+
+#[derive(Subcommand)]
 pub enum InstinctCmd {
     /// Add a rule manually to global instincts + project memory.md
     Add {
@@ -42,6 +60,33 @@ pub enum InstinctCmd {
 
 #[derive(Subcommand)]
 pub enum DbCmd {
+    /// Preview contracts whose parent task no longer exists.
+    RepairOrphanContracts {
+        /// Detach missing task references without deleting contracts (default: preview).
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Preview proven-dead wrapper sessions (no age-based cancellation).
+    ReconcileSessions {
+        /// Close the reported task/run pairs transactionally with audit events.
+        #[arg(long)]
+        apply: bool,
+        /// Also inspect untracked legacy rows from well before the current boot.
+        #[arg(long)]
+        include_legacy: bool,
+    },
+    /// Preview globally stale/ineligible BM25 and trigram cache rows.
+    PruneSearch {
+        /// Delete the reported cache rows transactionally (default: read-only).
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Preview deduplication of BM25 snippets into per-line storage.
+    NormalizeBm25 {
+        /// Convert transactionally; requires a backup and updated CLI/daemon readers.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Run a read-only integrity and storage check against workspace.db.
     Check {
         /// Run SQLite's exhaustive integrity_check instead of quick_check.
@@ -111,6 +156,15 @@ pub enum Commands {
         project: Option<String>,
         #[arg(short, long)]
         timeout: Option<u64>,
+        /// Pending handoff decision (auto asks in a terminal; headless auto accepts)
+        #[arg(long, default_value = "auto", value_parser = ["auto", "accept", "reject", "complete", "defer"])]
+        handoff: String,
+        /// Human-readable session name (up to 120 characters)
+        #[arg(long)]
+        name: Option<String>,
+        /// Current work description (up to 2000 characters; secrets rejected)
+        #[arg(long)]
+        work: Option<String>,
         /// Extra flags forwarded verbatim to the agent binary (e.g. --model opus --print "hi")
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -259,6 +313,11 @@ pub enum Commands {
         /// Start the receiving agent immediately in this project after recording the handoff
         #[arg(long, conflicts_with = "json")]
         run: bool,
+    },
+    /// List handoffs, confirm completed work, or remove queued handoffs.
+    Handoffs {
+        #[command(subcommand)]
+        command: HandoffsCmd,
     },
     /// Inject a message into a currently-running, daemon-spawned agent
     /// session (best-effort — does not know if the target is mid-turn).
@@ -419,6 +478,38 @@ pub enum Commands {
         #[command(subcommand)]
         action: AgentWrapperCmd,
     },
+    /// Set the name or current work of an existing wrapper session (full run ID)
+    #[command(name = "session-label")]
+    SessionLabel {
+        run_id: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        work: Option<String>,
+    },
+    /// Select and resume a saved conversation across all projects
+    Resume {
+        /// Full agent:conversation-id, native ID or a linked wrapper run ID
+        session: Option<String>,
+        /// List saved conversations without launching an agent
+        #[arg(long, conflicts_with = "session")]
+        list: bool,
+        /// Agent filter for the global inventory
+        #[arg(long)]
+        agent: Option<String>,
+        /// Exact project path (inventory defaults to every project)
+        #[arg(long)]
+        project: Option<String>,
+        /// Search names, work descriptions or IDs
+        #[arg(long)]
+        search: Option<String>,
+        /// Number of saved conversations to display
+        #[arg(short='n', long, default_value="30", value_parser=clap::value_parser!(u32).range(1..=20000))]
+        top: u32,
+        /// Print the exact continuation plan without launching
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Show recent wrapper-routed agent sessions
     Sessions {
         /// Filter by agent name (claude, codex, opencode, agy)
@@ -426,6 +517,15 @@ pub enum Commands {
         /// Number of sessions to show (default: 15)
         #[arg(short = 'n', long, default_value = "15")]
         top: usize,
+        /// Show only running sessions
+        #[arg(long)]
+        active: bool,
+        /// Filter by exact project name or path
+        #[arg(long)]
+        project: Option<String>,
+        /// Search names, work descriptions, summaries, or run IDs
+        #[arg(long)]
+        search: Option<String>,
         /// Render one session's event stream as a Mermaid canvas
         #[arg(long)]
         canvas: Option<String>,
@@ -492,4 +592,116 @@ pub enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn recovery_selection_and_readonly_modes_parse() {
+        for args in [
+            vec!["raios", "resume"],
+            vec!["raios", "resume", "--list", "--json"],
+            vec!["raios", "resume", "codex:uuid", "--dry-run", "--json"],
+            vec![
+                "raios",
+                "resume",
+                "--list",
+                "--agent",
+                "claude",
+                "--project",
+                "/workspace",
+                "--search",
+                "repair",
+            ],
+        ] {
+            Cli::try_parse_from(args).unwrap();
+        }
+        assert!(Cli::try_parse_from(["raios", "resume", "id", "--list"]).is_err());
+        assert!(Cli::try_parse_from(["raios", "resume", "--top", "0"]).is_err());
+    }
+
+    #[test]
+    fn session_labels_stay_in_wrapper_and_agent_flags_are_forwarded() {
+        let cli = Cli::try_parse_from([
+            "raios",
+            "run",
+            "codex",
+            "--name",
+            "Cache repair",
+            "--work",
+            "Check backup",
+            "--",
+            "--model",
+            "test",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Run {
+                name, work, extra, ..
+            }) => {
+                assert_eq!(name.as_deref(), Some("Cache repair"));
+                assert_eq!(work.as_deref(), Some("Check backup"));
+                assert_eq!(extra, vec!["--model", "test"]);
+            }
+            _ => panic!("expected run"),
+        }
+        Cli::try_parse_from([
+            "raios",
+            "sessions",
+            "codex",
+            "--active",
+            "--project",
+            ".",
+            "--search",
+            "backup",
+            "-n",
+            "1",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "raios",
+            "session-label",
+            "run-id",
+            "--work",
+            "Validate results",
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn policy_init_requires_an_explicit_home_choice() {
+        let error = Cli::try_parse_from(["raios", "anka", "policy-init"])
+            .err()
+            .expect("a missing --home is a usage error, never an inferred default");
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn policy_init_accepts_exactly_the_two_documented_home_choices() {
+        for choice in ["keep", "exclude"] {
+            Cli::try_parse_from(["raios", "anka", "policy-init", "--home", choice])
+                .expect("both documented choices parse");
+        }
+        let error =
+            Cli::try_parse_from(["raios", "anka", "policy-init", "--home", "silently-keep"])
+                .err()
+                .expect("no invented choices are accepted");
+        assert_eq!(error.kind(), ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn policy_show_parses_as_a_read_only_command() {
+        Cli::try_parse_from(["raios", "anka", "policy-show"]).expect("`show` takes no arguments");
+    }
+
+    #[test]
+    fn timer_install_and_uninstall_parse_without_arguments() {
+        Cli::try_parse_from(["raios", "anka", "timer-install"])
+            .expect("`timer-install` takes no arguments");
+        Cli::try_parse_from(["raios", "anka", "timer-uninstall"])
+            .expect("`timer-uninstall` takes no arguments");
+    }
 }

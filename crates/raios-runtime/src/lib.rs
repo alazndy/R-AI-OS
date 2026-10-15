@@ -31,6 +31,7 @@ pub mod server;
 pub mod session;
 pub mod session_canvas;
 pub mod session_memory;
+pub mod session_recovery;
 pub mod session_review;
 pub mod swarm;
 pub mod sync;
@@ -38,6 +39,7 @@ pub mod system_scan;
 pub mod tasks;
 pub mod trace_recall;
 pub mod workers;
+pub mod wrapper_liveness;
 pub mod cli {
     pub mod preflight;
 }

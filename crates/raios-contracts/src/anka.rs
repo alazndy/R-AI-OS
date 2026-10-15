@@ -38,10 +38,39 @@ pub struct AnkaHitDto {
     pub confidence: String,
 }
 
+/// One harness's slice of the last refresh, as carried over the wire.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnkaHarnessCoverageDto {
+    /// Harness name: "claude", "codex", "opencode", "antigravity".
+    pub harness: String,
+    /// Source files discovered for this harness.
+    pub sources: usize,
+    /// Records retained for this harness after exclusions and tombstones.
+    pub records: usize,
+    /// ISO-8601 UTC stamp of the run that wrote this entry; empty means unknown.
+    pub indexed_at: String,
+    /// Whether the run that wrote this entry refreshed every harness.
+    pub full_refresh: bool,
+    /// Entries dropped for exceeding the per-line byte bound — its own exclusion reason.
+    pub oversized: usize,
+}
+
+/// Privacy-policy state as reported alongside the status.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnkaPolicySummaryDto {
+    /// False when `anka-policy` is absent or does not parse.
+    pub initialized: bool,
+    /// `keep` | `exclude`; `None` until initialized.
+    pub home: Option<String>,
+    /// Number of literal substring rules resolved from `anka-exclude`.
+    pub exclude_rules: usize,
+}
+
 /// Status report summarizing the ANKA transcript indexer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AnkaIndexStatusDto {
-    /// Current indexer state (e.g., "ready", "indexing", "uninitialized").
+    /// Cache readiness derived from `coverage`:
+    /// "ready" | "partial" | "empty" | "incompatible".
     pub state: String,
     /// Local file path where the ANKA cache is persisted.
     pub cache_path: String,
@@ -51,4 +80,9 @@ pub struct AnkaIndexStatusDto {
     pub indexed_records: usize,
     /// ISO-8601 UTC timestamp when indexing was last performed.
     pub last_indexed_at: Option<String>,
+    /// Per-harness coverage of the last refresh(es).
+    pub coverage: Vec<AnkaHarnessCoverageDto>,
+    /// Privacy-policy state; absent on payloads from older builds.
+    #[serde(default)]
+    pub policy: AnkaPolicySummaryDto,
 }
