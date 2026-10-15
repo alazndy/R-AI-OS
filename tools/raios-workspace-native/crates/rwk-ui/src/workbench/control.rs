@@ -124,6 +124,7 @@ impl Workbench {
         match policy {
             Ok(PolicyAction::Allow) => self.run_guarded(op, window, cx),
             Ok(PolicyAction::Deny) => {
+                self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say(
                     format!("Politika '{}' komutunu reddediyor", op.command_name()),
@@ -143,12 +144,14 @@ impl Workbench {
                         cx.notify();
                     }
                     Err(error) => {
+                        self.settle_resume(&op, cx);
                         self.receiver_launch_failed(cx);
                         self.say(error.message, cx);
                     }
                 }
             }
             Err(error) => {
+                self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say(error.message, cx);
             }
@@ -174,10 +177,12 @@ impl Workbench {
         match result {
             Ok(()) if approved => self.run_guarded(op, window, cx),
             Ok(()) => {
+                self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say("Vazgeçildi; hiçbir şey gönderilmedi", cx);
             }
             Err(error) => {
+                self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say(error.message, cx);
             }
@@ -211,6 +216,10 @@ impl Workbench {
         match (op, outcome) {
             (Guarded::LaunchAgent(request), Ok(GuardedOutcome::AgentLaunchValidated)) => {
                 self.new_terminal(request.agent, window, cx);
+                self.receiver_started(cx);
+            }
+            (Guarded::ResumeAgent { key, .. }, Ok(GuardedOutcome::AgentLaunchValidated)) => {
+                self.resume_terminal(key, window, cx);
                 self.receiver_started(cx);
             }
             (Guarded::CreateHandoff(request), Ok(GuardedOutcome::HandoffQueued(queued))) => {
@@ -249,8 +258,12 @@ impl Workbench {
                     cx,
                 );
             }
-            (_, Ok(_)) => self.say("Beklenmeyen daemon yanıtı", cx),
-            (_, Err(error)) => {
+            (op, Ok(_)) => {
+                self.settle_resume(&op, cx);
+                self.say("Beklenmeyen daemon yanıtı", cx);
+            }
+            (op, Err(error)) => {
+                self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say(error.message, cx);
             }

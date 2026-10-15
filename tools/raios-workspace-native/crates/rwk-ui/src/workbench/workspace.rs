@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use gpui::{Context, Window};
-use rwk_core::sessions::{SessionKind, MAX_SESSIONS};
+use rwk_core::sessions::{SessionKind, SessionLaunch, MAX_SESSIONS};
 use rwk_core::workbench::{SavedTerminal, SavedWorkspace, WorkspaceStateSource};
 
 use super::{Workbench, WORKSPACE_SAVE_DELAY};
@@ -22,24 +22,31 @@ impl Workbench {
     /// The workspace state as it is right now, or `None` while no project is open.
     pub(super) fn workspace_snapshot(&self, cx: &gpui::App) -> Option<SavedWorkspace> {
         let project = self.project.as_ref()?;
+        let mut terminals: Vec<SavedTerminal> = self
+            .terminals
+            .iter()
+            .map(|pane| match pane.kind {
+                SessionKind::Shell => SavedTerminal::Shell,
+                kind => SavedTerminal::Agent {
+                    kind,
+                    // A pane started from an offer knows the conversation it continues; a fresh
+                    // run does not, and is matched by agent when the project opens again.
+                    native_session: pane.resume.as_ref().map(|key| key.native_id().to_owned()),
+                },
+            })
+            .collect();
+        // An offer that was not taken is offered again next time, with the conversation id it
+        // was matched to — the same session comes back, not merely the same agent.
+        terminals.extend(self.offers.iter().map(|offer| SavedTerminal::Agent {
+            kind: offer.kind,
+            native_session: offer.native_session.clone(),
+        }));
         Some(SavedWorkspace {
             project: project.info().root.clone(),
             tabs: self.editor.read(cx).tabs_snapshot(cx),
             active: self.editor.read(cx).active_index(),
             layout: self.layout,
-            terminals: self
-                .terminals
-                .iter()
-                .map(|pane| match pane.kind {
-                    // The agent's own conversation id is not known here: the terminal runs
-                    // `raios run <agent>` and the resume key lives in the daemon's catalog.
-                    SessionKind::Shell => SavedTerminal::Shell,
-                    kind => SavedTerminal::Agent {
-                        kind,
-                        native_session: None,
-                    },
-                })
-                .collect(),
+            terminals,
         })
     }
 
@@ -69,6 +76,11 @@ impl Workbench {
     /// Applies the stored state of the freshly opened project: layout, editor tabs and shells.
     /// Agent sessions are offered instead of started, which the offer flow does in the dock.
     pub(super) fn restore_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Offers of the previous project die with it, whether or not this project has a state
+        // file; a plan still in flight is dropped by the bumped generation.
+        self.offers.clear();
+        self.resuming.clear();
+        self.offers_generation += 1;
         let (Some(project), Some(source)) = (self.project.clone(), self.workspace_source.clone())
         else {
             return;
@@ -92,9 +104,18 @@ impl Workbench {
             .take(MAX_SESSIONS)
             .count();
         for _ in 0..shells {
-            if !self.spawn_terminal(SessionKind::Shell, window, cx) {
+            if !self.spawn_terminal(SessionKind::Shell, SessionLaunch::default(), window, cx) {
                 break;
             }
+        }
+        let agents: Vec<SavedTerminal> = saved
+            .terminals
+            .iter()
+            .filter(|terminal| matches!(terminal, SavedTerminal::Agent { .. }))
+            .cloned()
+            .collect();
+        if !agents.is_empty() {
+            self.load_offers(agents, root, window, cx);
         }
     }
 }

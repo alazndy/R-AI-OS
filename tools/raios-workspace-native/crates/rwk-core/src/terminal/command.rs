@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use portable_pty::CommandBuilder;
 
 use crate::error::{AppError, ErrorCode, Result};
-use crate::sessions::SessionKind;
+use crate::sessions::{SessionKind, SessionLaunch};
 
 /// Longest first prompt handed to an agent, in characters. The daemon enforces the same limit
 /// when it validates the launch.
@@ -45,43 +45,51 @@ pub fn validate_prompt(prompt: Option<&str>) -> Result<Option<String>> {
 
 /// Builds the command for one session in `root`.
 ///
-/// Agents run as `raios run <agent> --project <root> [prompt]`; the prompt is one argument, never
-/// parsed by a shell. A shell session runs the user's shell with no arguments.
+/// Agents run as `raios run <agent> --project <root> [prompt]`; a saved conversation runs as
+/// `raios resume <agent:native-id>`. The prompt and the key are each one argument, never parsed
+/// by a shell. A shell session runs the user's shell with no arguments.
 pub fn build_command(
     programs: &ProgramPaths,
     root: &Path,
     kind: SessionKind,
-    prompt: Option<&str>,
+    launch: &SessionLaunch,
 ) -> Result<CommandBuilder> {
-    let prompt = validate_prompt(prompt)?;
-    let mut command = if let Some(agent) = kind.agent() {
-        let raios = match &programs.raios {
-            Some(path) => path.clone(),
-            None => find_in_path(OsStr::new("raios")).ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::NotFound,
-                    "Install the RAIOS CLI before starting an agent.",
-                )
-            })?,
-        };
-        let mut command = CommandBuilder::new(raios);
-        command.args(["run", agent, "--project"]);
-        command.arg(root);
-        if let Some(prompt) = &prompt {
-            command.arg(prompt);
-        }
-        command
-    } else {
-        let shell = match &programs.shell {
-            Some(path) => path.clone(),
-            None => {
-                let configured = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
-                find_in_path(&configured).ok_or_else(|| {
-                    AppError::new(ErrorCode::NotFound, "No local shell is available.")
-                })?
+    let mut command = match launch {
+        SessionLaunch::Resume(key) => {
+            if kind != key.agent() {
+                return Err(AppError::new(
+                    ErrorCode::InvalidInput,
+                    "The session kind does not match the conversation's agent.",
+                ));
             }
-        };
-        CommandBuilder::new(shell)
+            let mut command = CommandBuilder::new(raios_program(programs)?);
+            command.args(["resume", key.to_string().as_str()]);
+            command
+        }
+        SessionLaunch::Fresh { prompt } => {
+            let prompt = validate_prompt(prompt.as_deref())?;
+            if let Some(agent) = kind.agent() {
+                let mut command = CommandBuilder::new(raios_program(programs)?);
+                command.args(["run", agent, "--project"]);
+                command.arg(root);
+                if let Some(prompt) = &prompt {
+                    command.arg(prompt);
+                }
+                command
+            } else {
+                let shell = match &programs.shell {
+                    Some(path) => path.clone(),
+                    None => {
+                        let configured =
+                            std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
+                        find_in_path(&configured).ok_or_else(|| {
+                            AppError::new(ErrorCode::NotFound, "No local shell is available.")
+                        })?
+                    }
+                };
+                CommandBuilder::new(shell)
+            }
+        }
     };
     command.cwd(root);
     command.env("TERM", "xterm-256color");
@@ -90,6 +98,19 @@ pub fn build_command(
         command.env_remove(name);
     }
     Ok(command)
+}
+
+/// The `raios` executable for agent sessions: the configured path or the first one on `PATH`.
+fn raios_program(programs: &ProgramPaths) -> Result<PathBuf> {
+    match &programs.raios {
+        Some(path) => Ok(path.clone()),
+        None => find_in_path(OsStr::new("raios")).ok_or_else(|| {
+            AppError::new(
+                ErrorCode::NotFound,
+                "Install the RAIOS CLI before starting an agent.",
+            )
+        }),
+    }
 }
 
 /// Resolves a program name against `PATH`; a name containing a slash is checked as given.

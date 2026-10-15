@@ -55,7 +55,20 @@ fn rig() -> Rig {
     std::fs::write(dir.path().join("a.txt"), "one").expect("a");
     std::fs::write(dir.path().join("b.txt"), "two").expect("b");
     let script = dir.path().join(".session.sh");
-    std::fs::write(&script, "#!/bin/bash\nexec sleep 100000\n").expect("script");
+    // Every call is logged for tests that check what a pane or the session catalog was run
+    // with; a `resume --list` answers from `.catalog` when a test put one there, and every
+    // other invocation (a pane) stays alive.
+    let argv_log = dir.path().join(".argv");
+    let catalog = dir.path().join(".catalog");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/bash\nprintf '%s\\n' \"$*\" >> {argv}\nif [ \"$1\" = \"resume\" ] && [ \"$2\" = \"--list\" ]; then\n  if [ -f {catalog} ]; then cat {catalog}; fi\n  exit 0\nfi\nexec sleep 100000\n",
+            argv = argv_log.display(),
+            catalog = catalog.display(),
+        ),
+    )
+    .expect("script");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let app = Box::leak(Box::new(TestAppContext::build_with_text_system(
         TestDispatcher::new(0),
@@ -157,6 +170,19 @@ impl Rig {
 
     fn set_workspace_source(&mut self, source: Arc<dyn WorkspaceStateSource>) {
         self.with(|wb, _window, _cx| wb.set_workspace_source(Some(source)));
+    }
+
+    /// Puts the JSON `raios resume --list --json` answers with into the project directory. The
+    /// rows have to name the project root themselves, as the CLI's do.
+    fn script_catalog(&mut self, json: &str) {
+        std::fs::write(self.dir.path().join(".catalog"), json).expect("catalog");
+    }
+
+    /// Every argument list the scripted `raios` has been called with so far, oldest first.
+    fn script_calls(&mut self) -> Vec<String> {
+        std::fs::read_to_string(self.dir.path().join(".argv"))
+            .map(|log| log.lines().map(str::to_owned).collect())
+            .unwrap_or_default()
     }
 
     /// Records every `WorkspaceChanged` the workbench hands to the application.
@@ -1844,6 +1870,181 @@ fn a_project_reopens_with_its_saved_tabs_layout_and_shells() {
     );
     assert_eq!(rig.read(|wb, _| wb.layout()), LayoutPreset::Editor);
     assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+}
+
+#[test]
+fn a_saved_agent_session_is_offered_and_resuming_runs_raios_resume() {
+    const KEY: &str = "claude:3294c005-aee0-4e95-860f-5800e045b624";
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    rig.script_catalog(&format!(
+        r#"{{"sessions":[{{"key":"{KEY}","agent":"claude","native_session_id":"3294c005-aee0-4e95-860f-5800e045b624","project_path":"{}","name":"gece oturumu","resumable":true}}],"warnings":[]}}"#,
+        root.display()
+    ));
+    rig.set_workspace_source(FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root.clone(),
+        tabs: Vec::new(),
+        active: 0,
+        layout: LayoutPreset::Balanced,
+        terminals: vec![SavedTerminal::Agent {
+            kind: SessionKind::Claude,
+            native_session: None,
+        }],
+    })));
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_launch(Ok(()));
+    let saved = rig.record_workspace_changes();
+    rig.open_project();
+
+    // Opening the project reads the catalog and turns the saved agent into an offer. Nothing
+    // is started before the user takes it.
+    assert!(
+        rig.settle_until(|rig| rig.read(|wb, _| wb.offers().len() == 1)),
+        "the offer never appeared"
+    );
+    assert_eq!(
+        rig.read(|wb, _| wb.terminal_count()),
+        0,
+        "offers are not panes"
+    );
+    let offer = rig.read(|wb, _| wb.offers()[0].clone());
+    assert_eq!(offer.kind, SessionKind::Claude);
+    assert_eq!(
+        offer.matched.as_ref().map(|matched| matched.name.as_str()),
+        Some("gece oturumu"),
+        "the offer names the catalog's session"
+    );
+
+    rig.with(|wb, window, cx| wb.resume_offer(&offer, window, cx));
+
+    // The continuation is validated as an agent launch and its pane runs the CLI's resume.
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert!(
+        fake.calls().iter().any(|call| matches!(
+            call,
+            RecordedCall::LaunchAgent(request)
+                if request.agent == SessionKind::Claude && request.prompt.is_none()
+        )),
+        "{:?}",
+        fake.calls()
+    );
+    assert!(
+        rig.script_calls()
+            .iter()
+            .any(|call| call == &format!("resume {KEY}")),
+        "{:?}",
+        rig.script_calls()
+    );
+    assert!(
+        rig.read(|wb, _| wb.offers().is_empty()),
+        "a taken offer is done"
+    );
+
+    // The state remembers which conversation the pane continues, so the next open offers
+    // exactly that one.
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let last = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a saved state");
+    assert_eq!(
+        last.terminals,
+        vec![SavedTerminal::Agent {
+            kind: SessionKind::Claude,
+            native_session: Some("3294c005-aee0-4e95-860f-5800e045b624".into()),
+        }]
+    );
+}
+
+#[test]
+fn an_offer_without_a_catalog_entry_can_only_be_dismissed() {
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    // No catalog file: the CLI reports nothing to continue.
+    rig.set_workspace_source(FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root,
+        tabs: Vec::new(),
+        active: 0,
+        layout: LayoutPreset::Balanced,
+        terminals: vec![SavedTerminal::Agent {
+            kind: SessionKind::Codex,
+            native_session: None,
+        }],
+    })));
+    let saved = rig.record_workspace_changes();
+    rig.open_project();
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.offers().len() == 1)));
+    let offer = rig.read(|wb, _| wb.offers()[0].clone());
+    assert!(
+        offer.matched.is_none(),
+        "nothing matched, so nothing to run"
+    );
+
+    rig.with(|wb, _window, cx| wb.dismiss_offer(&offer, cx));
+
+    assert!(rig.read(|wb, _| wb.offers().is_empty()));
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let last = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a saved state");
+    assert!(
+        last.terminals.is_empty(),
+        "a dismissed offer is not offered again: {:?}",
+        last.terminals
+    );
+}
+
+#[test]
+fn a_denied_resume_keeps_the_offer_for_another_try() {
+    const KEY: &str = "codex:9ac8a20a-7f0d-4c11-9f31-6b6e2f2ab111";
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    rig.script_catalog(&format!(
+        r#"{{"sessions":[{{"key":"{KEY}","agent":"codex","native_session_id":"9ac8a20a-7f0d-4c11-9f31-6b6e2f2ab111","project_path":"{}","name":"codex oturumu","resumable":true}}],"warnings":[]}}"#,
+        root.display()
+    ));
+    rig.set_workspace_source(FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root,
+        tabs: Vec::new(),
+        active: 0,
+        layout: LayoutPreset::Balanced,
+        terminals: vec![SavedTerminal::Agent {
+            kind: SessionKind::Codex,
+            native_session: None,
+        }],
+    })));
+    let fake = connected(&mut rig, PolicyAction::Deny);
+    rig.open_project();
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.offers().len() == 1)));
+    let offer = rig.read(|wb, _| wb.offers()[0].clone());
+    rig.with(|wb, window, cx| wb.resume_offer(&offer, window, cx));
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.toast()).is_some()));
+    assert_eq!(sends(&fake), 0, "a denied resume sends nothing");
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+    assert_eq!(
+        rig.read(|wb, _| wb.offers().len()),
+        1,
+        "the offer waits for another try"
+    );
+    assert!(
+        !rig.script_calls()
+            .iter()
+            .any(|call| call == &format!("resume {KEY}")),
+        "a denied resume never starts: {:?}",
+        rig.script_calls()
+    );
 }
 
 #[test]

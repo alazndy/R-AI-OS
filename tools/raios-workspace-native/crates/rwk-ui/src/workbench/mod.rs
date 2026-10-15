@@ -5,6 +5,7 @@ pub mod control;
 pub mod host;
 pub mod layout;
 pub mod memory;
+pub mod offers;
 pub mod palette;
 pub mod search;
 pub mod workspace;
@@ -24,12 +25,13 @@ use rwk_core::guarded::Guarded;
 use rwk_core::handoff_flow::TrackedHandoff;
 use rwk_core::project::ProjectRoot;
 use rwk_core::sessions::{
-    SessionId, SessionKind, SessionRegistry, TerminalHost, TerminalSize, MAX_SESSIONS,
+    ResumeKey, SessionId, SessionKind, SessionLaunch, SessionRegistry, TerminalHost, TerminalSize,
+    MAX_SESSIONS,
 };
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
 use rwk_core::workbench::{
     available, resolve_shortcut, Appearance, CommandId, KeyboardContext, Keystroke, SavedWorkspace,
-    Skin, SwitchDecision, Theme, Tone, WorkbenchState, WorkspaceStateSource,
+    SessionOffer, Skin, SwitchDecision, Theme, Tone, WorkbenchState, WorkspaceStateSource,
 };
 
 use crate::editor::view::{EditorEvent, EditorView};
@@ -179,6 +181,8 @@ impl PendingAction {
 struct TerminalPane {
     kind: SessionKind,
     id: SessionId,
+    /// The saved conversation this pane continues, when it was started from an offer.
+    resume: Option<ResumeKey>,
     view: Entity<TerminalView>,
 }
 
@@ -233,6 +237,14 @@ pub struct Workbench {
     pending_workspace: Option<SavedWorkspace>,
     /// The debounce task that hands `pending_workspace` to the application.
     workspace_save_task: Option<Task<()>>,
+    /// Previous agent sessions offered for continuation, in saved order.
+    offers: Vec<SessionOffer>,
+    /// Bumped by every offer plan; a plan that finishes after a project switch is dropped.
+    offers_generation: u64,
+    /// Offers whose continuation is being validated or started right now.
+    resuming: std::collections::HashSet<ResumeKey>,
+    /// The programs terminals (and the session catalog) run with.
+    programs: ProgramPaths,
     toast: Option<SharedString>,
     toast_task: Option<Task<()>>,
     file_search_task: Option<Task<()>>,
@@ -256,7 +268,7 @@ impl Workbench {
         let gates = Arc::new(GateRegistry::new());
         let wake_gates = Arc::clone(&gates);
         let pty = Arc::new(PtyTerminalHost::new(
-            programs,
+            programs.clone(),
             Arc::new(move |id: &SessionId| wake_gates.wake(id)),
         ));
         let host = SharedHost(pty);
@@ -352,6 +364,10 @@ impl Workbench {
             workspace_source: None,
             pending_workspace: None,
             workspace_save_task: None,
+            offers: Vec::new(),
+            offers_generation: 0,
+            resuming: std::collections::HashSet::new(),
+            programs,
             toast: None,
             toast_task: None,
             file_search_task: None,
@@ -452,6 +468,11 @@ impl Workbench {
     /// Index of the selected terminal pane.
     pub fn selected_terminal(&self) -> usize {
         self.selected
+    }
+
+    /// Previous agent sessions waiting in the dock, in saved order.
+    pub fn offers(&self) -> &[SessionOffer] {
+        &self.offers
     }
 
     /// The command that ran last (including ones refused as unavailable).
@@ -1125,6 +1146,7 @@ impl Workbench {
     fn spawn_terminal(
         &mut self,
         kind: SessionKind,
+        launch: SessionLaunch,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -1135,7 +1157,10 @@ impl Workbench {
         if self.terminals.len() >= MAX_SESSIONS {
             return false;
         }
-        let info = match self.sessions.start(&project, kind, None, NEW_TERMINAL_SIZE) {
+        let info = match self
+            .sessions
+            .start(&project, kind, &launch, NEW_TERMINAL_SIZE)
+        {
             Ok(info) => info,
             Err(error) => {
                 self.say(error.message, cx);
@@ -1151,9 +1176,14 @@ impl Workbench {
         let appearance = terminal_appearance(self.theme());
         let id = info.id.clone();
         let view = cx.new(|cx| TerminalView::new(engine, host, id, appearance, gate, receiver, cx));
+        let resume = match &launch {
+            SessionLaunch::Resume(key) => Some(key.clone()),
+            SessionLaunch::Fresh { .. } => None,
+        };
         self.terminals.push(TerminalPane {
             kind,
             id: info.id,
+            resume,
             view,
         });
         self.dock_visible = true;
@@ -1163,9 +1193,15 @@ impl Workbench {
     }
 
     fn new_terminal(&mut self, kind: SessionKind, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.spawn_terminal(kind, window, cx) {
+        if !self.spawn_terminal(kind, SessionLaunch::default(), window, cx) {
             return;
         }
+        self.after_started_terminal(window, cx);
+    }
+
+    /// What every user-started terminal does after its pane exists: nudge the layout once the
+    /// dock is crowded, and remember the new state. A restore calls neither.
+    fn after_started_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.terminals.len() >= 3 && self.layout != LayoutPreset::Agents {
             self.apply_layout(LayoutPreset::Agents, window, cx);
         }
@@ -1281,6 +1317,7 @@ impl Render for Workbench {
                     .border_color(gpui::rgb(theme.line))
                     .child(self.inspector.clone())
             }))
+            .children(self.offer_rows(cx))
             .children(self.terminals.iter().enumerate().map(|(index, pane)| {
                 div()
                     .flex_1()
