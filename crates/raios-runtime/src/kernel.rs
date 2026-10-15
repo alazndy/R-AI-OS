@@ -52,6 +52,9 @@ impl Kernel {
     /// Returns when any of them fails (error is propagated).
     pub async fn run(&self) -> Result<()> {
         let (tx, _) = broadcast::channel::<String>(256);
+        // Typed event bus: control-plane transitions reached through any
+        // transport publish `raios_contracts::Event` values on this sender.
+        crate::events::install(&tx);
 
         let daemon_state = self.state.clone();
         let daemon_tx = tx.clone();

@@ -113,6 +113,16 @@ pub struct UnifiedTaskRow {
     pub origin: String,
     pub assignee_id: Option<String>,
     pub project_name: Option<String>,
+    /// Registered display name of the task's project, when its `project_id`
+    /// still resolves in `projects`.
+    pub registered_name: Option<String>,
+    /// Absolute project root for the task. Resolution order:
+    /// 1. `projects.path` via `project_id` (registered projects),
+    /// 2. the newest run-contract workspace root recorded for the task's runs
+    ///    (wrapper and handoff tasks whose directory was never registered),
+    /// 3. the legacy `cp_task_list_items.project_name` slot, which older
+    ///    personal tasks used to carry their validated path in.
+    pub project_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -157,16 +167,36 @@ const ORIGIN_EXPR: &str = "
       ELSE 'personal'
     END";
 
+/// Resolves a task row to the absolute project root it belongs to.
+///
+/// The registered path wins; tasks launched against directories that were
+/// never registered (wrapper sessions, handoffs) still carry their workspace
+/// in the run contract, so the newest such workspace is the second choice.
+/// The legacy `cp_task_list_items.project_name` slot stays last for
+/// back-compat with pre-registration personal tasks.
+const PROJECT_PATH_EXPR: &str = "
+    COALESCE(p.path, (
+      SELECT rc.workspace_root
+      FROM cp_agent_runs r
+      JOIN cp_run_contracts rc ON rc.id = r.run_contract_id
+      WHERE r.task_id = t.id AND rc.workspace_root NOT IN ('', '.')
+      ORDER BY r.started_at IS NULL, r.started_at DESC, r.rowid DESC
+      LIMIT 1
+    ), li.project_name)";
+
 /// All non-terminal tasks from cp_tasks, ordered by updated_at DESC.
 pub fn cp_query_active_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> {
     let sql = format!(
         "SELECT t.id, t.title, t.priority, t.status, {origin} AS origin,
-                t.assignee_id, li.project_name, t.created_at, t.updated_at
+                t.assignee_id, li.project_name, p.name AS registered_name,
+                {path} AS project_path, t.created_at, t.updated_at
          FROM cp_tasks t
          LEFT JOIN cp_task_list_items li ON li.task_id = t.id
+         LEFT JOIN projects p ON p.id = t.project_id
          WHERE t.status NOT IN ('cancelled', 'completed', 'failed')
          ORDER BY t.updated_at DESC",
-        origin = ORIGIN_EXPR
+        origin = ORIGIN_EXPR,
+        path = PROJECT_PATH_EXPR
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
@@ -178,8 +208,10 @@ pub fn cp_query_active_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> {
             origin: row.get(4)?,
             assignee_id: row.get(5)?,
             project_name: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            registered_name: row.get(7)?,
+            project_path: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
         })
     })?;
     rows.collect()
@@ -189,12 +221,15 @@ pub fn cp_query_active_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> {
 pub fn cp_query_blocked_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> {
     let sql = format!(
         "SELECT t.id, t.title, t.priority, t.status, {origin} AS origin,
-                t.assignee_id, li.project_name, t.created_at, t.updated_at
+                t.assignee_id, li.project_name, p.name AS registered_name,
+                {path} AS project_path, t.created_at, t.updated_at
          FROM cp_tasks t
          LEFT JOIN cp_task_list_items li ON li.task_id = t.id
+         LEFT JOIN projects p ON p.id = t.project_id
          WHERE t.status = 'blocked'
          ORDER BY t.updated_at DESC",
-        origin = ORIGIN_EXPR
+        origin = ORIGIN_EXPR,
+        path = PROJECT_PATH_EXPR
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
@@ -206,8 +241,10 @@ pub fn cp_query_blocked_tasks(conn: &Connection) -> Result<Vec<UnifiedTaskRow>> 
             origin: row.get(4)?,
             assignee_id: row.get(5)?,
             project_name: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            registered_name: row.get(7)?,
+            project_path: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
         })
     })?;
     rows.collect()

@@ -289,3 +289,99 @@ fn rebuild_task_graph_cache_is_idempotent() {
     assert_eq!(first, 1, "first run should update the stale row");
     assert_eq!(second, 0, "second run has nothing left to change");
 }
+
+// ─── Unified task project root resolution ────────────────────────────────────
+
+fn insert_registered_project(conn: &Connection, name: &str, path: &str) -> i64 {
+    conn.execute(
+        "INSERT INTO projects (name, path) VALUES (?1, ?2)",
+        params![name, path],
+    )
+    .unwrap();
+    conn.query_row(
+        "SELECT id FROM projects WHERE path = ?1",
+        params![path],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+fn insert_task_with_project(conn: &Connection, id: &str, status: &str, project_id: Option<i64>) {
+    conn.execute(
+        "INSERT INTO cp_tasks (id, project_id, title, description, priority, status, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'desc', 50, ?4, datetime('now'), datetime('now'))",
+        params![id, project_id, format!("task {id}"), status],
+    )
+    .unwrap();
+}
+
+#[test]
+fn active_task_project_path_prefers_registered_project_root() {
+    let conn = in_memory();
+    let project_id = insert_registered_project(&conn, "demo", "/workspace/demo");
+    insert_task_with_project(&conn, "t1", "in_progress", Some(project_id));
+
+    let tasks = cp_query_active_tasks(&conn).unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].project_path.as_deref(), Some("/workspace/demo"));
+    assert_eq!(tasks[0].registered_name.as_deref(), Some("demo"));
+}
+
+#[test]
+fn active_task_project_path_falls_back_to_newest_run_contract_workspace() {
+    let conn = in_memory();
+    // No project_id: the directory was never registered, but wrapper/handoff
+    // runs still carry their workspace root on the run contract.
+    insert_task_with_project(&conn, "t1", "in_progress", None);
+    for (contract, root, started) in [
+        ("rc-old", "/workspace/old", "2026-01-01 09:00:00"),
+        ("rc-new", "/workspace/new", "2026-01-01 10:00:00"),
+    ] {
+        conn.execute(
+            "INSERT INTO cp_run_contracts (id, task_id, workspace_root) VALUES (?1, 't1', ?2)",
+            params![contract, root],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cp_agent_runs (id, task_id, provider, agent_name, run_contract_id, status, started_at)
+             VALUES (?1, 't1', 'wrapper', 'claude_kaira', ?2, 'running', ?3)",
+            params![format!("run-{contract}"), contract, started],
+        )
+        .unwrap();
+    }
+
+    let tasks = cp_query_active_tasks(&conn).unwrap();
+    assert_eq!(
+        tasks[0].project_path.as_deref(),
+        Some("/workspace/new"),
+        "the newest run's contract workspace root must win"
+    );
+    assert_eq!(tasks[0].registered_name, None);
+}
+
+#[test]
+fn active_task_project_path_falls_back_to_legacy_list_item_name() {
+    let conn = in_memory();
+    insert_task_with_project(&conn, "t1", "queued", None);
+    conn.execute(
+        "INSERT INTO cp_task_list_items (task_id, source_kind, source_path, display_order, project_name, created_at)
+         VALUES ('t1', 'tui', 'control-plane', 0, '/workspace/legacy', datetime('now'))",
+        [],
+    )
+    .unwrap();
+
+    let tasks = cp_query_active_tasks(&conn).unwrap();
+    assert_eq!(tasks[0].project_path.as_deref(), Some("/workspace/legacy"));
+}
+
+#[test]
+fn blocked_task_project_path_resolves_like_active_tasks() {
+    let conn = in_memory();
+    let project_id = insert_registered_project(&conn, "blocked-demo", "/workspace/blocked");
+    insert_task_with_project(&conn, "t-blocked", "blocked", Some(project_id));
+
+    let tasks = cp_query_blocked_tasks(&conn).unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].project_path.as_deref(), Some("/workspace/blocked"));
+    assert_eq!(tasks[0].registered_name.as_deref(), Some("blocked-demo"));
+}
