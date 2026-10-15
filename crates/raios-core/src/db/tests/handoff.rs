@@ -671,3 +671,179 @@ fn approval_revisions_move_with_every_transition() {
         Some(2)
     );
 }
+
+#[test]
+fn owner_approval_is_not_delivery_and_the_wrapper_still_delivers() {
+    let conn = in_memory();
+    let ids = create_handoff_workflow(
+        &conn,
+        HandoffWorkflowInput {
+            project_path: "/repo",
+            from_agent: "claude_kaira",
+            to_agent: "codex_kaira",
+            status: "BLOCKER",
+            msg: "Queued",
+            diff_stat: None,
+            report: None,
+        },
+    )
+    .unwrap();
+
+    assert!(cp_approve_handoff_by_owner(
+        &conn,
+        &ids.approval_id,
+        "local_control_owner",
+        "local_control_owner"
+    )
+    .unwrap());
+
+    // Consent closes the queue but not the task: the wrapper still takes the handoff and
+    // knows it was owner-approved, so it delivers without asking again.
+    let ctx = cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+        .unwrap()
+        .expect("owner-approved handoff is still deliverable");
+    assert!(ctx.approved_by_owner);
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM cp_tasks WHERE id = ?1",
+            rusqlite::params![ids.task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "awaiting_approval"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
+            rusqlite::params![ids.agent_run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "handover_approved_by_owner"
+    );
+
+    // A stranger cannot mark the delivery, and a resolved approval cannot be approved again.
+    assert!(!cp_mark_handoff_delivered(&conn, &ids.approval_id, "claude_kaira").unwrap());
+    assert!(!cp_approve_handoff_by_owner(
+        &conn,
+        &ids.approval_id,
+        "local_control_owner",
+        "local_control_owner"
+    )
+    .unwrap());
+
+    cp_consume_handoff(&conn, &ctx, "codex_kaira").unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM cp_tasks WHERE id = ?1",
+            rusqlite::params![ids.task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "completed"
+    );
+    // The run's reason stays what it was: the owner's approval ended the wait; delivery is
+    // recorded on the approval, artifact, task and audit — not by re-labelling the run.
+    assert_eq!(
+        conn.query_row(
+            "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
+            rusqlite::params![ids.agent_run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "handover_approved_by_owner"
+    );
+    assert!(
+        cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+            .unwrap()
+            .is_none()
+    );
+    let receipt = cp_handoff_receipt(&conn, &ids.approval_id, "/repo")
+        .unwrap()
+        .expect("receipt");
+    assert!(receipt.delivered_by_target());
+    assert_eq!(receipt.resolved_by.as_deref(), Some("codex_kaira"));
+}
+
+#[test]
+fn a_newer_handoff_supersedes_an_owner_approved_one_that_was_never_delivered() {
+    let conn = in_memory();
+    let queue = |msg: &str| {
+        create_handoff_workflow(
+            &conn,
+            HandoffWorkflowInput {
+                project_path: "/repo",
+                from_agent: "claude_kaira",
+                to_agent: "codex_kaira",
+                status: "BLOCKER",
+                msg,
+                diff_stat: None,
+                report: None,
+            },
+        )
+        .unwrap()
+    };
+    let approved = queue("First");
+    assert!(cp_approve_handoff_by_owner(
+        &conn,
+        &approved.approval_id,
+        "local_control_owner",
+        "local_control_owner"
+    )
+    .unwrap());
+
+    let _newer = queue("Second");
+
+    // The old note must not deliver later: it is expired, its task cancelled, and the
+    // newer handoff is the one waiting for the wrapper.
+    let ctx = cp_take_pending_handoff_for_path(&conn, "/repo", "codex_kaira")
+        .unwrap()
+        .expect("newer handoff is deliverable");
+    assert!(!ctx.approved_by_owner);
+    assert!(!cp_mark_handoff_delivered(&conn, &approved.approval_id, "codex_kaira").unwrap());
+    let receipt = cp_handoff_receipt(&conn, &approved.approval_id, "/repo")
+        .unwrap()
+        .expect("receipt");
+    assert_eq!(receipt.status, "expired");
+    assert!(!receipt.delivered_by_target());
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM cp_tasks WHERE id = ?1",
+            rusqlite::params![approved.task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "cancelled"
+    );
+}
+
+#[test]
+fn a_user_completed_handoff_is_never_superseded() {
+    let conn = in_memory();
+    let queue = |msg: &str| {
+        create_handoff_workflow(
+            &conn,
+            HandoffWorkflowInput {
+                project_path: "/repo",
+                from_agent: "claude_kaira",
+                to_agent: "codex_kaira",
+                status: "BLOCKER",
+                msg,
+                diff_stat: None,
+                report: None,
+            },
+        )
+        .unwrap()
+    };
+    let completed = queue("First");
+    cp_manage_handoff(&conn, &completed.approval_id, false).unwrap();
+
+    let _newer = queue("Second");
+
+    // The user closed this handoff explicitly; a later handoff must not rewrite that.
+    let receipt = cp_handoff_receipt(&conn, &completed.approval_id, "/repo")
+        .unwrap()
+        .expect("receipt");
+    assert_eq!(receipt.status, "approved");
+    assert_eq!(receipt.resolved_by.as_deref(), Some("local_user"));
+}

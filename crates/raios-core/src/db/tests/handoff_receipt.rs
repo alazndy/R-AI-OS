@@ -122,9 +122,7 @@ fn receipt_marks_delivery_only_when_the_target_consumed_it() {
 fn receipt_resolved_by_someone_else_is_not_target_delivery() {
     let conn = in_memory();
     let ids = create_handoff_workflow(&conn, input("/repo-a", "codex_kaira", "ctx")).unwrap();
-    // A human approval (ApproveHandoff) resolves the handoff as the control owner. Consuming it
-    // through the wrapper path requires the receiver itself, so that path cannot be used by
-    // anyone else.
+    // The wrapper path binds to the receiver itself: a foreign principal cannot consume.
     let pending = cp_take_pending_handoff_for_path(&conn, "/repo-a", "codex_kaira")
         .unwrap()
         .expect("pending handoff");
@@ -134,17 +132,27 @@ fn receipt_resolved_by_someone_else_is_not_target_delivery() {
         .expect("receipt");
     assert_eq!(still_pending.status, "pending");
 
-    assert!(cp_resolve_handoff(
+    // The control-plane owner's approval (ApproveHandoff) is consent, never delivery.
+    assert!(cp_approve_handoff_by_owner(
         &conn,
         &ids.approval_id,
         "local_control_owner",
-        "local_control_owner",
-        None
+        "local_control_owner"
     )
     .unwrap());
-    let receipt = cp_handoff_receipt(&conn, &ids.approval_id, "/repo-a")
+    let approved = cp_handoff_receipt(&conn, &ids.approval_id, "/repo-a")
         .unwrap()
         .expect("receipt");
-    assert_eq!(receipt.status, "approved");
-    assert!(!receipt.delivered_by_target());
+    assert_eq!(approved.status, "approved");
+    assert_eq!(approved.resolved_by.as_deref(), Some("local_control_owner"));
+    assert!(!approved.delivered_by_target());
+
+    // Only the addressed agent's own delivery flips the receipt, and it does so even
+    // though the owner already resolved the approval.
+    assert!(cp_mark_handoff_delivered(&conn, &ids.approval_id, "codex_kaira").unwrap());
+    let delivered = cp_handoff_receipt(&conn, &ids.approval_id, "/repo-a")
+        .unwrap()
+        .expect("receipt");
+    assert_eq!(delivered.resolved_by.as_deref(), Some("codex_kaira"));
+    assert!(delivered.delivered_by_target());
 }

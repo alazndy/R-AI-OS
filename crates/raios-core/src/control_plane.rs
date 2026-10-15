@@ -190,4 +190,8 @@ pub struct HandoffContext {
     /// of (or alongside) a bare `--msg`. `None` for legacy free-text handoffs.
     pub report: Option<HandoffReport>,
     pub diff_stat: Option<String>,
+    /// True when the control-plane owner already approved this handoff and only the
+    /// addressed agent's own delivery is still outstanding. The wrapper then delivers
+    /// without asking again; delivery (never the owner's approval) closes the task.
+    pub approved_by_owner: bool,
 }

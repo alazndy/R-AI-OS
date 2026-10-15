@@ -539,45 +539,50 @@ pub fn run_agent_with_session_labels(
     }
 
     if pending_handoff.is_some() {
-        let action = match handoff_action {
-            HandoffAction::Auto if io::stdin().is_terminal() && io::stdout().is_terminal() => {
-                read_handoff_action(&mut io::stdin().lock(), &mut io::stdout().lock())
-                    .map_err(|e| format!("Could not read handoff decision: {e}"))?
+        // The owner may have already consented to this handoff in the control plane; asking
+        // here again would be a second approval of the same decision. Delivery is still this
+        // wrapper's own act, and an explicit action flag still wins over the default.
+        let owner_approved = handoff_action == HandoffAction::Auto
+            && pending_handoff
+                .as_ref()
+                .map(|(_, _, ctx, _)| ctx.approved_by_owner)
+                .unwrap_or(false);
+        let action = if owner_approved {
+            println!("Handoff already approved by the control-plane owner; delivering.");
+            HandoffAction::Accept
+        } else {
+            match handoff_action {
+                HandoffAction::Auto if io::stdin().is_terminal() && io::stdout().is_terminal() => {
+                    read_handoff_action(&mut io::stdin().lock(), &mut io::stdout().lock())
+                        .map_err(|e| format!("Could not read handoff decision: {e}"))?
+                }
+                HandoffAction::Auto => HandoffAction::Accept,
+                action => action,
             }
-            HandoffAction::Auto => HandoffAction::Accept,
-            action => action,
         };
         if matches!(action, HandoffAction::Reject | HandoffAction::Complete) {
-            if let Some((conn, _, ctx, _)) = &mut pending_handoff {
-                let idempotency_key = format!(
-                    "wrapper-handoff-{}-{}",
-                    ctx.approval_id,
-                    if action == HandoffAction::Reject {
-                        "reject"
-                    } else {
-                        "complete"
-                    }
-                );
-                let command = if action == HandoffAction::Reject {
-                    raios_contracts::Command::RejectHandoff {
+            if let Some((conn, identity, ctx, _)) = &mut pending_handoff {
+                if action == HandoffAction::Reject {
+                    let command = raios_contracts::Command::RejectHandoff {
                         approval_id: ctx.approval_id.clone(),
                         expected_revision: None,
                         reason: "Rejected by user in agent wrapper".into(),
-                        idempotency_key,
-                    }
+                        idempotency_key: format!("wrapper-handoff-{}-reject", ctx.approval_id),
+                    };
+                    crate::control_plane::service::dispatch_control_command(
+                        conn,
+                        &crate::control_plane::service::ControlActor::local_session(),
+                        &command,
+                    )
+                    .map_err(|e| format!("Could not resolve handoff: {}", e.message))?;
                 } else {
-                    raios_contracts::Command::ApproveHandoff {
-                        approval_id: ctx.approval_id.clone(),
-                        expected_revision: None,
-                        idempotency_key,
+                    // "Already completed": the addressed agent's own wrapper marks the
+                    // delivery directly — never through the owner's approval. No context is
+                    // injected, and the receipt reads delivered by the target.
+                    if let Err(error) = raios_core::db::cp_consume_handoff(conn, ctx, identity) {
+                        return Err(format!("Could not mark handoff completed: {error}"));
                     }
-                };
-                crate::control_plane::service::dispatch_control_command(
-                    conn,
-                    &crate::control_plane::service::ControlActor::local_session(),
-                    &command,
-                )
-                .map_err(|e| format!("Could not resolve handoff: {}", e.message))?;
+                }
             }
             println!(
                 "Handoff {}. Starting without handoff context.",

@@ -757,12 +757,14 @@ pub(super) fn dispatch_with_seams(
         } => {
             require_expected_revision(&tx, approval_id, *expected_revision)?;
             let run_id = handoff_run_id(&tx, approval_id)?;
-            if !raios_core::db::cp_resolve_handoff(
+            // The owner's consent: the approval resolves as approved and the run leaves the
+            // queue, but the task stays open. Only the addressed agent's own wrapper marks
+            // delivery (`handover_delivered`).
+            if !raios_core::db::cp_approve_handoff_by_owner(
                 &tx,
                 approval_id,
                 actor.subject(),
                 actor.subject(),
-                None,
             )
             .map_err(|e| Problem::internal(e.to_string()))?
             {
@@ -1270,6 +1272,54 @@ mod tests {
             .approvals
             .iter()
             .any(|approval| approval.id == workflow.approval_id));
+
+        // The owner's approval is consent, not delivery: the run leaves the queue, but the
+        // task stays open and the receipt must not read "delivered by the target".
+        assert_eq!(
+            conn.query_row(
+                "SELECT status FROM cp_tasks WHERE id = ?1",
+                params![workflow.task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "awaiting_approval"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
+                params![workflow.agent_run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "handover_approved_by_owner"
+        );
+        let receipt = raios_core::db::cp_handoff_receipt(
+            &conn,
+            &workflow.approval_id,
+            "/tmp/control-plane-flow",
+        )
+        .unwrap()
+        .expect("receipt");
+        assert_eq!(receipt.status, "approved");
+        assert!(!receipt.delivered_by_target());
+        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 2);
+
+        // Only the addressed agent's own delivery closes the task and flips the receipt.
+        assert!(raios_core::db::cp_mark_handoff_delivered(
+            &conn,
+            &workflow.approval_id,
+            "antigravity_kaira"
+        )
+        .unwrap());
+        let delivered = raios_core::db::cp_handoff_receipt(
+            &conn,
+            &workflow.approval_id,
+            "/tmp/control-plane-flow",
+        )
+        .unwrap()
+        .expect("receipt");
+        assert_eq!(delivered.status, "approved");
+        assert!(delivered.delivered_by_target());
         assert_eq!(
             conn.query_row(
                 "SELECT status FROM cp_tasks WHERE id = ?1",
@@ -1279,7 +1329,18 @@ mod tests {
             .unwrap(),
             "completed"
         );
-        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 1);
+        // A run that already ended by owner approval keeps that reason: delivery is recorded
+        // on the approval, artifact and task, never by re-labelling the run.
+        assert_eq!(
+            conn.query_row(
+                "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
+                params![workflow.agent_run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "handover_approved_by_owner"
+        );
+        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 3);
     }
 
     #[test]
