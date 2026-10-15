@@ -104,8 +104,11 @@ pub struct UnifiedTaskDto {
     pub id: String,
     /// Short task title.
     pub title: String,
-    /// Optional project root directory path.
+    /// Absolute project root directory path of the task's project, when known.
     pub project_path: Option<String>,
+    /// Display name of the registered project the task belongs to, when known.
+    #[serde(default)]
+    pub project_name: Option<String>,
     /// Assigned agent or human user identifier.
     pub assignee: Option<String>,
     /// Current task status string.
