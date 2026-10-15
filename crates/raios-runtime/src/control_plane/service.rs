@@ -1294,9 +1294,15 @@ mod tests {
         raios_core::db::migrate_existing(&conn).unwrap();
 
         // 1. A queued handoff publishes the approval request plus the run's
-        // observed creation state.
+        // observed creation state. The dispatcher requires an absolute path;
+        // a POSIX literal like `/workspace/...` is not `Path::is_absolute` on
+        // Windows, so the fixture comes from the platform temp root.
+        let fixture_path = std::env::temp_dir()
+            .join("raios-typed-events-fixture")
+            .to_string_lossy()
+            .into_owned();
         let create = Command::CreateHandoff {
-            project_path: "/workspace/typed-events".into(),
+            project_path: fixture_path,
             from_agent: "claude_kaira".into(),
             to_agent: "codex_kaira".into(),
             summary: "Typed event coverage".into(),
