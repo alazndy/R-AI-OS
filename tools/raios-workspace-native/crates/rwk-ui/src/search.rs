@@ -41,9 +41,10 @@ pub struct SearchView {
     state: SearchState,
     selected: usize,
     ignore_case: bool,
-    /// The query changed since it was last submitted; the first Enter runs it again instead of
-    /// opening the highlighted hit.
-    query_dirty: bool,
+    /// The query of the last submitted search; a different text means Enter runs again instead
+    /// of opening the highlighted hit. Comparing values survives the input's own extra
+    /// `Change` events (it re-emits one on Enter), which a dirty flag would not.
+    last_run: String,
     query: Entity<InputState>,
     theme: Theme,
     _subscription: gpui::Subscription,
@@ -57,7 +58,6 @@ impl SearchView {
         let subscription =
             cx.subscribe(&query, |this, _input, event: &InputEvent, cx| match event {
                 InputEvent::Change => {
-                    this.query_dirty = true;
                     this.selected = 0;
                     cx.notify();
                 }
@@ -69,7 +69,7 @@ impl SearchView {
             state: SearchState::Idle,
             selected: 0,
             ignore_case: false,
-            query_dirty: false,
+            last_run: String::new(),
             query,
             theme: Theme::of(Appearance::default()),
             _subscription: subscription,
@@ -132,7 +132,6 @@ impl SearchView {
     pub fn set_query(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.query
             .update(cx, |input, cx| input.set_value(text, window, cx));
-        self.query_dirty = true;
         self.selected = 0;
         cx.notify();
     }
@@ -146,10 +145,19 @@ impl SearchView {
         }
     }
 
+    /// Flips the case toggle; a query that already ran is sent again with the new flag.
+    pub fn toggle_case(&mut self, cx: &mut Context<Self>) {
+        self.ignore_case = !self.ignore_case;
+        if !matches!(self.state, SearchState::Idle) {
+            self.submit(cx);
+        }
+        cx.notify();
+    }
+
     /// Runs the query currently in the box.
     fn submit(&mut self, cx: &mut Context<Self>) {
         let pattern = self.query.read(cx).value().to_string();
-        self.query_dirty = false;
+        self.last_run = pattern.clone();
         cx.emit(SearchEvent::Run(pattern, self.ignore_case));
     }
 
@@ -160,9 +168,10 @@ impl SearchView {
             "up" => self.selected = self.selected.saturating_sub(1),
             "enter" => {
                 // The first Enter runs the query (the input turns it into a submit); once the
-                // results of that query are on screen, Enter opens the highlighted hit.
+                // results of that exact query are on screen, Enter opens the highlighted hit.
+                let text = self.query.read(cx).value().to_string();
                 let empty = self.result().is_none_or(|result| result.hits.is_empty());
-                if self.query_dirty || empty {
+                if text != self.last_run || empty {
                     return;
                 }
                 self.choose_selected(cx);
@@ -300,13 +309,7 @@ impl Render for SearchView {
                             },
                             self.ignore_case,
                         )
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.ignore_case = !this.ignore_case;
-                            if !matches!(this.state, SearchState::Idle) {
-                                this.submit(cx);
-                            }
-                            cx.notify();
-                        })),
+                        .on_click(cx.listener(|this, _, _window, cx| this.toggle_case(cx))),
                     )
                     .child(
                         button(theme, "search-close", "Kapat (Esc)", false)

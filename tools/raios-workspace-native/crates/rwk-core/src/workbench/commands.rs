@@ -573,6 +573,34 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_shift_f_searches_the_project_from_every_pane() {
+        let mut stroke = stroke("f");
+        stroke.shift = true;
+        assert_eq!(
+            resolve_shortcut(&stroke, EDITOR, false),
+            Some(CommandId::Search)
+        );
+        assert_eq!(
+            resolve_shortcut(&stroke, TERMINAL, false),
+            Some(CommandId::Search)
+        );
+    }
+
+    #[test]
+    fn search_needs_a_project() {
+        let closed = WorkbenchState::default();
+        assert_eq!(
+            available(CommandId::Search, &closed).reason,
+            Some("Önce bir proje klasörü açın")
+        );
+        let open = WorkbenchState {
+            project_open: true,
+            ..WorkbenchState::default()
+        };
+        assert!(available(CommandId::Search, &open).enabled);
+    }
+
+    #[test]
     fn plain_ctrl_keys_reach_the_shell_when_a_terminal_has_focus() {
         for key in ["c", "k", "s", "l", "p", "o", "1"] {
             assert_eq!(

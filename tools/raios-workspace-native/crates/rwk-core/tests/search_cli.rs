@@ -4,15 +4,30 @@
 //! same contract (argv, stdin/stdout/stderr, exit status) so process handling, the time budget
 //! and the parsing are all exercised hermetically. The scripts are POSIX shell programs, so the
 //! suite is gated to unix — like the terminal module it stands in for.
+//!
+//! The tests run one at a time: `Command::spawn` forks, and a fork that lands while another
+//! test's script is between `write` and `exec` makes that exec fail with "Text file busy"
+//! (ETXTBSY). The serial lock keeps a scripted spawn and a script write from overlapping.
 #![cfg(unix)]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::MutexGuard;
 use std::time::Duration;
 
 use rwk_core::error::ErrorCode;
 use rwk_core::search::{locate_with, locate_with_timeout};
+
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Locks the suite and hands out a fresh temp dir for the fake CLI.
+fn scripted() -> (MutexGuard<'static, ()>, tempfile::TempDir) {
+    let serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    (serial, tempfile::tempdir().expect("temp dir"))
+}
 
 fn fake_cli(dir: &Path, body: &str) -> PathBuf {
     let path = dir.join("raios");
@@ -33,7 +48,7 @@ fn recorded_argv(cli: &Path) -> Vec<String> {
 
 #[test]
 fn the_cli_is_called_with_the_documented_arguments() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let (_serial, dir) = scripted();
     let root = dir.path().join("project");
     fs::create_dir(&root).expect("project dir");
     let cli = fake_cli(
@@ -62,7 +77,7 @@ printf '[]'
 
 #[test]
 fn hits_come_back_relative_to_the_root_and_the_limit_truncates() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let (_serial, dir) = scripted();
     let root = dir.path().join("project");
     fs::create_dir(&root).expect("project dir");
     let cli = fake_cli(
@@ -93,7 +108,7 @@ printf '[{"line":1,"path":"%s/src/a.rs","text":"alpha"},{"line":2,"path":"%s/src
 
 #[test]
 fn no_matches_is_an_empty_result() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let (_serial, dir) = scripted();
     let cli = fake_cli(dir.path(), "#!/bin/sh\nprintf '[]'\n");
     let result = locate_with(&cli, dir.path(), "nothing", false, 10).expect("search");
     assert!(result.hits.is_empty());
@@ -102,7 +117,7 @@ fn no_matches_is_an_empty_result() {
 
 #[test]
 fn an_empty_answer_is_an_empty_result() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let (_serial, dir) = scripted();
     let cli = fake_cli(dir.path(), "#!/bin/sh\nprintf '  \\n'\n");
     let result = locate_with(&cli, dir.path(), "nothing", false, 10).expect("search");
     assert!(result.hits.is_empty());
@@ -111,7 +126,7 @@ fn an_empty_answer_is_an_empty_result() {
 
 #[test]
 fn a_failing_cli_reports_its_first_stderr_line() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let (_serial, dir) = scripted();
     let cli = fake_cli(
         dir.path(),
         "#!/bin/sh\nprintf 'locate failed: invalid pattern: boom\\n' >&2\nexit 1\n",
@@ -123,7 +138,7 @@ fn a_failing_cli_reports_its_first_stderr_line() {
 
 #[test]
 fn garbage_output_is_an_internal_error() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let (_serial, dir) = scripted();
     let cli = fake_cli(dir.path(), "#!/bin/sh\nprintf 'not json'\n");
     let error = locate_with(&cli, dir.path(), "boom", false, 10).expect_err("must fail");
     assert_eq!(error.code, ErrorCode::Internal);
@@ -132,8 +147,8 @@ fn garbage_output_is_an_internal_error() {
 
 #[test]
 fn a_hung_cli_is_killed_at_the_time_budget() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    // Prints nothing and never exits; also the variant that prints and then hangs is covered
+    let (_serial, dir) = scripted();
+    // Prints nothing and never exits; the variant that prints and then hangs is covered too,
     // because the reader only hands over the output once the pipe closes.
     let cli = fake_cli(dir.path(), "#!/bin/sh\nsleep 30\n");
     let started = std::time::Instant::now();
@@ -159,7 +174,7 @@ fn a_hung_cli_is_killed_at_the_time_budget() {
 
 #[test]
 fn a_missing_program_is_an_io_error() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let (_serial, dir) = scripted();
     let missing = dir.path().join("no-such-raios");
     let error = locate_with(&missing, dir.path(), "boom", false, 10).expect_err("must fail");
     assert_eq!(error.code, ErrorCode::Io);
