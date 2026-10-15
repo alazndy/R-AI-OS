@@ -13,7 +13,8 @@ use crate::project::{ProjectId, ProjectRoot};
 pub const MAX_SESSIONS: usize = 4;
 
 /// What a session runs. Deserialized from an enum, never from free text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SessionKind {
     /// The user's login shell.
     Shell,
