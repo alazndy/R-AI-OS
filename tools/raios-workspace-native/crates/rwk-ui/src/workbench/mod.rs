@@ -68,6 +68,8 @@ pub enum PendingAction {
         /// 1-based line to put the cursor on.
         line: Option<usize>,
     },
+    /// Close this editor tab (unsaved edits are being asked about).
+    CloseTab(String),
     /// Open this folder as the project (unsaved edits are being asked about).
     OpenProject(PathBuf),
     /// Open this folder as the project; running sessions will be stopped, which needs a
@@ -146,6 +148,9 @@ impl PendingAction {
                     PendingAction::OpenFile { path, .. } => {
                         format!("Açık dosyada kaydedilmemiş değişiklikler var; {path} açılmadan önce ne yapılsın?")
                     }
+                    PendingAction::CloseTab(path) => {
+                        format!("{path} dosyasında kaydedilmemiş değişiklikler var; sekme kapanmadan önce ne yapılsın?")
+                    }
                     PendingAction::OpenProject(_) => {
                         "Açık dosyada kaydedilmemiş değişiklikler var; proje değişmeden önce ne yapılsın? Çalışan terminal oturumları da durdurulacak.".to_owned()
                     }
@@ -208,8 +213,10 @@ pub struct Workbench {
     pending: Option<PendingAction>,
     palette: Option<Entity<PaletteView>>,
     palette_subscription: Option<Subscription>,
-    /// An action to run once the save started by `Decision::Save` has succeeded.
+    /// An action to run once the saves started by `Decision::Save` have all succeeded.
     after_save: Option<PendingAction>,
+    /// The tabs still to save, in strip order (a save answer may cover several dirty files).
+    save_queue: Vec<String>,
     toast: Option<SharedString>,
     toast_task: Option<Task<()>>,
     file_search_task: Option<Task<()>>,
@@ -325,6 +332,7 @@ impl Workbench {
             palette: None,
             palette_subscription: None,
             after_save: None,
+            save_queue: Vec::new(),
             toast: None,
             toast_task: None,
             file_search_task: None,
@@ -510,6 +518,11 @@ impl Workbench {
         match id {
             CommandId::Project => self.pick_project(window, cx),
             CommandId::Save => self.save(cx),
+            CommandId::CloseTab => {
+                if let Some(path) = self.editor.read(cx).path().map(str::to_owned) {
+                    self.request_close_tab(path, window, cx);
+                }
+            }
             CommandId::Diff => {
                 if let Some(project) = self.project.clone() {
                     self.editor
@@ -811,13 +824,15 @@ impl Workbench {
         self.perform(PendingAction::OpenProject(root), window, cx);
     }
 
-    /// Opens a file of the project. Unsaved edits in the open file are asked about first.
+    /// Opens a file of the project. A file that is already open is brought forward instead of
+    /// being read again; nothing the user typed can be lost by opening a new tab.
     pub fn request_open_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         self.request_open_file_at(path, None, window, cx);
     }
 
     /// Opens a file of the project with the cursor on `line` (1-based), as a search hit asks.
-    /// Unsaved edits in the open file are asked about first.
+    /// A clean file that is already open is reloaded to move the cursor; a dirty one is only
+    /// brought forward, never reloaded.
     pub fn request_open_file_at(
         &mut self,
         path: String,
@@ -825,30 +840,39 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(project) = self.project.clone() else {
+        if self.project.is_none() {
             return;
+        }
+        let (already_open, clean) = {
+            let editor = self.editor.read(cx);
+            (
+                editor.contains(&path),
+                !editor.dirty_paths().contains(&path),
+            )
         };
-        let editor = self.editor.read(cx);
-        let decision = editor.request_open(&project.info().id, &path);
-        // The session treats reopening the open file as free, but doing it would reload the
-        // file from disk: harmless when clean (nothing to do), a loss when dirty (ask). A hit
-        // with a line is not a no-op though: the clean file is reopened to move the cursor.
-        let same_file = editor.path() == Some(path.as_str());
-        if same_file && decision == SwitchDecision::Allowed {
-            if editor.is_dirty() {
-                self.pending = Some(PendingAction::OpenFile { path, line });
-                cx.notify();
-            } else if line.is_some() {
+        if already_open {
+            if clean && line.is_some() {
+                // A hit with a line: read the file again and put the cursor there.
                 self.perform(PendingAction::OpenFile { path, line }, window, cx);
+            } else {
+                // Already open: bring its tab forward without touching the buffer.
+                self.editor
+                    .update(cx, |editor, cx| editor.activate_tab(&path, window, cx));
             }
             return;
         }
-        if decision == SwitchDecision::NeedsDecision {
-            self.pending = Some(PendingAction::OpenFile { path, line });
+        self.perform(PendingAction::OpenFile { path, line }, window, cx);
+    }
+
+    /// Closes an editor tab; a tab with unsaved edits is asked about first.
+    pub fn request_close_tab(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let dirty = self.editor.read(cx).dirty_paths().contains(&path);
+        if dirty {
+            self.pending = Some(PendingAction::CloseTab(path));
             cx.notify();
             return;
         }
-        self.perform(PendingAction::OpenFile { path, line }, window, cx);
+        self.perform(PendingAction::CloseTab(path), window, cx);
     }
 
     /// Asks whether the window may close. Returns true when it may (sessions are stopped);
@@ -887,13 +911,21 @@ impl Workbench {
                 | PendingAction::ChooseAgent
                 | PendingAction::Consent(..),
             ) => {}
-            (Decision::Save, _) => {
+            (Decision::Save, PendingAction::CloseTab(path)) => {
+                self.save_queue = vec![path.clone()];
                 self.after_save = Some(action);
-                self.save(cx);
+                self.save_next(window, cx);
+            }
+            (Decision::Save, _) => {
+                self.save_queue = self.editor.read(cx).dirty_paths();
+                self.after_save = Some(action);
+                self.save_next(window, cx);
+            }
+            (Decision::Discard, PendingAction::CloseTab(path)) => {
+                self.editor
+                    .update(cx, |editor, cx| editor.close_tab(path, window, cx));
             }
             (Decision::Discard, _) => {
-                self.editor
-                    .update(cx, |editor, cx| editor.discard(window, cx));
                 self.perform(action, window, cx);
             }
             (
@@ -917,18 +949,53 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         match event {
-            EditorEvent::Saved(_) => {
-                if let Some(action) = self.after_save.take() {
-                    self.perform(action, window, cx);
-                }
+            EditorEvent::Saved(saved) => {
+                self.save_queue.retain(|path| path != &saved.path);
+                self.save_next(window, cx);
             }
             EditorEvent::Conflict | EditorEvent::SaveFailed(_) => {
                 // The edits are still there: the pending action must not proceed.
-                if self.after_save.take().is_some() {
+                if !self.save_queue.is_empty() || self.after_save.is_some() {
+                    self.save_queue.clear();
+                    self.after_save = None;
                     self.say("Kaydedilemedi; işlem iptal edildi", cx);
                 }
             }
-            EditorEvent::Edited | EditorEvent::Opened(_) => {}
+            EditorEvent::CloseRequested(path) => {
+                self.request_close_tab(path.clone(), window, cx);
+            }
+            EditorEvent::Edited
+            | EditorEvent::Opened(_)
+            | EditorEvent::Closed(_)
+            | EditorEvent::Activated(_) => {}
+        }
+    }
+
+    /// Saves the next queued tab; when none is left the action that waited for the saves runs.
+    /// Tabs that were closed or are no longer dirty are skipped, so the queue always drains.
+    fn save_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            self.save_queue.clear();
+            self.after_save = None;
+            return;
+        };
+        loop {
+            let Some(path) = self.save_queue.first().cloned() else {
+                if let Some(action) = self.after_save.take() {
+                    self.perform(action, window, cx);
+                }
+                return;
+            };
+            let saveable = {
+                let editor = self.editor.read(cx);
+                editor.contains(&path) && editor.dirty_paths().contains(&path)
+            };
+            if saveable {
+                self.editor
+                    .update(cx, |editor, cx| editor.save_path(&path, project, cx));
+                return;
+            }
+            self.save_queue.remove(0);
         }
     }
 
@@ -941,6 +1008,10 @@ impl Workbench {
                     });
                 }
             }
+            PendingAction::CloseTab(path) => {
+                self.editor
+                    .update(cx, |editor, cx| editor.close_tab(&path, window, cx));
+            }
             PendingAction::OpenProjectStoppingSessions(root) => {
                 self.perform(PendingAction::OpenProject(root), window, cx);
             }
@@ -950,7 +1021,7 @@ impl Workbench {
                     self.close_search(window, cx);
                     self.stop_terminals(false);
                     self.editor
-                        .update(cx, |editor, cx| editor.discard(window, cx));
+                        .update(cx, |editor, cx| editor.clear(window, cx));
                     let project = Arc::new(project);
                     self.files
                         .update(cx, |files, cx| files.set_project(Arc::clone(&project), cx));

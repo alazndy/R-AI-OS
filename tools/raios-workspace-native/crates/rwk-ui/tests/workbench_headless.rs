@@ -110,6 +110,29 @@ impl Rig {
         self.read(|wb, cx| wb.editor().read(cx).text(cx))
     }
 
+    fn editor_paths(&mut self) -> Vec<String> {
+        self.read(|wb, cx| wb.editor().read(cx).paths())
+    }
+
+    fn editor_dirty_paths(&mut self) -> Vec<String> {
+        self.read(|wb, cx| wb.editor().read(cx).dirty_paths())
+    }
+
+    fn activate_tab(&mut self, path: &str) {
+        let path = path.to_owned();
+        self.with(|wb, window, cx| {
+            wb.editor()
+                .clone()
+                .update(cx, |editor, cx| editor.activate_tab(&path, window, cx))
+        });
+        self.cx.run_until_parked();
+    }
+
+    fn close_tab(&mut self, path: &str) {
+        let path = path.to_owned();
+        self.with(|wb, window, cx| wb.request_close_tab(path, window, cx));
+    }
+
     fn type_text(&mut self, text: &str) {
         let text = text.to_owned();
         self.with(|wb, window, cx| {
@@ -234,52 +257,57 @@ fn hiding_the_dock_keeps_the_terminals_alive() {
 }
 
 #[test]
-fn switching_files_with_unsaved_edits_asks_first() {
+fn opening_another_file_keeps_the_unsaved_edits_in_their_tab() {
     let mut rig = rig();
     rig.open_project();
     rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
     rig.open_file("b.txt");
-    assert_eq!(
-        rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile {
-            path: "b.txt".to_owned(),
-            line: None
-        })
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two"));
+    assert!(
+        rig.read(|wb, _| wb.pending().is_none()),
+        "opening a tab loses nothing, so nothing is asked"
     );
-    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
-    // Cancel changes nothing.
-    rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
-    assert!(rig.read(|wb, _| wb.pending().is_none()));
+    assert_eq!(rig.editor_paths(), vec!["a.txt", "b.txt"]);
+    assert_eq!(rig.editor_dirty_paths(), vec!["a.txt"]);
+    // The edits are still there, in their own tab.
+    rig.activate_tab("a.txt");
     assert!(rig.editor_text().contains('!'));
 }
 
 #[test]
-fn saving_then_continuing_writes_the_file_and_opens_the_next_one() {
+fn closing_a_dirty_tab_asks_and_can_save_it() {
     let mut rig = rig();
     rig.open_project();
     rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
-    rig.type_text("!");
     rig.open_file("b.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two"));
+    rig.activate_tab("a.txt");
+    rig.type_text("!");
+    rig.close_tab("a.txt");
+    assert_eq!(
+        rig.read(|wb, _| wb.pending().cloned()),
+        Some(PendingAction::CloseTab("a.txt".to_owned()))
+    );
     rig.with(|wb, window, cx| wb.resolve(Decision::Save, window, cx));
-    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("b.txt")));
+    let closed = rig.settle_until(|rig| rig.editor_paths() == vec!["b.txt".to_owned()]);
+    assert!(closed, "the tab must close after its save succeeded");
     let saved = std::fs::read_to_string(rig.dir.path().join("a.txt")).expect("read");
     assert!(saved.contains('!'), "{saved}");
-    assert_eq!(rig.editor_text(), "two");
 }
 
 #[test]
-fn discarding_drops_the_edits_and_opens_the_next_file() {
+fn discarding_a_dirty_tab_closes_it_and_keeps_the_disk_content() {
     let mut rig = rig();
     rig.open_project();
     rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
-    rig.open_file("b.txt");
+    rig.close_tab("a.txt");
     rig.with(|wb, window, cx| wb.resolve(Decision::Discard, window, cx));
-    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("b.txt")));
+    assert!(rig.settle_until(|rig| rig.editor_paths().is_empty()));
     assert_eq!(
         std::fs::read_to_string(rig.dir.path().join("a.txt")).expect("read"),
         "one",
@@ -288,18 +316,59 @@ fn discarding_drops_the_edits_and_opens_the_next_file() {
 }
 
 #[test]
-fn a_failed_save_cancels_the_pending_switch_and_keeps_the_edits() {
+fn the_close_tab_command_and_its_shortcut_close_the_active_tab() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    rig.run(CommandId::CloseTab);
+    assert!(rig.editor_paths().is_empty(), "the command closes the tab");
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    focus_workbench(&mut rig);
+    rig.cx.simulate_keystrokes("ctrl-w");
+    assert!(rig.editor_paths().is_empty(), "ctrl-w closes the tab");
+}
+
+#[test]
+fn closing_the_window_saves_every_dirty_tab_in_order() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    rig.type_text("!");
+    rig.open_file("b.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two"));
+    rig.type_text("?");
+    assert_eq!(rig.editor_dirty_paths(), vec!["a.txt", "b.txt"]);
+    let allowed = rig.with(|wb, window, cx| wb.request_close(window, cx));
+    assert!(!allowed);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Save, window, cx));
+    let closed = rig.settle_until(|rig| rig.read(|wb, _| wb.close_confirmed()));
+    assert!(closed, "the close must finish after both saves");
+    let a = std::fs::read_to_string(rig.dir.path().join("a.txt")).expect("read");
+    let b = std::fs::read_to_string(rig.dir.path().join("b.txt")).expect("read");
+    assert!(a.contains('!'), "{a}");
+    assert!(b.contains('?'), "{b}");
+}
+
+#[test]
+fn a_conflicting_save_cancels_the_close_and_keeps_the_edits() {
     let mut rig = rig();
     rig.open_project();
     rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
     std::fs::write(rig.dir.path().join("a.txt"), "changed elsewhere").expect("write");
-    rig.open_file("b.txt");
+    let allowed = rig.with(|wb, window, cx| wb.request_close(window, cx));
+    assert!(!allowed);
     rig.with(|wb, window, cx| wb.resolve(Decision::Save, window, cx));
     rig.settle_for(500);
-    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
     assert!(rig.editor_text().contains('!'));
+    assert!(
+        !rig.read(|wb, _| wb.close_confirmed()),
+        "a failed save must not close the window"
+    );
     assert!(rig.read(|wb, _| wb.toast()).is_some());
 }
 
@@ -477,7 +546,7 @@ fn the_unsaved_changes_dialog_offers_save_discard_and_cancel() {
     rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
-    rig.open_file("b.txt");
+    rig.close_tab("a.txt");
     let dialog = rig.read(|wb, _| wb.dialog()).expect("a dialog is waiting");
     let decisions: Vec<Decision> = dialog
         .buttons
@@ -488,7 +557,7 @@ fn the_unsaved_changes_dialog_offers_save_discard_and_cancel() {
         decisions,
         [Decision::Save, Decision::Discard, Decision::Cancel]
     );
-    assert!(dialog.message.contains("b.txt"));
+    assert!(dialog.message.contains("a.txt"));
 }
 
 #[test]
@@ -499,18 +568,18 @@ fn escape_cancels_the_dialog_and_enter_takes_the_default_button() {
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
     focus_workbench(&mut rig);
-    rig.open_file("b.txt");
+    rig.close_tab("a.txt");
     rig.cx.simulate_keystrokes("escape");
     assert!(rig.read(|wb, _| wb.pending().is_none()));
-    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
+    assert_eq!(rig.editor_paths(), vec!["a.txt".to_owned()]);
     assert!(
         rig.editor_text().contains('!'),
         "cancelling must change nothing"
     );
-    // Enter picks the default, which is Save.
-    rig.open_file("b.txt");
+    // Enter picks the default, which is Save: the tab closes and the edits are written.
+    rig.close_tab("a.txt");
     rig.cx.simulate_keystrokes("enter");
-    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("b.txt")));
+    assert!(rig.settle_until(|rig| rig.editor_paths().is_empty()));
     assert!(std::fs::read_to_string(rig.dir.path().join("a.txt"))
         .expect("read")
         .contains('!'));
@@ -524,7 +593,7 @@ fn no_shortcut_runs_while_a_dialog_is_open() {
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     rig.type_text("!");
     focus_workbench(&mut rig);
-    rig.open_file("b.txt");
+    rig.close_tab("a.txt");
     assert!(rig.read(|wb, _| wb.pending().is_some()));
     rig.cx.simulate_keystrokes("ctrl-2");
     assert_eq!(rig.read(|wb, _| wb.layout()), LayoutPreset::Balanced);
@@ -597,7 +666,7 @@ fn switching_projects_with_running_sessions_asks_first() {
 }
 
 #[test]
-fn reopening_the_open_file_with_unsaved_edits_asks_instead_of_overwriting_them() {
+fn reopening_an_open_dirty_file_just_brings_its_tab_forward() {
     let mut rig = rig();
     rig.open_project();
     rig.open_file("a.txt");
@@ -610,18 +679,15 @@ fn reopening_the_open_file_with_unsaved_edits_asks_instead_of_overwriting_them()
         rig.editor_text().contains('!'),
         "the edits were overwritten"
     );
-    assert_eq!(
-        rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile {
-            path: "a.txt".to_owned(),
-            line: None
-        })
-    );
-    // Discard is the way to reload from disk, for example after a conflict.
+    assert!(rig.read(|wb, _| wb.pending().is_none()));
+    // Back to the disk content: close the tab and open it again.
     std::fs::write(rig.dir.path().join("a.txt"), "changed on disk").expect("write");
+    rig.close_tab("a.txt");
     rig.with(|wb, window, cx| wb.resolve(Decision::Discard, window, cx));
+    assert!(rig.settle_until(|rig| rig.editor_paths().is_empty()));
+    rig.open_file("a.txt");
     assert!(rig.settle_until(|rig| rig.editor_text() == "changed on disk"));
-    assert!(!rig.read(|wb, cx| wb.state(cx).dirty));
+    assert!(rig.editor_dirty_paths().is_empty());
 }
 
 #[test]
@@ -682,26 +748,15 @@ fn quick_open_finds_nested_files_and_respects_unsaved_edits() {
     );
     rig.cx
         .update(|_, cx| palette.update(cx, |p, cx| p.confirm(cx)));
-    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
-    assert_eq!(
-        rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile {
-            path: "nested/needle.rs".into(),
-            line: None
-        })
-    );
-    rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
-    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
-    rig.run(CommandId::Files);
-    let palette = rig
-        .read(|wb, _| wb.palette().cloned())
-        .expect("file palette");
-    assert!(rig.settle_until(|rig| rig.read(|_, cx| !palette.read(cx).file_paths().is_empty())));
-    rig.with(|_, window, cx| palette.update(cx, |p, cx| p.set_query("needle", window, cx)));
-    rig.cx
-        .update(|_, cx| palette.update(cx, |p, cx| p.confirm(cx)));
-    rig.with(|wb, window, cx| wb.resolve(Decision::Discard, window, cx));
     assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("nested/needle.rs")));
+    assert!(
+        rig.read(|wb, _| wb.pending().is_none()),
+        "opening a tab loses nothing, so nothing is asked"
+    );
+    assert_eq!(rig.editor_paths(), vec!["a.txt", "nested/needle.rs"]);
+    assert_eq!(rig.editor_dirty_paths(), vec!["a.txt"]);
+    rig.activate_tab("a.txt");
+    assert!(rig.editor_text().contains("edited"));
 }
 
 #[test]

@@ -15,6 +15,8 @@ pub enum CommandId {
     Search,
     /// Save the open file.
     Save,
+    /// Close the active editor tab.
+    CloseTab,
     /// Git diff of the open file.
     Diff,
     /// Switch the diff between unified and side-by-side.
@@ -130,7 +132,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 35] = [
+const COMMANDS: [Command; 36] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -160,6 +162,12 @@ const COMMANDS: [Command; 35] = [
         "Dosyayı kaydet",
         Some("Ctrl S"),
         &[bind("s")],
+    ),
+    cmd(
+        CommandId::CloseTab,
+        "Sekmeyi kapat",
+        Some("Ctrl W"),
+        &[bind("w")],
     ),
     cmd(
         CommandId::Diff,
@@ -473,7 +481,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor => {
+        Diff | DiffSplit | FocusEditor | CloseTab => {
             if state.file_open {
                 allow()
             } else {
@@ -554,7 +562,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 35);
+        assert_eq!(catalog().len(), 36);
     }
 
     #[test]
