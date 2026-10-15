@@ -778,7 +778,8 @@ impl Render for EditorView {
                 .flex()
                 .flex_row()
                 .items_center()
-                .bg(gpui::rgb(theme.panel))
+                .gap_px()
+                .bg(gpui::rgb(theme.bg))
                 .border_b_1()
                 .border_color(gpui::rgb(theme.line))
                 .children(self.tabs.iter().enumerate().map(|(index, tab)| {
@@ -794,15 +795,25 @@ impl Render for EditorView {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap_1()
-                        .px_2()
-                        .py_1()
+                        .gap_2()
+                        .pl_3()
+                        .pr_2()
+                        .py_1p5()
                         .max_w(gpui::px(220.0))
                         .overflow_hidden()
                         .text_xs()
                         .whitespace_nowrap()
+                        .border_t_2()
+                        .border_color(gpui::rgb(if active { theme.accent } else { theme.panel }))
                         .bg(gpui::rgb(if active { theme.editor } else { theme.panel }))
                         .text_color(gpui::rgb(if active { theme.text } else { theme.muted }))
+                        .hover(move |style| {
+                            if active {
+                                style
+                            } else {
+                                style.bg(gpui::rgb(theme.raised))
+                            }
+                        })
                         .child(
                             div()
                                 .id(SharedString::from(format!("tab-{path}")))
@@ -817,7 +828,9 @@ impl Render for EditorView {
                             div()
                                 .id(SharedString::from(format!("tab-close-{path}")))
                                 .px_1()
+                                .rounded_sm()
                                 .cursor_pointer()
+                                .hover(move |style| style.bg(gpui::rgb(theme.raised)))
                                 .child("×")
                                 .on_click(cx.listener(move |_, _, _window, cx| {
                                     cx.emit(EditorEvent::CloseRequested(close.clone()));
@@ -894,8 +907,13 @@ impl EditorView {
         div()
             .flex()
             .flex_row()
+            .items_center()
             .gap_3()
-            .px_2()
+            .px_3()
+            .py_0p5()
+            .border_t_1()
+            .border_color(gpui::rgb(theme.line))
+            .bg(gpui::rgb(theme.panel))
             .text_xs()
             .text_color(gpui::rgb(theme.muted))
             .child(format!("{title}{marker}"))

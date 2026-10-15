@@ -1344,8 +1344,10 @@ impl Render for Workbench {
                     .id(SharedString::from(format!("dialog-{label}")))
                     .px_3()
                     .py_1()
+                    .rounded_sm()
                     .border_1()
                     .border_color(gpui::rgb(theme.accent_ink))
+                    .hover(move |style| style.bg(gpui::rgb(theme.raised)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.resolve(decision, window, cx);
                     }))
@@ -1358,7 +1360,9 @@ impl Render for Workbench {
                 .right_0()
                 .mx_auto()
                 .w(px(520.0))
-                .p_3()
+                .p_4()
+                .rounded_md()
+                .shadow_lg()
                 .bg(gpui::rgb(theme.panel))
                 .border_1()
                 .border_color(gpui::rgb(if theme.lcars {
@@ -1368,7 +1372,7 @@ impl Render for Workbench {
                 }))
                 .text_color(gpui::rgb(theme.text))
                 .child(div().child(dialog.title))
-                .child(div().py_2().child(dialog.message))
+                .child(div().py_3().child(dialog.message))
                 .child(div().flex().flex_row().gap_2().children(buttons))
         });
         div()
@@ -1391,7 +1395,12 @@ impl Render for Workbench {
             .child(div().flex_1().min_h_0().child(main))
             .child(
                 div()
-                    .px_2()
+                    .px_3()
+                    .py_0p5()
+                    .min_h(px(22.0))
+                    .border_t_1()
+                    .border_color(gpui::rgb(theme.line))
+                    .bg(gpui::rgb(theme.panel))
                     .text_xs()
                     .text_color(gpui::rgb(if theme.lcars {
                         theme.accent_ink

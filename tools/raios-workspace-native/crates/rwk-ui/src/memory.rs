@@ -203,8 +203,11 @@ fn button(
 ) -> gpui::Stateful<gpui::Div> {
     let base = div()
         .id(id)
-        .px_2()
+        .px_3()
         .py_0p5()
+        .rounded_sm()
+        .cursor_pointer()
+        .hover(move |style| style.bg(gpui::rgb(theme.raised)))
         .border_1()
         .border_color(gpui::rgb(if active {
             theme.accent_ink
@@ -416,7 +419,9 @@ impl Render for MemoryView {
             .flex()
             .flex_col()
             .gap_2()
-            .p_3()
+            .p_4()
+            .rounded_md()
+            .shadow_lg()
             .bg(gpui::rgb(theme.panel))
             .border_1()
             .border_color(gpui::rgb(theme.line))
