@@ -6,6 +6,7 @@ pub mod host;
 pub mod layout;
 pub mod memory;
 pub mod palette;
+pub mod search;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -59,8 +60,14 @@ impl gpui::EventEmitter<WorkbenchEvent> for Workbench {}
 /// An action that waits for the user's decision about unsaved edits or a running session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingAction {
-    /// Open this file in the editor.
-    OpenFile(String),
+    /// Open this file in the editor; `line` (1-based) is where the cursor should land when a
+    /// search hit asked for it.
+    OpenFile {
+        /// Project-relative path.
+        path: String,
+        /// 1-based line to put the cursor on.
+        line: Option<usize>,
+    },
     /// Open this folder as the project (unsaved edits are being asked about).
     OpenProject(PathBuf),
     /// Open this folder as the project; running sessions will be stopped, which needs a
@@ -136,7 +143,7 @@ impl PendingAction {
             other => Dialog {
                 title: "Kaydedilmemiş değişiklikler",
                 message: match other {
-                    PendingAction::OpenFile(path) => {
+                    PendingAction::OpenFile { path, .. } => {
                         format!("Açık dosyada kaydedilmemiş değişiklikler var; {path} açılmadan önce ne yapılsın?")
                     }
                     PendingAction::OpenProject(_) => {
@@ -170,6 +177,11 @@ pub struct Workbench {
     memory_source: Option<Arc<dyn rwk_core::memory::MemorySource>>,
     memory: Option<Entity<crate::memory::MemoryView>>,
     memory_subscription: Option<Subscription>,
+    search_source: Option<Arc<dyn rwk_core::search::SearchSource>>,
+    search: Option<Entity<crate::search::SearchView>>,
+    search_subscription: Option<Subscription>,
+    /// Bumped on every search and on every close; an answer for an older search is dropped.
+    search_generation: u64,
     consent: Arc<ConsentRegistry>,
     consent_wait: Option<std::sync::mpsc::Receiver<rwk_core::consent::ConsentDecision>>,
     composer: Option<Entity<crate::handoff::HandoffComposer>>,
@@ -269,6 +281,10 @@ impl Workbench {
             memory_source: None,
             memory: None,
             memory_subscription: None,
+            search_source: None,
+            search: None,
+            search_subscription: None,
+            search_generation: 0,
             consent: Arc::new(ConsentRegistry::new()),
             consent_wait: None,
             composer: None,
@@ -535,6 +551,7 @@ impl Workbench {
             CommandId::AgentsLayout => self.apply_layout(LayoutPreset::Agents, window, cx),
             CommandId::Commands | CommandId::Shortcuts => self.toggle_palette(window, cx),
             CommandId::Files => self.open_file_palette(window, cx),
+            CommandId::Search => self.open_search(window, cx),
             CommandId::Agent => self.open_agent_chooser(cx),
             CommandId::Handoff => self.open_composer(window, cx),
             CommandId::RegisterProject => self.register_project(window, cx),
@@ -709,6 +726,9 @@ impl Workbench {
         if let Some(memory) = &self.memory {
             memory.update(cx, |memory, cx| memory.set_theme(theme, cx));
         }
+        if let Some(search) = &self.search {
+            search.update(cx, |search, cx| search.set_theme(theme, cx));
+        }
         cx.notify();
     }
 
@@ -773,27 +793,42 @@ impl Workbench {
 
     /// Opens a file of the project. Unsaved edits in the open file are asked about first.
     pub fn request_open_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.request_open_file_at(path, None, window, cx);
+    }
+
+    /// Opens a file of the project with the cursor on `line` (1-based), as a search hit asks.
+    /// Unsaved edits in the open file are asked about first.
+    pub fn request_open_file_at(
+        &mut self,
+        path: String,
+        line: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(project) = self.project.clone() else {
             return;
         };
         let editor = self.editor.read(cx);
         let decision = editor.request_open(&project.info().id, &path);
         // The session treats reopening the open file as free, but doing it would reload the
-        // file from disk: harmless when clean (nothing to do), a loss when dirty (ask).
+        // file from disk: harmless when clean (nothing to do), a loss when dirty (ask). A hit
+        // with a line is not a no-op though: the clean file is reopened to move the cursor.
         let same_file = editor.path() == Some(path.as_str());
         if same_file && decision == SwitchDecision::Allowed {
             if editor.is_dirty() {
-                self.pending = Some(PendingAction::OpenFile(path));
+                self.pending = Some(PendingAction::OpenFile { path, line });
                 cx.notify();
+            } else if line.is_some() {
+                self.perform(PendingAction::OpenFile { path, line }, window, cx);
             }
             return;
         }
         if decision == SwitchDecision::NeedsDecision {
-            self.pending = Some(PendingAction::OpenFile(path));
+            self.pending = Some(PendingAction::OpenFile { path, line });
             cx.notify();
             return;
         }
-        self.perform(PendingAction::OpenFile(path), window, cx);
+        self.perform(PendingAction::OpenFile { path, line }, window, cx);
     }
 
     /// Asks whether the window may close. Returns true when it may (sessions are stopped);
@@ -879,10 +914,11 @@ impl Workbench {
 
     fn perform(&mut self, action: PendingAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
-            PendingAction::OpenFile(path) => {
+            PendingAction::OpenFile { path, line } => {
                 if let Some(project) = self.project.clone() {
-                    self.editor
-                        .update(cx, |editor, cx| editor.open_path(project, path, window, cx));
+                    self.editor.update(cx, |editor, cx| {
+                        editor.open_path_at(project, path, line, window, cx)
+                    });
                 }
             }
             PendingAction::OpenProjectStoppingSessions(root) => {
@@ -891,6 +927,7 @@ impl Workbench {
             PendingAction::OpenProject(root) => match ProjectRoot::open(root) {
                 Ok(project) => {
                     self.close_palette(window, cx);
+                    self.close_search(window, cx);
                     self.stop_terminals(false);
                     self.editor
                         .update(cx, |editor, cx| editor.discard(window, cx));
@@ -1198,6 +1235,7 @@ impl Render for Workbench {
             .children(self.palette.clone())
             .children(self.composer.clone())
             .children(self.memory.clone())
+            .children(self.search.clone())
             .children(dialog)
     }
 }

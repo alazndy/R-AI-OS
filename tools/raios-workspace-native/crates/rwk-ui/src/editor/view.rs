@@ -7,7 +7,7 @@ use gpui::{
     div, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render,
     SharedString, Styled, Subscription, Window,
 };
-use gpui_base::input::{Editor, EditorState, InputEvent, InputHighlighter};
+use gpui_base::input::{Editor, EditorState, InputEvent, InputHighlighter, Position};
 use rwk_core::documents::Document;
 use rwk_core::error::{AppError, ErrorCode};
 use rwk_core::project::{ProjectId, ProjectRoot};
@@ -67,6 +67,8 @@ pub struct EditorView {
     highlighting: bool,
     /// Bumped by every open request; a read that finishes for an older request is dropped.
     open_generation: u64,
+    /// The 1-based line the next successful open puts the cursor on (a search hit's line).
+    pending_line: Option<usize>,
     diff_generation: u64,
     _subscription: Subscription,
 }
@@ -108,6 +110,7 @@ impl EditorView {
             status: None,
             highlighting: true,
             open_generation: 0,
+            pending_line: None,
             diff_generation: 0,
             _subscription: subscription,
         }
@@ -116,6 +119,13 @@ impl EditorView {
     /// The text in the editor.
     pub fn text(&self, cx: &gpui::App) -> String {
         self.state.read(cx).value().to_string()
+    }
+
+    /// The 1-based line of the cursor, when a document is open.
+    pub fn cursor_line(&self, cx: &gpui::App) -> Option<usize> {
+        self.path()?;
+        let position = self.state.read(cx).cursor_position();
+        Some(usize::try_from(position.line).unwrap_or(usize::MAX) + 1)
     }
 
     /// Path of the open file, relative to its project.
@@ -211,6 +221,7 @@ impl EditorView {
         let enabled = highlight_enabled(document.content.len());
         let language = language_for_path(&document.path);
         let content = document.content.clone();
+        let pending_line = self.pending_line.take();
         self.state.update(cx, |state, cx| {
             state.set_highlighter_factory(highlighter_factory(), cx);
             // An unknown language name has no grammar, so the factory answers `None`.
@@ -220,6 +231,11 @@ impl EditorView {
             };
             state.set_highlighter(name, cx);
             state.set_value(content.as_str(), window, cx);
+            if let Some(line) = pending_line {
+                // A search hit's line is 1-based; an editor position is 0-based.
+                let line = u32::try_from(line.saturating_sub(1)).unwrap_or(u32::MAX);
+                state.set_cursor_position(Position::new(line, 0), window, cx);
+            }
         });
         self.highlighting = enabled;
         self.status = (!enabled).then(|| {
@@ -248,6 +264,18 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_path_at(project, path, None, window, cx);
+    }
+
+    /// Like [`Self::open_path`], with the cursor left on `line` (1-based) once it is loaded.
+    pub fn open_path_at(
+        &mut self,
+        project: Arc<ProjectRoot>,
+        path: String,
+        line: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Fail-safe: callers are expected to have asked the user, but unsaved edits are never
         // replaced without a decision, whoever calls and whichever file is meant (reloading the
         // open file would overwrite them as well). Discarding first makes the file clean.
@@ -258,6 +286,7 @@ impl EditorView {
             );
             return;
         }
+        self.pending_line = line;
         self.open_generation += 1;
         let generation = self.open_generation;
         cx.spawn_in(window, async move |this, cx| {
@@ -272,7 +301,10 @@ impl EditorView {
                 }
                 match result {
                     Ok(document) => view.open(document, window, cx),
-                    Err(error) => view.set_status(error.message, cx),
+                    Err(error) => {
+                        view.pending_line = None;
+                        view.set_status(error.message, cx);
+                    }
                 }
             })
             .ok();

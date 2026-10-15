@@ -23,6 +23,7 @@ pub mod inspector;
 pub mod memory;
 pub mod memory_model;
 pub mod project;
+pub mod search;
 pub mod sessions;
 pub mod terminal;
 pub mod workbench;

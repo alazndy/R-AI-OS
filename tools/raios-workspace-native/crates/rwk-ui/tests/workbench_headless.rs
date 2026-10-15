@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{Entity, TestAppContext, TestDispatcher, VisualTestContext};
 use gpui_wgpu::CosmicTextSystem;
+use rwk_core::search::{SearchHit, SearchResult, SearchSource};
 use rwk_core::terminal::ProgramPaths;
 use rwk_core::workbench::Tone;
 use rwk_core::workbench::{Appearance, CommandId};
@@ -122,6 +123,51 @@ impl Rig {
     fn run(&mut self, id: CommandId) {
         self.with(|wb, window, cx| wb.run(id, window, cx));
     }
+
+    /// Connects a scripted search source; every `locate` call takes the next queued answer.
+    fn script_search(
+        &mut self,
+        answers: Vec<(Duration, Vec<SearchHit>)>,
+    ) -> Arc<Mutex<Vec<(String, bool)>>> {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source = FakeSearch {
+            answers: Mutex::new(answers.into()),
+            calls: Arc::clone(&calls),
+        };
+        self.with(|wb, _window, _cx| wb.set_search_source(Some(Arc::new(source))));
+        calls
+    }
+
+    /// Types `text` into the open search view, as a person would.
+    fn search_query(&mut self, text: &str) {
+        let text = text.to_owned();
+        self.with(|wb, window, cx| {
+            let view = wb.search().expect("the search view is open").clone();
+            view.update(cx, |view, cx| view.set_query(&text, window, cx));
+        });
+        self.cx.run_until_parked();
+    }
+
+    fn search_open(&mut self) -> bool {
+        self.read(|wb, _| wb.search().is_some())
+    }
+
+    /// The hits on screen as `path:line`, empty while nothing has answered.
+    fn search_hits(&mut self) -> Vec<String> {
+        self.read(|wb, cx| {
+            wb.search()
+                .and_then(|view| {
+                    view.read(cx).result().map(|result| {
+                        result
+                            .hits
+                            .iter()
+                            .map(|hit| format!("{}:{}", hit.path, hit.line))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default()
+        })
+    }
 }
 
 #[test]
@@ -197,7 +243,10 @@ fn switching_files_with_unsaved_edits_asks_first() {
     rig.open_file("b.txt");
     assert_eq!(
         rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile("b.txt".to_owned()))
+        Some(PendingAction::OpenFile {
+            path: "b.txt".to_owned(),
+            line: None
+        })
     );
     assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
     // Cancel changes nothing.
@@ -563,7 +612,10 @@ fn reopening_the_open_file_with_unsaved_edits_asks_instead_of_overwriting_them()
     );
     assert_eq!(
         rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile("a.txt".to_owned()))
+        Some(PendingAction::OpenFile {
+            path: "a.txt".to_owned(),
+            line: None
+        })
     );
     // Discard is the way to reload from disk, for example after a conflict.
     std::fs::write(rig.dir.path().join("a.txt"), "changed on disk").expect("write");
@@ -633,7 +685,10 @@ fn quick_open_finds_nested_files_and_respects_unsaved_edits() {
     assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
     assert_eq!(
         rig.read(|wb, _| wb.pending().cloned()),
-        Some(PendingAction::OpenFile("nested/needle.rs".into()))
+        Some(PendingAction::OpenFile {
+            path: "nested/needle.rs".into(),
+            line: None
+        })
     );
     rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
     assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
@@ -1393,4 +1448,135 @@ fn a_typed_stream_event_refreshes_the_inspector_before_the_next_poll() {
         refreshed,
         "a typed stream event must refresh the inspector before the next poll"
     );
+}
+
+/// A scripted search source: queued answers with their delays, and a log of the calls.
+struct FakeSearch {
+    answers: Mutex<std::collections::VecDeque<(Duration, Vec<SearchHit>)>>,
+    calls: Arc<Mutex<Vec<(String, bool)>>>,
+}
+
+impl SearchSource for FakeSearch {
+    fn locate(
+        &self,
+        _root: &std::path::Path,
+        pattern: &str,
+        ignore_case: bool,
+    ) -> rwk_core::error::Result<SearchResult> {
+        self.calls
+            .lock()
+            .expect("calls")
+            .push((pattern.to_owned(), ignore_case));
+        let (delay, hits) = self
+            .answers
+            .lock()
+            .expect("answers")
+            .pop_front()
+            .unwrap_or((Duration::ZERO, Vec::new()));
+        std::thread::sleep(delay);
+        Ok(SearchResult {
+            hits,
+            truncated: false,
+        })
+    }
+}
+
+fn hits(entries: &[(&str, usize, &str)]) -> Vec<SearchHit> {
+    entries
+        .iter()
+        .map(|(path, line, text)| SearchHit {
+            path: (*path).to_owned(),
+            line: *line,
+            text: (*text).to_owned(),
+        })
+        .collect()
+}
+
+#[test]
+fn a_search_runs_on_enter_and_a_hit_opens_the_file_at_its_line() {
+    let mut rig = rig();
+    rig.open_project();
+    std::fs::write(rig.dir.path().join("c.txt"), "alpha\nbeta\ngamma").expect("c");
+    let calls = rig.script_search(vec![(Duration::ZERO, hits(&[("c.txt", 2, "beta")]))]);
+    rig.run(CommandId::Search);
+    assert!(rig.search_open());
+    rig.search_query("beta");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.search_hits().as_slice() == ["c.txt:2"]));
+    assert_eq!(
+        calls.lock().expect("calls").as_slice(),
+        [("beta".to_owned(), false)]
+    );
+    // The first Enter ran the query; a second one opens the highlighted hit.
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("c.txt")));
+    assert!(!rig.search_open(), "opening a hit closes the overlay");
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(2)
+    );
+}
+
+#[test]
+fn escape_closes_the_search_overlay() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::Search);
+    assert!(rig.search_open());
+    rig.cx.simulate_keystrokes("escape");
+    assert!(!rig.search_open());
+}
+
+#[test]
+fn the_case_toggle_runs_the_query_again_with_ignore_case() {
+    let mut rig = rig();
+    rig.open_project();
+    let calls = rig.script_search(vec![
+        (Duration::ZERO, hits(&[("a.txt", 1, "one")])),
+        (Duration::ZERO, hits(&[("a.txt", 1, "ONE")])),
+    ]);
+    rig.run(CommandId::Search);
+    rig.search_query("one");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| !rig.search_hits().is_empty()));
+    rig.with(|wb, _window, cx| {
+        let view = wb.search().expect("the search view is open").clone();
+        view.update(cx, |view, cx| view.toggle_case(cx));
+    });
+    assert!(rig.settle_until(|_rig| calls.lock().expect("calls").len() == 2));
+    assert_eq!(
+        calls.lock().expect("calls").as_slice(),
+        [("one".to_owned(), false), ("one".to_owned(), true)]
+    );
+}
+
+#[test]
+fn an_answer_for_a_superseded_search_is_dropped() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.script_search(vec![
+        (Duration::from_millis(400), hits(&[("a.txt", 1, "slow")])),
+        (Duration::ZERO, hits(&[("b.txt", 1, "fast")])),
+    ]);
+    rig.run(CommandId::Search);
+    rig.search_query("slow");
+    rig.cx.simulate_keystrokes("enter");
+    rig.search_query("fast");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.search_hits().as_slice() == ["b.txt:1"]));
+    // The slow answer arrives after the fast one and must not replace it.
+    rig.settle_for(500);
+    assert_eq!(rig.search_hits().as_slice(), ["b.txt:1"]);
+}
+
+#[test]
+fn switching_projects_closes_the_search_overlay() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::Search);
+    assert!(rig.search_open());
+    let root = rig.dir.path().join("nested");
+    std::fs::create_dir(&root).expect("nested dir");
+    rig.with(|wb, window, cx| wb.open_project(root, window, cx));
+    assert!(!rig.search_open());
 }
