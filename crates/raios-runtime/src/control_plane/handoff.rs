@@ -333,6 +333,7 @@ mod tests {
             &mut conn,
             &Command::ApproveHandoff {
                 approval_id: approval_id.clone(),
+                expected_revision: None,
                 idempotency_key: "r-2-approve".into(),
             },
         )

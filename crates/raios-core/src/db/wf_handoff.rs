@@ -228,24 +228,24 @@ pub fn create_handoff_workflow_in_tx(
         if let Some(incoming) =
             select_pending_handoff(tx, project_id, Some(project_path), from_agent)?
         {
-            if cp_resolve_handoff(
-                tx,
-                &incoming.approval_id,
-                "local_control_owner",
-                from_agent,
-                None,
-            )? {
-                audit_handoff_delivery(tx, &incoming.approval_id, from_agent)?;
-            }
+            cp_mark_handoff_delivered(tx, &incoming.approval_id, from_agent)?;
         }
     }
 
     // One active handoff per (project, assignee): supersede whatever this one replaces
-    // instead of letting stale pending handovers pile up for the same agent.
+    // instead of letting stale pending handovers pile up for the same agent. An
+    // owner-approved handoff that no wrapper delivered yet is replaced the same way —
+    // the new note carries the work forward, and the old one must not deliver later.
+    // A handoff the local user already closed (completed/removed) is never superseded.
     tx.execute(
         "UPDATE cp_approvals
-         SET status = 'expired', resolved_at = ?1, resolved_by = 'superseded'
-         WHERE approval_type = 'handover' AND status = 'pending'
+         SET status = 'expired', resolved_at = ?1, resolved_by = 'superseded',
+             revision = revision + 1
+         WHERE approval_type = 'handover'
+           AND (status = 'pending'
+                OR (status = 'approved' AND resolved_by = owner_subject))
+           AND resolved_by IS NOT (SELECT assignee_id FROM cp_tasks
+                                   WHERE id = cp_approvals.task_id)
            AND task_id IN (
                SELECT id FROM cp_tasks
                WHERE assignee_id = ?2 AND (project_id = ?3 OR (?3 IS NULL AND id IN (
@@ -338,8 +338,9 @@ pub fn create_handoff_workflow_in_tx(
     })
 }
 
-/// Most recent pending handover addressed to `to_agent` (optionally scoped to a project).
-/// Returns `None` when no handover is waiting, so callers can spawn normally.
+/// Most recent deliverable handover addressed to `to_agent` (optionally scoped to a project):
+/// pending, or already approved by the owner and still awaiting the addressed agent's own
+/// delivery. Returns `None` when no handover is waiting, so callers can spawn normally.
 pub fn cp_take_pending_handoff(
     conn: &Connection,
     project_id: Option<i64>,
@@ -370,15 +371,17 @@ fn select_pending_handoff(
 ) -> Result<Option<raios_core::control_plane::HandoffContext>> {
     let row = conn
         .query_row(
-            "SELECT ap.id, ap.artifact_id, ap.agent_run_id, ap.task_id, art.metadata_json
+            "SELECT ap.id, ap.artifact_id, ap.agent_run_id, ap.task_id, art.metadata_json, ap.status
              FROM cp_approvals ap
              JOIN cp_tasks t ON t.id = ap.task_id
              JOIN cp_artifacts art ON art.id = ap.artifact_id
              JOIN cp_agent_runs run ON run.id = ap.agent_run_id
              JOIN cp_run_contracts contract ON contract.id = run.run_contract_id
-             WHERE ap.approval_type = 'handover' AND ap.status = 'pending'
-               AND t.status = 'awaiting_approval' AND run.status = 'awaiting_approval'
-               AND run.provider = 'handoff' AND art.kind = 'handover_note'
+             WHERE ap.approval_type = 'handover' AND ap.status IN ('pending', 'approved')
+               AND t.status = 'awaiting_approval' AND run.provider = 'handoff'
+               AND (run.status = 'awaiting_approval'
+                    OR (run.status = 'succeeded' AND run.exit_reason = 'handover_approved_by_owner'))
+               AND art.kind = 'handover_note'
                AND art.status = 'submitted'
                AND t.assignee_id = ?1
                AND ((?2 IS NULL AND ?3 IS NULL) OR t.project_id = ?2
@@ -393,12 +396,15 @@ fn select_pending_handoff(
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
         .optional()?;
 
-    let Some((approval_id, artifact_id, agent_run_id, task_id, metadata_json)) = row else {
+    let Some((approval_id, artifact_id, agent_run_id, task_id, metadata_json, approval_status)) =
+        row
+    else {
         return Ok(None);
     };
     let metadata: serde_json::Value =
@@ -426,11 +432,31 @@ fn select_pending_handoff(
         context_summary,
         report,
         diff_stat,
+        approved_by_owner: approval_status == "approved",
     }))
+}
+
+/// Current optimistic-concurrency revision of an approval, or `None` when no such row exists.
+///
+/// Every transition of an approval bumps this value, so a surface can send back what it saw
+/// (`expected_revision` on the handoff commands) and be refused with `CONFLICT` instead of
+/// acting on state that changed since it was read.
+pub fn cp_approval_revision(conn: &Connection, approval_id: &str) -> Result<Option<i64>> {
+    conn.query_row(
+        "SELECT revision FROM cp_approvals WHERE id = ?1",
+        params![approval_id],
+        |row| row.get(0),
+    )
+    .optional()
 }
 
 /// Resolve every linked delivery record inside the caller's transaction.
 /// Returns false for a stale or foreign-owned approval, without reviving it.
+///
+/// The approve branch is the *local user's explicit completion* (see [`cp_manage_handoff`]).
+/// The control-plane owner's consent goes through [`cp_approve_handoff_by_owner`], and the
+/// addressed agent's own delivery through [`cp_mark_handoff_delivered`] — an owner approval
+/// must never read as delivery.
 pub fn cp_resolve_handoff(
     tx: &Connection,
     approval_id: &str,
@@ -478,7 +504,8 @@ pub fn cp_resolve_handoff(
         };
     tx.execute(
         "UPDATE cp_approvals SET status = ?1, resolved_at = ?2, resolved_by = ?3,
-         reason = CASE WHEN ?4 IS NULL THEN reason ELSE reason || char(10) || 'Rejected: ' || ?4 END
+         reason = CASE WHEN ?4 IS NULL THEN reason ELSE reason || char(10) || 'Rejected: ' || ?4 END,
+         revision = revision + 1
          WHERE id = ?5",
         params![
             approval_status,
@@ -503,6 +530,128 @@ pub fn cp_resolve_handoff(
     Ok(true)
 }
 
+/// The control-plane owner's consent for a pending handoff: the approval resolves as
+/// `approved` (by its owner), the run leaves the approval queue as
+/// `handover_approved_by_owner`, and the task stays open. This is deliberately *not*
+/// delivery: only the addressed agent's own wrapper may mark that
+/// (see [`cp_mark_handoff_delivered`]). Returns false for a stale or foreign-owned
+/// approval, without reviving it.
+pub fn cp_approve_handoff_by_owner(
+    tx: &Connection,
+    approval_id: &str,
+    owner_subject: &str,
+    resolved_by: &str,
+) -> Result<bool> {
+    let linked: Option<(String, String)> = tx
+        .query_row(
+            "SELECT ap.task_id, ap.agent_run_id
+             FROM cp_approvals ap
+             JOIN cp_tasks t ON t.id = ap.task_id
+             JOIN cp_agent_runs r ON r.id = ap.agent_run_id AND r.task_id = t.id
+             JOIN cp_artifacts a ON a.id = ap.artifact_id AND a.task_id = t.id
+                                  AND a.agent_run_id = r.id
+             WHERE ap.id = ?1 AND ap.owner_subject = ?2
+               AND ap.approval_type = 'handover' AND ap.status = 'pending'
+               AND t.status = 'awaiting_approval' AND r.status = 'awaiting_approval'
+               AND r.provider = 'handoff' AND a.kind = 'handover_note' AND a.status = 'submitted'",
+            params![approval_id, owner_subject],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((_task_id, run_id)) = linked else {
+        return Ok(false);
+    };
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    tx.execute(
+        "UPDATE cp_approvals
+         SET status = 'approved', resolved_at = ?1, resolved_by = ?2, revision = revision + 1
+         WHERE id = ?3",
+        params![now, resolved_by, approval_id],
+    )?;
+    tx.execute(
+        "UPDATE cp_agent_runs
+         SET status = 'succeeded', ended_at = ?1, exit_reason = 'handover_approved_by_owner'
+         WHERE id = ?2",
+        params![now, run_id],
+    )?;
+    audit_handoff_approval(tx, approval_id, resolved_by)?;
+    Ok(true)
+}
+
+/// The addressed agent's own delivery of a handoff, bound to that agent: the approval
+/// resolves as `approved` by the deliverer, the artifact is applied, the task completes
+/// and a still-waiting run ends as `handover_delivered`. An approval the owner already
+/// approved resolves here too — the run keeps `handover_approved_by_owner` as the reason
+/// it left the queue, while `resolved_by` names the delivery, so the receipt's
+/// `delivered_by_target` turns true only now. The delivery's audit record is committed
+/// with the same transaction. Returns false for a stale or foreign-owned approval, without
+/// reviving it.
+pub fn cp_mark_handoff_delivered(
+    tx: &Connection,
+    approval_id: &str,
+    resolved_by: &str,
+) -> Result<bool> {
+    let linked: Option<(String, String, String, String)> = tx
+        .query_row(
+            "SELECT ap.task_id, ap.agent_run_id, ap.artifact_id, r.status
+             FROM cp_approvals ap
+             JOIN cp_tasks t ON t.id = ap.task_id
+             JOIN cp_agent_runs r ON r.id = ap.agent_run_id AND r.task_id = t.id
+             JOIN cp_artifacts a ON a.id = ap.artifact_id AND a.task_id = t.id
+                                  AND a.agent_run_id = r.id
+             WHERE ap.id = ?1
+               AND ap.approval_type = 'handover' AND ap.status IN ('pending', 'approved')
+               AND t.status = 'awaiting_approval' AND t.assignee_id = ?2
+               AND r.provider = 'handoff'
+               AND (r.status = 'awaiting_approval'
+                    OR (r.status = 'succeeded' AND r.exit_reason = 'handover_approved_by_owner'))
+               AND a.kind = 'handover_note' AND a.status = 'submitted'",
+            params![approval_id, resolved_by],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let Some((task_id, run_id, artifact_id, run_status)) = linked else {
+        return Ok(false);
+    };
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    tx.execute(
+        "UPDATE cp_approvals
+         SET status = 'approved', resolved_at = ?1, resolved_by = ?2, revision = revision + 1
+         WHERE id = ?3",
+        params![now, resolved_by, approval_id],
+    )?;
+    tx.execute(
+        "UPDATE cp_artifacts SET status = 'applied' WHERE id = ?1",
+        params![artifact_id],
+    )?;
+    tx.execute(
+        "UPDATE cp_tasks SET status = 'completed', updated_at = ?1 WHERE id = ?2",
+        params![now, task_id],
+    )?;
+    if run_status == "awaiting_approval" {
+        // Only a run that was still waiting ends *by* this delivery; an owner-approved
+        // run already ended, and its exit reason records that fact permanently.
+        tx.execute(
+            "UPDATE cp_agent_runs
+             SET status = 'succeeded', ended_at = ?1, exit_reason = 'handover_delivered'
+             WHERE id = ?2",
+            params![now, run_id],
+        )?;
+    }
+    audit_handoff_delivery(tx, approval_id, resolved_by)?;
+    Ok(true)
+}
+
+fn audit_handoff_approval(tx: &Connection, approval_id: &str, resolved_by: &str) -> Result<()> {
+    crate::security::record_audit_event(
+        tx,
+        "handover_approved_by_owner",
+        resolved_by,
+        &serde_json::json!({"approval_id": approval_id, "resolved_by": resolved_by}).to_string(),
+    )
+    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))
+}
+
 /// Atomically acknowledge delivery, including audit. Superseded/rejected
 /// handoffs remain terminal even if a wrapper holds an old context.
 pub fn cp_consume_handoff(
@@ -513,9 +662,9 @@ pub fn cp_consume_handoff(
     let tx = conn.unchecked_transaction()?;
     // Bind the acknowledgement to the receiver and the canonical IDs, rather
     // than trusting a caller's cached context after a rejection/supersession.
-    let owner: Option<String> = tx
+    let bound: Option<i64> = tx
         .query_row(
-            "SELECT ap.owner_subject FROM cp_approvals ap JOIN cp_tasks t ON t.id = ap.task_id
+            "SELECT 1 FROM cp_approvals ap JOIN cp_tasks t ON t.id = ap.task_id
          WHERE ap.id = ?1 AND ap.task_id = ?2 AND ap.agent_run_id = ?3
            AND ap.artifact_id = ?4 AND t.assignee_id = ?5",
             params![
@@ -528,10 +677,8 @@ pub fn cp_consume_handoff(
             |row| row.get(0),
         )
         .optional()?;
-    if let Some(owner) = owner {
-        if cp_resolve_handoff(&tx, &ctx.approval_id, &owner, resolved_by, None)? {
-            audit_handoff_delivery(&tx, &ctx.approval_id, resolved_by)?;
-        }
+    if bound.is_some() {
+        cp_mark_handoff_delivered(&tx, &ctx.approval_id, resolved_by)?;
     }
     tx.commit()?;
     Ok(())

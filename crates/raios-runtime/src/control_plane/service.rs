@@ -97,12 +97,13 @@ pub fn load_now_snapshot(conn: &Connection) -> Result<NowSnapshot, String> {
             task_id: a.approval.task_id.unwrap_or_default(),
             kind: a.approval.approval_type,
             title: a.approval.task_title.unwrap_or_default(),
-            origin_agent: "agent".into(),
-            target_agent: "human".into(),
-            project_path: None,
+            origin_agent: a.approval.origin_agent.unwrap_or_else(|| "agent".into()),
+            target_agent: a.approval.target_agent.unwrap_or_else(|| "human".into()),
+            project_path: a.approval.project_path,
             created_at: a.approval.requested_at,
             score: a.risk_score as i32,
             reason: a.approval.reason,
+            revision: a.approval.revision,
         })
         .collect();
 
@@ -546,6 +547,30 @@ fn handoff_run_id(tx: &Connection, approval_id: &str) -> Result<Option<String>, 
     .map(Option::flatten)
 }
 
+/// Refuses a decision made on a stale read. When the caller names the revision it saw and the
+/// stored revision has moved on, the answer is `CONFLICT` — never a silent decision on newer
+/// state. A named revision that matches no approval at all stays `NOT_FOUND`. Callers that
+/// name no revision (older surfaces) are unaffected.
+fn require_expected_revision(
+    conn: &Connection,
+    approval_id: &str,
+    expected: Option<i64>,
+) -> Result<(), Problem> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    match raios_core::db::cp_approval_revision(conn, approval_id)
+        .map_err(|e| Problem::internal(e.to_string()))?
+    {
+        Some(current) if current != expected => Err(Problem::conflict(format!(
+            "Approval '{}' changed since it was read (revision {} is stale, current is {})",
+            approval_id, expected, current
+        ))),
+        Some(_) => Ok(()),
+        None => Err(Problem::not_found("Pending handoff approval not found")),
+    }
+}
+
 /// Appends the typed events for a resolved handoff approval: the resolution
 /// itself plus the linked run's *observed* post-resolution state. The status
 /// string is read back from the database rather than assumed, so the event
@@ -726,14 +751,21 @@ pub(super) fn dispatch_with_seams(
     let mut launch_request: Option<AgentLaunchRequest> = None;
     let mut pending_events: Vec<Event> = Vec::new();
     let result_val: Option<serde_json::Value> = match cmd {
-        Command::ApproveHandoff { approval_id, .. } => {
+        Command::ApproveHandoff {
+            approval_id,
+            expected_revision,
+            ..
+        } => {
+            require_expected_revision(&tx, approval_id, *expected_revision)?;
             let run_id = handoff_run_id(&tx, approval_id)?;
-            if !raios_core::db::cp_resolve_handoff(
+            // The owner's consent: the approval resolves as approved and the run leaves the
+            // queue, but the task stays open. Only the addressed agent's own wrapper marks
+            // delivery (`handover_delivered`).
+            if !raios_core::db::cp_approve_handoff_by_owner(
                 &tx,
                 approval_id,
                 actor.subject(),
                 actor.subject(),
-                None,
             )
             .map_err(|e| Problem::internal(e.to_string()))?
             {
@@ -751,8 +783,10 @@ pub(super) fn dispatch_with_seams(
         Command::RejectHandoff {
             approval_id,
             reason,
+            expected_revision,
             ..
         } => {
+            require_expected_revision(&tx, approval_id, *expected_revision)?;
             if reason.trim().is_empty() || reason.len() > 2_000 {
                 return Err(Problem::invalid_input(
                     "Rejection reason must contain at most 2000 characters",
@@ -1141,6 +1175,7 @@ mod tests {
 
         let cmd1 = Command::RejectHandoff {
             approval_id: workflow.approval_id.clone(),
+            expected_revision: None,
             reason: "Not needed".into(),
             idempotency_key: "idem-key-1".into(),
         };
@@ -1188,6 +1223,7 @@ mod tests {
         // Same key + different payload -> Error (invalid input / collision)
         let cmd2 = Command::RejectHandoff {
             approval_id: "app-different".into(),
+            expected_revision: None,
             reason: "Different reason".into(),
             idempotency_key: "idem-key-1".into(),
         };
@@ -1215,14 +1251,25 @@ mod tests {
         .unwrap();
 
         let before = load_system_snapshot(&conn).unwrap();
-        assert!(before
+        let listed = before
             .now
             .approvals
             .iter()
-            .any(|approval| approval.id == workflow.approval_id));
+            .find(|approval| approval.id == workflow.approval_id)
+            .expect("pending approval must be listed");
+        // The surface can only present (and decide) what carries its project root, both
+        // agents and the revision the decision must echo back.
+        assert_eq!(
+            listed.project_path.as_deref(),
+            Some("/tmp/control-plane-flow")
+        );
+        assert_eq!(listed.origin_agent, "codex_kaira");
+        assert_eq!(listed.target_agent, "antigravity_kaira");
+        assert_eq!(listed.revision, 1);
 
         let command = Command::ApproveHandoff {
             approval_id: workflow.approval_id.clone(),
+            expected_revision: None,
             idempotency_key: "approve-control-plane-flow".into(),
         };
         let result = dispatch_control_command(&mut conn, &ControlActor::test_local(), &command)
@@ -1236,6 +1283,54 @@ mod tests {
             .approvals
             .iter()
             .any(|approval| approval.id == workflow.approval_id));
+
+        // The owner's approval is consent, not delivery: the run leaves the queue, but the
+        // task stays open and the receipt must not read "delivered by the target".
+        assert_eq!(
+            conn.query_row(
+                "SELECT status FROM cp_tasks WHERE id = ?1",
+                params![workflow.task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "awaiting_approval"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
+                params![workflow.agent_run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "handover_approved_by_owner"
+        );
+        let receipt = raios_core::db::cp_handoff_receipt(
+            &conn,
+            &workflow.approval_id,
+            "/tmp/control-plane-flow",
+        )
+        .unwrap()
+        .expect("receipt");
+        assert_eq!(receipt.status, "approved");
+        assert!(!receipt.delivered_by_target());
+        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 2);
+
+        // Only the addressed agent's own delivery closes the task and flips the receipt.
+        assert!(raios_core::db::cp_mark_handoff_delivered(
+            &conn,
+            &workflow.approval_id,
+            "antigravity_kaira"
+        )
+        .unwrap());
+        let delivered = raios_core::db::cp_handoff_receipt(
+            &conn,
+            &workflow.approval_id,
+            "/tmp/control-plane-flow",
+        )
+        .unwrap()
+        .expect("receipt");
+        assert_eq!(delivered.status, "approved");
+        assert!(delivered.delivered_by_target());
         assert_eq!(
             conn.query_row(
                 "SELECT status FROM cp_tasks WHERE id = ?1",
@@ -1245,7 +1340,86 @@ mod tests {
             .unwrap(),
             "completed"
         );
-        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 1);
+        // A run that already ended by owner approval keeps that reason: delivery is recorded
+        // on the approval, artifact and task, never by re-labelling the run.
+        assert_eq!(
+            conn.query_row(
+                "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
+                params![workflow.agent_run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "handover_approved_by_owner"
+        );
+        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 3);
+    }
+
+    #[test]
+    fn stale_expected_revision_is_refused_with_conflict() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let workflow = raios_core::db::create_handoff_workflow(
+            &conn,
+            raios_core::db::HandoffWorkflowInput {
+                project_path: "/tmp/control-plane-conflict",
+                from_agent: "codex_kaira",
+                to_agent: "antigravity_kaira",
+                status: "blocker",
+                msg: "Conflict coverage",
+                diff_stat: None,
+                report: None,
+            },
+        )
+        .unwrap();
+        let actor = ControlActor::test_local();
+
+        // A decision on a revision the row never had is refused without touching the row.
+        let stale = Command::RejectHandoff {
+            approval_id: workflow.approval_id.clone(),
+            expected_revision: Some(99),
+            reason: "stale decision".into(),
+            idempotency_key: "conflict-stale".into(),
+        };
+        let error = dispatch_control_command(&mut conn, &actor, &stale).unwrap_err();
+        assert_eq!(error.code, "CONFLICT");
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM cp_approvals WHERE id = ?1",
+                params![workflow.approval_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "pending");
+
+        // The revision read before the decision is accepted once.
+        let fresh = Command::ApproveHandoff {
+            approval_id: workflow.approval_id.clone(),
+            expected_revision: Some(1),
+            idempotency_key: "conflict-fresh".into(),
+        };
+        let result = dispatch_control_command(&mut conn, &actor, &fresh)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["status"], "approved");
+
+        // Re-deciding on the same, now stale revision is a conflict, not a silent success.
+        let again = Command::ApproveHandoff {
+            approval_id: workflow.approval_id.clone(),
+            expected_revision: Some(1),
+            idempotency_key: "conflict-again".into(),
+        };
+        let error = dispatch_control_command(&mut conn, &actor, &again).unwrap_err();
+        assert_eq!(error.code, "CONFLICT");
+
+        // A named revision that matches no approval at all stays `NOT_FOUND`.
+        let missing = Command::RejectHandoff {
+            approval_id: "no-such-approval".into(),
+            expected_revision: Some(1),
+            reason: "nowhere".into(),
+            idempotency_key: "conflict-missing".into(),
+        };
+        let error = dispatch_control_command(&mut conn, &actor, &missing).unwrap_err();
+        assert_eq!(error.code, "NOT_FOUND");
     }
 
     /// Drains the typed-event bus for `expected` messages matching `matching`.
@@ -1351,6 +1525,7 @@ mod tests {
         // state (never an assumed constant).
         let approve = Command::ApproveHandoff {
             approval_id: approval_id.clone(),
+            expected_revision: None,
             idempotency_key: "typed-events-approve".into(),
         };
         dispatch_control_command(&mut conn, &ControlActor::test_local(), &approve)
@@ -1413,6 +1588,7 @@ mod tests {
 
         let command = Command::ApproveHandoff {
             approval_id: workflow.approval_id.clone(),
+            expected_revision: None,
             idempotency_key: "remote-owner-check".into(),
         };
         let error = dispatch_control_command(

@@ -9,8 +9,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use raios_contracts::{GovernSnapshot, HandoffReceiptDto, NowSnapshot, WorkSnapshot};
 
 use super::{
-    ControlPlane, CreateHandoffRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction,
-    QueuedHandoff, RegistrationOutcome,
+    ControlPlane, CreateHandoffRequest, HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest,
+    PolicyAction, QueuedHandoff, RegistrationOutcome,
 };
 use crate::error::{AppError, ErrorCode, Result};
 
@@ -39,6 +39,10 @@ pub enum RecordedCall {
     LaunchAgent(LaunchAgentRequest),
     /// [`ControlPlane::create_handoff`].
     CreateHandoff(CreateHandoffRequest),
+    /// [`ControlPlane::approve_handoff`].
+    ApproveHandoff(HandoffDecisionRequest),
+    /// [`ControlPlane::reject_handoff`].
+    RejectHandoff(HandoffDecisionRequest),
     /// [`ControlPlane::handoff_receipt`].
     HandoffReceipt {
         /// Approval identifier that was read.
@@ -58,6 +62,8 @@ struct Script {
     registrations: VecDeque<Result<RegistrationOutcome>>,
     launches: VecDeque<Result<()>>,
     handoffs: VecDeque<Result<QueuedHandoff>>,
+    approvals: VecDeque<Result<()>>,
+    rejections: VecDeque<Result<()>>,
     receipts: VecDeque<Result<HandoffReceiptDto>>,
 }
 
@@ -124,6 +130,18 @@ impl FakeControlPlane {
     /// Queues the response of the next [`ControlPlane::handoff_receipt`] call.
     pub fn push_receipt(&self, response: Result<HandoffReceiptDto>) -> &Self {
         self.script().receipts.push_back(response);
+        self
+    }
+
+    /// Queues the response of the next [`ControlPlane::approve_handoff`] call.
+    pub fn push_approval(&self, response: Result<()>) -> &Self {
+        self.script().approvals.push_back(response);
+        self
+    }
+
+    /// Queues the response of the next [`ControlPlane::reject_handoff`] call.
+    pub fn push_rejection(&self, response: Result<()>) -> &Self {
+        self.script().rejections.push_back(response);
         self
     }
 
@@ -228,5 +246,27 @@ impl ControlPlane for FakeControlPlane {
             .receipts
             .pop_front()
             .unwrap_or_else(|| Err(unscripted("handoff_receipt")))
+    }
+
+    fn approve_handoff(&self, request: &HandoffDecisionRequest) -> Result<()> {
+        let mut script = self.script();
+        script
+            .calls
+            .push(RecordedCall::ApproveHandoff(request.clone()));
+        script
+            .approvals
+            .pop_front()
+            .unwrap_or_else(|| Err(unscripted("approve_handoff")))
+    }
+
+    fn reject_handoff(&self, request: &HandoffDecisionRequest) -> Result<()> {
+        let mut script = self.script();
+        script
+            .calls
+            .push(RecordedCall::RejectHandoff(request.clone()));
+        script
+            .rejections
+            .pop_front()
+            .unwrap_or_else(|| Err(unscripted("reject_handoff")))
     }
 }

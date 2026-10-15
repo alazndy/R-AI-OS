@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use raios_contracts::{GovernSnapshot, HandoffReceiptDto, NowSnapshot, WorkSnapshot};
 use rwk_core::control::fake::{FakeControlPlane, RecordedCall};
 use rwk_core::control::{
-    ControlPlane, CreateHandoffRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction,
-    QueuedHandoff, RegistrationOutcome,
+    ControlPlane, CreateHandoffRequest, HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest,
+    PolicyAction, QueuedHandoff, RegistrationOutcome,
 };
 use rwk_core::error::{AppError, ErrorCode};
 use rwk_core::sessions::SessionKind;
@@ -18,6 +18,16 @@ fn handoff_request(summary: &str) -> CreateHandoffRequest {
         to: SessionKind::Codex,
         summary: summary.into(),
         idempotency_key: IdempotencyKey::new("h-1"),
+    }
+}
+
+fn decision(reason: Option<&str>) -> HandoffDecisionRequest {
+    HandoffDecisionRequest {
+        project_root: PathBuf::from("/work/app"),
+        approval_id: "a-1".into(),
+        expected_revision: 4,
+        reason: reason.map(str::to_owned),
+        idempotency_key: IdempotencyKey::new("d-1"),
     }
 }
 
@@ -63,6 +73,8 @@ fn an_unscripted_call_fails_closed_and_never_allows_a_command() {
         })
         .is_err());
     assert!(fake.handoff_receipt("a-1", Path::new("/work/app")).is_err());
+    assert!(fake.approve_handoff(&decision(None)).is_err());
+    assert!(fake.reject_handoff(&decision(Some("no"))).is_err());
 }
 
 #[test]
@@ -103,6 +115,8 @@ fn every_call_is_recorded_with_its_arguments_in_order() {
             resolved_at: None,
             delivered_by_target: false,
         }))
+        .push_approval(Ok(()))
+        .push_rejection(Ok(()))
         .set_policy("launch_agent", PolicyAction::Allow);
 
     fake.work_snapshot().unwrap();
@@ -119,6 +133,8 @@ fn every_call_is_recorded_with_its_arguments_in_order() {
     };
     fake.launch_agent(&launch).unwrap();
     fake.handoff_receipt("a-1", Path::new("/work/app")).unwrap();
+    fake.approve_handoff(&decision(None)).unwrap();
+    fake.reject_handoff(&decision(Some("kapsam dışı"))).unwrap();
 
     assert_eq!(
         fake.calls(),
@@ -138,6 +154,8 @@ fn every_call_is_recorded_with_its_arguments_in_order() {
                 approval_id: "a-1".into(),
                 project_root: PathBuf::from("/work/app"),
             },
+            RecordedCall::ApproveHandoff(decision(None)),
+            RecordedCall::RejectHandoff(decision(Some("kapsam dışı"))),
         ]
     );
 }

@@ -27,6 +27,20 @@ const TOKEN_RETRY: Duration = Duration::from_secs(2);
 pub enum InspectorEvent {
     /// The user asked to start the receiver of this handoff.
     StartReceiver(String),
+    /// The user approved a pending handoff approval, echoing the revision that was shown.
+    ApproveHandoff {
+        /// Target approval identifier.
+        approval_id: String,
+        /// Revision the row was displayed at.
+        revision: i64,
+    },
+    /// The user wants to reject a pending handoff approval; a reason is asked for before sending.
+    RejectHandoff {
+        /// Target approval identifier.
+        approval_id: String,
+        /// Revision the row was displayed at.
+        revision: i64,
+    },
 }
 
 impl gpui::EventEmitter<InspectorEvent> for InspectorView {}
@@ -170,7 +184,7 @@ impl InspectorView {
     }
 
     /// One extra read of the daemon right after a typed event, instead of waiting for the poll.
-    fn refresh_now(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn refresh_now(&mut self, cx: &mut Context<Self>) {
         let (Some(plane), Some(project)) = (self.plane.clone(), self.project.clone()) else {
             return;
         };
@@ -378,14 +392,57 @@ impl Render for InspectorView {
             )
         });
         let approvals = self.model.approvals.iter().map(|approval| {
-            row(
+            let line = row(
                 theme,
                 approval.title.clone(),
                 format!(
                     "{} → {} · {}",
                     approval.from_agent, approval.to_agent, approval.reason
                 ),
-            )
+            );
+            // Only handoff approvals can be decided here; other kinds stay read-only.
+            let decisions = (approval.kind == "handover").then(|| {
+                let approve_id = approval.id.clone();
+                let reject_id = approval.id.clone();
+                let revision = approval.revision;
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .px_2()
+                    .pb_1()
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("approve-handoff-{approve_id}")))
+                            .px_2()
+                            .border_1()
+                            .border_color(gpui::rgb(theme.accent_ink))
+                            .text_xs()
+                            .child("Onayla")
+                            .on_click(cx.listener(move |_, _, _window, cx| {
+                                cx.emit(InspectorEvent::ApproveHandoff {
+                                    approval_id: approve_id.clone(),
+                                    revision,
+                                });
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("reject-handoff-{reject_id}")))
+                            .px_2()
+                            .border_1()
+                            .border_color(gpui::rgb(theme.bad))
+                            .text_xs()
+                            .child("Reddet")
+                            .on_click(cx.listener(move |_, _, _window, cx| {
+                                cx.emit(InspectorEvent::RejectHandoff {
+                                    approval_id: reject_id.clone(),
+                                    revision,
+                                });
+                            })),
+                    )
+            });
+            div().child(line).children(decisions)
         });
         let handoffs: Vec<_> = self
             .handoffs

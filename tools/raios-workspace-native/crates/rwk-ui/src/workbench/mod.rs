@@ -186,6 +186,8 @@ pub struct Workbench {
     consent_wait: Option<std::sync::mpsc::Receiver<rwk_core::consent::ConsentDecision>>,
     composer: Option<Entity<crate::handoff::HandoffComposer>>,
     composer_subscription: Option<Subscription>,
+    reject_prompt: Option<Entity<crate::handoff::RejectHandoffPrompt>>,
+    reject_prompt_subscription: Option<Subscription>,
     handoffs: Vec<TrackedHandoff>,
     receipt_task: Option<Task<()>>,
     receiver_for: Option<String>,
@@ -249,9 +251,22 @@ impl Workbench {
         let inspector_events = cx.subscribe_in(
             &inspector,
             window,
-            |this, _inspector, event: &crate::inspector::InspectorEvent, window, cx| {
-                let crate::inspector::InspectorEvent::StartReceiver(id) = event;
-                this.start_receiver(id.clone(), window, cx);
+            |this, _inspector, event: &crate::inspector::InspectorEvent, window, cx| match event {
+                crate::inspector::InspectorEvent::StartReceiver(id) => {
+                    this.start_receiver(id.clone(), window, cx);
+                }
+                crate::inspector::InspectorEvent::ApproveHandoff {
+                    approval_id,
+                    revision,
+                } => {
+                    this.approve_handoff(approval_id.clone(), *revision, window, cx);
+                }
+                crate::inspector::InspectorEvent::RejectHandoff {
+                    approval_id,
+                    revision,
+                } => {
+                    this.request_reject_handoff(approval_id.clone(), *revision, window, cx);
+                }
             },
         );
         let subscriptions = vec![
@@ -289,6 +304,8 @@ impl Workbench {
             consent_wait: None,
             composer: None,
             composer_subscription: None,
+            reject_prompt: None,
+            reject_prompt_subscription: None,
             handoffs: Vec::new(),
             receipt_task: None,
             receiver_for: None,
@@ -722,6 +739,9 @@ impl Workbench {
         }
         if let Some(composer) = &self.composer {
             composer.update(cx, |composer, cx| composer.set_theme(theme, cx));
+        }
+        if let Some(prompt) = &self.reject_prompt {
+            prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
         }
         if let Some(memory) = &self.memory {
             memory.update(cx, |memory, cx| memory.set_theme(theme, cx));
@@ -1234,6 +1254,7 @@ impl Render for Workbench {
             )
             .children(self.palette.clone())
             .children(self.composer.clone())
+            .children(self.reject_prompt.clone())
             .children(self.memory.clone())
             .children(self.search.clone())
             .children(dialog)

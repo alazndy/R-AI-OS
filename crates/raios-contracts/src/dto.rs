@@ -25,6 +25,12 @@ pub struct ScoredApprovalDto {
     pub score: i32,
     /// Explanation of why approval is required.
     pub reason: String,
+    /// Optimistic-concurrency revision of the stored approval. A surface sends back the
+    /// revision it displayed so a decision on a stale read is refused with `CONFLICT`
+    /// instead of silently acting on state that changed since (see `expected_revision`
+    /// on the handoff commands). Defaults to `0` for payloads predating the field.
+    #[serde(default)]
+    pub revision: i64,
 }
 
 /// Active agent run state snapshot.

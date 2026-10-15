@@ -46,6 +46,11 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "ALTER TABLE cp_approvals ADD COLUMN owner_subject TEXT NOT NULL DEFAULT 'local_control_owner'",
     );
+    // Optimistic-concurrency revision: every transition of an approval bumps it, so a
+    // surface that decided on a stale read is refused instead of silently acting on
+    // newer state (see `expected_revision` on the handoff commands).
+    let _ = conn
+        .execute_batch("ALTER TABLE cp_approvals ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
     let _ = conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_cp_approvals_owner_status
              ON cp_approvals(owner_subject, status)",
@@ -344,7 +349,8 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             owner_subject TEXT NOT NULL DEFAULT 'local_control_owner',
             requested_at TEXT NOT NULL,
             resolved_at TEXT,
-            resolved_by TEXT
+            resolved_by TEXT,
+            revision INTEGER NOT NULL DEFAULT 1
         );
         CREATE INDEX IF NOT EXISTS idx_cp_approvals_status ON cp_approvals(status);
         CREATE INDEX IF NOT EXISTS idx_cp_approvals_owner_status ON cp_approvals(owner_subject, status);

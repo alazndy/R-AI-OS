@@ -5,7 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::control::{
-    ControlPlane, CreateHandoffRequest, IdempotencyKey, LaunchAgentRequest, QueuedHandoff,
+    ControlPlane, CreateHandoffRequest, HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest,
+    QueuedHandoff,
 };
 use crate::error::Result;
 use crate::handoff_input::handoff_operation_text;
@@ -17,6 +18,10 @@ pub enum Guarded {
     LaunchAgent(LaunchAgentRequest),
     /// Queue a `BLOCKER` handoff.
     CreateHandoff(CreateHandoffRequest),
+    /// Approve a pending handoff approval: owner consent, not delivery.
+    ApproveHandoff(HandoffDecisionRequest),
+    /// Reject a pending handoff approval with a reason.
+    RejectHandoff(HandoffDecisionRequest),
     /// Register a project directory.
     RegisterProject {
         /// Directory to register.
@@ -33,6 +38,10 @@ pub enum GuardedOutcome {
     AgentLaunchValidated,
     /// The daemon queued the handoff.
     HandoffQueued(QueuedHandoff),
+    /// The daemon recorded the owner's approval; delivery stays with the addressed agent.
+    HandoffApproved,
+    /// The daemon recorded the rejection.
+    HandoffRejected,
     /// The project is registered (or already was).
     ProjectRegistered {
         /// True when nothing changed because it was registered before.
@@ -46,6 +55,8 @@ impl Guarded {
         match self {
             Self::LaunchAgent(_) => "launch_agent",
             Self::CreateHandoff(_) => "create_handoff",
+            Self::ApproveHandoff(_) => "approve_handoff",
+            Self::RejectHandoff(_) => "reject_handoff",
             Self::RegisterProject { .. } => "register_project",
         }
     }
@@ -55,6 +66,8 @@ impl Guarded {
         match self {
             Self::LaunchAgent(request) => &request.project_root,
             Self::CreateHandoff(request) => &request.project_root,
+            Self::ApproveHandoff(request) => &request.project_root,
+            Self::RejectHandoff(request) => &request.project_root,
             Self::RegisterProject { root, .. } => root,
         }
     }
@@ -72,6 +85,17 @@ impl Guarded {
                 }
             ),
             Self::CreateHandoff(request) => handoff_operation_text(request),
+            Self::ApproveHandoff(request) => format!(
+                "{} numaralı devir onayı onaylanacak ({}). Onay teslim değildir: notu adreslenen ajan kendi çalıştırmasında teslim alacak.",
+                request.approval_id,
+                request.project_root.display()
+            ),
+            Self::RejectHandoff(request) => format!(
+                "{} numaralı devir onayı reddedilecek ({}). Gerekçe: {}",
+                request.approval_id,
+                request.project_root.display(),
+                request.reason.as_deref().unwrap_or("(yok)")
+            ),
             Self::RegisterProject { root, .. } => {
                 format!(
                     "{} dizini Raios'a proje olarak kaydedilecek.",
@@ -92,6 +116,14 @@ impl Guarded {
             Self::CreateHandoff(request) => plane
                 .create_handoff(request)
                 .map(GuardedOutcome::HandoffQueued),
+            Self::ApproveHandoff(request) => {
+                plane.approve_handoff(request)?;
+                Ok(GuardedOutcome::HandoffApproved)
+            }
+            Self::RejectHandoff(request) => {
+                plane.reject_handoff(request)?;
+                Ok(GuardedOutcome::HandoffRejected)
+            }
             Self::RegisterProject { root, key } => {
                 let outcome = plane.register_project(root, key)?;
                 Ok(GuardedOutcome::ProjectRegistered {
@@ -132,11 +164,79 @@ mod tests {
     fn command_names_match_the_daemons_policy_keys() {
         assert_eq!(launch().command_name(), "launch_agent");
         assert_eq!(handoff().command_name(), "create_handoff");
+        assert_eq!(
+            Guarded::ApproveHandoff(decision(None)).command_name(),
+            "approve_handoff"
+        );
+        assert_eq!(
+            Guarded::RejectHandoff(decision(Some("kapsam dışı"))).command_name(),
+            "reject_handoff"
+        );
         let register = Guarded::RegisterProject {
             root: PathBuf::from("/a"),
             key: IdempotencyKey::new("k"),
         };
         assert_eq!(register.command_name(), "register_project");
+    }
+
+    fn decision(reason: Option<&str>) -> HandoffDecisionRequest {
+        HandoffDecisionRequest {
+            project_root: PathBuf::from("/work/app"),
+            approval_id: "a-7".to_owned(),
+            expected_revision: 4,
+            reason: reason.map(str::to_owned),
+            idempotency_key: IdempotencyKey::new("d-1"),
+        }
+    }
+
+    #[test]
+    fn the_approval_text_says_consent_is_not_delivery() {
+        let text = Guarded::ApproveHandoff(decision(None)).summary();
+
+        assert!(text.contains("a-7") && text.contains("/work/app"), "{text}");
+        assert!(text.contains("teslim değildir"), "{text}");
+
+        let rejection = Guarded::RejectHandoff(decision(Some("kapsam dışı"))).summary();
+        assert!(
+            rejection.contains("a-7") && rejection.contains("kapsam dışı"),
+            "{rejection}"
+        );
+        assert_eq!(
+            Guarded::ApproveHandoff(decision(None)).project_root(),
+            Path::new("/work/app")
+        );
+    }
+
+    #[test]
+    fn approving_sends_the_revision_the_user_saw() {
+        let plane = FakeControlPlane::new();
+        plane.push_approval(Ok(()));
+
+        let outcome = Guarded::ApproveHandoff(decision(None))
+            .execute(&plane)
+            .unwrap();
+
+        assert_eq!(outcome, GuardedOutcome::HandoffApproved);
+        assert!(
+            matches!(&plane.calls()[..], [RecordedCall::ApproveHandoff(request)]
+            if request.approval_id == "a-7" && request.expected_revision == 4 && request.reason.is_none())
+        );
+    }
+
+    #[test]
+    fn rejecting_sends_the_reason_and_the_revision() {
+        let plane = FakeControlPlane::new();
+        plane.push_rejection(Ok(()));
+
+        let outcome = Guarded::RejectHandoff(decision(Some("kapsam dışı")))
+            .execute(&plane)
+            .unwrap();
+
+        assert_eq!(outcome, GuardedOutcome::HandoffRejected);
+        assert!(
+            matches!(&plane.calls()[..], [RecordedCall::RejectHandoff(request)]
+            if request.reason.as_deref() == Some("kapsam dışı") && request.expected_revision == 4)
+        );
     }
 
     #[test]

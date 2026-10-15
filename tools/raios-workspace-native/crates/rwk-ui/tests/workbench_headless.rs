@@ -823,6 +823,8 @@ fn connected(rig: &mut Rig, policy: PolicyAction) -> Arc<FakeControlPlane> {
     fake.set_policy("launch_agent", policy);
     fake.set_policy("create_handoff", policy);
     fake.set_policy("register_project", policy);
+    fake.set_policy("approve_handoff", policy);
+    fake.set_policy("reject_handoff", policy);
     // The first inspector poll finds the daemon healthy; only then are agent commands offered.
     fake.push_work_snapshot(Ok(raios_contracts::WorkSnapshot::default()))
         .push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()));
@@ -850,6 +852,20 @@ fn sends(fake: &FakeControlPlane) -> usize {
             )
         })
         .count()
+}
+
+/// Every handoff decision the fake received, in order.
+fn decisions(fake: &FakeControlPlane) -> Vec<RecordedCall> {
+    fake.calls()
+        .iter()
+        .filter(|call| {
+            matches!(
+                call,
+                RecordedCall::ApproveHandoff(_) | RecordedCall::RejectHandoff(_)
+            )
+        })
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -1083,6 +1099,124 @@ fn starting_the_receiver_reads_the_receipt_again_and_tracks_the_process() {
         !rig.read(|wb, _| wb.handoffs()[0].can_start_receiver()),
         "a running receiver blocks a second start"
     );
+}
+
+// ----- approval decisions --------------------------------------------------------------
+
+#[test]
+fn approving_a_handoff_sends_the_revision_the_user_saw() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_approval(Ok(()));
+
+    rig.with(|wb, window, cx| wb.approve_handoff("a-1".into(), 7, window, cx));
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb
+        .toast()
+        .is_some_and(|toast| toast.contains("Devir onaylandı")))));
+    assert!(matches!(
+        &decisions(&fake)[..],
+        [RecordedCall::ApproveHandoff(request)]
+        if request.approval_id == "a-1"
+            && request.expected_revision == 7
+            && request.reason.is_none()
+    ));
+    // Consent is not delivery: no receiver was started and no agent terminal opened.
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+}
+
+#[test]
+fn a_confirm_policy_asks_before_a_handoff_decision_is_sent() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Confirm);
+    fake.push_approval(Ok(()));
+
+    rig.with(|wb, window, cx| wb.approve_handoff("a-1".into(), 7, window, cx));
+
+    assert!(rig.settle_until(|rig| matches!(
+        rig.read(|wb, _| wb.pending().cloned()),
+        Some(PendingAction::Consent(..))
+    )));
+    assert!(decisions(&fake).is_empty(), "nothing before the answer");
+    let message = rig.read(|wb, _| wb.dialog().map(|dialog| dialog.message));
+    // The dialog says what consent means: the addressed agent still delivers the note.
+    assert!(message.is_some_and(|text| text.contains("teslim")));
+
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+
+    assert!(rig.settle_until(|_rig| decisions(&fake).len() == 1));
+}
+
+#[test]
+fn rejecting_a_handoff_asks_for_a_reason_and_sends_it() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_rejection(Ok(()));
+
+    rig.with(|wb, window, cx| wb.request_reject_handoff("a-1".into(), 7, window, cx));
+    let prompt = rig
+        .read(|wb, _| wb.reject_prompt().cloned())
+        .expect("the prompt opens");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("  kapsam dışı  ", window, cx);
+            prompt.submit(cx);
+        })
+    });
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.reject_prompt().is_none())));
+    assert!(rig.settle_until(|_rig| decisions(&fake).len() == 1));
+    assert!(matches!(
+        &decisions(&fake)[..],
+        [RecordedCall::RejectHandoff(request)]
+        if request.reason.as_deref() == Some("kapsam dışı")
+            && request.expected_revision == 7
+    ));
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Devir reddedildi: a-1".to_owned())
+    );
+}
+
+#[test]
+fn an_empty_or_secret_reject_reason_never_reaches_the_daemon() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+
+    for text in ["   ", "anahtar sk-abcdefghijklmnopqrstuvwx"] {
+        rig.with(|wb, window, cx| wb.request_reject_handoff("a-1".into(), 7, window, cx));
+        let prompt = rig
+            .read(|wb, _| wb.reject_prompt().cloned())
+            .expect("the prompt opens");
+        rig.with(|_wb, window, cx| {
+            prompt.update(cx, |prompt, cx| {
+                prompt.set_text(text, window, cx);
+                prompt.submit(cx);
+            })
+        });
+        rig.settle_for(50);
+
+        assert!(rig.read(|wb, cx| wb
+            .reject_prompt()
+            .is_some_and(|prompt| prompt.read(cx).problem().is_some())));
+        assert!(decisions(&fake).is_empty(), "{text:?} must not be sent");
+        rig.with(|wb, window, cx| wb.close_reject_prompt(window, cx));
+    }
+}
+
+#[test]
+fn escape_closes_the_reject_prompt_without_sending() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+
+    rig.with(|wb, window, cx| wb.request_reject_handoff("a-1".into(), 7, window, cx));
+    assert!(rig.read(|wb, _| wb.reject_prompt().is_some()));
+
+    rig.cx.simulate_keystrokes("escape");
+    rig.cx.run_until_parked();
+
+    assert!(rig.read(|wb, _| wb.reject_prompt().is_none()));
+    assert!(decisions(&fake).is_empty());
 }
 
 // ----- memory view ---------------------------------------------------------------------

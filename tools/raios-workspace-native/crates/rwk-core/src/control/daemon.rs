@@ -13,8 +13,8 @@ use raios_contracts::{
 use serde_json::Value;
 
 use super::{
-    ControlPlane, CreateHandoffRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction,
-    QueuedHandoff, RegistrationOutcome,
+    ControlPlane, CreateHandoffRequest, HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest,
+    PolicyAction, QueuedHandoff, RegistrationOutcome,
 };
 use crate::error::{AppError, ErrorCode, Result};
 
@@ -253,6 +253,47 @@ impl ControlPlane for DaemonClient {
             })?,
             "handoff_receipt",
         )
+    }
+
+    /// Sends `ApproveHandoff` with the revision the user saw; a stale one comes back as a
+    /// `CONFLICT` problem. The daemon answers `approved` — consent only, the addressed agent's
+    /// run still consumes the handoff.
+    fn approve_handoff(&self, request: &HandoffDecisionRequest) -> Result<()> {
+        let response = self.command(&Command::ApproveHandoff {
+            approval_id: request.approval_id.clone(),
+            expected_revision: Some(request.expected_revision),
+            idempotency_key: request.idempotency_key.as_str().to_owned(),
+        })?;
+        let result: Value = take(response, "result")?;
+        match text_field(&result, "status")?.as_str() {
+            "approved" => Ok(()),
+            other => Err(daemon_error(format!(
+                "the daemon answered '{other}' instead of 'approved'; the handoff was not approved"
+            ))),
+        }
+    }
+
+    /// Sends `RejectHandoff` with the reason and the revision the user saw.
+    fn reject_handoff(&self, request: &HandoffDecisionRequest) -> Result<()> {
+        let reason = request
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty())
+            .ok_or_else(|| invalid("A rejection needs a reason."))?;
+        let response = self.command(&Command::RejectHandoff {
+            approval_id: request.approval_id.clone(),
+            expected_revision: Some(request.expected_revision),
+            reason: reason.to_owned(),
+            idempotency_key: request.idempotency_key.as_str().to_owned(),
+        })?;
+        let result: Value = take(response, "result")?;
+        match text_field(&result, "status")?.as_str() {
+            "rejected" => Ok(()),
+            other => Err(daemon_error(format!(
+                "the daemon answered '{other}' instead of 'rejected'; the handoff was not rejected"
+            ))),
+        }
     }
 }
 
