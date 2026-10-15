@@ -1,7 +1,7 @@
 //! The workbench on GPUI's test platform: real project, real editor, real PTY sessions.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -10,7 +10,9 @@ use gpui_wgpu::CosmicTextSystem;
 use rwk_core::search::{SearchHit, SearchResult, SearchSource};
 use rwk_core::terminal::ProgramPaths;
 use rwk_core::workbench::Tone;
-use rwk_core::workbench::{Appearance, CommandId};
+use rwk_core::workbench::{
+    Appearance, CommandId, SavedTab, SavedTerminal, SavedWorkspace, WorkspaceStateSource,
+};
 use rwk_ui::workbench::layout::LayoutPreset;
 use rwk_ui::workbench::{Decision, PendingAction, Workbench, WorkbenchEvent};
 
@@ -23,6 +25,26 @@ struct Rig {
     cx: &'static mut VisualTestContext,
     view: Entity<Workbench>,
     dir: tempfile::TempDir,
+}
+
+/// A workspace source that hands back whatever state it was given, for any project: the
+/// workbench itself is the one that decides whether the state belongs to the open project.
+struct FixedWorkspaceStore {
+    state: Mutex<Option<SavedWorkspace>>,
+}
+
+impl FixedWorkspaceStore {
+    fn new(state: Option<SavedWorkspace>) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(state),
+        })
+    }
+}
+
+impl WorkspaceStateSource for FixedWorkspaceStore {
+    fn load(&self, _project: &Path) -> Option<SavedWorkspace> {
+        self.state.lock().expect("lock").clone()
+    }
 }
 
 fn rig() -> Rig {
@@ -131,6 +153,26 @@ impl Rig {
     fn close_tab(&mut self, path: &str) {
         let path = path.to_owned();
         self.with(|wb, window, cx| wb.request_close_tab(path, window, cx));
+    }
+
+    fn set_workspace_source(&mut self, source: Arc<dyn WorkspaceStateSource>) {
+        self.with(|wb, _window, _cx| wb.set_workspace_source(Some(source)));
+    }
+
+    /// Records every `WorkspaceChanged` the workbench hands to the application.
+    fn record_workspace_changes(&mut self) -> Arc<Mutex<Vec<SavedWorkspace>>> {
+        let saved = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&saved);
+        let view = self.view.clone();
+        self.cx.update(|_w, cx| {
+            cx.subscribe(&view, move |_wb, event: &WorkbenchEvent, _cx| {
+                if let WorkbenchEvent::WorkspaceChanged(workspace) = event {
+                    recorder.lock().expect("lock").push(workspace.clone());
+                }
+            })
+            .detach();
+        });
+        saved
     }
 
     fn type_text(&mut self, text: &str) {
@@ -1768,4 +1810,103 @@ fn switching_projects_closes_the_search_overlay() {
     std::fs::create_dir(&root).expect("nested dir");
     rig.with(|wb, window, cx| wb.open_project(root, window, cx));
     assert!(!rig.search_open());
+}
+
+#[test]
+fn a_project_reopens_with_its_saved_tabs_layout_and_shells() {
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    let store = FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root,
+        tabs: vec![
+            SavedTab {
+                path: "a.txt".into(),
+                line: 1,
+            },
+            SavedTab {
+                path: "b.txt".into(),
+                line: 1,
+            },
+        ],
+        active: 1,
+        layout: LayoutPreset::Editor,
+        terminals: vec![SavedTerminal::Shell],
+    }));
+    rig.set_workspace_source(store);
+    rig.open_project();
+    assert!(
+        rig.settle_until(|rig| rig.editor_paths() == vec!["a.txt".to_owned(), "b.txt".to_owned()])
+    );
+    assert_eq!(
+        rig.editor_path().as_deref(),
+        Some("b.txt"),
+        "the saved active tab"
+    );
+    assert_eq!(rig.read(|wb, _| wb.layout()), LayoutPreset::Editor);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+}
+
+#[test]
+fn a_saved_workspace_of_another_project_is_not_restored() {
+    let mut rig = rig();
+    let store = FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: PathBuf::from("/elsewhere/other"),
+        tabs: vec![SavedTab {
+            path: "a.txt".into(),
+            line: 1,
+        }],
+        active: 0,
+        layout: LayoutPreset::Agents,
+        terminals: Vec::new(),
+    }));
+    rig.set_workspace_source(store);
+    rig.open_project();
+    rig.settle_for(300);
+    assert!(
+        rig.editor_paths().is_empty(),
+        "a state file that names another project must not seed tabs"
+    );
+    assert_eq!(rig.read(|wb, _| wb.layout()), LayoutPreset::Balanced);
+}
+
+#[test]
+fn workspace_changes_are_saved_after_the_delay_and_on_close() {
+    let mut rig = rig();
+    let saved = rig.record_workspace_changes();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    rig.type_text("!");
+    assert!(
+        saved.lock().expect("lock").is_empty(),
+        "the state waits for the delay"
+    );
+    // The write delay passes: the state is handed over with the tab and its cursor line.
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a saved state");
+    assert_eq!(workspace.project, rig.dir.path());
+    assert_eq!(workspace.tabs.len(), 1);
+    assert_eq!(workspace.tabs[0].path, "a.txt");
+    // A close hands over what is pending without waiting for the delay.
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    let before = saved.lock().expect("lock").len();
+    let allowed = rig.with(|wb, window, cx| wb.request_close(window, cx));
+    assert!(!allowed, "the unsaved edit is asked about first");
+    rig.with(|wb, window, cx| wb.resolve(Decision::Discard, window, cx));
+    let states = saved.lock().expect("lock");
+    assert!(
+        states.len() > before,
+        "the close must flush the pending state"
+    );
+    let last = states.last().expect("a saved state");
+    assert_eq!(last.terminals, vec![SavedTerminal::Shell]);
+    assert_eq!(last.tabs.len(), 1, "the open tab is part of the state");
 }

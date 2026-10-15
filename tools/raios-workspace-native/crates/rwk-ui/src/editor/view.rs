@@ -14,8 +14,8 @@ use rwk_core::documents::Document;
 use rwk_core::error::{AppError, ErrorCode};
 use rwk_core::project::ProjectRoot;
 use rwk_core::workbench::{
-    side_by_side, Appearance, DocumentSession, SaveBlocked, SaveTicket, Skin, SwitchDecision,
-    Theme, Tone, MAX_SAVED_TABS,
+    side_by_side, Appearance, DocumentSession, SaveBlocked, SaveTicket, SavedTab, Skin,
+    SwitchDecision, Theme, Tone, MAX_SAVED_TABS,
 };
 
 use super::diff::DiffHighlighter;
@@ -95,6 +95,8 @@ pub struct EditorView {
     /// In-flight read per path; a closed tab's entry is removed so its read cannot reopen it.
     requests: HashMap<String, u64>,
     diff_generation: u64,
+    /// Bumped by every restore; a restore that finishes after a project switch is dropped.
+    restore_generation: u64,
 }
 
 impl EventEmitter<EditorEvent> for EditorView {}
@@ -123,6 +125,7 @@ impl EditorView {
             next_request: 0,
             requests: HashMap::new(),
             diff_generation: 0,
+            restore_generation: 0,
         }
     }
 
@@ -442,6 +445,75 @@ impl EditorView {
                 match result {
                     Ok(document) => view.install_document(document, line, window, cx),
                     Err(error) => view.set_status(error.message, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Path and 1-based cursor line of every tab, in strip order: what the saved workspace
+    /// stores so a project reopens as it was left.
+    pub fn tabs_snapshot(&self, cx: &gpui::App) -> Vec<SavedTab> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| {
+                let path = tab.path()?.to_owned();
+                let position = tab.state.read(cx).cursor_position();
+                let line = usize::try_from(position.line).unwrap_or(usize::MAX) + 1;
+                Some(SavedTab { path, line })
+            })
+            .collect()
+    }
+
+    /// Index of the active tab (what the saved workspace stores).
+    pub fn active_index(&self) -> usize {
+        self.active
+    }
+
+    /// Restores a saved set of tabs: every file is read on the background executor, the ones
+    /// that read cleanly become tabs in the saved order and `active` picks the active tab.
+    /// Files that no longer read (gone, binary, over the size limit) are skipped silently.
+    /// A restore that finishes after a project switch is dropped.
+    pub fn restore_tabs(
+        &mut self,
+        project: Arc<ProjectRoot>,
+        tabs: Vec<SavedTab>,
+        active: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tabs: Vec<SavedTab> = tabs.into_iter().take(MAX_SAVED_TABS).collect();
+        if tabs.is_empty() {
+            return;
+        }
+        self.restore_generation += 1;
+        let generation = self.restore_generation;
+        cx.spawn_in(window, async move |this, cx| {
+            let mut read = Vec::new();
+            for tab in tabs {
+                let project = project.clone();
+                let path = tab.path.clone();
+                let document = cx
+                    .background_executor()
+                    .spawn(async move { project.read_document(&path) })
+                    .await;
+                read.push((tab, document));
+            }
+            this.update_in(cx, |view, window, cx| {
+                if view.restore_generation != generation {
+                    return;
+                }
+                let mut installed: Vec<String> = Vec::new();
+                for (tab, document) in read {
+                    if let Ok(document) = document {
+                        let path = document.path.clone();
+                        view.install_document(document, Some(tab.line), window, cx);
+                        installed.push(path);
+                    }
+                }
+                if let Some(path) = installed.get(active) {
+                    view.activate_tab(path, window, cx);
                 }
             })
             .ok();

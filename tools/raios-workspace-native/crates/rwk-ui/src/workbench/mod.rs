@@ -7,6 +7,7 @@ pub mod layout;
 pub mod memory;
 pub mod palette;
 pub mod search;
+pub mod workspace;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,11 +23,13 @@ use rwk_core::control::ControlPlane;
 use rwk_core::guarded::Guarded;
 use rwk_core::handoff_flow::TrackedHandoff;
 use rwk_core::project::ProjectRoot;
-use rwk_core::sessions::{SessionId, SessionKind, SessionRegistry, TerminalHost, TerminalSize};
+use rwk_core::sessions::{
+    SessionId, SessionKind, SessionRegistry, TerminalHost, TerminalSize, MAX_SESSIONS,
+};
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
 use rwk_core::workbench::{
-    available, resolve_shortcut, Appearance, CommandId, KeyboardContext, Keystroke, Skin,
-    SwitchDecision, Theme, Tone, WorkbenchState,
+    available, resolve_shortcut, Appearance, CommandId, KeyboardContext, Keystroke, SavedWorkspace,
+    Skin, SwitchDecision, Theme, Tone, WorkbenchState, WorkspaceStateSource,
 };
 
 use crate::editor::view::{EditorEvent, EditorView};
@@ -45,6 +48,10 @@ const NEW_TERMINAL_SIZE: TerminalSize = TerminalSize {
     rows: 30,
 };
 
+/// How long a workspace change waits for the user to stop fiddling before it is handed to the
+/// application for storage. A project switch or a close flushes it immediately.
+const WORKSPACE_SAVE_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// What the workbench tells the application around it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkbenchEvent {
@@ -53,6 +60,9 @@ pub enum WorkbenchEvent {
     /// The daemon confirmed this project is registered (newly or before); the application
     /// remembers it so the registration is not offered again at every start.
     ProjectRegistered(PathBuf),
+    /// The open project's workspace changed (tabs, layout, sessions); the application writes
+    /// it so the next start reopens the project as it was left.
+    WorkspaceChanged(SavedWorkspace),
 }
 
 impl gpui::EventEmitter<WorkbenchEvent> for Workbench {}
@@ -217,6 +227,12 @@ pub struct Workbench {
     after_save: Option<PendingAction>,
     /// The tabs still to save, in strip order (a save answer may cover several dirty files).
     save_queue: Vec<String>,
+    /// Where the saved workspace of each project is read from (the application sets it).
+    workspace_source: Option<Arc<dyn WorkspaceStateSource>>,
+    /// The workspace state waiting for the write delay to pass.
+    pending_workspace: Option<SavedWorkspace>,
+    /// The debounce task that hands `pending_workspace` to the application.
+    workspace_save_task: Option<Task<()>>,
     toast: Option<SharedString>,
     toast_task: Option<Task<()>>,
     file_search_task: Option<Task<()>>,
@@ -333,6 +349,9 @@ impl Workbench {
             palette_subscription: None,
             after_save: None,
             save_queue: Vec::new(),
+            workspace_source: None,
+            pending_workspace: None,
+            workspace_save_task: None,
             toast: None,
             toast_task: None,
             file_search_task: None,
@@ -803,6 +822,7 @@ impl Workbench {
             sizes.resize_panel(0, px(files), window, cx);
             sizes.resize_panel(2, px(dock), window, cx);
         });
+        self.note_workspace_change(cx);
         cx.notify();
     }
 
@@ -967,7 +987,7 @@ impl Workbench {
             EditorEvent::Edited
             | EditorEvent::Opened(_)
             | EditorEvent::Closed(_)
-            | EditorEvent::Activated(_) => {}
+            | EditorEvent::Activated(_) => self.note_workspace_change(cx),
         }
     }
 
@@ -1017,6 +1037,8 @@ impl Workbench {
             }
             PendingAction::OpenProject(root) => match ProjectRoot::open(root) {
                 Ok(project) => {
+                    // The state of the project being left is written before anything is torn down.
+                    self.flush_workspace(cx);
                     self.close_palette(window, cx);
                     self.close_search(window, cx);
                     self.stop_terminals(false);
@@ -1030,6 +1052,7 @@ impl Workbench {
                     self.inspector
                         .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));
                     self.register_if_unknown(window, cx);
+                    self.restore_workspace(window, cx);
                     if let Some(command) = self.after_pick.take() {
                         self.run(command, window, cx);
                     }
@@ -1038,6 +1061,8 @@ impl Workbench {
                 Err(error) => self.say(error.message, cx),
             },
             PendingAction::CloseWindow => {
+                // Next time the project opens with what was open now, sessions included.
+                self.flush_workspace(cx);
                 self.stop_terminals(true);
                 self.close_confirmed = true;
             }
@@ -1045,6 +1070,7 @@ impl Workbench {
                 if let Err(error) = self.sessions.stop(&id) {
                     self.say(error.message, cx);
                 }
+                self.note_workspace_change(cx);
             }
             // These two are answered through `resolve`, never performed directly.
             PendingAction::ChooseAgent | PendingAction::Consent(..) => {}
@@ -1093,21 +1119,32 @@ impl Workbench {
         self.selected = self.selected.min(self.terminals.len().saturating_sub(1));
     }
 
-    fn new_terminal(&mut self, kind: SessionKind, window: &mut Window, cx: &mut Context<Self>) {
+    /// Starts one terminal pane for the open project. `false` (with a message) when it could not
+    /// start. Silent about layout and the saved workspace: a restore seeds panes without
+    /// nudging the layout or noting a change it is itself restoring.
+    fn spawn_terminal(
+        &mut self,
+        kind: SessionKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(project) = self.project.clone() else {
-            return;
+            return false;
         };
         self.prune_dead_panes();
+        if self.terminals.len() >= MAX_SESSIONS {
+            return false;
+        }
         let info = match self.sessions.start(&project, kind, None, NEW_TERMINAL_SIZE) {
             Ok(info) => info,
             Err(error) => {
                 self.say(error.message, cx);
-                return;
+                return false;
             }
         };
         let Some(engine) = self.host.0.engine(&info.id) else {
             self.say("Terminal oturumu başlatılamadı", cx);
-            return;
+            return false;
         };
         let (gate, receiver) = self.gates.attach(&info.id);
         let host: Arc<dyn TerminalHost> = Arc::new(self.host.clone());
@@ -1120,11 +1157,19 @@ impl Workbench {
             view,
         });
         self.dock_visible = true;
+        let last = self.terminals.len() - 1;
+        self.select_terminal(last, window, cx);
+        true
+    }
+
+    fn new_terminal(&mut self, kind: SessionKind, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.spawn_terminal(kind, window, cx) {
+            return;
+        }
         if self.terminals.len() >= 3 && self.layout != LayoutPreset::Agents {
             self.apply_layout(LayoutPreset::Agents, window, cx);
         }
-        let last = self.terminals.len() - 1;
-        self.select_terminal(last, window, cx);
+        self.note_workspace_change(cx);
     }
 
     fn select_terminal(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
