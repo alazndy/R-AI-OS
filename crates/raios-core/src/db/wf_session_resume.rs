@@ -52,6 +52,7 @@ pub fn cp_bind_wrapper_resume(conn: &Connection, run_id: &str, native_id: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::abs;
     #[test]
     fn launch_record_survives_reopen_without_session_end_and_binding_is_immutable() {
         let temp = tempfile::tempdir().unwrap();
@@ -63,7 +64,7 @@ mod tests {
                 &conn,
                 "codex_kaira",
                 None,
-                "/workspace",
+                abs("/workspace").as_str(),
                 None,
                 Some("Recovery"),
                 Some("Check writes"),
@@ -74,7 +75,7 @@ mod tests {
         };
         let conn = Connection::open(path).unwrap();
         let record = cp_wrapper_resume_record(&conn, &run).unwrap();
-        assert_eq!(record.workspace_root, "/workspace");
+        assert_eq!(record.workspace_root, abs("/workspace").as_str());
         assert!(record.native_session_id.is_some());
         assert!(cp_bind_wrapper_resume(&conn, &run, "other").is_err());
         assert_eq!(cp_sessions_list(&conn, 1).unwrap()[0].status, "running");

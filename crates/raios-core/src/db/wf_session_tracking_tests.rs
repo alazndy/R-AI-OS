@@ -1,4 +1,5 @@
 use super::*;
+use crate::db::abs;
 
 #[test]
 fn named_sessions_can_be_tracked_and_relabelled_without_changing_execution_state() {
@@ -7,7 +8,7 @@ fn named_sessions_can_be_tracked_and_relabelled_without_changing_execution_state
         &conn,
         "codex_kaira",
         None,
-        "/workspace",
+        abs("/workspace").as_str(),
         None,
         Some("  Database maintenance  "),
         Some("Investigate cache growth"),
@@ -36,7 +37,7 @@ fn session_filters_are_applied_before_limit_and_search_is_literal() {
         &conn,
         "codex_kaira",
         None,
-        "/workspace",
+        abs("/workspace").as_str(),
         None,
         Some("100% backup"),
         Some("SQLite work"),
@@ -80,7 +81,7 @@ fn label_audit_failure_rolls_back_and_invalid_labels_leave_no_partial_launch() {
             &conn,
             "codex_kaira",
             None,
-            "/workspace",
+            abs("/workspace").as_str(),
             None,
             Some(name),
             None
@@ -99,7 +100,7 @@ fn project_filter_reports_registered_project_and_preserves_legacy_labels() {
         &conn,
         "Tracked",
         "core",
-        "/workspace/project",
+        abs("/workspace/project").as_str(),
         None,
         "active",
         None,
@@ -110,7 +111,7 @@ fn project_filter_reports_registered_project_and_preserves_legacy_labels() {
     .unwrap();
     let (_, run) = cp_session_start(&conn, "codex_kaira", Some(pid)).unwrap();
     cp_session_start(&conn, "codex_kaira", None).unwrap();
-    for project in ["Tracked", "/workspace/project"] {
+    for project in ["Tracked", abs("/workspace/project").as_str()] {
         let rows = cp_sessions_list_filtered(&conn, 10, None, false, Some(project), None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].run_id, run);

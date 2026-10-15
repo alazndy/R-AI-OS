@@ -74,6 +74,7 @@ pub fn repair_orphan_contracts(path: &Path, apply: bool) -> Result<ContractRecov
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::abs;
     fn fixture() -> (tempfile::TempDir, std::path::PathBuf, String) {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("db.sqlite");
@@ -83,7 +84,7 @@ mod tests {
         let contract = crate::db::cp_insert_run_contract(
             &conn,
             None,
-            "/project",
+            abs("/project").as_str(),
             "[\"source\"]",
             "[]",
             "[]",

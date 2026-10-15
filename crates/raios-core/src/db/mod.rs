@@ -66,6 +66,17 @@ pub use wf_swarm::*;
 pub use wf_task_graph::*;
 pub use workspace::*;
 
+/// An absolute path in the test's Unix notation, valid on the host: a bare `/workspace` is
+/// relative on Windows, so there it gains a drive and backslashes.
+#[cfg(test)]
+pub(crate) fn abs(path: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", path.replace('/', "\\"))
+    } else {
+        path.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests;
 

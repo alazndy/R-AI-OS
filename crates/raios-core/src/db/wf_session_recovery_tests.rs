@@ -1,4 +1,5 @@
 use super::*;
+use crate::db::abs;
 
 #[test]
 fn ending_a_wrapper_preserves_an_explicit_terminal_task_decision() {
@@ -80,7 +81,7 @@ fn explicit_workspace_binds_the_contract_and_rejects_an_unrelated_project() {
         &conn,
         "target",
         "core",
-        "/workspace/target",
+        abs("/workspace/target").as_str(),
         None,
         "active",
         None,
@@ -93,7 +94,7 @@ fn explicit_workspace_binds_the_contract_and_rejects_an_unrelated_project() {
         &conn,
         "codex_kaira",
         Some(project),
-        "/workspace/target",
+        abs("/workspace/target").as_str(),
         None,
     )
     .unwrap();
@@ -102,13 +103,13 @@ fn explicit_workspace_binds_the_contract_and_rejects_an_unrelated_project() {
             .unwrap()
             .unwrap()
             .workspace_root,
-        "/workspace/target"
+        abs("/workspace/target").as_str()
     );
     assert!(cp_session_start_in_workspace(
         &conn,
         "codex_kaira",
         Some(project),
-        "/workspace/another",
+        abs("/workspace/another").as_str(),
         None
     )
     .is_err());
@@ -125,9 +126,14 @@ fn process_attachment_is_owner_bound_and_cannot_replace_the_child() {
         pid: 10,
         start_ticks: 1,
     };
-    let (_, run) =
-        cp_session_start_in_workspace(&conn, "codex_kaira", None, "/workspace", Some(&owner))
-            .unwrap();
+    let (_, run) = cp_session_start_in_workspace(
+        &conn,
+        "codex_kaira",
+        None,
+        abs("/workspace").as_str(),
+        Some(&owner),
+    )
+    .unwrap();
     let mut impostor = owner.clone();
     impostor.start_ticks = 2;
     assert!(cp_attach_wrapper_child(&conn, &run, &impostor, None).is_err());

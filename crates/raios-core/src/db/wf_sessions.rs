@@ -440,13 +440,14 @@ mod recovery_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::abs;
 
     fn scoped_run(conn: &Connection) -> (String, i64) {
         let project_id = upsert_project(
             conn,
             "Test",
             "core",
-            "/workspace/project",
+            abs("/workspace/project").as_str(),
             None,
             "active",
             None,
@@ -467,18 +468,24 @@ mod tests {
         let event = cp_record_wrapper_memory_note(
             &conn,
             &run_id,
-            "/workspace/project/src",
+            abs("/workspace/project/src").as_str(),
             "We decided to keep the project boundary strict.",
         )
         .unwrap();
         assert_eq!(event.agent_name, "codex_kaira");
         assert_eq!(event.project_id, project_id);
 
-        assert!(cp_record_wrapper_memory_note(&conn, &run_id, "/other", "cross project").is_err());
         assert!(cp_record_wrapper_memory_note(
             &conn,
             &run_id,
-            "/workspace/project",
+            abs("/other").as_str(),
+            "cross project"
+        )
+        .is_err());
+        assert!(cp_record_wrapper_memory_note(
+            &conn,
+            &run_id,
+            abs("/workspace/project").as_str(),
             "password = 'superSecretValue123'"
         )
         .is_err());
@@ -491,7 +498,7 @@ mod tests {
         assert!(cp_record_wrapper_memory_note(
             &conn,
             &ended_run,
-            "/workspace/project",
+            abs("/workspace/project").as_str(),
             "late note"
         )
         .is_err());

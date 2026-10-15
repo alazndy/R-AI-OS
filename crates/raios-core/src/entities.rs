@@ -280,15 +280,16 @@ fn load_entities_json_fallback(dev_ops: &Path) -> Vec<EntityProject> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::abs;
 
     #[test]
     fn explicit_health_selection_includes_held_and_nested_projects_and_prefers_exact_names() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::migrate_existing(&conn).unwrap();
         for (name, path, status) in [
-            ("parent", "/health/parent", "beklemede"),
-            ("child", "/health/parent/child", "waiting"),
-            ("parent-tools", "/health/tools", "active"),
+            ("parent", abs("/health/parent").as_str(), "beklemede"),
+            ("child", abs("/health/parent/child").as_str(), "waiting"),
+            ("parent-tools", abs("/health/tools").as_str(), "active"),
         ] {
             crate::db::upsert_project(
                 &conn, name, "core", path, None, status, None, None, None, None,
@@ -298,7 +299,8 @@ mod tests {
         let parent = select_registered_entities(&conn, "parent").unwrap();
         assert_eq!(parent.len(), 1);
         assert_eq!(parent[0].status, "beklemede");
-        let child = select_registered_entities(&conn, "/health/parent/child").unwrap();
+        let child =
+            select_registered_entities(&conn, abs("/health/parent/child").as_str()).unwrap();
         assert_eq!(child.len(), 1);
         assert_eq!(child[0].name, "child");
         assert!(select_registered_entities(&conn, "absent")
