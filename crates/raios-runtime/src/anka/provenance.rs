@@ -991,6 +991,7 @@ mod tests {
         assert!(map.resolve("OTHER-B").is_some());
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_absolute_paths_are_scoped_and_normalization_stays_narrow() {
         let temp = tempfile::tempdir().expect("tempdir");
