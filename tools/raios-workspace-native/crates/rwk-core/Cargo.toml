@@ -18,6 +18,7 @@ uuid = { version = "1", features = ["v4"] }
 alacritty_terminal = "=0.25.1"
 portable-pty = "0.9"
 libc = "0.2"
+tungstenite = "0.24"
 
 [dev-dependencies]
 tempfile = "3"
