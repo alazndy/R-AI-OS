@@ -17,7 +17,9 @@ So the product goal is not "an editor". It is:
    projects, same folders, same agent conversations.
 3. **One place that shows every session and its memory**, so nothing is lost track of.
 4. The editor stays as it is: usable when needed, no more investment.
-5. **A menu bar at the top** (Dosya, Düzenle, Görünüm, Oturum, Ayarlar, Yardım) so every
+5. **Every terminal says who it is**: a name strip (agent name plus the user's label) and a
+   colour per agent or per pane, so ten terminals can be told apart at a glance.
+6. **A menu bar at the top** (Dosya, Düzenle, Görünüm, Oturum, Ayarlar, Yardım) so every
    command and every setting can be reached by mouse, without remembering shortcuts.
 
 ## 2. What exists today (measured from the code on master `696e22b`)
@@ -76,7 +78,12 @@ pub struct SavedPane {
     pub terminal: SavedTerminal,       // existing: Shell | Agent { kind, native_session }
     pub cwd: PathBuf,                  // absolute, validated inside or equal to project
     pub tail: Option<Vec<String>>,     // last lines, redacted; None when disabled
+    pub label: Option<String>,         // user's name for the pane, <= 40 chars, no control chars
+    pub tint: Option<PaneTint>,        // None = the agent's default colour
 }
+
+/// A fixed palette, never free hex: contrast is checked once per theme (see tests).
+pub enum PaneTint { Amber, Blue, Green, Violet, Rose, Teal, Slate }
 
 // rwk-core/src/desk_recovery.rs  (new)
 pub enum StartState { Fresh, CleanRestart(SavedDesk), CrashedWith(SavedDesk) }
@@ -113,6 +120,16 @@ UI contracts (empty at first): `RecoveryView` (the list with checkboxes and the 
 - **E. Sessions panel.** Every agent conversation across projects (from the resume catalog and
   the control plane): project, status, last work description, link to the project's memory.
 - **F. Scrollback tail** (optional, droppable).
+- **H. Pane identity.** Each terminal gets a header strip: coloured dot, agent name
+  (`Claude`, `Codex`, `OpenCode`, `Antigravity`, `Kabuk`), the user's label and, when known,
+  the project folder name. The terminal body gets a *very light* tint overlay (about 6 %
+  alpha) plus a coloured left edge, strong enough to recognise across the room and weak
+  enough not to touch text contrast. Default colour per agent kind (Claude amber, Codex
+  blue, OpenCode green, Antigravity violet, shell slate); a pane can override it from its
+  header or the menu (*Oturum → Bölme rengi / Bölme adı*). Colour and label are saved in the
+  desk and restored. The existing 0.1 contrast gates run for every tint on all four
+  appearances; a tint that fails a gate is not offered. Pairs with the status marker from
+  phase E so the strip also shows running / waiting / finished / failed.
 - **G. Menu bar and settings.** A menu bar over the existing `CommandId` registry (the same
   commands the palette lists, with their shortcuts and disabled reasons), plus a settings
   view. Menus: *Dosya* (open project, quick open, save, close tab, quit), *Düzenle*
