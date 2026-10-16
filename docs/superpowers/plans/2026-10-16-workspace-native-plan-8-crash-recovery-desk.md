@@ -19,7 +19,9 @@ So the product goal is not "an editor". It is:
 4. The editor stays as it is: usable when needed, no more investment.
 5. **Every terminal says who it is**: a name strip (agent name plus the user's label) and a
    colour per agent or per pane, so ten terminals can be told apart at a glance.
-6. **A menu bar at the top** (Dosya, Düzenle, Görünüm, Oturum, Ayarlar, Yardım) so every
+6. **Fully integrated with raios.** The workspace is a thin client of the daemon and the CLI,
+   never a second source of truth: what it shows and does is what `raios` knows and does.
+7. **A menu bar at the top** (Dosya, Düzenle, Görünüm, Oturum, Ayarlar, Yardım) so every
    command and every setting can be reached by mouse, without remembering shortcuts.
 
 ## 2. What exists today (measured from the code on master `696e22b`)
@@ -130,6 +132,23 @@ UI contracts (empty at first): `RecoveryView` (the list with checkboxes and the 
   desk and restored. The existing 0.1 contrast gates run for every tint on all four
   appearances; a tint that fails a gate is not offered. Pairs with the status marker from
   phase E so the strip also shows running / waiting / finished / failed.
+- **I. raios integration.** Principle: no state of its own that raios should own; every
+  action goes through the daemon's policy and consent gate, like today.
+  1. *One identity.* Every pane started from the workspace is a wrapper session registered
+     with its project and label (today some show `project: unregistered` in `raios sessions`),
+     so `raios sessions`, the inspector and the sessions panel agree.
+  2. *Actions menu.* A raios menu/palette group that runs the CLI for the open project:
+     `health`, `reflect`, `security`, `deps`, `pre-flight`, `build`, `test`, `git status`,
+     `usage`, `memory <query>`, `mem list`. Output opens in a pane or a result view; anything
+     that changes state (commit, version-bump, swarm approve) goes through the consent gate.
+  3. *Project badges.* Each desk tab shows what raios already computes: dirty files, health
+     score, pending approvals, quota signal (`raios usage`). Read-only, polled through the
+     daemon, never blocks the UI.
+  4. *Memory.* Per-pane note and `session_note` go into the raios memory pipeline; the memory
+     view and the sessions panel read `raios mem` and the project's `memory.md`.
+  5. *Contract.* A typed capability list (`rwk-core/src/raios_actions.rs`) maps each menu
+     item to one allowlisted raios subcommand or MCP tool; no free command text, as with
+     `SessionKind` today.
 - **G. Menu bar and settings.** A menu bar over the existing `CommandId` registry (the same
   commands the palette lists, with their shortcuts and disabled reasons), plus a settings
   view. Menus: *Dosya* (open project, quick open, save, close tab, quit), *Düzenle*
