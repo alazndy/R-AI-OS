@@ -2,6 +2,8 @@
 //! exact-modifier shortcut table, and the reasons a command is unavailable. Buttons, shortcuts
 //! and the command palette all go through the same [`available`] check.
 
+use crate::sessions::MAX_SESSIONS;
+
 /// Every action the workbench offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandId {
@@ -419,7 +421,7 @@ pub struct WorkbenchState {
     pub file_open: bool,
     /// The open file has unsaved edits.
     pub dirty: bool,
-    /// Live terminal sessions (0 to 4).
+    /// Live terminal sessions (0 to [`MAX_SESSIONS`]).
     pub terminals: u8,
     /// The terminal dock is visible.
     pub dock_visible: bool,
@@ -451,9 +453,6 @@ fn deny(reason: &'static str) -> CommandState {
         reason: Some(reason),
     }
 }
-
-/// Maximum simultaneous terminal sessions (spec section 7).
-pub const MAX_TERMINALS: u8 = 4;
 
 /// Whether `id` can run in `state`, with the reason when it cannot.
 pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
@@ -491,8 +490,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         NewTerminal => {
             if !state.project_open {
                 deny("Önce bir proje klasörü açın")
-            } else if state.terminals >= MAX_TERMINALS {
-                deny("En fazla 4 terminal açılabilir")
+            } else if usize::from(state.terminals) >= MAX_SESSIONS {
+                deny("En fazla 12 terminal açılabilir")
             } else {
                 allow()
             }
@@ -729,26 +728,26 @@ mod tests {
     }
 
     #[test]
-    fn the_fifth_terminal_is_refused_with_a_reason() {
+    fn the_thirteenth_terminal_is_refused_with_a_reason() {
         let state = WorkbenchState {
             project_open: true,
-            terminals: 4,
+            terminals: 12,
             ..WorkbenchState::default()
         };
         let result = available(CommandId::NewTerminal, &state);
         assert!(!result.enabled);
-        assert_eq!(result.reason, Some("En fazla 4 terminal açılabilir"));
+        assert_eq!(result.reason, Some("En fazla 12 terminal açılabilir"));
         assert!(
             !available(
-                CommandId::FocusTerminal(4),
+                CommandId::FocusTerminal(12),
                 &WorkbenchState {
-                    terminals: 3,
+                    terminals: 11,
                     ..state
                 }
             )
             .enabled
         );
-        assert!(available(CommandId::FocusTerminal(4), &state).enabled);
+        assert!(available(CommandId::FocusTerminal(12), &state).enabled);
     }
 
     #[test]

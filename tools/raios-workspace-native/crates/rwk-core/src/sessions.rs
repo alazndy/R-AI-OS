@@ -10,7 +10,7 @@ use crate::error::{AppError, ErrorCode, Result};
 use crate::project::{ProjectId, ProjectRoot};
 
 /// Maximum number of concurrent sessions, in the UI and in the backend.
-pub const MAX_SESSIONS: usize = 4;
+pub const MAX_SESSIONS: usize = 12;
 
 /// What a session runs. Deserialized from an enum, never from free text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -365,8 +365,8 @@ mod tests {
     }
 
     #[test]
-    fn at_most_four_sessions_may_run_at_once() {
-        assert_eq!(MAX_SESSIONS, 4);
+    fn at_most_twelve_sessions_may_run_at_once() {
+        assert_eq!(MAX_SESSIONS, 12);
     }
 
     #[test]

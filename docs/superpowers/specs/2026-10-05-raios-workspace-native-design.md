@@ -91,7 +91,7 @@ Per session: PTY -> reader thread (64 KiB reads) -> **bounded channel** -> parse
 
 **Keyboard and commands:** the 0.1 `workbench.ts` catalog is ported 1:1: a typed `Command` enum, `available(&state) -> Result<(), Reason>` (palette shows why an action is unavailable), one dispatch path shared by buttons, shortcuts and the palette. GPUI `actions!` plus key contexts: reserved combinations are caught as actions before reaching the PTY; unreserved keys (Ctrl+C/K/S/L, Tab, arrows) go to the shell. To verify: Wayland IME/AltGr and the equivalent of 0.1's held-key repeat cancellation.
 
-**Layout:** dock with draggable divider (drag and arrow keys), Ctrl/Cmd+1/2/3 balanced/editor/agent layouts, up to 4 terminal panes. Evaluate `gpui_base::dock::DockArea` first; if unsuitable, a flex split with `ResizeHandle`.
+**Layout:** dock with draggable divider (drag and arrow keys), Ctrl/Cmd+1/2/3 balanced/editor/agent layouts, up to 12 terminal panes. Evaluate `gpui_base::dock::DockArea` first; if unsuitable, a flex split with `ResizeHandle`.
 
 **Theme:** token based; skins standard and GT-LCARS times tones dark and light; `{skin, tone}` persisted independently and validated. Switching does not recreate editors or PTYs (editor styles via `set_editor_style`, terminal palette swap). Antonio font bundled with its OFL license. The existing contrast gates become pure unit tests: file icons >= 4.94:1, filenames >= 12.52:1 across all four appearances.
 

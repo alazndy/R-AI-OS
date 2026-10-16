@@ -307,18 +307,18 @@ fn a_disabled_command_does_nothing_and_reports_its_reason() {
 }
 
 #[test]
-fn the_fifth_terminal_is_refused_with_a_reason() {
+fn the_thirteenth_terminal_is_refused_with_a_reason() {
     let mut rig = rig();
     rig.open_project();
-    for _ in 0..4 {
+    for _ in 0..12 {
         rig.run(CommandId::NewTerminal);
     }
-    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 4);
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 12);
     rig.run(CommandId::NewTerminal);
-    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 4);
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 12);
     assert_eq!(
         rig.read(|wb, _| wb.toast()).as_deref(),
-        Some("En fazla 4 terminal açılabilir")
+        Some("En fazla 12 terminal açılabilir")
     );
 }
 
