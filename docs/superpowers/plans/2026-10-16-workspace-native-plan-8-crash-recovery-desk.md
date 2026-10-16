@@ -17,6 +17,8 @@ So the product goal is not "an editor". It is:
    projects, same folders, same agent conversations.
 3. **One place that shows every session and its memory**, so nothing is lost track of.
 4. The editor stays as it is: usable when needed, no more investment.
+5. **A menu bar at the top** (Dosya, Düzenle, Görünüm, Oturum, Ayarlar, Yardım) so every
+   command and every setting can be reached by mouse, without remembering shortcuts.
 
 ## 2. What exists today (measured from the code on master `696e22b`)
 
@@ -111,6 +113,14 @@ UI contracts (empty at first): `RecoveryView` (the list with checkboxes and the 
 - **E. Sessions panel.** Every agent conversation across projects (from the resume catalog and
   the control plane): project, status, last work description, link to the project's memory.
 - **F. Scrollback tail** (optional, droppable).
+- **G. Menu bar and settings.** A menu bar over the existing `CommandId` registry (the same
+  commands the palette lists, with their shortcuts and disabled reasons), plus a settings
+  view. Menus: *Dosya* (open project, quick open, save, close tab, quit), *Düzenle*
+  (search in project, copy/paste), *Görünüm* (terminal, inspector, layouts, skin and tone,
+  dock size), *Oturum* (new terminal, start agent, handoff, restore desk, sessions panel,
+  project memory), *Ayarlar* (appearance, font size, terminal limit, restore policy,
+  scrollback tail on/off), *Yardım* (shortcut list). Settings persist next to
+  `appearance.json`. No new behaviour: every item runs an existing command.
 
 ## 6. How we will know it works (acceptance)
 
