@@ -9,6 +9,7 @@ use gpui::{Entity, TestAppContext, TestDispatcher, VisualTestContext};
 use gpui_wgpu::CosmicTextSystem;
 use rwk_core::search::{SearchHit, SearchResult, SearchSource};
 use rwk_core::terminal::ProgramPaths;
+use rwk_core::usage::{UsageProvider, UsageReport, UsageSource};
 use rwk_core::workbench::Tone;
 use rwk_core::workbench::{
     Appearance, CommandId, SavedTab, SavedTerminal, SavedWorkspace, WorkspaceStateSource,
@@ -226,6 +227,17 @@ impl Rig {
             calls: Arc::clone(&calls),
         };
         self.with(|wb, _window, _cx| wb.set_search_source(Some(Arc::new(source))));
+        calls
+    }
+
+    /// Connects a scripted quota source; every `usage` call takes the next queued answer.
+    fn script_usage(&mut self, answers: Vec<(Duration, Option<UsageReport>)>) -> Arc<Mutex<usize>> {
+        let calls = Arc::new(Mutex::new(0));
+        let source = FakeUsage {
+            answers: Mutex::new(answers.into()),
+            calls: Arc::clone(&calls),
+        };
+        self.with(|wb, _window, cx| wb.set_usage_source(Some(Arc::new(source)), cx));
         calls
     }
 
@@ -791,6 +803,70 @@ fn toasts_expire_after_five_seconds_and_a_replacement_gets_its_own_timer() {
     rig.cx.executor().advance_clock(Duration::from_secs(4));
     tick_ready(&mut rig);
     assert_eq!(rig.read(|wb, _| wb.toast()), None);
+}
+
+#[test]
+fn the_status_bar_shows_the_quota_line_once_a_reading_lands() {
+    let mut rig = rig();
+    let calls = rig.script_usage(vec![(
+        Duration::ZERO,
+        Some(usage_report("5h:64% 7d:8% remaining")),
+    )]);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.quota_line()).is_some()));
+    assert_eq!(
+        rig.read(|wb, _| wb.quota_line()).as_deref(),
+        Some("Kota: Claude Code 5h:64% 7d:8% remaining")
+    );
+    assert_eq!(*calls.lock().expect("calls"), 1);
+}
+
+#[test]
+fn a_failed_quota_reading_leaves_the_status_bar_quiet() {
+    let mut rig = rig();
+    let calls = rig.script_usage(vec![(Duration::ZERO, None)]);
+    let observed = Arc::clone(&calls);
+    assert!(rig.settle_until(move |_rig| *observed.lock().expect("calls") == 1));
+    rig.cx.run_until_parked();
+    assert_eq!(rig.read(|wb, _| wb.quota_line()), None);
+    // The failure is not toasted either; the status bar simply stays quiet.
+    assert_eq!(rig.read(|wb, _| wb.toast()), None);
+}
+
+#[test]
+fn a_slow_quota_reading_never_blocks_the_workbench() {
+    let mut rig = rig();
+    let calls = rig.script_usage(vec![(
+        Duration::from_millis(300),
+        Some(usage_report("5h:64% 7d:8% remaining")),
+    )]);
+    // The reading has not even started on the executor yet: the workbench answers commands...
+    assert_eq!(rig.read(|wb, _| wb.quota_line()), None);
+    rig.run(CommandId::ToggleTerminal);
+    assert!(!rig.read(|wb, _| wb.dock_visible()));
+    assert_eq!(*calls.lock().expect("calls"), 0);
+    // ...and the line lands once the background reading finishes.
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.quota_line()).is_some()));
+    assert_eq!(*calls.lock().expect("calls"), 1);
+}
+
+#[test]
+fn the_quota_signal_refreshes_on_the_timer() {
+    let mut rig = rig();
+    let calls = rig.script_usage(vec![
+        (Duration::ZERO, Some(usage_report("5h:64% 7d:8% remaining"))),
+        (Duration::ZERO, Some(usage_report("5h:12% 7d:8% remaining"))),
+    ]);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.quota_line()).is_some()));
+    assert_eq!(*calls.lock().expect("calls"), 1);
+    rig.cx
+        .executor()
+        .advance_clock(rwk_ui::workbench::usage::USAGE_REFRESH);
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|rig| {
+        rig.read(|wb, _| wb.quota_line()).as_deref()
+            == Some("Kota: Claude Code 5h:12% 7d:8% remaining")
+    }));
+    assert_eq!(*calls.lock().expect("calls"), 2);
 }
 
 #[test]
@@ -1735,6 +1811,45 @@ impl SearchSource for FakeSearch {
             hits,
             truncated: false,
         })
+    }
+}
+
+/// A scripted quota source: queued answers with their delays, and a log of the calls. `None`
+/// answers fail like a missing CLI; the workbench must stay quiet then.
+struct FakeUsage {
+    answers: Mutex<std::collections::VecDeque<(Duration, Option<UsageReport>)>>,
+    calls: Arc<Mutex<usize>>,
+}
+
+impl UsageSource for FakeUsage {
+    fn usage(&self) -> rwk_core::error::Result<UsageReport> {
+        *self.calls.lock().expect("calls") += 1;
+        let (delay, answer) = self
+            .answers
+            .lock()
+            .expect("answers")
+            .pop_front()
+            .unwrap_or((Duration::ZERO, None));
+        std::thread::sleep(delay);
+        match answer {
+            Some(report) => Ok(report),
+            None => Err(rwk_core::error::AppError::new(
+                rwk_core::error::ErrorCode::Io,
+                "kota okunamadı".to_owned(),
+            )),
+        }
+    }
+}
+
+/// A report with a single remaining figure, as `raios usage --json` answers for Claude.
+fn usage_report(remaining: &str) -> UsageReport {
+    UsageReport {
+        providers: vec![UsageProvider {
+            provider: "Claude Code".to_owned(),
+            installed: true,
+            authenticated: true,
+            remaining: Some(remaining.to_owned()),
+        }],
     }
 }
 

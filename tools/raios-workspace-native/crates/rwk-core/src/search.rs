@@ -270,8 +270,8 @@ fn relative_path(root: &Path, path: &str) -> String {
 /// Resolves a program name against `PATH`; a name containing a slash is checked as given.
 ///
 /// The terminal module has the same helper, but it only builds on Linux while search is
-/// portable (the CLI runs on every platform RAIOS supports).
-fn find_in_path(name: &OsStr) -> Option<PathBuf> {
+/// portable (the CLI runs on every platform RAIOS supports); the usage module reuses this one.
+pub(crate) fn find_in_path(name: &OsStr) -> Option<PathBuf> {
     let candidate = Path::new(name);
     if candidate.components().count() > 1 || candidate.is_absolute() {
         return is_executable(candidate).then(|| candidate.to_path_buf());

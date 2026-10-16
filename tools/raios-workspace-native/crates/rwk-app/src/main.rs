@@ -21,6 +21,7 @@ use rwk_core::handoff_input::redact_secrets;
 use rwk_core::memory::{MemorySource, SqliteMemorySource};
 use rwk_core::search::CliSearch;
 use rwk_core::terminal::ProgramPaths;
+use rwk_core::usage::CliUsage;
 use rwk_ui::workbench::{Workbench, WorkbenchEvent};
 use token::FileTokenSource;
 
@@ -153,6 +154,11 @@ fn main() {
             // without the daemon; without the CLI on PATH the view says so when a search runs.
             workbench.update(cx, |workbench, _| {
                 workbench.set_search_source(Some(Arc::new(CliSearch::default())));
+            });
+            // The quota signal: `raios usage --json` read on the background executor and
+            // refreshed on a timer; the status bar stays quiet until a reading lands.
+            workbench.update(cx, |workbench, cx| {
+                workbench.set_usage_source(Some(Arc::new(CliUsage::default())), cx);
             });
             // The daemon connection: without a config home there is no token file, so the inspector
             // keeps showing "not configured" instead of guessing a path. The event stream travels

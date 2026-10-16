@@ -26,6 +26,7 @@ pub mod project;
 pub mod search;
 pub mod sessions;
 pub mod terminal;
+pub mod usage;
 pub mod workbench;
 
 pub use error::{AppError, ErrorCode, Result};
