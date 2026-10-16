@@ -162,7 +162,7 @@ fn a_resume_reaches_the_host_with_its_validated_key() {
 }
 
 #[test]
-fn at_most_four_sessions_run_at_once_and_a_finished_one_frees_a_slot() {
+fn at_most_twelve_sessions_run_at_once_and_a_finished_one_frees_a_slot() {
     let (_directory, project, host, registry) = fixture();
     let mut started = Vec::new();
     for _ in 0..MAX_SESSIONS {

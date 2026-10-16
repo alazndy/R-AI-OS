@@ -224,7 +224,9 @@ mod tests {
                 line: 1,
             })
             .collect();
-        let more_terminals: Vec<SavedTerminal> = (0..10).map(|_| SavedTerminal::Shell).collect();
+        let more_terminals: Vec<SavedTerminal> = (0..MAX_SESSIONS + 4)
+            .map(|_| SavedTerminal::Shell)
+            .collect();
         let parsed = SavedWorkspace {
             project: PathBuf::from("/work/app"),
             tabs,
