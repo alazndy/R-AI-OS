@@ -8,6 +8,7 @@ pub mod memory;
 pub mod offers;
 pub mod palette;
 pub mod search;
+pub mod usage;
 pub mod workspace;
 
 use std::path::PathBuf;
@@ -201,6 +202,12 @@ pub struct Workbench {
     search_subscription: Option<Subscription>,
     /// Bumped on every search and on every close; an answer for an older search is dropped.
     search_generation: u64,
+    /// Where the quota signal is read from (the application sets it).
+    usage_source: Option<Arc<dyn rwk_core::usage::UsageSource>>,
+    /// The last quota reading, shown at the right of the status bar.
+    quota: Option<String>,
+    /// The background task that reads the quota signal and refreshes it on a timer.
+    usage_task: Option<Task<()>>,
     consent: Arc<ConsentRegistry>,
     consent_wait: Option<std::sync::mpsc::Receiver<rwk_core::consent::ConsentDecision>>,
     composer: Option<Entity<crate::handoff::HandoffComposer>>,
@@ -335,6 +342,9 @@ impl Workbench {
             search: None,
             search_subscription: None,
             search_generation: 0,
+            usage_source: None,
+            quota: None,
+            usage_task: None,
             consent: Arc::new(ConsentRegistry::new()),
             consent_wait: None,
             composer: None,
@@ -1412,7 +1422,19 @@ impl Render for Workbench {
                             .lcars
                             .then(|| div().h(px(3.0)).mb_1().bg(gpui::rgb(theme.blue))),
                     )
-                    .child(toast),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_3()
+                            .child(div().flex_1().min_w_0().child(toast))
+                            .children(
+                                self.quota
+                                    .clone()
+                                    .map(|quota| div().flex_none().child(quota)),
+                            ),
+                    ),
             )
             .children(self.palette.clone())
             .children(self.composer.clone())

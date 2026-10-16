@@ -20,6 +20,8 @@ cargo run --release -p rwk-app -- /path/to/project
 
 `Ctrl+Shift+D` (or the palette) shows the inspector above the terminals, `Ctrl+Shift+A` starts an agent, `Ctrl+Shift+H` writes a handoff, the palette's "Proje hafızasını göster" opens the memory view and "GT-LCARS görünümünü aç / kapat" switches the skin; `Ctrl+,` switches dark and light, `Ctrl+Alt+.` / `Ctrl+Alt+,` move the dock divider.
 
+The bottom bar shows toasts and, on its right, the quota signal read from `raios usage --json`; it refreshes every ten minutes and never blocks the window.
+
 ## Daemon-facing commands
 
 Everything that changes daemon state (start an agent, queue a handoff, register a project) first reads the policy for that command: `deny` refuses, `allow` sends, `confirm` shows a dialog whose text is derived from the exact payload and sends only after a click (Enter never answers it). Declining, closing or letting it expire sends nothing. Opening a project the daemon does not know registers it through the same guard. The daemon token is read from `<config>/raios/.session_token` (owner-only, at most eight hours old) on every call; without the daemon, files, editor, terminals and memory keep working and the daemon commands say why they are unavailable.
