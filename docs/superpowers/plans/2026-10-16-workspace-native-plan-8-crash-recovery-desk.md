@@ -45,16 +45,24 @@ So the product goal is not "an editor". It is:
    written atomically and **fsynced** (file and directory) on every structural change;
    unchanged per-project files keep working. Recommended: yes.
 4. **Crash detection.** A `clean_exit` marker written on a normal quit and removed at start.
-   Marker missing at start ⇒ the previous run ended abnormally ⇒ show the recovery screen.
-   Recommended: yes.
+   Rule: **no desk file ⇒ `Fresh`; desk file present and marker missing ⇒ `CrashedWith`;
+   desk file present and marker present ⇒ `CleanRestart`.** A clean install therefore never
+   shows the recovery screen. Recommended: yes.
 5. **Restore policy.** Recovery screen lists every pane with a checkbox, default all selected,
    and **one button "Hepsini geri yükle"**. Shell panes restart in their folder.
    Agent panes continue their conversation through `raios resume <key>` (the existing
    planner re-checks each one); nothing runs without the user pressing the button.
-   This replaces the earlier "offer one by one" behaviour. Recommended: yes.
+   The per-project offer flow of today **stays as the fallback** for projects that have no
+   desk entry and for a missing or damaged `desk.json`. The bulk button still passes each
+   agent's own launch guard; audit entries stay per agent. Whether the consent UX is one
+   dialog or one per agent is decided in phase D. Recommended: yes.
 6. **Scrollback tail.** Store the last **200 lines** of each terminal (secrets redacted with
    the existing redactor, owner-only file) and show them read-only above the restored
-   terminal. Recommended: yes, as a last phase; it can be dropped without touching the rest.
+   terminal. To be useful after a crash it must be written **periodically** (debounced,
+   every 10–30 s), not only on structural saves, otherwise a pane opened in the crashed
+   session has no tail on disk. Trade-off to accept: the redactor is heuristic, so up to
+   10 × 200 lines of plain text stay on disk; mitigations are owner-only files, redaction
+   and a setting that turns the tail off. Recommended: yes, as a last phase; droppable.
 
 ## 4. Skeleton (types and contracts only)
 
@@ -63,6 +71,9 @@ So the product goal is not "an editor". It is:
 pub const MAX_DESK_TABS: usize = 8;
 pub const MAX_PANES_PER_TAB: usize = 2;
 
+/// Invariant enforced by `sanitized()`: total panes over all tabs <= MAX_SESSIONS, so a
+/// restore can never silently drop a session. Relation of `PaneSplit` to today's
+/// `LayoutPreset` is settled in phase B.
 pub struct SavedDesk {
     pub version: u32,
     pub tabs: Vec<SavedDeskTab>,
@@ -142,8 +153,10 @@ UI contracts (empty at first): `RecoveryView` (the list with checkboxes and the 
      `usage`, `memory <query>`, `mem list`. Output opens in a pane or a result view; anything
      that changes state (commit, version-bump, swarm approve) goes through the consent gate.
   3. *Project badges.* Each desk tab shows what raios already computes: dirty files, health
-     score, pending approvals, quota signal (`raios usage`). Read-only, polled through the
-     daemon, never blocks the UI.
+     score, pending approvals, quota signal (`raios usage`). Read-only and never blocks the
+     UI. Sources differ: approvals come from the daemon; `usage`, `health` and dirty counts
+     come from the CLI (`--json`) through the same source-trait pattern the project search
+     uses, with fake sources in tests.
   4. *Memory.* Per-pane note and `session_note` go into the raios memory pipeline; the memory
      view and the sessions panel read `raios mem` and the project's `memory.md`.
   5. *Contract.* A typed capability list (`rwk-core/src/raios_actions.rs`) maps each menu
