@@ -654,6 +654,8 @@ targets = ["~/.claude/rules", "~/.antigravity/rules"]
 | `raios db check [--full]` | Read-only SQLite quick check (or exhaustive integrity check) plus DB/WAL/free-page/snapshot metrics |
 | `raios db backup [--keep 1..=10]` | Create an online, SHA-256-recorded, integrity-checked private snapshot; retains 3 by default |
 | `raios db checkpoint [--truncate]` | Checkpoint committed WAL frames; passive by default, optionally truncating the WAL file |
+| `raios db backup-timer-install` | Install and enable a daily systemd **user** timer for `raios db backup` (03:30 local, then a passive `raios db checkpoint`); idempotent |
+| `raios db backup-timer-uninstall` | Stop and remove that timer pair; the database, its snapshots and their SHA-256 sidecars are retained |
 | `raios usage` | Show local usage/quota signals across AI tools |
 | `raios search "<query>"` | Semantic search across portfolio |
 | `raios locate "<pattern>" [--dir <path>] [-i] [--reindex]` | Exhaustive exact/regex search over the trigram index (grep-equivalent) |
