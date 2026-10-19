@@ -105,6 +105,10 @@ pub enum DbCmd {
         #[arg(long)]
         truncate: bool,
     },
+    /// Install and enable the daily workspace.db backup user timer (units generated from live values)
+    BackupTimerInstall,
+    /// Stop and remove the workspace.db backup timer; the database and snapshots are retained
+    BackupTimerUninstall,
 }
 
 #[derive(Subcommand)]
@@ -703,5 +707,31 @@ mod tests {
             .expect("`timer-install` takes no arguments");
         Cli::try_parse_from(["raios", "anka", "timer-uninstall"])
             .expect("`timer-uninstall` takes no arguments");
+    }
+
+    #[test]
+    fn db_backup_timer_commands_parse_without_arguments() {
+        let install = Cli::try_parse_from(["raios", "db", "backup-timer-install"])
+            .expect("`backup-timer-install` takes no arguments");
+        assert!(matches!(
+            install.command,
+            Some(Commands::Db {
+                command: DbCmd::BackupTimerInstall
+            })
+        ));
+
+        let uninstall = Cli::try_parse_from(["raios", "db", "backup-timer-uninstall"])
+            .expect("`backup-timer-uninstall` takes no arguments");
+        assert!(matches!(
+            uninstall.command,
+            Some(Commands::Db {
+                command: DbCmd::BackupTimerUninstall
+            })
+        ));
+
+        assert!(
+            Cli::try_parse_from(["raios", "db", "backup-timer-install", "unexpected"]).is_err(),
+            "the timer commands take no positional or flag arguments"
+        );
     }
 }
