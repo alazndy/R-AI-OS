@@ -28,6 +28,8 @@
 
 - **Native workspace core skeleton (P1a):** new nested workspace `tools/raios-workspace-native` with the UI-independent `rwk-core` crate: typed project, document, session, control-plane, handoff-lifecycle, memory and consent skeletons with `unimplemented!("P1b")` bodies and ten executable specifications, plus a recorded supply-chain verification of the GPUI crates (`docs/security/gpui-supply-chain-2026-10-06.md`, `tools/raios-workspace-native/scripts/verify_gpui_supply_chain.py`).
 
+- **Workspace-native project badges (skeleton).** `rwk-core::badges` defines the contract for the three signals a project row will show — uncommitted files, health grade and pending approvals — without a reader or a view yet. A badge is a typed reading or an explicit `Unavailable` reason, so "no pending approvals" (a known zero) can never render like "the daemon did not answer"; `ProjectBadges` keeps one reading per kind in display order (a retry replaces, it does not duplicate), and `ProjectBadgeSource` is the `Send + Sync` seam with a per-project scriptable `FakeBadgeSource` that records every call. Eleven unit tests pin the mapping, grade parsing, ordering, last-wins replacement, the zero-vs-unavailable split, absent kinds, the fake's scripting and the thread-safe trait object. No production reader and no UI are part of this change.
+
 ## v3.9.0 — 2026-08-18
 
 - **VS Code daemon ownership:** Linux startup now delegates to `aiosd.service` and requires an authenticated TCP handshake before reporting readiness, preventing detached auto-spawn races with the systemd user service during desktop login.

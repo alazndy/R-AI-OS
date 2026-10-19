@@ -4,7 +4,7 @@ Nested Cargo workspace for the native (GPUI) RAIOS workspace. Design: `docs/supe
 
 | Crate | Role | GPUI |
 |---|---|---|
-| `rwk-core` | project capability, documents, sessions, control plane client, consent gate, guarded commands, handoff state machine and receipt tracking, input validation, inspector and memory models, theme tokens, file-type classifier, terminal engine and its pure helpers | no |
+| `rwk-core` | project capability, documents, sessions, control plane client, consent gate, guarded commands, handoff state machine and receipt tracking, input validation, inspector, memory and project-badge models, theme tokens, file-type classifier, terminal engine and its pure helpers | no |
 | `rwk-ui` | terminal view (`terminal`), code editor and highlighter (`editor`), file tree (`file_tree`), inspector, handoff composer, memory view, bundled assets (Breeze icons, Antonio), workbench shell, palette and dialogs (`workbench`) | yes |
 | `rwk-app` | the application binary: window, folder picker, appearance persistence, daemon token source | yes |
 | `rwk-bench` | headless terminal gates G1-G8 (`term-bench`) | no |
