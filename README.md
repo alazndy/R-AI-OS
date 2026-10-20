@@ -25,11 +25,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.9.0-blue?style=for-the-badge" alt="Version"></a>
+  <a href="https://github.com/alazndy/r-ai-os/releases"><img src="https://img.shields.io/badge/version-v3.10.0-blue?style=for-the-badge" alt="Version"></a>
   <a href="https://rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust"></a>
   <a href="https://github.com/alazndy/r-ai-os/blob/master/LICENSE"><img src="https://img.shields.io/github/license/alazndy/r-ai-os?style=for-the-badge" alt="License"></a>
   <a href="#-security-kernel"><img src="https://img.shields.io/badge/Security-Hardened-green?style=for-the-badge" alt="Security"></a>
-  <a href="#-vs-code-extension"><img src="https://img.shields.io/badge/VS%20Code-v0.9.0-blueviolet?style=for-the-badge&logo=visualstudiocode" alt="VS Code"></a>
+  <a href="#-vs-code-extension"><img src="https://img.shields.io/badge/VS%20Code-v0.10.0-blueviolet?style=for-the-badge&logo=visualstudiocode" alt="VS Code"></a>
 </p>
 
 <p align="center">
@@ -285,7 +285,7 @@ lifecycle_interval_secs = 3600
 
 ---
 
-## 🖥️ VS Code Extension (v0.9.0)
+## 🖥️ VS Code Extension (v0.10.0)
 
 R-AI-OS ships a native VS Code extension that turns the IDE into a **Hybrid UI** — the control panel for your agent swarm directly in your sidebar.
 
@@ -329,7 +329,7 @@ vscode-extension/
 No `.vsix` is committed to the repo. Every [GitHub Release](https://github.com/alazndy/R-AI-OS/releases/latest) attaches a prebuilt `raios-<version>.vsix` as a release asset — download it and install directly, no Node toolchain required:
 
 ```bash
-code --install-extension raios-0.9.0.vsix --force
+code --install-extension raios-0.10.0.vsix --force
 ```
 
 To build from source instead, use the bundled script — it compiles, repackages, **uninstalls any existing `alazndy.raios` install first**, then installs the fresh `.vsix`. This guarantees only one version is ever registered, no matter how many times you re-run it:
@@ -435,7 +435,7 @@ tools/raios-factory-ui/
 curl -fsSL https://raw.githubusercontent.com/alazndy/R-AI-OS/master/scripts/get-raios.sh | sh
 ```
 
-Downloads the latest signed release from [GitHub Releases](https://github.com/alazndy/R-AI-OS/releases), verifies its sha256 checksum, and installs `raios`/`aiosd` to `~/.local/bin` (override with `RAIOS_INSTALL_DIR`). Pin a specific version with `RAIOS_VERSION=v3.9.0 curl ... | sh`. No arm64/Apple Silicon build yet — Apple Silicon Macs and ARM Linux need the build-from-source path below.
+Downloads the latest signed release from [GitHub Releases](https://github.com/alazndy/R-AI-OS/releases), verifies its sha256 checksum, and installs `raios`/`aiosd` to `~/.local/bin` (override with `RAIOS_INSTALL_DIR`). Pin a specific version with `RAIOS_VERSION=v3.10.0 curl ... | sh`. No arm64/Apple Silicon build yet — Apple Silicon Macs and ARM Linux need the build-from-source path below.
 
 ### From source (any platform/architecture)
 
