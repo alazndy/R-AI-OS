@@ -382,6 +382,7 @@ impl Workbench {
         let on_move = id.clone();
         let on_drop = id.clone();
         let on_task_drop = id.clone();
+        let on_menu = id.clone();
         let body = div()
             .id(SharedString::from(format!("terminal-body-{}", id.as_str())))
             .flex_1()
@@ -389,6 +390,31 @@ impl Workbench {
             .relative()
             .child(pane.view.clone())
             .children(hint.map(|zone| drop_highlight(zone, theme)))
+            // Capture phase: the terminal view would otherwise take the click first. A program
+            // that asked for mouse reports keeps its right click; Shift takes it back.
+            .capture_any_mouse_down(cx.listener(
+                move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    if event.button != gpui::MouseButton::Right {
+                        return;
+                    }
+                    let Some(index) = this.terminals.iter().position(|pane| pane.id == on_menu)
+                    else {
+                        return;
+                    };
+                    let wants = this.terminals[index].view.read(cx).wants_mouse();
+                    if wants && !event.modifiers.shift {
+                        return;
+                    }
+                    this.select_terminal(index, window, cx);
+                    this.open_context_menu(
+                        rwk_core::workbench::MenuTarget::TerminalBody,
+                        event.position,
+                        window,
+                        cx,
+                    );
+                    cx.stop_propagation();
+                },
+            ))
             .on_drag_move(cx.listener(
                 move |this, event: &DragMoveEvent<DraggedTerminal>, _window, cx| {
                     if !event.bounds.contains(&event.event.position) {
@@ -484,6 +510,7 @@ impl Workbench {
         let click_target = id.clone();
         let drop_target = id.clone();
         let task_target = id.clone();
+        let menu_target = id.clone();
         let carried = DraggedTerminal {
             id: id.clone(),
             title: title.clone(),
@@ -505,6 +532,28 @@ impl Workbench {
                 theme.muted
             }))
             .child(title)
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(
+                    move |this: &mut Workbench, event: &gpui::MouseDownEvent, window, cx| {
+                        let Some(index) = this
+                            .terminals
+                            .iter()
+                            .position(|pane| pane.id == menu_target)
+                        else {
+                            return;
+                        };
+                        this.select_terminal(index, window, cx);
+                        this.open_context_menu(
+                            rwk_core::workbench::MenuTarget::TerminalTitle,
+                            event.position,
+                            window,
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    },
+                ),
+            )
             .on_click(cx.listener(
                 move |this: &mut Workbench, event: &ClickEvent, window: &mut Window, cx| {
                     // The index is looked up again: terminals may have come and gone since the paint.

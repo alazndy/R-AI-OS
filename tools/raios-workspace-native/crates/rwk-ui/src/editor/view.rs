@@ -44,6 +44,13 @@ pub enum EditorEvent {
     Closed(String),
     /// The active tab changed.
     Activated(String),
+    /// The user right-clicked a tab; it is active now.
+    TabContextMenu {
+        /// Relative path of the tab.
+        path: String,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
 }
 
 /// Builds an editor state with the settings every editor in the workspace uses: soft wrap off
@@ -791,7 +798,19 @@ impl Render for EditorView {
                     let active = index == self.active;
                     let activate = path.clone();
                     let close = path.clone();
+                    let menu_path = path.clone();
                     div()
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |view, event: &gpui::MouseDownEvent, window, cx| {
+                                view.activate_tab(&menu_path, window, cx);
+                                cx.emit(EditorEvent::TabContextMenu {
+                                    path: menu_path.clone(),
+                                    position: event.position,
+                                });
+                                cx.stop_propagation();
+                            }),
+                        )
                         .flex()
                         .flex_row()
                         .items_center()

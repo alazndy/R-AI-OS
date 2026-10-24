@@ -8,6 +8,7 @@ pub mod documents;
 pub mod file_types;
 pub mod layout;
 pub mod layout_state;
+pub mod menus;
 pub mod offers;
 pub mod palette;
 pub mod quick_open;
@@ -29,6 +30,7 @@ pub use layout_state::{
     parse_workspace, serialize_workspace, state_file_name, SavedTab, SavedTerminal, SavedWorkspace,
     WorkspaceStateSource, MAX_SAVED_TABS,
 };
+pub use menus::{menu_entries, toolbar, toolbar_pressed, MenuEntry, MenuTarget, ToolbarItem};
 pub use offers::{
     parse_catalog, plan_offers, MatchedSession, SavedSessionRow, SessionCatalog, SessionOffer,
 };

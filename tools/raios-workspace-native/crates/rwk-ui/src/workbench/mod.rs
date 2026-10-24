@@ -6,6 +6,7 @@ pub mod dock;
 pub mod host;
 pub mod layout;
 pub mod memory;
+pub mod menus;
 pub mod offers;
 pub mod palette;
 pub mod search;
@@ -223,6 +224,8 @@ pub struct Workbench {
     /// Where the terminal being dragged would land, while a drag is over a pane.
     drop_hint: Option<(SessionId, rwk_core::workbench::DropZone)>,
     rename_prompt: Option<Entity<crate::rename::RenameTerminalPrompt>>,
+    /// The open context menu.
+    menu: Option<menus::OpenMenu>,
     rename_subscription: Option<Subscription>,
     handoffs: Vec<TrackedHandoff>,
     /// The task the open composer was started for.
@@ -339,6 +342,23 @@ impl Workbench {
                         cx,
                     );
                 }
+                crate::inspector::InspectorEvent::TaskMenu {
+                    task_id,
+                    title,
+                    status,
+                    assigned,
+                    updated_at,
+                    position,
+                } => {
+                    let info = menus::TaskMenuInfo {
+                        task_id: task_id.clone(),
+                        title: title.clone(),
+                        status: status.clone(),
+                        assigned: *assigned,
+                        updated_at: updated_at.clone(),
+                    };
+                    this.open_task_menu(info, *position, window, cx);
+                }
                 crate::inspector::InspectorEvent::HandoffTask { task_id, title } => {
                     let link = rwk_core::handoff_flow::TaskLink {
                         task_id: task_id.clone(),
@@ -359,9 +379,15 @@ impl Workbench {
             cx.subscribe_in(
                 &files,
                 window,
-                |this, _files, event: &FileTreeEvent, window, cx| {
-                    let FileTreeEvent::OpenFile(path) = event;
-                    this.request_open_file(path.clone(), window, cx);
+                |this, _files, event: &FileTreeEvent, window, cx| match event {
+                    FileTreeEvent::OpenFile(path) => {
+                        this.request_open_file(path.clone(), window, cx);
+                    }
+                    FileTreeEvent::ContextMenu {
+                        path,
+                        folder,
+                        position,
+                    } => this.open_file_menu(path.clone(), *folder, *position, window, cx),
                 },
             ),
             cx.subscribe_in(
@@ -397,6 +423,7 @@ impl Workbench {
             dock: DockLayout::new(),
             drop_hint: None,
             rename_prompt: None,
+            menu: None,
             rename_subscription: None,
             handoffs: Vec::new(),
             composer_task: None,
@@ -1077,6 +1104,14 @@ impl Workbench {
             EditorEvent::CloseRequested(path) => {
                 self.request_close_tab(path.clone(), window, cx);
             }
+            EditorEvent::TabContextMenu { position, .. } => {
+                self.open_context_menu(
+                    rwk_core::workbench::MenuTarget::EditorTab,
+                    *position,
+                    window,
+                    cx,
+                );
+            }
             EditorEvent::Edited
             | EditorEvent::Opened(_)
             | EditorEvent::Closed(_)
@@ -1454,6 +1489,11 @@ impl Workbench {
             cx.stop_propagation();
             return;
         }
+        // An open menu owns the keyboard like a dialog does.
+        if self.menu_key(event.keystroke.key.as_str(), cx) {
+            cx.stop_propagation();
+            return;
+        }
         let modifiers = event.keystroke.modifiers;
         let stroke = Keystroke {
             key: event.keystroke.key.clone(),
@@ -1487,9 +1527,23 @@ impl Render for Workbench {
         self.frames += 1;
         let theme = self.theme();
         let dock = div()
+            .id("dock-panel")
             .size_full()
             .flex()
             .flex_col()
+            // Terminals, titles, the inspector and the offers stop their own right clicks; what
+            // reaches the panel itself is the empty part of the dock.
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.open_context_menu(
+                        rwk_core::workbench::MenuTarget::DockBackground,
+                        event.position,
+                        window,
+                        cx,
+                    );
+                }),
+            )
             .children(self.inspector_visible.then(|| {
                 div()
                     .h(px(INSPECTOR_HEIGHT))
@@ -1566,6 +1620,7 @@ impl Render for Workbench {
                     .lcars
                     .then(|| lcars_header(theme, self.project_name(), window)),
             )
+            .child(self.toolbar_row(theme, cx))
             .child(div().flex_1().min_h_0().child(main))
             .child(
                 div()
@@ -1606,6 +1661,7 @@ impl Render for Workbench {
             .children(self.rename_prompt.clone())
             .children(self.memory.clone())
             .children(self.search.clone())
+            .children(self.menu.as_ref().map(|open| open.view.clone()))
             .children(dialog)
     }
 }

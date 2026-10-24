@@ -65,6 +65,21 @@ pub enum InspectorEvent {
         /// Revision the row was displayed at.
         updated_at: String,
     },
+    /// The user right-clicked a task row.
+    TaskMenu {
+        /// Task identifier.
+        task_id: String,
+        /// Title.
+        title: String,
+        /// Status label from the daemon.
+        status: String,
+        /// The task has an assignee.
+        assigned: bool,
+        /// Revision the row was displayed at.
+        updated_at: String,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
     /// The user wants to reject a pending handoff approval; a reason is asked for before sending.
     RejectHandoff {
         /// Target approval identifier.
@@ -545,8 +560,30 @@ impl Render for InspectorView {
                     .into_any_element(),
                 );
             }
+            let menu_task = (
+                id.clone(),
+                task.title.clone(),
+                task.status.clone(),
+                task.assignee.is_some(),
+                revision.clone(),
+            );
             div()
                 .id(SharedString::from(format!("task-row-{id}")))
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |_, event: &gpui::MouseDownEvent, _window, cx| {
+                        let (task_id, title, status, assigned, updated_at) = menu_task.clone();
+                        cx.emit(InspectorEvent::TaskMenu {
+                            task_id,
+                            title,
+                            status,
+                            assigned,
+                            updated_at,
+                            position: event.position,
+                        });
+                        cx.stop_propagation();
+                    }),
+                )
                 .on_drag(carried, |dragged, _offset, _window, cx| {
                     let label = dragged.title.clone();
                     cx.new(|_| TaskDragLabel(label))

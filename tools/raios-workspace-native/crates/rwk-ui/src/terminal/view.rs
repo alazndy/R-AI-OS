@@ -295,6 +295,12 @@ impl TerminalView {
         (row, col, side)
     }
 
+    /// True while the program in the terminal asks for mouse reports; a right click then
+    /// belongs to it (Shift takes the click back).
+    pub fn wants_mouse(&self) -> bool {
+        self.reporting_mouse(false)
+    }
+
     fn reporting_mouse(&self, shift: bool) -> bool {
         let modes = self.shared.modes.get();
         modes.mouse_report && modes.sgr_mouse && !shift
