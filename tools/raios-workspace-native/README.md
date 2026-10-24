@@ -8,7 +8,7 @@ Nested Cargo workspace for the native (GPUI) RAIOS workspace. Design: `docs/supe
 | `rwk-ui` | terminal view (`terminal`), code editor and highlighter (`editor`), file tree (`file_tree`), inspector, handoff composer, memory view, bundled assets (Breeze icons, Antonio), workbench shell, palette and dialogs (`workbench`) | yes |
 | `rwk-app` | the application binary: window, folder picker, appearance persistence, daemon token source | yes |
 | `rwk-bench` | headless terminal gates G1-G8 (`term-bench`) | no |
-| `rwk-ui-bench` | UI-bound gates U1-U5, E1-E2, A1-A2 (`ui-bench`) | yes |
+| `rwk-ui-bench` | UI-bound gates U1-U5, E1-E2, A1-A2, D1 (`ui-bench`; D1 = dock rearrangement with 12 terminals) | yes |
 
 ## Running the application
 
