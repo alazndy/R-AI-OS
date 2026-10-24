@@ -18,6 +18,8 @@ cargo run --release -p rwk-app -- /path/to/project
 
 `Ctrl+O` picks a folder, `Ctrl+Shift+P` opens the command palette (it lists every command with its shortcut and, for unavailable ones, why). `Ctrl+S` saves, `Ctrl+Shift+T` opens a terminal (up to twelve), `Ctrl+1/2/3` switch the layout. While a terminal has focus only the shortcuts that carry Shift or Alt are taken by the workbench: plain Ctrl keys (`Ctrl+C`, `Ctrl+K`, `Ctrl+L`, ...) reach the shell. Unsaved edits are never discarded without a choice (Save / Discard / Cancel).
 
+Every terminal has a title strip: its name, or the kind with an ordinal ("shell 2", "claude 1"). Double-click the strip or use the palette's "Terminali yeniden adlandır…" to name it (up to 120 characters, no control characters, no leading `-`, nothing credential-looking; an empty name clears it). The name is saved with the project's terminals and comes back on restore. A fresh agent started with a name runs `raios run <agent> --name <name>`; renaming an agent that is already running only changes the local label, because the daemon keeps the name a run started with.
+
 `Ctrl+Shift+D` (or the palette) shows the inspector above the terminals, `Ctrl+Shift+A` starts an agent, `Ctrl+Shift+H` writes a handoff, the palette's "Proje hafızasını göster" opens the memory view and "GT-LCARS görünümünü aç / kapat" switches the skin; `Ctrl+,` switches dark and light, `Ctrl+Alt+.` / `Ctrl+Alt+,` move the dock divider.
 
 The bottom bar shows toasts and, on its right, the quota signal read from `raios usage --json`; it refreshes every ten minutes and never blocks the window.

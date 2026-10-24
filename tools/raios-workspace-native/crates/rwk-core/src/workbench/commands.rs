@@ -45,6 +45,8 @@ pub enum CommandId {
     PasteTerminal,
     /// Stop the selected session.
     StopTerminal,
+    /// Give the selected terminal a name.
+    RenameTerminal,
     /// Launch an agent.
     Agent,
     /// Create a handoff.
@@ -134,7 +136,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 36] = [
+const COMMANDS: [Command; 37] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -260,6 +262,12 @@ const COMMANDS: [Command; 36] = [
         &[bind_terminal("v", true, false)],
     ),
     cmd(CommandId::StopTerminal, "Seçili oturumu durdur…", None, &[]),
+    cmd(
+        CommandId::RenameTerminal,
+        "Terminali yeniden adlandır…",
+        None,
+        &[],
+    ),
     cmd(
         CommandId::Agent,
         "Ajan başlat",
@@ -505,7 +513,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             }
         }
         NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
-        | StopTerminal => needs_terminal(),
+        | StopTerminal | RenameTerminal => needs_terminal(),
         FocusTerminal(index) => {
             if index >= 1 && index <= state.terminals {
                 allow()
@@ -561,7 +569,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 36);
+        assert_eq!(catalog().len(), 37);
     }
 
     #[test]

@@ -322,10 +322,11 @@ mod tests {
             active: 0,
             layout: LayoutPreset::Editor,
             terminals: vec![
-                SavedTerminal::Shell,
+                SavedTerminal::Shell { name: None },
                 SavedTerminal::Agent {
                     kind: rwk_core::sessions::SessionKind::Claude,
                     native_session: None,
+                    name: None,
                 },
             ],
         };

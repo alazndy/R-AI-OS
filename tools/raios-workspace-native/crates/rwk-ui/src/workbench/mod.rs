@@ -26,8 +26,8 @@ use rwk_core::guarded::Guarded;
 use rwk_core::handoff_flow::TrackedHandoff;
 use rwk_core::project::ProjectRoot;
 use rwk_core::sessions::{
-    ResumeKey, SessionId, SessionKind, SessionLaunch, SessionRegistry, TerminalHost, TerminalSize,
-    MAX_SESSIONS,
+    ResumeKey, SessionId, SessionKind, SessionLaunch, SessionName, SessionRegistry, TerminalHost,
+    TerminalSize, MAX_SESSIONS,
 };
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
 use rwk_core::workbench::{
@@ -182,6 +182,8 @@ impl PendingAction {
 struct TerminalPane {
     kind: SessionKind,
     id: SessionId,
+    /// The name the user gave the terminal, when there is one.
+    name: Option<SessionName>,
     /// The saved conversation this pane continues, when it was started from an offer.
     resume: Option<ResumeKey>,
     view: Entity<TerminalView>,
@@ -214,6 +216,8 @@ pub struct Workbench {
     composer_subscription: Option<Subscription>,
     reject_prompt: Option<Entity<crate::handoff::RejectHandoffPrompt>>,
     reject_prompt_subscription: Option<Subscription>,
+    rename_prompt: Option<Entity<crate::rename::RenameTerminalPrompt>>,
+    rename_subscription: Option<Subscription>,
     handoffs: Vec<TrackedHandoff>,
     receipt_task: Option<Task<()>>,
     receiver_for: Option<String>,
@@ -351,6 +355,8 @@ impl Workbench {
             composer_subscription: None,
             reject_prompt: None,
             reject_prompt_subscription: None,
+            rename_prompt: None,
+            rename_subscription: None,
             handoffs: Vec::new(),
             receipt_task: None,
             receiver_for: None,
@@ -621,6 +627,7 @@ impl Workbench {
                     cx.notify();
                 }
             }
+            CommandId::RenameTerminal => self.open_rename_prompt(self.selected, window, cx),
             CommandId::Refresh => self.files.update(cx, |files, cx| files.refresh(cx)),
             CommandId::Settings => self.toggle_tone(cx),
             CommandId::Skin => self.toggle_skin(cx),
@@ -804,6 +811,9 @@ impl Workbench {
             composer.update(cx, |composer, cx| composer.set_theme(theme, cx));
         }
         if let Some(prompt) = &self.reject_prompt {
+            prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        }
+        if let Some(prompt) = &self.rename_prompt {
             prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
         }
         if let Some(memory) = &self.memory {
@@ -1186,13 +1196,14 @@ impl Workbench {
         let appearance = terminal_appearance(self.theme());
         let id = info.id.clone();
         let view = cx.new(|cx| TerminalView::new(engine, host, id, appearance, gate, receiver, cx));
-        let resume = match &launch {
-            SessionLaunch::Resume(key) => Some(key.clone()),
-            SessionLaunch::Fresh { .. } => None,
+        let (resume, name) = match &launch {
+            SessionLaunch::Resume(key) => (Some(key.clone()), None),
+            SessionLaunch::Fresh { name, .. } => (None, name.clone()),
         };
         self.terminals.push(TerminalPane {
             kind,
             id: info.id,
+            name,
             resume,
             view,
         });
@@ -1200,6 +1211,97 @@ impl Workbench {
         let last = self.terminals.len() - 1;
         self.select_terminal(last, window, cx);
         true
+    }
+
+    /// The name of terminal `index`, when the user gave it one.
+    pub fn terminal_name(&self, index: usize) -> Option<&SessionName> {
+        self.terminals.get(index)?.name.as_ref()
+    }
+
+    /// What the title strip of terminal `index` shows: its name, or the kind with an ordinal
+    /// among the terminals of the same kind ("claude 2"), so unnamed panes stay tellable apart.
+    pub fn terminal_title(&self, index: usize) -> String {
+        let Some(pane) = self.terminals.get(index) else {
+            return String::new();
+        };
+        if let Some(name) = &pane.name {
+            return name.to_string();
+        }
+        let label = pane.kind.agent().unwrap_or("shell");
+        let ordinal = self.terminals[..=index]
+            .iter()
+            .filter(|other| other.kind == pane.kind)
+            .count();
+        format!("{label} {ordinal}")
+    }
+
+    /// Sets or clears the name of terminal `index` and remembers it in the saved workspace. The
+    /// daemon keeps the name a run started with; this is the local label.
+    pub fn rename_terminal(
+        &mut self,
+        index: usize,
+        name: Option<SessionName>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane) = self.terminals.get_mut(index) else {
+            return;
+        };
+        pane.name = name;
+        self.note_workspace_change(cx);
+        cx.notify();
+    }
+
+    /// The open rename prompt.
+    pub fn rename_prompt(&self) -> Option<&Entity<crate::rename::RenameTerminalPrompt>> {
+        self.rename_prompt.as_ref()
+    }
+
+    /// Asks for a new name for terminal `index`.
+    pub fn open_rename_prompt(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::rename::{RenamePromptEvent, RenameTerminalPrompt};
+
+        if self.rename_prompt.is_some() {
+            return;
+        }
+        let Some(pane) = self.terminals.get(index) else {
+            return;
+        };
+        let current = pane.name.clone();
+        let running_agent = pane.kind != SessionKind::Shell;
+        let theme = self.theme();
+        let prompt =
+            cx.new(|cx| RenameTerminalPrompt::new(current.as_ref(), running_agent, window, cx));
+        prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        // The pane is found again by id: terminals may have come and gone while the prompt was open.
+        let id = pane.id.clone();
+        self.rename_subscription = Some(cx.subscribe_in(
+            &prompt,
+            window,
+            move |this, _prompt, event: &RenamePromptEvent, window, cx| match event {
+                RenamePromptEvent::Rename(name) => {
+                    if let Some(index) = this.terminals.iter().position(|pane| pane.id == id) {
+                        this.rename_terminal(index, name.clone(), cx);
+                    }
+                    this.close_rename_prompt(window, cx);
+                }
+                RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
+            },
+        ));
+        self.rename_prompt = Some(prompt);
+        cx.notify();
+    }
+
+    /// Closes the rename prompt and returns focus to the workbench.
+    pub fn close_rename_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.rename_prompt = None;
+        self.rename_subscription = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 
     fn new_terminal(&mut self, kind: SessionKind, window: &mut Window, cx: &mut Context<Self>) {
@@ -1329,12 +1431,42 @@ impl Render for Workbench {
             }))
             .children(self.offer_rows(cx))
             .children(self.terminals.iter().enumerate().map(|(index, pane)| {
+                let title = SharedString::from(self.terminal_title(index));
                 div()
                     .flex_1()
                     .min_h_0()
+                    .flex()
+                    .flex_col()
                     .border_1()
                     .when_selected(theme, index == self.selected)
-                    .child(pane.view.clone())
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("terminal-title-{index}")))
+                            .flex_none()
+                            .px_2()
+                            .text_xs()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .border_b_1()
+                            .border_color(gpui::rgb(theme.line))
+                            .bg(gpui::rgb(theme.panel))
+                            .text_color(gpui::rgb(if pane.name.is_some() {
+                                theme.text
+                            } else {
+                                theme.muted
+                            }))
+                            .child(title)
+                            .on_click(cx.listener(
+                                move |this, event: &gpui::ClickEvent, window, cx| {
+                                    if event.click_count() >= 2 {
+                                        this.open_rename_prompt(index, window, cx);
+                                    } else {
+                                        this.select_terminal(index, window, cx);
+                                    }
+                                },
+                            )),
+                    )
+                    .child(div().flex_1().min_h_0().child(pane.view.clone()))
             }));
         let main = h_resizable("workbench")
             .with_state(&self.sizes)
@@ -1439,6 +1571,7 @@ impl Render for Workbench {
             .children(self.palette.clone())
             .children(self.composer.clone())
             .children(self.reject_prompt.clone())
+            .children(self.rename_prompt.clone())
             .children(self.memory.clone())
             .children(self.search.clone())
             .children(dialog)

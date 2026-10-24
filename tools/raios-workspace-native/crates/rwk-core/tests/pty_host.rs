@@ -80,6 +80,7 @@ fn spawn(
 ) -> SessionId {
     let launch = SessionLaunch::Fresh {
         prompt: prompt.map(str::to_owned),
+        name: None,
     };
     spawn_launch(host, project, kind, &launch, terminal)
 }
@@ -383,6 +384,7 @@ fn a_bad_prompt_or_unknown_session_is_refused() {
                 SessionKind::Codex,
                 &SessionLaunch::Fresh {
                     prompt: Some(prompt.to_owned()),
+                    name: None,
                 },
                 size(80, 24),
             )
