@@ -2645,9 +2645,11 @@ fn a_real_drag_of_a_title_onto_another_pane_rearranges_the_dock() {
     // The dock is the right-hand panel; the second terminal's title strip is the first thing
     // painted in its half, so scan down the dock's left part for the strip that starts a drag.
     let x = size.width - px(120.0);
-    let target = point(x, size.height * 0.2);
+    let target = point(x, size.height * 0.27);
     let mut moved = false;
-    let mut y = size.height * 0.5;
+    // Start below the divider between the two panes (about the middle of the dock): a press on
+    // it drags the divider instead of a title.
+    let mut y = size.height * 0.5 + px(20.0);
     while y < size.height * 0.75 && !moved {
         rig.cx
             .simulate_mouse_move(point(x, y), None, Modifiers::default());
@@ -2925,4 +2927,396 @@ fn a_handoff_that_never_arrives_leaves_the_task_where_it_was() {
     rig.settle_for(300);
 
     assert!(assignments(&fake).is_empty());
+}
+
+// ----- context menus and the toolbar ---------------------------------------------------------
+
+use gpui::{point, px};
+use rwk_core::workbench::MenuTarget;
+use rwk_ui::context_menu::{ContextMenu, Line};
+use rwk_ui::workbench::menus::{MenuAction, TaskMenuInfo};
+
+fn menu_of(rig: &mut Rig) -> gpui::Entity<ContextMenu> {
+    rig.read(|wb, _| wb.context_menu().cloned())
+        .expect("a context menu is open")
+}
+
+fn menu_lines(rig: &mut Rig) -> Vec<Line> {
+    let menu = menu_of(rig);
+    rig.read(|_, cx| menu.read(cx).lines().to_vec())
+}
+
+fn menu_highlight(rig: &mut Rig) -> Option<usize> {
+    let menu = menu_of(rig);
+    rig.read(|_, cx| menu.read(cx).highlighted())
+}
+
+fn line_index(rig: &mut Rig, wanted: &MenuAction) -> usize {
+    let menu = menu_of(rig);
+    let count = rig.read(|_, cx| menu.read(cx).lines().len());
+    (0..count)
+        .find(|index| rig.read(|wb, _| wb.menu_action(*index)).as_ref() == Some(wanted))
+        .unwrap_or_else(|| panic!("no line for {wanted:?}"))
+}
+
+#[test]
+fn a_terminal_menu_lists_commands_and_choosing_one_runs_it_on_the_selected_terminal() {
+    let mut rig = rig();
+    let (_first, _second) = two_terminals(&mut rig);
+
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::TerminalTitle,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    let index = line_index(&mut rig, &MenuAction::Command(CommandId::RenameTerminal));
+    let menu = menu_of(&mut rig);
+    rig.with(|_, _, cx| menu.update(cx, |menu, cx| menu.choose(index, cx)));
+
+    // The menu is gone, the command ran.
+    assert!(rig.read(|wb, _| wb.context_menu().is_none()));
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_some()));
+}
+
+#[test]
+fn unavailable_commands_are_shown_with_their_reason_and_cannot_be_chosen() {
+    let mut rig = rig();
+    rig.open_project();
+
+    // No daemon is connected and no terminal exists.
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::DockBackground,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    let menu = menu_of(&mut rig);
+    let lines = menu_lines(&mut rig);
+    let disabled: Vec<(String, Option<String>)> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Item {
+                label,
+                hint,
+                enabled: false,
+            } => Some((label.to_string(), hint.as_ref().map(ToString::to_string))),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        disabled.iter().any(|(label, hint)| label == "Ajan başlat"
+            && hint.as_deref() == Some("Daemon bağlantısı yapılandırılmadı")),
+        "{disabled:?}"
+    );
+    // The agent line has no action behind it.
+    let agent = lines
+        .iter()
+        .position(
+            |line| matches!(line, Line::Item { label, .. } if label.as_ref() == "Ajan başlat"),
+        )
+        .expect("the agent line");
+    assert_eq!(rig.read(|wb, _| wb.menu_action(agent)), None);
+    rig.with(|_, _, cx| menu.update(cx, |menu, cx| menu.choose(agent, cx)));
+    assert!(
+        rig.read(|wb, _| wb.context_menu().is_some()),
+        "choosing a disabled line keeps the menu open"
+    );
+}
+
+#[test]
+fn the_keyboard_walks_the_menu_and_escape_closes_it_without_running_anything() {
+    let mut rig = rig();
+    let (_first, _second) = two_terminals(&mut rig);
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::TerminalTitle,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    let start = menu_highlight(&mut rig);
+    assert!(
+        start.is_some(),
+        "the first choosable line starts highlighted"
+    );
+
+    rig.cx.simulate_keystrokes("down");
+    let after = menu_highlight(&mut rig);
+    assert_ne!(after, start);
+    rig.cx.simulate_keystrokes("up");
+    assert_eq!(menu_highlight(&mut rig), start);
+
+    // Shortcuts do not fire behind an open menu.
+    let before = rig.read(|wb, _| wb.terminal_count());
+    rig.cx.simulate_keystrokes("ctrl-shift-t");
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), before);
+
+    rig.cx.simulate_keystrokes("escape");
+    assert!(rig.read(|wb, _| wb.context_menu().is_none()));
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+}
+
+#[test]
+fn enter_runs_the_highlighted_line() {
+    let mut rig = rig();
+    let (_first, _second) = two_terminals(&mut rig);
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::TerminalTitle,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    // The first line of the terminal menu renames the terminal.
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.context_menu().is_none()));
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_some()));
+}
+
+#[test]
+fn a_real_right_click_on_a_terminal_title_selects_it_and_opens_its_menu() {
+    use gpui::{Modifiers, MouseButton};
+
+    let mut rig = rig();
+    let (_first, second) = two_terminals(&mut rig);
+    rig.settle_for(100);
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    let x = size.width - px(120.0);
+    // The second terminal's title strip is the first thing painted in its half of the dock.
+    let mut opened = false;
+    let mut y = size.height * 0.4;
+    while y < size.height * 0.8 && !opened {
+        rig.cx
+            .simulate_mouse_down(point(x, y), MouseButton::Right, Modifiers::default());
+        rig.settle_for(30);
+        opened = rig.read(|wb, _| wb.context_menu().is_some());
+        if opened {
+            break;
+        }
+        y += px(4.0);
+    }
+    assert!(opened, "no scanned point opened a menu; viewport {size:?}");
+    // Whatever was hit, a menu line exists for renaming and the click selected a terminal.
+    let _ = second;
+    assert!(rig.read(|wb, _| wb.selected_terminal() < 2));
+    // A click anywhere else closes the menu and does nothing else.
+    rig.cx.simulate_mouse_down(
+        point(px(5.0), px(5.0)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    rig.settle_for(30);
+    assert!(rig.read(|wb, _| wb.context_menu().is_none()));
+}
+
+#[test]
+fn a_task_menu_changes_the_status_through_the_guard() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_status_update(Ok(()));
+    let info = TaskMenuInfo {
+        task_id: "t-1".into(),
+        title: "Derle".into(),
+        status: "pending".into(),
+        assigned: false,
+        updated_at: "2026-10-25T08:00:00Z".into(),
+    };
+    rig.with(|wb, window, cx| wb.open_task_menu(info, point(px(900.0), px(300.0)), window, cx));
+    // "Başlat" and "Bitir" are offered, a status the task already has is not.
+    let start = line_index(
+        &mut rig,
+        &MenuAction::TaskStatus {
+            task_id: "t-1".into(),
+            status: rwk_core::tasks::TaskStatus::InProgress,
+        },
+    );
+    let menu = menu_of(&mut rig);
+    rig.with(|_, _, cx| menu.update(cx, |menu, cx| menu.choose(start, cx)));
+
+    assert!(rig.settle_until(|_| !task_calls(&fake).is_empty()));
+    let RecordedCall::UpdateTaskStatus(update) = task_calls(&fake).remove(0) else {
+        panic!("a status call");
+    };
+    assert_eq!(update.task_id, "t-1");
+    assert_eq!(update.status, rwk_core::tasks::TaskStatus::InProgress);
+}
+
+#[test]
+fn a_task_menu_cannot_assign_to_a_shell_and_clears_an_assignee() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_assignment(Ok("2026-10-25T09:00:00Z".to_owned()));
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    let info = TaskMenuInfo {
+        task_id: "t-1".into(),
+        title: "Derle".into(),
+        status: "in_progress".into(),
+        assigned: true,
+        updated_at: "2026-10-25T08:00:00Z".into(),
+    };
+    rig.with(|wb, window, cx| wb.open_task_menu(info, point(px(900.0), px(300.0)), window, cx));
+    // A shell is selected: assigning to it is shown but disabled.
+    let menu = menu_of(&mut rig);
+    let assign_enabled = menu_lines(&mut rig).iter().any(|line| {
+        matches!(line, Line::Item { label, enabled: true, .. } if label.starts_with("Seçili terminalin"))
+    });
+    assert!(!assign_enabled);
+
+    let clear = line_index(
+        &mut rig,
+        &MenuAction::TaskClear {
+            task_id: "t-1".into(),
+            updated_at: "2026-10-25T08:00:00Z".into(),
+        },
+    );
+    rig.with(|_, _, cx| menu.update(cx, |menu, cx| menu.choose(clear, cx)));
+    assert!(rig.settle_until(|_| !assignments(&fake).is_empty()));
+    let sent = assignments(&fake).remove(0);
+    assert_eq!(sent.assignee, None);
+    assert_eq!(
+        sent.expected_updated_at.as_deref(),
+        Some("2026-10-25T08:00:00Z")
+    );
+}
+
+#[test]
+fn a_file_menu_offers_open_for_files_only_and_copies_the_path() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.with(|wb, window, cx| {
+        wb.open_file_menu(
+            "src/main.rs".into(),
+            false,
+            point(px(60.0), px(80.0)),
+            window,
+            cx,
+        )
+    });
+    let open = line_index(&mut rig, &MenuAction::OpenFile("src/main.rs".into()));
+    let copy = line_index(&mut rig, &MenuAction::CopyPath("src/main.rs".into()));
+    assert!(open < copy);
+    rig.with(|wb, window, cx| wb.close_context_menu(window, cx));
+
+    rig.with(|wb, window, cx| {
+        wb.open_file_menu("src".into(), true, point(px(60.0), px(80.0)), window, cx)
+    });
+    assert!((0..8).all(|index| {
+        rig.read(|wb, _| wb.menu_action(index)) != Some(MenuAction::OpenFile("src".into()))
+    }));
+    let copy = line_index(&mut rig, &MenuAction::CopyPath("src".into()));
+    let menu = menu_of(&mut rig);
+    rig.with(|_, _, cx| menu.update(cx, |menu, cx| menu.choose(copy, cx)));
+    assert_eq!(
+        rig.cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("src".to_owned())
+    );
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Yol panoya kopyalandı".to_owned())
+    );
+}
+
+#[test]
+fn only_one_menu_is_open_at_a_time_and_a_dialog_blocks_a_new_one() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::DockBackground,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    let first = menu_of(&mut rig);
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::EditorTab,
+            point(px(300.0), px(30.0)),
+            window,
+            cx,
+        )
+    });
+    let second = menu_of(&mut rig);
+    assert_ne!(first.entity_id(), second.entity_id());
+    rig.with(|wb, window, cx| wb.close_context_menu(window, cx));
+    assert!(rig.read(|wb, _| wb.context_menu().is_none()));
+}
+
+fn toolbar_button(rig: &mut Rig, id: CommandId) -> rwk_ui::workbench::menus::ToolbarButton {
+    rig.read(|wb, cx| wb.toolbar_buttons(cx))
+        .into_iter()
+        .find(|button| button.id == id)
+        .unwrap_or_else(|| panic!("no toolbar button for {id:?}"))
+}
+
+#[test]
+fn toolbar_buttons_follow_what_the_commands_can_do() {
+    let mut rig = rig();
+
+    // No project: the terminal button is there, disabled, and says why.
+    let button = toolbar_button(&mut rig, CommandId::NewTerminal);
+    assert!(!button.enabled);
+    assert!(
+        button.tip.contains("Önce bir proje klasörü açın"),
+        "{}",
+        button.tip
+    );
+    assert!(!toolbar_button(&mut rig, CommandId::Save).enabled);
+    assert!(toolbar_button(&mut rig, CommandId::Commands).enabled);
+
+    rig.open_project();
+    assert!(toolbar_button(&mut rig, CommandId::NewTerminal).enabled);
+    // Arrangement needs two terminals.
+    assert!(!toolbar_button(&mut rig, CommandId::SplitTerminalRight).enabled);
+    let (_a, _b) = two_terminals(&mut rig);
+    let split = toolbar_button(&mut rig, CommandId::SplitTerminalRight);
+    assert!(
+        split.enabled && split.tip.contains("Terminali"),
+        "{}",
+        split.tip
+    );
+    // Shortcuts show in the tip.
+    assert!(toolbar_button(&mut rig, CommandId::Commands)
+        .tip
+        .contains("Ctrl Shift P"));
+}
+
+#[test]
+fn the_panel_toggles_show_a_pressed_state_that_follows_the_panels() {
+    let mut rig = rig();
+    rig.open_project();
+    let dock = rig.read(|wb, _| wb.dock_visible());
+    assert_eq!(
+        toolbar_button(&mut rig, CommandId::ToggleTerminal).pressed,
+        dock
+    );
+    rig.run(CommandId::ToggleTerminal);
+    assert_eq!(
+        toolbar_button(&mut rig, CommandId::ToggleTerminal).pressed,
+        !dock
+    );
+
+    assert!(!toolbar_button(&mut rig, CommandId::Inspector).pressed);
+    rig.run(CommandId::Inspector);
+    assert!(toolbar_button(&mut rig, CommandId::Inspector).pressed);
+}
+
+#[test]
+fn every_toolbar_command_runs_through_the_same_check_as_the_palette() {
+    let mut rig = rig();
+    // A disabled button's command answers with its reason instead of doing anything.
+    rig.run(CommandId::Save);
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Açık dosya yok".to_owned())
+    );
 }

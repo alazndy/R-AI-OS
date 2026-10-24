@@ -2,6 +2,7 @@
 //! it) may depend on GPUI; `rwk-core` stays headless.
 
 pub mod assets;
+pub mod context_menu;
 pub mod editor;
 pub mod file_tree;
 pub mod fonts;
