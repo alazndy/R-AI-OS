@@ -16,6 +16,14 @@ overrides:
   # patched >=4.3.1.
   # Transitive via @vscode/vsce > @secretlint/node > ... > js-yaml.
   js-yaml: 4.3.1
+  # GHSA-xcx6-jx8p-x3h5: MSAL Node authorization code flow may disclose
+  # parameters to an attacker-controlled endpoint, patched >=7.1.0.
+  # Transitive via @vscode/vsce > @azure/identity > @azure/msal-node, which
+  # only `vsce publish` authentication uses; `vsce package` does not call it.
+  # @azure/identity (latest 4.14.0) still asks for ^6, so there is no upstream fix.
+  '@azure/msal-node': 7.1.0
+  # Patched >=6.16.0. Transitive via @vscode/vsce > typed-rest-client > qs.
+  qs: 6.16.0
 
 allowBuilds:
   '@vscode/vsce-sign': false
