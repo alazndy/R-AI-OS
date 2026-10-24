@@ -1,0 +1,189 @@
+//! The terminal rename prompt: a small modal with one text box. It only validates and reports;
+//! the workbench applies the name to the pane and saves the workspace.
+
+use gpui::{
+    div, Context, EventEmitter, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+};
+use gpui::{AppContext, Entity};
+use gpui_base::input::{Input, InputEvent, InputState};
+use rwk_core::sessions::SessionName;
+use rwk_core::workbench::{Appearance, Theme};
+
+/// What the prompt asks of the workbench.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenamePromptEvent {
+    /// The user committed a name, or an empty text, which removes the name.
+    Rename(Option<SessionName>),
+    /// The user closed the prompt.
+    Close,
+}
+
+impl EventEmitter<RenamePromptEvent> for RenameTerminalPrompt {}
+
+/// The rename prompt for one terminal.
+pub struct RenameTerminalPrompt {
+    input: Entity<InputState>,
+    problem: Option<SharedString>,
+    running_agent: bool,
+    theme: Theme,
+    _subscription: Subscription,
+}
+
+impl RenameTerminalPrompt {
+    /// A prompt that starts with the terminal's current name; the text box takes focus.
+    /// `running_agent` adds a note that the daemon keeps the name the run started with.
+    pub fn new(
+        current: Option<&SessionName>,
+        running_agent: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let input = cx.new(|cx| InputState::new(window, cx).submit_on_enter(true));
+        if let Some(current) = current {
+            input.update(cx, |input, cx| {
+                input.set_value(current.as_str(), window, cx)
+            });
+        }
+        input.update(cx, |input, cx| input.focus(window, cx));
+        let subscription = cx.subscribe(&input, |this, _input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.submit(cx);
+            }
+        });
+        Self {
+            input,
+            problem: None,
+            running_agent,
+            theme: Theme::of(Appearance::default()),
+            _subscription: subscription,
+        }
+    }
+
+    /// Repaints the prompt with another skin or tone.
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
+    /// The text typed so far.
+    pub fn text(&self, cx: &gpui::App) -> String {
+        self.input.read(cx).value().to_string()
+    }
+
+    /// Replaces the text (as typing would).
+    pub fn set_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.input
+            .update(cx, |input, cx| input.set_value(text, window, cx));
+    }
+
+    /// The message shown under the text box.
+    pub fn problem(&self) -> Option<String> {
+        self.problem.as_ref().map(ToString::to_string)
+    }
+
+    /// Validates the text and, when it passes, asks the workbench to apply it. An empty text
+    /// removes the name.
+    pub fn submit(&mut self, cx: &mut Context<Self>) {
+        let text = self.text(cx);
+        if text.trim().is_empty() {
+            self.problem = None;
+            cx.emit(RenamePromptEvent::Rename(None));
+        } else {
+            match SessionName::parse(&text) {
+                Ok(name) => {
+                    self.problem = None;
+                    cx.emit(RenamePromptEvent::Rename(Some(name)));
+                }
+                Err(error) => self.problem = Some(error.message.into()),
+            }
+        }
+        cx.notify();
+    }
+
+    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if event.keystroke.key == "escape" {
+            cx.emit(RenamePromptEvent::Close);
+            cx.stop_propagation();
+        }
+    }
+}
+
+impl Render for RenameTerminalPrompt {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let note = if self.running_agent {
+            "Çalışan ajanın daemon kaydındaki adı başlatıldığı adla kalır; bu ad yalnızca burada görünür."
+        } else {
+            "Boş bırakırsanız ad kaldırılır. Enter kaydeder, Esc kapatır."
+        };
+        div()
+            .id("rename-terminal-prompt")
+            .absolute()
+            .top_16()
+            .left_0()
+            .right_0()
+            .mx_auto()
+            .w(gpui::px(520.0))
+            .p_4()
+            .rounded_md()
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .bg(gpui::rgb(theme.panel))
+            .border_1()
+            .border_color(gpui::rgb(theme.line))
+            .text_color(gpui::rgb(theme.text))
+            .capture_key_down(cx.listener(Self::on_key_down))
+            .child(SharedString::from("Terminali yeniden adlandır"))
+            .child(
+                div()
+                    .h(gpui::px(30.0))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(gpui::rgb(theme.line))
+                    .child(Input::new(&self.input)),
+            )
+            .children(self.problem.clone().map(|problem| {
+                div()
+                    .text_xs()
+                    .text_color(gpui::rgb(theme.bad))
+                    .child(problem)
+            }))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(gpui::rgb(theme.muted))
+                    .child(note),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("rename-terminal-confirm")
+                            .px_3()
+                            .py_1()
+                            .border_1()
+                            .border_color(gpui::rgb(theme.accent_ink))
+                            .child(SharedString::from("Kaydet"))
+                            .on_click(cx.listener(|this, _, _window, cx| this.submit(cx))),
+                    )
+                    .child(
+                        div()
+                            .id("rename-terminal-cancel")
+                            .px_3()
+                            .py_1()
+                            .border_1()
+                            .border_color(gpui::rgb(theme.line))
+                            .child(SharedString::from("Vazgeç"))
+                            .on_click(cx.listener(|_, _, _window, cx| {
+                                cx.emit(RenamePromptEvent::Close);
+                            })),
+                    ),
+            )
+    }
+}

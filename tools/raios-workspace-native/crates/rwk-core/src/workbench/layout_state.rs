@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::sessions::{SessionKind, MAX_SESSIONS};
+use crate::sessions::{SessionKind, SessionName, MAX_SESSIONS};
 use crate::workbench::layout::LayoutPreset;
 
 /// Most editor tabs stored for one project. Beyond this the oldest tabs are dropped; the cap
@@ -38,7 +38,11 @@ fn first_line() -> usize {
 #[serde(tag = "terminal", rename_all = "snake_case")]
 pub enum SavedTerminal {
     /// A plain shell; it is restarted when the project opens.
-    Shell,
+    Shell {
+        /// The name the user gave it, when there is one.
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// An agent session; on restore it is *offered* (through `raios resume` planning) and only
     /// started when the user accepts.
     Agent {
@@ -47,7 +51,28 @@ pub enum SavedTerminal {
         /// The agent's own conversation id when it is known.
         #[serde(default)]
         native_session: Option<String>,
+        /// The name the user gave the terminal, when there is one.
+        #[serde(default)]
+        name: Option<String>,
     },
+}
+
+impl SavedTerminal {
+    /// The stored name, when it passes the same rules as a typed one.
+    pub fn name(&self) -> Option<SessionName> {
+        let (Self::Shell { name } | Self::Agent { name, .. }) = self;
+        name.as_deref().and_then(|raw| SessionName::parse(raw).ok())
+    }
+
+    /// The same terminal with its name normalized, or dropped when it is not a valid name: a
+    /// hand-edited file cannot put an option-looking or credential-looking text into argv or
+    /// the daemon's records.
+    fn sanitized(mut self) -> Self {
+        let clean = self.name().map(|name| name.to_string());
+        let (Self::Shell { name } | Self::Agent { name, .. }) = &mut self;
+        *name = clean;
+        self
+    }
 }
 
 /// Everything one project had open at save time.
@@ -93,6 +118,11 @@ impl SavedWorkspace {
             .retain(|tab| valid_tab_path(&tab.path) && seen.insert(tab.path.clone()));
         self.tabs.truncate(MAX_SAVED_TABS);
         self.terminals.truncate(MAX_SESSIONS);
+        self.terminals = self
+            .terminals
+            .into_iter()
+            .map(SavedTerminal::sanitized)
+            .collect();
         self.active = self.active.min(self.tabs.len().saturating_sub(1));
         self
     }
@@ -143,10 +173,11 @@ mod tests {
             active: 1,
             layout: LayoutPreset::Agents,
             terminals: vec![
-                SavedTerminal::Shell,
+                SavedTerminal::Shell { name: None },
                 SavedTerminal::Agent {
                     kind: SessionKind::Codex,
                     native_session: Some("sess-1".into()),
+                    name: None,
                 },
             ],
         }
@@ -225,7 +256,7 @@ mod tests {
             })
             .collect();
         let more_terminals: Vec<SavedTerminal> = (0..MAX_SESSIONS + 4)
-            .map(|_| SavedTerminal::Shell)
+            .map(|_| SavedTerminal::Shell { name: None })
             .collect();
         let parsed = SavedWorkspace {
             project: PathBuf::from("/work/app"),

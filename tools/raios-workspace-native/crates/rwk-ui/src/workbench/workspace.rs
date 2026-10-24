@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use gpui::{Context, Window};
-use rwk_core::sessions::{SessionKind, SessionLaunch, MAX_SESSIONS};
+use rwk_core::sessions::{SessionKind, SessionLaunch, SessionName, MAX_SESSIONS};
 use rwk_core::workbench::{SavedTerminal, SavedWorkspace, WorkspaceStateSource};
 
 use super::{Workbench, WORKSPACE_SAVE_DELAY};
@@ -26,9 +26,12 @@ impl Workbench {
             .terminals
             .iter()
             .map(|pane| match pane.kind {
-                SessionKind::Shell => SavedTerminal::Shell,
+                SessionKind::Shell => SavedTerminal::Shell {
+                    name: pane.name.as_ref().map(ToString::to_string),
+                },
                 kind => SavedTerminal::Agent {
                     kind,
+                    name: pane.name.as_ref().map(ToString::to_string),
                     // A pane started from an offer knows the conversation it continues; a fresh
                     // run does not, and is matched by agent when the project opens again.
                     native_session: pane.resume.as_ref().map(|key| key.native_id().to_owned()),
@@ -40,6 +43,7 @@ impl Workbench {
         terminals.extend(self.offers.iter().map(|offer| SavedTerminal::Agent {
             kind: offer.kind,
             native_session: offer.native_session.clone(),
+            name: offer.name.as_ref().map(ToString::to_string),
         }));
         Some(SavedWorkspace {
             project: project.info().root.clone(),
@@ -97,14 +101,16 @@ impl Workbench {
         self.editor.update(cx, |editor, cx| {
             editor.restore_tabs(Arc::clone(&project), saved.tabs, saved.active, window, cx)
         });
-        let shells = saved
+        let shells: Vec<Option<SessionName>> = saved
             .terminals
             .iter()
-            .filter(|terminal| matches!(terminal, SavedTerminal::Shell))
+            .filter(|terminal| matches!(terminal, SavedTerminal::Shell { .. }))
             .take(MAX_SESSIONS)
-            .count();
-        for _ in 0..shells {
-            if !self.spawn_terminal(SessionKind::Shell, SessionLaunch::default(), window, cx) {
+            .map(SavedTerminal::name)
+            .collect();
+        for name in shells {
+            let launch = SessionLaunch::Fresh { prompt: None, name };
+            if !self.spawn_terminal(SessionKind::Shell, launch, window, cx) {
                 break;
             }
         }
