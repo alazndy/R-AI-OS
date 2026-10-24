@@ -67,6 +67,8 @@ pub enum CommandId {
     Agent,
     /// Create a handoff.
     Handoff,
+    /// Add an operator task to the open project.
+    NewTask,
     /// Show the project memory.
     Memory,
     /// Register the open project with Raios.
@@ -152,7 +154,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 45] = [
+const COMMANDS: [Command; 46] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -334,6 +336,7 @@ const COMMANDS: [Command; 45] = [
         Some("Ctrl Shift H"),
         &[bind_terminal("h", true, false)],
     ),
+    cmd(CommandId::NewTask, "Yeni görev…", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
     cmd(
         CommandId::RegisterProject,
@@ -583,7 +586,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("Böyle bir terminal yok")
             }
         }
-        Agent | Handoff | RegisterProject => {
+        Agent | Handoff | NewTask | RegisterProject => {
             if !state.control_plane_features {
                 deny("Daemon bağlantısı yapılandırılmadı")
             } else if !state.project_open {
@@ -631,7 +634,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 45);
+        assert_eq!(catalog().len(), 46);
     }
 
     #[test]

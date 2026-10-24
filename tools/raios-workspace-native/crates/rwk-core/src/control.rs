@@ -111,6 +111,47 @@ pub struct HandoffDecisionRequest {
     pub idempotency_key: IdempotencyKey,
 }
 
+/// Creates an operator task in a project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateTaskRequest {
+    /// Project root the task belongs to.
+    pub project_root: PathBuf,
+    /// Validated title.
+    pub title: String,
+    /// Priority, 0 to 255.
+    pub priority: u8,
+    /// Retry key.
+    pub idempotency_key: IdempotencyKey,
+}
+
+/// Sets the status of an operator task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateTaskStatusRequest {
+    /// Project root the task belongs to (the policy and the audit entry are scoped by it).
+    pub project_root: PathBuf,
+    /// Task to change.
+    pub task_id: String,
+    /// The new status.
+    pub status: crate::tasks::TaskStatus,
+    /// Retry key.
+    pub idempotency_key: IdempotencyKey,
+}
+
+/// Assigns an operator task to an agent, or clears its assignee.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignTaskRequest {
+    /// Project root the task belongs to.
+    pub project_root: PathBuf,
+    /// Task to change.
+    pub task_id: String,
+    /// The agent that gets the task; `None` clears it. A shell is not an agent.
+    pub assignee: Option<SessionKind>,
+    /// The `updated_at` the task had when the user saw it; a newer change is not overwritten.
+    pub expected_updated_at: Option<String>,
+    /// Retry key.
+    pub idempotency_key: IdempotencyKey,
+}
+
 /// A handoff the daemon accepted into its queue. The receiver has not started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedHandoff {
@@ -212,6 +253,15 @@ pub trait ControlPlane: Send + Sync {
 
     /// Reads the delivery receipt of one handoff, scoped to `project_root`.
     fn handoff_receipt(&self, approval_id: &str, project_root: &Path) -> Result<HandoffReceiptDto>;
+
+    /// Creates an operator task and returns its identifier.
+    fn create_task(&self, request: &CreateTaskRequest) -> Result<String>;
+
+    /// Sets the status of an operator task.
+    fn update_task_status(&self, request: &UpdateTaskStatusRequest) -> Result<()>;
+
+    /// Assigns an operator task and returns its new `updated_at`.
+    fn assign_task(&self, request: &AssignTaskRequest) -> Result<String>;
 }
 
 /// Source of [`ControlEvent`]s. [`stream::WebSocketEvents`] subscribes to the daemon's typed

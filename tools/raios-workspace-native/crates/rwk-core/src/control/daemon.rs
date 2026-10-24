@@ -13,8 +13,9 @@ use raios_contracts::{
 use serde_json::Value;
 
 use super::{
-    ControlPlane, CreateHandoffRequest, HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest,
-    PolicyAction, QueuedHandoff, RegistrationOutcome,
+    AssignTaskRequest, ControlPlane, CreateHandoffRequest, CreateTaskRequest,
+    HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction, QueuedHandoff,
+    RegistrationOutcome, UpdateTaskStatusRequest,
 };
 use crate::error::{AppError, ErrorCode, Result};
 
@@ -243,6 +244,53 @@ impl ControlPlane for DaemonClient {
             approval_id: text_field(&result, "approval_id")?,
             project_path: PathBuf::from(text_field(&result, "project_path")?),
         })
+    }
+
+    fn create_task(&self, request: &CreateTaskRequest) -> Result<String> {
+        let response = self.command(&Command::CreateTask {
+            title: request.title.clone(),
+            project_path: Some(path_text(&request.project_root)?),
+            priority: request.priority,
+            idempotency_key: request.idempotency_key.as_str().to_owned(),
+        })?;
+        let result: Value = take(response, "result")?;
+        text_field(&result, "task_id")
+    }
+
+    fn update_task_status(&self, request: &UpdateTaskStatusRequest) -> Result<()> {
+        let response = self.command(&Command::UpdateTaskStatus {
+            task_id: request.task_id.clone(),
+            status: request.status.as_str().to_owned(),
+            idempotency_key: request.idempotency_key.as_str().to_owned(),
+        })?;
+        let result: Value = take(response, "result")?;
+        match text_field(&result, "status")? == request.status.as_str() {
+            true => Ok(()),
+            false => Err(daemon_error(
+                "the daemon answered with another status than the one requested",
+            )),
+        }
+    }
+
+    /// Sends `AssignTask` with the revision the user saw; a newer change comes back as a
+    /// `CONFLICT` problem and is not overwritten. A shell cannot be assigned.
+    fn assign_task(&self, request: &AssignTaskRequest) -> Result<String> {
+        let assignee = match request.assignee {
+            Some(kind) => Some(
+                kind.agent()
+                    .ok_or_else(|| invalid("A shell session is not an agent."))?
+                    .to_owned(),
+            ),
+            None => None,
+        };
+        let response = self.command(&Command::AssignTask {
+            task_id: request.task_id.clone(),
+            assignee,
+            expected_updated_at: request.expected_updated_at.clone(),
+            idempotency_key: request.idempotency_key.as_str().to_owned(),
+        })?;
+        let result: Value = take(response, "result")?;
+        text_field(&result, "updated_at")
     }
 
     fn handoff_receipt(&self, approval_id: &str, project_root: &Path) -> Result<HandoffReceiptDto> {

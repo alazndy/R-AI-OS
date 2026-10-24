@@ -15,6 +15,16 @@ static SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const MAX_TASK_TITLE_CHARS: usize = 240;
 const MAX_PROJECT_PATH_CHARS: usize = 4_096;
 const MAX_AGENT_PROMPT_CHARS: usize = 600;
+/// Which tasks a human operator may change from a control surface: personal tasks that are
+/// not part of a plan, not under approval and not (yet) run by an agent.
+const OPERATOR_TASK_CONDITIONS: &str = "plan_id IS NULL
+     AND parent_task_id IS NULL
+     AND EXISTS (SELECT 1 FROM cp_task_list_items li WHERE li.task_id = cp_tasks.id)
+     AND NOT EXISTS (SELECT 1 FROM cp_approvals ap WHERE ap.task_id = cp_tasks.id)
+     AND NOT EXISTS (SELECT 1 FROM cp_agent_runs ar WHERE ar.task_id = cp_tasks.id)";
+
+/// Agents a task can be assigned to: the names `raios run` takes.
+const TASK_ASSIGNEES: &[&str] = &["claude", "codex", "opencode", "agy"];
 const OPERATOR_TASK_STATUSES: &[&str] =
     &["queued", "in_progress", "blocked", "completed", "cancelled"];
 
@@ -183,6 +193,7 @@ pub fn load_work_snapshot(conn: &Connection) -> Result<WorkSnapshot, String> {
             status: t.status,
             priority: t.priority.clamp(0, i64::from(u8::MAX)) as u8,
             created_at: t.created_at,
+            updated_at: t.updated_at,
         })
         .collect();
 
@@ -426,6 +437,7 @@ fn command_name(cmd: &Command) -> &'static str {
         Command::UpdatePolicyRule { .. } => "update_policy_rule",
         Command::RegisterProject { .. } => "register_project",
         Command::CreateHandoff { .. } => "create_handoff",
+        Command::AssignTask { .. } => "assign_task",
     }
 }
 
@@ -941,21 +953,11 @@ pub(super) fn dispatch_with_seams(
             let now = Utc::now().to_rfc3339();
             let changed = tx
                 .execute(
-                    "UPDATE cp_tasks
-                     SET status = ?1, updated_at = ?2
-                     WHERE id = ?3
-                       AND plan_id IS NULL
-                       AND parent_task_id IS NULL
-                       AND EXISTS (
-                         SELECT 1 FROM cp_task_list_items li
-                         WHERE li.task_id = cp_tasks.id
-                       )
-                       AND NOT EXISTS (
-                         SELECT 1 FROM cp_approvals ap WHERE ap.task_id = cp_tasks.id
-                       )
-                       AND NOT EXISTS (
-                         SELECT 1 FROM cp_agent_runs ar WHERE ar.task_id = cp_tasks.id
-                       )",
+                    &format!(
+                        "UPDATE cp_tasks
+                         SET status = ?1, updated_at = ?2
+                         WHERE id = ?3 AND {OPERATOR_TASK_CONDITIONS}"
+                    ),
                     params![status, now, task_id],
                 )
                 .map_err(|error| Problem::internal(error.to_string()))?;
@@ -965,6 +967,65 @@ pub(super) fn dispatch_with_seams(
                 ));
             }
             Some(serde_json::json!({"task_id": task_id, "status": status}))
+        }
+        Command::AssignTask {
+            task_id,
+            assignee,
+            expected_updated_at,
+            ..
+        } => {
+            let assignee = assignee.as_deref().map(str::trim);
+            if task_id.trim().is_empty()
+                || assignee.is_some_and(|name| !TASK_ASSIGNEES.contains(&name))
+            {
+                return Err(Problem::invalid_input(
+                    "A task id and, when given, one of the known agents are required",
+                ));
+            }
+            let current: Option<String> = tx
+                .query_row(
+                    &format!(
+                        "SELECT updated_at FROM cp_tasks WHERE id = ?1 AND {OPERATOR_TASK_CONDITIONS}"
+                    ),
+                    params![task_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| Problem::internal(error.to_string()))?;
+            let Some(current) = current else {
+                return Err(Problem::not_found(
+                    "Operator-managed personal task was not found or cannot be updated",
+                ));
+            };
+            if expected_updated_at
+                .as_deref()
+                .is_some_and(|expected| expected != current)
+            {
+                return Err(Problem::conflict(
+                    "The task changed since it was read; reload it and try again",
+                ));
+            }
+            let now = Utc::now().to_rfc3339();
+            let changed = tx
+                .execute(
+                    &format!(
+                        "UPDATE cp_tasks
+                         SET assignee_kind = ?1, assignee_id = ?2, updated_at = ?3
+                         WHERE id = ?4 AND updated_at = ?5 AND {OPERATOR_TASK_CONDITIONS}"
+                    ),
+                    params![assignee.map(|_| "agent"), assignee, now, task_id, current],
+                )
+                .map_err(|error| Problem::internal(error.to_string()))?;
+            if changed != 1 {
+                return Err(Problem::conflict(
+                    "The task changed while it was being assigned; try again",
+                ));
+            }
+            Some(serde_json::json!({
+                "task_id": task_id,
+                "assignee": assignee,
+                "updated_at": now,
+            }))
         }
         Command::RegisterProject { project_path, .. } => Some(
             super::project_registry::register_project(&tx, project_path)?,
@@ -1738,5 +1799,172 @@ mod tests {
                 .unwrap()["status"],
             "completed"
         );
+    }
+
+    fn new_operator_task(conn: &mut Connection, key: &str) -> String {
+        let create = Command::CreateTask {
+            title: "Assign me".into(),
+            project_path: None,
+            priority: 50,
+            idempotency_key: key.into(),
+        };
+        let result = dispatch_control_command(conn, &ControlActor::test_local(), &create)
+            .unwrap()
+            .unwrap();
+        result["task_id"].as_str().unwrap().to_owned()
+    }
+
+    fn assign(
+        conn: &mut Connection,
+        key: &str,
+        task_id: &str,
+        assignee: Option<&str>,
+        expected: Option<&str>,
+    ) -> Result<Option<serde_json::Value>, Problem> {
+        dispatch_control_command(
+            conn,
+            &ControlActor::test_local(),
+            &Command::AssignTask {
+                task_id: task_id.into(),
+                assignee: assignee.map(str::to_owned),
+                expected_updated_at: expected.map(str::to_owned),
+                idempotency_key: key.into(),
+            },
+        )
+    }
+
+    fn stored(conn: &Connection, task_id: &str) -> (Option<String>, Option<String>, String) {
+        conn.query_row(
+            "SELECT assignee_kind, assignee_id, updated_at FROM cp_tasks WHERE id = ?1",
+            params![task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn assigning_a_task_sets_and_clears_the_agent_and_shows_in_the_snapshot() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let task_id = new_operator_task(&mut conn, "assign-create");
+
+        let result = assign(&mut conn, "assign-1", &task_id, Some("codex"), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["assignee"], "codex");
+        let (kind, id, updated) = stored(&conn, &task_id);
+        assert_eq!(
+            (kind.as_deref(), id.as_deref()),
+            (Some("agent"), Some("codex"))
+        );
+        assert_eq!(result["updated_at"], updated.as_str());
+
+        let snapshot = load_work_snapshot(&conn).unwrap();
+        let task = snapshot.tasks.iter().find(|t| t.id == task_id).unwrap();
+        assert_eq!(task.assignee.as_deref(), Some("codex"));
+        assert_eq!(
+            task.updated_at, updated,
+            "the snapshot carries the revision token"
+        );
+
+        assign(&mut conn, "assign-2", &task_id, None, Some(&updated)).unwrap();
+        let (kind, id, _) = stored(&conn, &task_id);
+        assert_eq!((kind, id), (None, None), "None clears the assignee");
+    }
+
+    #[test]
+    fn assigning_refuses_unknown_agents_missing_tasks_and_a_stale_revision() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let task_id = new_operator_task(&mut conn, "assign-create");
+        let (_, _, first_revision) = stored(&conn, &task_id);
+
+        for bad in ["", "claude_kaira", "cursor", "claude; drop"] {
+            assert_eq!(
+                assign(&mut conn, &format!("bad-{bad}"), &task_id, Some(bad), None)
+                    .unwrap_err()
+                    .code,
+                "INVALID_INPUT",
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            assign(&mut conn, "blank-id", " ", Some("claude"), None)
+                .unwrap_err()
+                .code,
+            "INVALID_INPUT"
+        );
+        assert_eq!(
+            assign(&mut conn, "missing", "no-such-task", Some("claude"), None)
+                .unwrap_err()
+                .code,
+            "NOT_FOUND"
+        );
+        assert_eq!(stored(&conn, &task_id).1, None, "nothing was assigned");
+
+        // Someone else changes the task; the stale token is refused and nothing is overwritten.
+        let status = Command::UpdateTaskStatus {
+            task_id: task_id.clone(),
+            status: "in_progress".into(),
+            idempotency_key: "status-in-between".into(),
+        };
+        dispatch_control_command(&mut conn, &ControlActor::test_local(), &status).unwrap();
+        let error = assign(
+            &mut conn,
+            "stale",
+            &task_id,
+            Some("claude"),
+            Some(&first_revision),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "CONFLICT");
+        assert_eq!(stored(&conn, &task_id).1, None);
+
+        let (_, _, fresh) = stored(&conn, &task_id);
+        assign(&mut conn, "fresh", &task_id, Some("claude"), Some(&fresh)).unwrap();
+        assert_eq!(stored(&conn, &task_id).1.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn assigning_leaves_agent_owned_tasks_alone_and_replays_by_idempotency_key() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        raios_core::db::migrate_existing(&conn).unwrap();
+        let now = Utc::now().to_rfc3339();
+        // A task an approval hangs on belongs to the agent workflow, not to the operator.
+        conn.execute(
+            "INSERT INTO cp_tasks
+             (id, plan_id, parent_task_id, title, description, priority, status,
+              acceptance_criteria, created_at, updated_at)
+             VALUES ('agent-task', NULL, NULL, 'Agent work', '', 50, 'awaiting_approval', '', ?1, ?1)",
+            params![now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cp_task_list_items
+             (task_id, source_kind, source_path, display_order, created_at)
+             VALUES ('agent-task', 'markdown', 'tasks.md', 0, ?1)",
+            params![now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cp_approvals (id, task_id, approval_type, reason, status, requested_at)
+             VALUES ('ap-1', 'agent-task', 'handover', 'x', 'pending', ?1)",
+            params![now],
+        )
+        .unwrap();
+        assert_eq!(
+            assign(&mut conn, "agent-owned", "agent-task", Some("claude"), None)
+                .unwrap_err()
+                .code,
+            "NOT_FOUND"
+        );
+
+        let task_id = new_operator_task(&mut conn, "assign-create");
+        let first = assign(&mut conn, "same-key", &task_id, Some("opencode"), None).unwrap();
+        let replay = assign(&mut conn, "same-key", &task_id, Some("opencode"), None).unwrap();
+        assert_eq!(first, replay, "a retry returns the stored result");
+        // The same key with another payload is a conflict, never a second change.
+        assert!(assign(&mut conn, "same-key", &task_id, Some("claude"), None).is_err());
+        assert_eq!(stored(&conn, &task_id).1.as_deref(), Some("opencode"));
     }
 }

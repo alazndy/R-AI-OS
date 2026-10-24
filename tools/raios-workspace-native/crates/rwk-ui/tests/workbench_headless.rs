@@ -1018,14 +1018,25 @@ use rwk_core::control::{ControlEvent, ControlPlane, EventSource, PolicyAction, Q
 use rwk_core::sessions::{SessionKind, SessionName};
 
 fn connected(rig: &mut Rig, policy: PolicyAction) -> Arc<FakeControlPlane> {
+    connected_with(rig, policy, raios_contracts::WorkSnapshot::default())
+}
+
+fn connected_with(
+    rig: &mut Rig,
+    policy: PolicyAction,
+    work: raios_contracts::WorkSnapshot,
+) -> Arc<FakeControlPlane> {
     let fake = Arc::new(FakeControlPlane::new());
     fake.set_policy("launch_agent", policy);
     fake.set_policy("create_handoff", policy);
     fake.set_policy("register_project", policy);
     fake.set_policy("approve_handoff", policy);
     fake.set_policy("reject_handoff", policy);
+    fake.set_policy("create_task", policy);
+    fake.set_policy("update_task_status", policy);
+    fake.set_policy("assign_task", policy);
     // The first inspector poll finds the daemon healthy; only then are agent commands offered.
-    fake.push_work_snapshot(Ok(raios_contracts::WorkSnapshot::default()))
+    fake.push_work_snapshot(Ok(work))
         .push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()));
     let plane: Arc<dyn ControlPlane> = fake.clone();
     rig.with(|wb, _, cx| wb.set_control_plane(Some(plane), cx));
@@ -2656,4 +2667,262 @@ fn a_real_drag_of_a_title_onto_another_pane_rearranges_the_dock() {
     // Dropped on the middle of the first pane, the dragged terminal joined its group.
     assert!(moved, "no scanned point started a drag; viewport {size:?}");
     assert_eq!(rig.read(|wb, _| wb.running_sessions()), 2);
+}
+
+fn task_calls(fake: &FakeControlPlane) -> Vec<RecordedCall> {
+    fake.calls()
+        .iter()
+        .filter(|call| {
+            matches!(
+                call,
+                RecordedCall::CreateTask(_)
+                    | RecordedCall::UpdateTaskStatus(_)
+                    | RecordedCall::AssignTask(_)
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_new_task_is_titled_in_a_prompt_validated_and_created_through_the_guard() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_created_task(Ok("t-new".to_owned()));
+
+    rig.run(CommandId::NewTask);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("the prompt opens");
+
+    // A title that looks like a credential never leaves the workspace.
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("anahtar sk-abcdefghijklmnopqrstuvwx", window, cx);
+            prompt.submit(cx);
+        })
+    });
+    rig.settle_for(50);
+    assert!(task_calls(&fake).is_empty());
+    assert!(rig.read(|wb, cx| wb
+        .rename_prompt()
+        .is_some_and(|prompt| prompt.read(cx).problem().is_some())));
+
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("  Derlemeyi düzelt  ", window, cx);
+            prompt.submit(cx);
+        })
+    });
+    assert!(rig.settle_until(|_| !task_calls(&fake).is_empty()));
+    let RecordedCall::CreateTask(request) = task_calls(&fake).remove(0) else {
+        panic!("a create call");
+    };
+    assert_eq!(request.title, "Derlemeyi düzelt");
+    assert_eq!(request.priority, 50);
+    assert_eq!(
+        request.project_root,
+        std::fs::canonicalize(rig.dir.path()).unwrap()
+    );
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+    assert!(
+        rig.settle_until(|rig| rig.read(|wb, _| wb.toast()) == Some("Görev eklendi".to_owned()))
+    );
+}
+
+#[test]
+fn a_status_change_and_an_assignment_carry_the_revision_the_user_saw() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_status_update(Ok(()));
+    fake.push_assignment(Ok("2026-10-24T10:00:00Z".to_owned()));
+
+    rig.with(|wb, window, cx| {
+        wb.set_task_status(
+            "t-1".into(),
+            rwk_core::tasks::TaskStatus::Completed,
+            window,
+            cx,
+        )
+    });
+    rig.with(|wb, window, cx| {
+        wb.assign_task(
+            "t-1".into(),
+            "2026-10-24T09:00:00Z".into(),
+            Some(SessionKind::Codex),
+            window,
+            cx,
+        )
+    });
+    assert!(rig.settle_until(|_| task_calls(&fake).len() == 2));
+
+    let calls = task_calls(&fake);
+    let RecordedCall::UpdateTaskStatus(update) = &calls[0] else {
+        panic!("a status call");
+    };
+    assert_eq!(update.status, rwk_core::tasks::TaskStatus::Completed);
+    let RecordedCall::AssignTask(assign) = &calls[1] else {
+        panic!("an assign call");
+    };
+    assert_eq!(assign.assignee, Some(SessionKind::Codex));
+    assert_eq!(
+        assign.expected_updated_at.as_deref(),
+        Some("2026-10-24T09:00:00Z")
+    );
+}
+
+#[test]
+fn a_task_changed_elsewhere_says_so_and_a_shell_terminal_is_never_assigned() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_assignment(Err(rwk_core::error::AppError::new(
+        rwk_core::error::ErrorCode::Conflict,
+        "The task changed since it was read",
+    )));
+
+    rig.with(|wb, window, cx| {
+        wb.assign_task(
+            "t-1".into(),
+            "old".into(),
+            Some(SessionKind::Claude),
+            window,
+            cx,
+        )
+    });
+    assert!(rig.settle_until(|rig| rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("bu arada değişti"))));
+
+    // Terminal 1 is a plain shell: nothing is sent.
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    let before = task_calls(&fake).len();
+    rig.with(|wb, window, cx| {
+        wb.assign_task_to_terminal("t-1".into(), "old".into(), 0, window, cx)
+    });
+    assert_eq!(task_calls(&fake).len(), before);
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("ajan değil")));
+}
+
+#[test]
+fn a_denied_task_policy_sends_nothing() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Deny);
+    rig.with(|wb, window, cx| wb.create_task("Görev".into(), window, cx));
+    rig.settle_for(100);
+    assert!(task_calls(&fake).is_empty());
+}
+
+fn receipt_of(
+    root: &std::path::Path,
+    status: &str,
+    delivered: bool,
+) -> raios_contracts::HandoffReceiptDto {
+    raios_contracts::HandoffReceiptDto {
+        approval_id: "a-1".into(),
+        project_path: root.to_string_lossy().into_owned(),
+        from_agent: "claude_kaira".into(),
+        to_agent: "codex_kaira".into(),
+        status: status.into(),
+        resolved_by: None,
+        resolved_at: None,
+        delivered_by_target: delivered,
+    }
+}
+
+/// A rig with one open task "t-1" in the project, and a handoff of it queued towards Codex whose
+/// receipts follow `receipts`.
+fn handoff_of_a_task(receipts: &[(&str, bool)]) -> (Rig, Arc<FakeControlPlane>) {
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("root");
+    let work = raios_contracts::WorkSnapshot {
+        tasks: vec![raios_contracts::UnifiedTaskDto {
+            id: "t-1".into(),
+            title: "Derlemeyi düzelt".into(),
+            project_path: Some(root.to_string_lossy().into_owned()),
+            updated_at: "2026-10-25T08:00:00Z".into(),
+            ..raios_contracts::UnifiedTaskDto::default()
+        }],
+        ..raios_contracts::WorkSnapshot::default()
+    };
+    let fake = connected_with(&mut rig, PolicyAction::Allow, work);
+    assert!(rig.settle_until(|rig| rig.read(|wb, cx| !wb
+        .inspector()
+        .read(cx)
+        .model()
+        .tasks
+        .is_empty())));
+    fake.push_handoff(Ok(QueuedHandoff {
+        approval_id: "a-1".into(),
+        project_path: root.clone(),
+    }));
+    for (status, delivered) in receipts {
+        fake.push_receipt(Ok(receipt_of(&root, status, *delivered)));
+    }
+    fake.push_assignment(Ok("2026-10-25T09:00:00Z".to_owned()));
+
+    // The row's "Devret…" button emits this event.
+    let inspector = rig.read(|wb, _| wb.inspector().clone());
+    rig.with(|_, _, cx| {
+        inspector.update(cx, |_, cx| {
+            cx.emit(rwk_ui::inspector::InspectorEvent::HandoffTask {
+                task_id: "t-1".into(),
+                title: "Derlemeyi düzelt".into(),
+            })
+        })
+    });
+    let composer = rig
+        .read(|wb, _| wb.composer().cloned())
+        .expect("the composer opens");
+    let seeded = rig.read(|_, cx| composer.read(cx).text(cx));
+    assert!(seeded.contains("Görev: Derlemeyi düzelt"), "{seeded}");
+    rig.with(|_, window, cx| {
+        composer.update(cx, |composer, cx| {
+            let text = format!("{seeded}testleri çalıştır.");
+            composer.set_text(&text, window, cx);
+            composer.submit(SessionKind::Codex, cx);
+        })
+    });
+    (rig, fake)
+}
+
+fn assignments(fake: &FakeControlPlane) -> Vec<rwk_core::control::AssignTaskRequest> {
+    fake.calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            RecordedCall::AssignTask(request) => Some(request),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_task_follows_a_handoff_once_the_receipt_says_it_was_delivered() {
+    let (mut rig, fake) = handoff_of_a_task(&[("approved", true)]);
+
+    assert!(rig.settle_until(|_| !assignments(&fake).is_empty()));
+    rig.settle_for(300);
+
+    let moves = assignments(&fake);
+    assert_eq!(moves.len(), 1, "the task moves once");
+    assert_eq!(moves[0].task_id, "t-1");
+    assert_eq!(moves[0].assignee, Some(SessionKind::Codex));
+    assert_eq!(
+        moves[0].expected_updated_at.as_deref(),
+        Some("2026-10-25T08:00:00Z")
+    );
+}
+
+#[test]
+fn a_handoff_that_never_arrives_leaves_the_task_where_it_was() {
+    let (mut rig, fake) = handoff_of_a_task(&[("expired", false)]);
+
+    assert!(rig.settle_until(
+        |rig| rig.read(|wb, _| { wb.handoffs().first().is_some_and(|h| !h.is_open()) })
+    ));
+    rig.settle_for(300);
+
+    assert!(assignments(&fake).is_empty());
 }

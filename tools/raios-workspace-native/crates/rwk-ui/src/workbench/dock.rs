@@ -17,6 +17,7 @@ use rwk_core::sessions::SessionId;
 use rwk_core::workbench::{zone_at, Axis, CommandId, DockLayout, DropZone, Edge, Node, Theme};
 
 use super::{SelectedPane, Workbench};
+use crate::inspector::DraggedTask;
 
 /// What a dragged terminal title carries.
 #[derive(Clone)]
@@ -185,6 +186,26 @@ impl Workbench {
             Err(error) => self.say(format!("Terminal taşınamadı: {error}"), cx),
         }
         cx.notify();
+    }
+
+    /// A task row was dropped on terminal `target`: the task goes to that terminal's agent.
+    pub fn drop_task(
+        &mut self,
+        dragged: &DraggedTask,
+        target: &SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.terminals.iter().position(|pane| &pane.id == target) else {
+            return;
+        };
+        self.assign_task_to_terminal(
+            dragged.task_id.clone(),
+            dragged.updated_at.clone(),
+            index,
+            window,
+            cx,
+        );
     }
 
     // ----- painting --------------------------------------------------------------------
@@ -360,6 +381,7 @@ impl Workbench {
             .map(|(_, zone)| *zone);
         let on_move = id.clone();
         let on_drop = id.clone();
+        let on_task_drop = id.clone();
         let body = div()
             .id(SharedString::from(format!("terminal-body-{}", id.as_str())))
             .flex_1()
@@ -390,6 +412,9 @@ impl Workbench {
                     }
                 },
             ))
+            .on_drop(cx.listener(move |this, dragged: &DraggedTask, window, cx| {
+                this.drop_task(dragged, &on_task_drop, window, cx);
+            }))
             .on_drop(
                 cx.listener(move |this, dragged: &DraggedTerminal, window, cx| {
                     let zone = this
@@ -458,6 +483,7 @@ impl Workbench {
         let title = SharedString::from(self.terminal_title(index));
         let click_target = id.clone();
         let drop_target = id.clone();
+        let task_target = id.clone();
         let carried = DraggedTerminal {
             id: id.clone(),
             title: title.clone(),
@@ -503,6 +529,12 @@ impl Workbench {
             .drag_over::<DraggedTerminal>(move |style, _dragged, _window, _cx| {
                 style.bg(gpui::rgb(theme.raised))
             })
+            .drag_over::<DraggedTask>(move |style, _dragged, _window, _cx| {
+                style.bg(gpui::rgb(theme.raised))
+            })
+            .on_drop(cx.listener(move |this, dragged: &DraggedTask, window, cx| {
+                this.drop_task(dragged, &task_target, window, cx);
+            }))
             .on_drop(
                 cx.listener(move |this, dragged: &DraggedTerminal, window, cx| {
                     this.drop_on_title(&dragged.id, &drop_target, window, cx);
