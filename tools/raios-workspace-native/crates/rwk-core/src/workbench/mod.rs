@@ -3,6 +3,7 @@
 
 pub mod appearance;
 pub mod commands;
+pub mod dock;
 pub mod documents;
 pub mod file_types;
 pub mod layout;
@@ -17,6 +18,9 @@ pub use appearance::{parse_appearance, serialize_appearance, Appearance, Skin, T
 pub use commands::{
     available, catalog, resolve_shortcut, Binding, Command, CommandId, CommandState,
     KeyboardContext, Keystroke, WorkbenchState,
+};
+pub use dock::{
+    zone_at, Axis, DockError, DockLayout, DropZone, Edge, Node, EDGE_BAND, MAX_DEPTH, MIN_SHARE,
 };
 pub use documents::{DocumentSession, SaveBlocked, SaveTicket, SwitchDecision};
 pub use file_types::{presentation, FileIcon, FilePresentation, FileTone};

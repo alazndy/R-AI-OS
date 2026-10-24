@@ -321,6 +321,7 @@ mod tests {
             }],
             active: 0,
             layout: LayoutPreset::Editor,
+            dock: None,
             terminals: vec![
                 SavedTerminal::Shell { name: None },
                 SavedTerminal::Agent {
@@ -347,6 +348,7 @@ mod tests {
             active: 0,
             layout: rwk_core::workbench::LayoutPreset::Balanced,
             terminals: Vec::new(),
+            dock: None,
         };
         store.save(&state).expect("save");
         assert_eq!(

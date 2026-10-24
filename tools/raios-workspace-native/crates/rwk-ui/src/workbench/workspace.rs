@@ -51,6 +51,13 @@ impl Workbench {
             active: self.editor.read(cx).active_index(),
             layout: self.layout,
             terminals,
+            // Panes are stored as their position among the terminals, which is how they are
+            // listed above; a session id means nothing in the next run.
+            dock: Some(
+                self.dock
+                    .filter_map(&|id| self.terminals.iter().position(|pane| &pane.id == id)),
+            )
+            .filter(|dock| !dock.is_empty()),
         })
     }
 
@@ -101,17 +108,43 @@ impl Workbench {
         self.editor.update(cx, |editor, cx| {
             editor.restore_tabs(Arc::clone(&project), saved.tabs, saved.active, window, cx)
         });
-        let shells: Vec<Option<SessionName>> = saved
+        let shells: Vec<(usize, Option<SessionName>)> = saved
             .terminals
             .iter()
-            .filter(|terminal| matches!(terminal, SavedTerminal::Shell { .. }))
+            .enumerate()
+            .filter(|(_, terminal)| matches!(terminal, SavedTerminal::Shell { .. }))
             .take(MAX_SESSIONS)
-            .map(SavedTerminal::name)
+            .map(|(index, terminal)| (index, terminal.name()))
             .collect();
-        for name in shells {
+        // Saved position -> the session started for it.
+        let mut started: Vec<(usize, rwk_core::sessions::SessionId)> = Vec::new();
+        for (saved_index, name) in shells {
             let launch = SessionLaunch::Fresh { prompt: None, name };
             if !self.spawn_terminal(SessionKind::Shell, launch, window, cx) {
                 break;
+            }
+            if let Some(pane) = self.terminals.last() {
+                started.push((saved_index, pane.id.clone()));
+            }
+        }
+        // The saved arrangement covers the shells that came back; agents rejoin the dock one by
+        // one as their offers are taken. Any shell the arrangement does not mention keeps the
+        // place the default gave it.
+        if let Some(arrangement) = saved.dock.as_ref().map(|dock| {
+            dock.filter_map(&|saved_index: &usize| {
+                started
+                    .iter()
+                    .find(|(index, _)| index == saved_index)
+                    .map(|(_, id)| id.clone())
+            })
+        }) {
+            if !arrangement.is_empty() {
+                self.dock = arrangement;
+                for pane in &self.terminals {
+                    if !self.dock.contains(&pane.id) {
+                        let _ = self.dock.push_default(pane.id.clone());
+                    }
+                }
             }
         }
         let agents: Vec<SavedTerminal> = saved
