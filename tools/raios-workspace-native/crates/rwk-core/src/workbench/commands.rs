@@ -47,6 +47,22 @@ pub enum CommandId {
     StopTerminal,
     /// Give the selected terminal a name.
     RenameTerminal,
+    /// Swap the selected terminal with the one before it in the dock.
+    MoveTerminalPrevious,
+    /// Swap the selected terminal with the one after it in the dock.
+    MoveTerminalNext,
+    /// Place the selected terminal to the right of its neighbour.
+    SplitTerminalRight,
+    /// Place the selected terminal below its neighbour.
+    SplitTerminalDown,
+    /// Make the selected terminal a tab of the group before it.
+    JoinTerminalPrevious,
+    /// Take the selected terminal out of its tab group.
+    UngroupTerminal,
+    /// Give the selected terminal more room.
+    GrowTerminal,
+    /// Give the selected terminal less room.
+    ShrinkTerminal,
     /// Launch an agent.
     Agent,
     /// Create a handoff.
@@ -136,7 +152,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 37] = [
+const COMMANDS: [Command; 45] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -268,6 +284,44 @@ const COMMANDS: [Command; 37] = [
         None,
         &[],
     ),
+    cmd(
+        CommandId::MoveTerminalPrevious,
+        "Terminali öncekiyle yer değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::MoveTerminalNext,
+        "Terminali sonrakiyle yer değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::SplitTerminalRight,
+        "Terminali komşusunun sağına böl",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::SplitTerminalDown,
+        "Terminali komşusunun altına böl",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::JoinTerminalPrevious,
+        "Terminali öncekinin sekmesi yap",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::UngroupTerminal,
+        "Terminali sekme grubundan ayır",
+        None,
+        &[],
+    ),
+    cmd(CommandId::GrowTerminal, "Terminali büyüt", None, &[]),
+    cmd(CommandId::ShrinkTerminal, "Terminali küçült", None, &[]),
     cmd(
         CommandId::Agent,
         "Ajan başlat",
@@ -513,7 +567,15 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             }
         }
         NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
-        | StopTerminal | RenameTerminal => needs_terminal(),
+        | StopTerminal | RenameTerminal | UngroupTerminal => needs_terminal(),
+        MoveTerminalPrevious | MoveTerminalNext | SplitTerminalRight | SplitTerminalDown
+        | JoinTerminalPrevious | GrowTerminal | ShrinkTerminal => {
+            if state.terminals >= 2 {
+                allow()
+            } else {
+                deny("En az iki terminal gerekir")
+            }
+        }
         FocusTerminal(index) => {
             if index >= 1 && index <= state.terminals {
                 allow()
@@ -569,7 +631,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 37);
+        assert_eq!(catalog().len(), 45);
     }
 
     #[test]

@@ -46,17 +46,19 @@ A session gains a `name: Option<String>`, at most 120 characters (the limit `rai
 
 ### 5.1 Model
 
-The flat terminal list becomes a pure layout tree in `rwk-core` (no GPUI):
+The flat terminal list becomes a pure layout tree in `rwk-core` (no GPUI), generic over how a pane is identified (live `SessionId`s while running, positions in the saved terminal list on disk):
 
 ```
-DockLayout { root: Node }
-Node = Tabs { sessions: Vec<SessionId>, active: usize }
-     | Split { axis: Horizontal | Vertical, ratio: f32, first: Box<Node>, second: Box<Node> }
+DockLayout<T> { root: Option<Node<T>> }
+Node = Tabs  { sessions: Vec<T>, active: usize }
+     | Split { axis: Horizontal | Vertical, children: Vec<{ weight: f32, node: Node }> }   // at least two children, weights sum to 1
 ```
 
-Invariants, checked by a `validate()` that every operation ends with: each live session appears in exactly one `Tabs`; no empty `Tabs` except the root; depth at most 4; ratio within [0.15, 0.85]; at most 12 sessions (the existing ceiling).
+A split is n-ary rather than binary, so twelve terminals stacked in a column are one split of twelve, not eleven nested pairs, and the depth limit stays meaningful (an earlier draft of this document used binary splits with a ratio; that could not hold twelve stacked panes within the depth limit).
 
-Operations, all pure functions returning a new layout: `move_tab(session, to_group, index)`, `split(session, target_group, edge)`, `close_group`, `resize(split, ratio)`, `activate`. The three presets keep working: they set the pane proportions of files, editor and dock, and the dock tree is independent of them.
+Invariants, checked by `validate()` that every operation ends with: each pane appears exactly once; no empty group; a split has at least two children and its weights are positive and sum to one; a split never sits directly inside a split of the same axis (it is merged); active tab in range; depth at most 4; at most 12 panes. Every operation works on a copy, normalizes it and validates it before replacing the layout, so a refused operation changes nothing.
+
+Operations: `push_default`, `remove`, `retain`, `activate`, `move_tab(pane, into_group_of, index)`, `split(pane, target, edge)`, `resize(path, boundary, delta)`, `map`, `filter_map`, `sanitized`. The three presets keep working: they set the pane proportions of files, editor and dock, and the dock tree is independent of them.
 
 ### 5.2 Gestures
 
@@ -69,7 +71,7 @@ Operations, all pure functions returning a new layout: `move_tab(session, to_gro
 
 ### 5.3 Persistence
 
-`DockLayout` is stored in the per-project saved workspace file next to the existing tab list. The file format gains a `dock` field; a file without it loads as one `Tabs` group in the old order, and an unreadable tree falls back to that too (never to an error that loses the terminals).
+`DockLayout<usize>` is stored in the per-project saved workspace file next to the existing tab list (`dock`, each pane a position in the saved `terminals` list). A file without it loads with the default arrangement (every terminal in its own group, stacked equally), and a tree that points past the terminals, repeats a pane or nests too deeply is repaired or dropped, never turned into an error that loses the terminals. On restore the arrangement covers the shells that come back; agent terminals rejoin the dock at the end, one by one, as their resume offers are taken.
 
 ### 5.4 Risk
 

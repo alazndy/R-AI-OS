@@ -2,6 +2,7 @@
 //! commands take effect.
 
 pub mod control;
+pub mod dock;
 pub mod host;
 pub mod layout;
 pub mod memory;
@@ -31,8 +32,9 @@ use rwk_core::sessions::{
 };
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
 use rwk_core::workbench::{
-    available, resolve_shortcut, Appearance, CommandId, KeyboardContext, Keystroke, SavedWorkspace,
-    SessionOffer, Skin, SwitchDecision, Theme, Tone, WorkbenchState, WorkspaceStateSource,
+    available, resolve_shortcut, Appearance, CommandId, DockLayout, KeyboardContext, Keystroke,
+    SavedWorkspace, SessionOffer, Skin, SwitchDecision, Theme, Tone, WorkbenchState,
+    WorkspaceStateSource,
 };
 
 use crate::editor::view::{EditorEvent, EditorView};
@@ -56,7 +58,7 @@ const NEW_TERMINAL_SIZE: TerminalSize = TerminalSize {
 const WORKSPACE_SAVE_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// What the workbench tells the application around it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WorkbenchEvent {
     /// The user changed skin or tone; the application stores it.
     AppearanceChanged(Appearance),
@@ -216,6 +218,10 @@ pub struct Workbench {
     composer_subscription: Option<Subscription>,
     reject_prompt: Option<Entity<crate::handoff::RejectHandoffPrompt>>,
     reject_prompt_subscription: Option<Subscription>,
+    /// How the dock arranges the terminal panes.
+    dock: DockLayout<SessionId>,
+    /// Where the terminal being dragged would land, while a drag is over a pane.
+    drop_hint: Option<(SessionId, rwk_core::workbench::DropZone)>,
     rename_prompt: Option<Entity<crate::rename::RenameTerminalPrompt>>,
     rename_subscription: Option<Subscription>,
     handoffs: Vec<TrackedHandoff>,
@@ -355,6 +361,8 @@ impl Workbench {
             composer_subscription: None,
             reject_prompt: None,
             reject_prompt_subscription: None,
+            dock: DockLayout::new(),
+            drop_hint: None,
             rename_prompt: None,
             rename_subscription: None,
             handoffs: Vec::new(),
@@ -628,6 +636,14 @@ impl Workbench {
                 }
             }
             CommandId::RenameTerminal => self.open_rename_prompt(self.selected, window, cx),
+            CommandId::MoveTerminalPrevious
+            | CommandId::MoveTerminalNext
+            | CommandId::SplitTerminalRight
+            | CommandId::SplitTerminalDown
+            | CommandId::JoinTerminalPrevious
+            | CommandId::UngroupTerminal
+            | CommandId::GrowTerminal
+            | CommandId::ShrinkTerminal => self.arrange(id, window, cx),
             CommandId::Refresh => self.files.update(cx, |files, cx| files.refresh(cx)),
             CommandId::Settings => self.toggle_tone(cx),
             CommandId::Skin => self.toggle_skin(cx),
@@ -1135,6 +1151,7 @@ impl Workbench {
             self.gates.detach(&pane.id);
             self.host.0.remove(&pane.id);
         }
+        self.dock = DockLayout::new();
         self.selected = 0;
     }
 
@@ -1149,14 +1166,19 @@ impl Workbench {
             .collect();
         let gates = Arc::clone(&self.gates);
         let host = self.host.0.clone();
+        let mut gone = Vec::new();
         self.terminals.retain(|pane| {
             let alive = running.contains(&pane.id);
             if !alive {
                 gates.detach(&pane.id);
                 host.remove(&pane.id);
+                gone.push(pane.id.clone());
             }
             alive
         });
+        for id in gone {
+            self.dock.remove(&id);
+        }
         self.selected = self.selected.min(self.terminals.len().saturating_sub(1));
     }
 
@@ -1200,6 +1222,7 @@ impl Workbench {
             SessionLaunch::Resume(key) => (Some(key.clone()), None),
             SessionLaunch::Fresh { name, .. } => (None, name.clone()),
         };
+        let _ = self.dock.push_default(info.id.clone());
         self.terminals.push(TerminalPane {
             kind,
             id: info.id,
@@ -1325,8 +1348,17 @@ impl Workbench {
             return;
         };
         self.selected = index;
+        let id = pane.id.clone();
         let handle = pane.view.read(cx).focus_handle().clone();
-        window.focus(&handle, cx);
+        // A tab that was hidden is painted for the first time on the next frame; focus can only
+        // land on it then.
+        let was_shown = self.dock.is_shown(&id);
+        self.dock.activate(&id);
+        if was_shown {
+            window.focus(&handle, cx);
+        } else {
+            window.on_next_frame(move |window, cx| window.focus(&handle, cx));
+        }
         cx.notify();
     }
 
@@ -1430,44 +1462,7 @@ impl Render for Workbench {
                     .child(self.inspector.clone())
             }))
             .children(self.offer_rows(cx))
-            .children(self.terminals.iter().enumerate().map(|(index, pane)| {
-                let title = SharedString::from(self.terminal_title(index));
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .border_1()
-                    .when_selected(theme, index == self.selected)
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("terminal-title-{index}")))
-                            .flex_none()
-                            .px_2()
-                            .text_xs()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .border_b_1()
-                            .border_color(gpui::rgb(theme.line))
-                            .bg(gpui::rgb(theme.panel))
-                            .text_color(gpui::rgb(if pane.name.is_some() {
-                                theme.text
-                            } else {
-                                theme.muted
-                            }))
-                            .child(title)
-                            .on_click(cx.listener(
-                                move |this, event: &gpui::ClickEvent, window, cx| {
-                                    if event.click_count() >= 2 {
-                                        this.open_rename_prompt(index, window, cx);
-                                    } else {
-                                        this.select_terminal(index, window, cx);
-                                    }
-                                },
-                            )),
-                    )
-                    .child(div().flex_1().min_h_0().child(pane.view.clone()))
-            }));
+            .children(self.dock_tree(theme, cx));
         let main = h_resizable("workbench")
             .with_state(&self.sizes)
             .child(resizable_panel().size(px(260.0)).child(self.files.clone()))
