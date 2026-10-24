@@ -1,5 +1,6 @@
 //! The inspector: tasks, running agents and pending approvals of the open project, read from the
-//! daemon every few seconds. Read-only; approvals can be seen, not decided (spec section 8).
+//! daemon every few seconds. Reading never changes anything; the buttons and drags on a row only
+//! tell the workbench what the user wants, and the workbench sends it through the consent gate.
 //!
 //! The daemon is read on the background executor. Every result carries the generation of the
 //! project it was requested for, so a slow answer for the previous project is dropped.
@@ -9,8 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{div, Context, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window};
-use gpui::{InteractiveElement, StatefulInteractiveElement};
+use gpui::{
+    div, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Task, Window,
+};
 use rwk_core::control::{ConnectionState, ControlEvent, ControlPlane, EventSource};
 use rwk_core::inspector::{fetch, Banner, InspectorModel};
 use rwk_core::workbench::{Appearance, Theme};
@@ -34,6 +37,34 @@ pub enum InspectorEvent {
         /// Revision the row was displayed at.
         revision: i64,
     },
+    /// The user set the status of an operator task.
+    SetTaskStatus {
+        /// Target task identifier.
+        task_id: String,
+        /// The new status.
+        status: rwk_core::tasks::TaskStatus,
+    },
+    /// The user wants this task given to the agent of the selected terminal.
+    AssignToSelected {
+        /// Target task identifier.
+        task_id: String,
+        /// Revision the row was displayed at.
+        updated_at: String,
+    },
+    /// The user wants to hand this task over to another agent through a handoff note.
+    HandoffTask {
+        /// Target task identifier.
+        task_id: String,
+        /// Title, seeded into the note.
+        title: String,
+    },
+    /// The user wants the task's assignee cleared.
+    ClearAssignee {
+        /// Target task identifier.
+        task_id: String,
+        /// Revision the row was displayed at.
+        updated_at: String,
+    },
     /// The user wants to reject a pending handoff approval; a reason is asked for before sending.
     RejectHandoff {
         /// Target approval identifier.
@@ -44,6 +75,34 @@ pub enum InspectorEvent {
 }
 
 impl gpui::EventEmitter<InspectorEvent> for InspectorView {}
+
+/// What a dragged task row carries: dropped on a terminal, it is assigned to that terminal's
+/// agent.
+#[derive(Clone)]
+pub struct DraggedTask {
+    /// Task identifier.
+    pub task_id: String,
+    /// Revision the row was displayed at.
+    pub updated_at: String,
+    /// Title shown while dragging.
+    pub title: SharedString,
+}
+
+/// The label that follows the pointer while a task is dragged.
+struct TaskDragLabel(SharedString);
+
+impl Render for TaskDragLabel {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_0p5()
+            .text_xs()
+            .rounded_sm()
+            .bg(gpui::rgba(0x000000cc))
+            .text_color(gpui::rgb(0xffffff))
+            .child(self.0.clone())
+    }
+}
 
 /// One handoff line: approval id, text, and whether the receiver may be started.
 pub type HandoffLine = (String, String, bool);
@@ -349,6 +408,25 @@ fn heading(theme: Theme, text: &str, count: usize) -> impl IntoElement {
         )))
 }
 
+/// A small bordered button of a task row.
+fn task_button(
+    theme: Theme,
+    id: String,
+    label: &'static str,
+    border: u32,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(SharedString::from(id))
+        .px_2()
+        .py_0p5()
+        .rounded_sm()
+        .border_1()
+        .border_color(gpui::rgb(border))
+        .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+        .text_xs()
+        .child(label)
+}
+
 fn row(theme: Theme, primary: String, secondary: String) -> impl IntoElement {
     div()
         .px_3()
@@ -376,7 +454,7 @@ impl Render for InspectorView {
                 .child(SharedString::from(text))
         });
         let tasks = self.model.tasks.iter().map(|task| {
-            row(
+            let line = row(
                 theme,
                 task.title.clone(),
                 format!(
@@ -384,7 +462,106 @@ impl Render for InspectorView {
                     task.status,
                     task.assignee.as_deref().unwrap_or("atanmamış")
                 ),
-            )
+            );
+            let id = task.id.clone();
+            let revision = task.updated_at.clone();
+            let carried = DraggedTask {
+                task_id: id.clone(),
+                updated_at: revision.clone(),
+                title: SharedString::from(task.title.clone()),
+            };
+            let mut actions: Vec<gpui::AnyElement> = Vec::new();
+            for (label, status) in [
+                ("Başlat", rwk_core::tasks::TaskStatus::InProgress),
+                ("Bitir", rwk_core::tasks::TaskStatus::Completed),
+                ("İptal", rwk_core::tasks::TaskStatus::Cancelled),
+            ] {
+                if task.status == status.as_str() {
+                    continue;
+                }
+                let task_id = id.clone();
+                actions.push(
+                    task_button(theme, format!("task-{label}-{id}"), label, theme.line)
+                        .on_click(cx.listener(move |_, _, _window, cx| {
+                            cx.emit(InspectorEvent::SetTaskStatus {
+                                task_id: task_id.clone(),
+                                status,
+                            });
+                        }))
+                        .into_any_element(),
+                );
+            }
+            {
+                let (task_id, revision) = (id.clone(), revision.clone());
+                actions.push(
+                    task_button(
+                        theme,
+                        format!("task-assign-{id}"),
+                        "Seçili terminale ata",
+                        theme.accent_ink,
+                    )
+                    .on_click(cx.listener(move |_, _, _window, cx| {
+                        cx.emit(InspectorEvent::AssignToSelected {
+                            task_id: task_id.clone(),
+                            updated_at: revision.clone(),
+                        });
+                    }))
+                    .into_any_element(),
+                );
+            }
+            {
+                let (task_id, title) = (id.clone(), task.title.clone());
+                actions.push(
+                    task_button(
+                        theme,
+                        format!("task-handoff-{id}"),
+                        "Devret…",
+                        theme.accent_ink,
+                    )
+                    .on_click(cx.listener(move |_, _, _window, cx| {
+                        cx.emit(InspectorEvent::HandoffTask {
+                            task_id: task_id.clone(),
+                            title: title.clone(),
+                        });
+                    }))
+                    .into_any_element(),
+                );
+            }
+            if task.assignee.is_some() {
+                let (task_id, revision) = (id.clone(), revision.clone());
+                actions.push(
+                    task_button(
+                        theme,
+                        format!("task-clear-{id}"),
+                        "Atamayı kaldır",
+                        theme.line,
+                    )
+                    .on_click(cx.listener(move |_, _, _window, cx| {
+                        cx.emit(InspectorEvent::ClearAssignee {
+                            task_id: task_id.clone(),
+                            updated_at: revision.clone(),
+                        });
+                    }))
+                    .into_any_element(),
+                );
+            }
+            div()
+                .id(SharedString::from(format!("task-row-{id}")))
+                .on_drag(carried, |dragged, _offset, _window, cx| {
+                    let label = dragged.title.clone();
+                    cx.new(|_| TaskDragLabel(label))
+                })
+                .child(line)
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap_1()
+                        .px_3()
+                        .pb_1()
+                        .children(actions),
+                )
         });
         let runs = self.model.runs.iter().map(|run| {
             row(

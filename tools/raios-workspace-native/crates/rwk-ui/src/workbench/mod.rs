@@ -225,6 +225,10 @@ pub struct Workbench {
     rename_prompt: Option<Entity<crate::rename::RenameTerminalPrompt>>,
     rename_subscription: Option<Subscription>,
     handoffs: Vec<TrackedHandoff>,
+    /// The task the open composer was started for.
+    composer_task: Option<rwk_core::handoff_flow::TaskLink>,
+    /// The task of a handoff that is waiting for policy and consent.
+    queued_task: Option<rwk_core::handoff_flow::TaskLink>,
     receipt_task: Option<Task<()>>,
     receiver_for: Option<String>,
     /// Projects already known to be registered with the daemon.
@@ -319,6 +323,35 @@ impl Workbench {
                 } => {
                     this.request_reject_handoff(approval_id.clone(), *revision, window, cx);
                 }
+                crate::inspector::InspectorEvent::SetTaskStatus { task_id, status } => {
+                    this.set_task_status(task_id.clone(), *status, window, cx);
+                }
+                crate::inspector::InspectorEvent::AssignToSelected {
+                    task_id,
+                    updated_at,
+                } => {
+                    let selected = this.selected;
+                    this.assign_task_to_terminal(
+                        task_id.clone(),
+                        updated_at.clone(),
+                        selected,
+                        window,
+                        cx,
+                    );
+                }
+                crate::inspector::InspectorEvent::HandoffTask { task_id, title } => {
+                    let link = rwk_core::handoff_flow::TaskLink {
+                        task_id: task_id.clone(),
+                        title: title.clone(),
+                    };
+                    this.open_composer(Some(link), window, cx);
+                }
+                crate::inspector::InspectorEvent::ClearAssignee {
+                    task_id,
+                    updated_at,
+                } => {
+                    this.assign_task(task_id.clone(), updated_at.clone(), None, window, cx);
+                }
             },
         );
         let subscriptions = vec![
@@ -366,6 +399,8 @@ impl Workbench {
             rename_prompt: None,
             rename_subscription: None,
             handoffs: Vec::new(),
+            composer_task: None,
+            queued_task: None,
             receipt_task: None,
             receiver_for: None,
             known_projects: std::collections::HashSet::new(),
@@ -636,6 +671,7 @@ impl Workbench {
                 }
             }
             CommandId::RenameTerminal => self.open_rename_prompt(self.selected, window, cx),
+            CommandId::NewTask => self.open_new_task_prompt(window, cx),
             CommandId::MoveTerminalPrevious
             | CommandId::MoveTerminalNext
             | CommandId::SplitTerminalRight
@@ -656,7 +692,7 @@ impl Workbench {
             CommandId::Files => self.open_file_palette(window, cx),
             CommandId::Search => self.open_search(window, cx),
             CommandId::Agent => self.open_agent_chooser(cx),
-            CommandId::Handoff => self.open_composer(window, cx),
+            CommandId::Handoff => self.open_composer(None, window, cx),
             CommandId::RegisterProject => self.register_project(window, cx),
             CommandId::Memory => self.open_memory(window, cx),
         }
@@ -1313,6 +1349,7 @@ impl Workbench {
                     this.close_rename_prompt(window, cx);
                 }
                 RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
+                RenamePromptEvent::NewTask(_) => {}
             },
         ));
         self.rename_prompt = Some(prompt);

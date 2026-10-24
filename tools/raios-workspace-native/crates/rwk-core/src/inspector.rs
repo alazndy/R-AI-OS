@@ -55,6 +55,10 @@ pub struct TaskRow {
     pub status: String,
     /// Assigned agent or person, when there is one.
     pub assignee: Option<String>,
+    /// Priority, 0 to 255.
+    pub priority: u8,
+    /// The revision the row was read at; an edit echoes it so a newer change is not overwritten.
+    pub updated_at: String,
 }
 
 /// One running agent of the open project.
@@ -155,6 +159,8 @@ pub fn project_view(
             title: task.title.clone(),
             status: task.status.clone(),
             assignee: task.assignee.clone(),
+            priority: task.priority,
+            updated_at: task.updated_at.clone(),
         })
         .collect();
     let runs = project_runs(&work.active_runs, &work.tasks, project)

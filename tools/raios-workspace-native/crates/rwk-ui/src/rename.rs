@@ -10,9 +10,20 @@ use gpui_base::input::{Input, InputEvent, InputState};
 use rwk_core::sessions::SessionName;
 use rwk_core::workbench::{Appearance, Theme};
 
+/// What the prompt is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptPurpose {
+    /// Name a terminal.
+    RenameTerminal,
+    /// Title a new operator task.
+    NewTask,
+}
+
 /// What the prompt asks of the workbench.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RenamePromptEvent {
+    /// The user committed a task title that passed validation.
+    NewTask(String),
     /// The user committed a name, or an empty text, which removes the name.
     Rename(Option<SessionName>),
     /// The user closed the prompt.
@@ -25,6 +36,7 @@ impl EventEmitter<RenamePromptEvent> for RenameTerminalPrompt {}
 pub struct RenameTerminalPrompt {
     input: Entity<InputState>,
     problem: Option<SharedString>,
+    purpose: PromptPurpose,
     running_agent: bool,
     theme: Theme,
     _subscription: Subscription,
@@ -54,10 +66,18 @@ impl RenameTerminalPrompt {
         Self {
             input,
             problem: None,
+            purpose: PromptPurpose::RenameTerminal,
             running_agent,
             theme: Theme::of(Appearance::default()),
             _subscription: subscription,
         }
+    }
+
+    /// A prompt for the title of a new task.
+    pub fn new_task(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut prompt = Self::new(None, false, window, cx);
+        prompt.purpose = PromptPurpose::NewTask;
+        prompt
     }
 
     /// Repaints the prompt with another skin or tone.
@@ -86,6 +106,17 @@ impl RenameTerminalPrompt {
     /// removes the name.
     pub fn submit(&mut self, cx: &mut Context<Self>) {
         let text = self.text(cx);
+        if self.purpose == PromptPurpose::NewTask {
+            match rwk_core::tasks::validate_title(&text) {
+                Ok(title) => {
+                    self.problem = None;
+                    cx.emit(RenamePromptEvent::NewTask(title));
+                }
+                Err(error) => self.problem = Some(error.message.into()),
+            }
+            cx.notify();
+            return;
+        }
         if text.trim().is_empty() {
             self.problem = None;
             cx.emit(RenamePromptEvent::Rename(None));
@@ -112,7 +143,13 @@ impl RenameTerminalPrompt {
 impl Render for RenameTerminalPrompt {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let note = if self.running_agent {
+        let heading = match self.purpose {
+            PromptPurpose::RenameTerminal => "Terminali yeniden adlandır",
+            PromptPurpose::NewTask => "Yeni görev",
+        };
+        let note = if self.purpose == PromptPurpose::NewTask {
+            "Görev açık projeye eklenir; başlık denetim kaydına geçer, parola ve anahtar yazmayın. Enter ekler, Esc kapatır."
+        } else if self.running_agent {
             "Çalışan ajanın daemon kaydındaki adı başlatıldığı adla kalır; bu ad yalnızca burada görünür."
         } else {
             "Boş bırakırsanız ad kaldırılır. Enter kaydeder, Esc kapatır."
@@ -136,7 +173,7 @@ impl Render for RenameTerminalPrompt {
             .border_color(gpui::rgb(theme.line))
             .text_color(gpui::rgb(theme.text))
             .capture_key_down(cx.listener(Self::on_key_down))
-            .child(SharedString::from("Terminali yeniden adlandır"))
+            .child(SharedString::from(heading))
             .child(
                 div()
                     .h(gpui::px(30.0))

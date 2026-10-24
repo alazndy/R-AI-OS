@@ -163,7 +163,7 @@ impl Render for HandoffComposer {
                 div()
                     .text_xs()
                     .text_color(gpui::rgb(theme.muted))
-                    .child("Not bir BLOCKER devri olarak kuyruğa alınır; parola ve anahtar yazmayın. Esc kapatır."),
+                    .child("Not bir BLOCKER devri olarak kuyruğa alınır; parola ve anahtar yazmayın. Aynı ajana devredilemez (gönderenin düğmesi yoktur). Esc kapatır."),
             )
             .child(div().flex().flex_row().gap_2().children(buttons))
     }
