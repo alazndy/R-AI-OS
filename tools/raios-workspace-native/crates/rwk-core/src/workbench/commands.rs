@@ -45,10 +45,30 @@ pub enum CommandId {
     PasteTerminal,
     /// Stop the selected session.
     StopTerminal,
+    /// Give the selected terminal a name.
+    RenameTerminal,
+    /// Swap the selected terminal with the one before it in the dock.
+    MoveTerminalPrevious,
+    /// Swap the selected terminal with the one after it in the dock.
+    MoveTerminalNext,
+    /// Place the selected terminal to the right of its neighbour.
+    SplitTerminalRight,
+    /// Place the selected terminal below its neighbour.
+    SplitTerminalDown,
+    /// Make the selected terminal a tab of the group before it.
+    JoinTerminalPrevious,
+    /// Take the selected terminal out of its tab group.
+    UngroupTerminal,
+    /// Give the selected terminal more room.
+    GrowTerminal,
+    /// Give the selected terminal less room.
+    ShrinkTerminal,
     /// Launch an agent.
     Agent,
     /// Create a handoff.
     Handoff,
+    /// Add an operator task to the open project.
+    NewTask,
     /// Show the project memory.
     Memory,
     /// Register the open project with Raios.
@@ -134,7 +154,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 36] = [
+const COMMANDS: [Command; 46] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -261,6 +281,50 @@ const COMMANDS: [Command; 36] = [
     ),
     cmd(CommandId::StopTerminal, "Seçili oturumu durdur…", None, &[]),
     cmd(
+        CommandId::RenameTerminal,
+        "Terminali yeniden adlandır…",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::MoveTerminalPrevious,
+        "Terminali öncekiyle yer değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::MoveTerminalNext,
+        "Terminali sonrakiyle yer değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::SplitTerminalRight,
+        "Terminali komşusunun sağına böl",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::SplitTerminalDown,
+        "Terminali komşusunun altına böl",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::JoinTerminalPrevious,
+        "Terminali öncekinin sekmesi yap",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::UngroupTerminal,
+        "Terminali sekme grubundan ayır",
+        None,
+        &[],
+    ),
+    cmd(CommandId::GrowTerminal, "Terminali büyüt", None, &[]),
+    cmd(CommandId::ShrinkTerminal, "Terminali küçült", None, &[]),
+    cmd(
         CommandId::Agent,
         "Ajan başlat",
         Some("Ctrl Shift A"),
@@ -272,6 +336,7 @@ const COMMANDS: [Command; 36] = [
         Some("Ctrl Shift H"),
         &[bind_terminal("h", true, false)],
     ),
+    cmd(CommandId::NewTask, "Yeni görev…", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
     cmd(
         CommandId::RegisterProject,
@@ -505,7 +570,15 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             }
         }
         NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
-        | StopTerminal => needs_terminal(),
+        | StopTerminal | RenameTerminal | UngroupTerminal => needs_terminal(),
+        MoveTerminalPrevious | MoveTerminalNext | SplitTerminalRight | SplitTerminalDown
+        | JoinTerminalPrevious | GrowTerminal | ShrinkTerminal => {
+            if state.terminals >= 2 {
+                allow()
+            } else {
+                deny("En az iki terminal gerekir")
+            }
+        }
         FocusTerminal(index) => {
             if index >= 1 && index <= state.terminals {
                 allow()
@@ -513,7 +586,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("Böyle bir terminal yok")
             }
         }
-        Agent | Handoff | RegisterProject => {
+        Agent | Handoff | NewTask | RegisterProject => {
             if !state.control_plane_features {
                 deny("Daemon bağlantısı yapılandırılmadı")
             } else if !state.project_open {
@@ -561,7 +634,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 36);
+        assert_eq!(catalog().len(), 46);
     }
 
     #[test]

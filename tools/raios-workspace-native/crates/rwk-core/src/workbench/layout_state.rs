@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::sessions::{SessionKind, MAX_SESSIONS};
+use crate::sessions::{SessionKind, SessionName, MAX_SESSIONS};
+use crate::workbench::dock::DockLayout;
 use crate::workbench::layout::LayoutPreset;
 
 /// Most editor tabs stored for one project. Beyond this the oldest tabs are dropped; the cap
@@ -38,7 +39,11 @@ fn first_line() -> usize {
 #[serde(tag = "terminal", rename_all = "snake_case")]
 pub enum SavedTerminal {
     /// A plain shell; it is restarted when the project opens.
-    Shell,
+    Shell {
+        /// The name the user gave it, when there is one.
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// An agent session; on restore it is *offered* (through `raios resume` planning) and only
     /// started when the user accepts.
     Agent {
@@ -47,11 +52,32 @@ pub enum SavedTerminal {
         /// The agent's own conversation id when it is known.
         #[serde(default)]
         native_session: Option<String>,
+        /// The name the user gave the terminal, when there is one.
+        #[serde(default)]
+        name: Option<String>,
     },
 }
 
+impl SavedTerminal {
+    /// The stored name, when it passes the same rules as a typed one.
+    pub fn name(&self) -> Option<SessionName> {
+        let (Self::Shell { name } | Self::Agent { name, .. }) = self;
+        name.as_deref().and_then(|raw| SessionName::parse(raw).ok())
+    }
+
+    /// The same terminal with its name normalized, or dropped when it is not a valid name: a
+    /// hand-edited file cannot put an option-looking or credential-looking text into argv or
+    /// the daemon's records.
+    fn sanitized(mut self) -> Self {
+        let clean = self.name().map(|name| name.to_string());
+        let (Self::Shell { name } | Self::Agent { name, .. }) = &mut self;
+        *name = clean;
+        self
+    }
+}
+
 /// Everything one project had open at save time.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SavedWorkspace {
     /// Absolute project root this state belongs to.
     pub project: PathBuf,
@@ -67,6 +93,10 @@ pub struct SavedWorkspace {
     /// Terminal sessions.
     #[serde(default)]
     pub terminals: Vec<SavedTerminal>,
+    /// How the dock arranges the terminals; each pane is a position in `terminals`. Absent in
+    /// older files, which load with the default arrangement.
+    #[serde(default)]
+    pub dock: Option<DockLayout<usize>>,
 }
 
 /// Reads untrusted state text. `None` when it is not valid JSON, has no absolute project, or
@@ -93,7 +123,21 @@ impl SavedWorkspace {
             .retain(|tab| valid_tab_path(&tab.path) && seen.insert(tab.path.clone()));
         self.tabs.truncate(MAX_SAVED_TABS);
         self.terminals.truncate(MAX_SESSIONS);
+        self.terminals = self
+            .terminals
+            .into_iter()
+            .map(SavedTerminal::sanitized)
+            .collect();
         self.active = self.active.min(self.tabs.len().saturating_sub(1));
+        // Panes that point past the terminals are dropped and repeats are cleaned; a layout
+        // that cannot be repaired (nested too deeply) or has nothing left falls back to the
+        // dock's default arrangement.
+        let terminals = self.terminals.len();
+        self.dock = self
+            .dock
+            .take()
+            .map(|dock| dock.filter_map(&|index: &usize| (*index < terminals).then_some(*index)))
+            .filter(|dock| !dock.is_empty());
         self
     }
 }
@@ -142,11 +186,13 @@ mod tests {
             ],
             active: 1,
             layout: LayoutPreset::Agents,
+            dock: None,
             terminals: vec![
-                SavedTerminal::Shell,
+                SavedTerminal::Shell { name: None },
                 SavedTerminal::Agent {
                     kind: SessionKind::Codex,
                     native_session: Some("sess-1".into()),
+                    name: None,
                 },
             ],
         }
@@ -225,13 +271,14 @@ mod tests {
             })
             .collect();
         let more_terminals: Vec<SavedTerminal> = (0..MAX_SESSIONS + 4)
-            .map(|_| SavedTerminal::Shell)
+            .map(|_| SavedTerminal::Shell { name: None })
             .collect();
         let parsed = SavedWorkspace {
             project: PathBuf::from("/work/app"),
             tabs,
             active: 99,
             layout: LayoutPreset::Balanced,
+            dock: None,
             terminals: more_terminals,
         }
         .sanitized();
@@ -249,5 +296,34 @@ mod tests {
         let stem = name.strip_suffix(".json").expect("json suffix");
         assert_eq!(stem.len(), 64, "sha-256 hex: {name}");
         assert!(stem.chars().all(|c| c.is_ascii_hexdigit()), "{name}");
+    }
+
+    #[test]
+    fn the_dock_arrangement_is_kept_cleaned_and_absent_in_old_files() {
+        use crate::workbench::dock::Edge;
+
+        let old = parse_workspace(r#"{"project":"/work/app","terminals":[{"terminal":"shell"}]}"#)
+            .expect("parse");
+        assert_eq!(old.dock, None, "an older file has no arrangement");
+
+        let mut dock = DockLayout::stacked([0_usize, 1, 2]);
+        dock.split(&2, &0, Edge::Right).unwrap();
+        let mut workspace = workspace();
+        workspace.terminals = vec![SavedTerminal::Shell { name: None }; 3];
+        workspace.dock = Some(dock.clone());
+        let again = parse_workspace(&serialize_workspace(&workspace)).expect("round trip");
+        assert_eq!(again.dock, Some(dock));
+
+        // Positions past the terminals are dropped and the rest closes up.
+        workspace.terminals = vec![SavedTerminal::Shell { name: None }; 2];
+        let cleaned = workspace.clone().sanitized();
+        assert_eq!(
+            cleaned.dock.as_ref().map(DockLayout::sessions),
+            Some(vec![0, 1])
+        );
+
+        // Nothing usable left: the dock falls back to its default arrangement.
+        workspace.terminals.clear();
+        assert_eq!(workspace.sanitized().dock, None);
     }
 }

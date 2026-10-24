@@ -56,6 +56,8 @@ pub enum Scenario {
     EditorOpen500k,
     /// The whole application at rest: project, file, four terminals (A2).
     AppIdle,
+    /// Twelve terminals rearranged by dock commands (D1).
+    DockArrange,
 }
 
 impl Scenario {
@@ -70,6 +72,7 @@ impl Scenario {
             "editor-open-30k" => Scenario::EditorOpen30k,
             "editor-open-500k" => Scenario::EditorOpen500k,
             "app-idle" => Scenario::AppIdle,
+            "dock-arrange" => Scenario::DockArrange,
             _ => return None,
         })
     }
@@ -84,6 +87,7 @@ impl Scenario {
             Scenario::EditorOpen30k => "editor-open-30k",
             Scenario::EditorOpen500k => "editor-open-500k",
             Scenario::AppIdle => "app-idle",
+            Scenario::DockArrange => "dock-arrange",
         }
     }
 }
@@ -304,12 +308,17 @@ fn fail(message: &str) -> ! {
 pub fn run(scenario: Scenario) -> ! {
     if matches!(
         scenario,
-        Scenario::EditorOpen30k | Scenario::EditorOpen500k | Scenario::AppIdle
+        Scenario::EditorOpen30k
+            | Scenario::EditorOpen500k
+            | Scenario::AppIdle
+            | Scenario::DockArrange
     ) {
         crate::app_child::run(scenario);
     }
     let body: &str = match scenario {
-        Scenario::ColdStart | Scenario::Idle | Scenario::AppIdle => "exec sleep 100000",
+        Scenario::ColdStart | Scenario::Idle | Scenario::AppIdle | Scenario::DockArrange => {
+            "exec sleep 100000"
+        }
         Scenario::Keystroke => "exec cat",
         Scenario::Flood => "seq 1 4000000",
         Scenario::Flood4 => "seq 1 1000000",
@@ -364,9 +373,10 @@ async fn measure(
         Scenario::Flood | Scenario::Flood4 => flood(scenario, handle, engines, started, cx).await,
         Scenario::Keystroke => keystroke(handle, cx).await,
         Scenario::Idle => idle(handle, cx).await,
-        Scenario::EditorOpen30k | Scenario::EditorOpen500k | Scenario::AppIdle => {
-            Err("handled by app_child".to_owned())
-        }
+        Scenario::EditorOpen30k
+        | Scenario::EditorOpen500k
+        | Scenario::AppIdle
+        | Scenario::DockArrange => Err("handled by app_child".to_owned()),
     }
 }
 

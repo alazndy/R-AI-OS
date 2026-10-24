@@ -113,9 +113,21 @@ pub const APP_IDLE_PSS: Gate = Gate {
     direction: Direction::AtMost,
 };
 
+/// What a dock arrangement command adds to the frame pacing of the window, with twelve live
+/// terminals: its 99th-percentile time to the next painted frame minus the median time a bare
+/// refresh takes (about 24 ms on the development compositor, which is pacing, not work). The
+/// limit, 25 ms, is a hypothesis of about one and a half 60 Hz frames.
+pub const DOCK_ARRANGE_OVER_FLOOR: Gate = Gate {
+    id: "D1",
+    name: "dock arrange over frame floor, 12 terminals, p99",
+    unit: "ms",
+    limit: 25.0,
+    direction: Direction::AtMost,
+};
+
 /// Every gate, in report order.
 #[cfg(test)]
-pub const ALL_GATES: [Gate; 9] = [
+pub const ALL_GATES: [Gate; 10] = [
     COLD_START,
     FLOOD_FPS,
     FLOOD4_FPS,
@@ -125,6 +137,7 @@ pub const ALL_GATES: [Gate; 9] = [
     EDITOR_OPEN_500K,
     APP_COLD_START,
     APP_IDLE_PSS,
+    DOCK_ARRANGE_OVER_FLOOR,
 ];
 
 /// A gate together with what was measured.

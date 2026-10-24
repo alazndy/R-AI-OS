@@ -3,10 +3,12 @@
 
 pub mod appearance;
 pub mod commands;
+pub mod dock;
 pub mod documents;
 pub mod file_types;
 pub mod layout;
 pub mod layout_state;
+pub mod menus;
 pub mod offers;
 pub mod palette;
 pub mod quick_open;
@@ -18,6 +20,9 @@ pub use commands::{
     available, catalog, resolve_shortcut, Binding, Command, CommandId, CommandState,
     KeyboardContext, Keystroke, WorkbenchState,
 };
+pub use dock::{
+    zone_at, Axis, DockError, DockLayout, DropZone, Edge, Node, EDGE_BAND, MAX_DEPTH, MIN_SHARE,
+};
 pub use documents::{DocumentSession, SaveBlocked, SaveTicket, SwitchDecision};
 pub use file_types::{presentation, FileIcon, FilePresentation, FileTone};
 pub use layout::{LayoutPreset, MIN_EDITOR_PX, MIN_SIDE_PANE_PX};
@@ -25,6 +30,7 @@ pub use layout_state::{
     parse_workspace, serialize_workspace, state_file_name, SavedTab, SavedTerminal, SavedWorkspace,
     WorkspaceStateSource, MAX_SAVED_TABS,
 };
+pub use menus::{menu_entries, toolbar, toolbar_pressed, MenuEntry, MenuTarget, ToolbarItem};
 pub use offers::{
     parse_catalog, plan_offers, MatchedSession, SavedSessionRow, SessionCatalog, SessionOffer,
 };

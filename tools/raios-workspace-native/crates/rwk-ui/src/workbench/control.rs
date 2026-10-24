@@ -223,11 +223,14 @@ impl Workbench {
                 self.receiver_started(cx);
             }
             (Guarded::CreateHandoff(request), Ok(GuardedOutcome::HandoffQueued(queued))) => {
-                self.handoffs.push(TrackedHandoff::queued(
-                    queued.approval_id,
-                    request.from.identity().unwrap_or("shell").to_owned(),
-                    request.to.identity().unwrap_or("shell").to_owned(),
-                ));
+                self.handoffs.push(
+                    TrackedHandoff::queued(
+                        queued.approval_id,
+                        request.from.identity().unwrap_or("shell").to_owned(),
+                        request.to.identity().unwrap_or("shell").to_owned(),
+                    )
+                    .with_task(self.queued_task.take()),
+                );
                 self.say("Devir notu kuyruğa alındı", cx);
                 self.publish_handoffs(cx);
                 self.start_receipt_polling(window, cx);
@@ -258,11 +261,41 @@ impl Workbench {
                     cx,
                 );
             }
+            (Guarded::CreateTask(_), Ok(GuardedOutcome::TaskCreated(_))) => {
+                self.say("Görev eklendi", cx);
+                self.refresh_tasks(cx);
+            }
+            (Guarded::UpdateTaskStatus(request), Ok(GuardedOutcome::TaskStatusChanged)) => {
+                self.say(format!("Görev durumu: {}", request.status.label()), cx);
+                self.refresh_tasks(cx);
+            }
+            (Guarded::AssignTask(request), Ok(GuardedOutcome::TaskAssigned(_))) => {
+                let text = match request.assignee.and_then(SessionKind::agent) {
+                    Some(agent) => format!("Görev {agent} ajanına atandı"),
+                    None => "Görev ataması kaldırıldı".to_owned(),
+                };
+                self.say(text, cx);
+                self.refresh_tasks(cx);
+            }
             (op, Ok(_)) => {
                 self.settle_resume(&op, cx);
                 self.say("Beklenmeyen daemon yanıtı", cx);
             }
+            (op @ (Guarded::AssignTask(_) | Guarded::UpdateTaskStatus(_)), Err(error)) => {
+                // The row may be stale: show what the daemon said and reload the list.
+                let text = if error.code == rwk_core::error::ErrorCode::Conflict {
+                    "Görev bu arada değişti; liste yenilendi, tekrar deneyin".to_owned()
+                } else {
+                    format!("Görev değiştirilemedi: {}", error.message)
+                };
+                drop(op);
+                self.say(text, cx);
+                self.refresh_tasks(cx);
+            }
             (op, Err(error)) => {
+                if matches!(op, Guarded::CreateHandoff(_)) {
+                    self.queued_task = None;
+                }
                 self.settle_resume(&op, cx);
                 self.receiver_launch_failed(cx);
                 self.say(error.message, cx);
@@ -270,24 +303,167 @@ impl Workbench {
         }
     }
 
+    // ----- tasks -----------------------------------------------------------------------
+
+    fn refresh_tasks(&mut self, cx: &mut Context<Self>) {
+        self.inspector
+            .update(cx, |inspector, cx| inspector.refresh_now(cx));
+    }
+
+    /// Asks for the title of a new task in the open project.
+    pub(super) fn open_new_task_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::rename::{RenamePromptEvent, RenameTerminalPrompt};
+
+        if self.rename_prompt.is_some() {
+            return;
+        }
+        let theme = self.theme();
+        let prompt = cx.new(|cx| RenameTerminalPrompt::new_task(window, cx));
+        prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        self.rename_subscription = Some(cx.subscribe_in(
+            &prompt,
+            window,
+            |this, _prompt, event: &RenamePromptEvent, window, cx| match event {
+                RenamePromptEvent::NewTask(title) => {
+                    this.close_rename_prompt(window, cx);
+                    this.create_task(title.clone(), window, cx);
+                }
+                RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
+                RenamePromptEvent::Rename(_) => {}
+            },
+        ));
+        self.rename_prompt = Some(prompt);
+        cx.notify();
+    }
+
+    /// Adds an operator task (policy, consent, daemon).
+    pub fn create_task(&mut self, title: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        let title = match rwk_core::tasks::validate_title(&title) {
+            Ok(title) => title,
+            Err(error) => {
+                self.say(error.message, cx);
+                return;
+            }
+        };
+        self.start_guarded(
+            Guarded::CreateTask(rwk_core::control::CreateTaskRequest {
+                project_root: project.info().root.clone(),
+                title,
+                priority: 50,
+                idempotency_key: IdempotencyKey::fresh(),
+            }),
+            window,
+            cx,
+        );
+    }
+
+    /// Sets the status of an operator task (policy, consent, daemon).
+    pub fn set_task_status(
+        &mut self,
+        task_id: String,
+        status: rwk_core::tasks::TaskStatus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.start_guarded(
+            Guarded::UpdateTaskStatus(rwk_core::control::UpdateTaskStatusRequest {
+                project_root: project.info().root.clone(),
+                task_id,
+                status,
+                idempotency_key: IdempotencyKey::fresh(),
+            }),
+            window,
+            cx,
+        );
+    }
+
+    /// Gives a task to an agent, or clears the assignee. `updated_at` is the revision the user
+    /// saw; a newer change in the daemon is not overwritten.
+    pub fn assign_task(
+        &mut self,
+        task_id: String,
+        updated_at: String,
+        assignee: Option<SessionKind>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.start_guarded(
+            Guarded::AssignTask(rwk_core::control::AssignTaskRequest {
+                project_root: project.info().root.clone(),
+                task_id,
+                assignee,
+                expected_updated_at: Some(updated_at).filter(|revision| !revision.is_empty()),
+                idempotency_key: IdempotencyKey::fresh(),
+            }),
+            window,
+            cx,
+        );
+    }
+
+    /// Gives a task to the agent that runs in terminal `index`. A shell has no agent to give it
+    /// to, and nothing is sent then.
+    pub fn assign_task_to_terminal(
+        &mut self,
+        task_id: String,
+        updated_at: String,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let kind = self.terminals.get(index).map(|pane| pane.kind);
+        match kind {
+            Some(kind) if kind.agent().is_some() => {
+                self.assign_task(task_id, updated_at, Some(kind), window, cx);
+            }
+            Some(_) => self.say("Bu terminal bir ajan değil; görev atanamaz", cx),
+            None => self.say("Önce bir ajan terminali seçin", cx),
+        }
+    }
+
     // ----- handoff composer ------------------------------------------------------------
 
     /// Opens the composer; the sender is the selected agent terminal, else Claude.
-    pub(super) fn open_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// With a task, the note starts from the task's title and the task follows the handoff once
+    /// the receipt says it was delivered.
+    pub(super) fn open_composer(
+        &mut self,
+        task: Option<rwk_core::handoff_flow::TaskLink>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.composer.is_some() {
             return;
         }
         let from = self.selected_agent_kind().unwrap_or(SessionKind::Claude);
         let theme = self.theme();
+        let seed = rwk_core::handoff_flow::handoff_seed(
+            &self.terminal_title(self.selected),
+            task.as_ref().map(|task| task.title.as_str()),
+        );
+        self.composer_task = task;
         let composer = cx.new(|cx| HandoffComposer::new(from, window, cx));
-        composer.update(cx, |composer, cx| composer.set_theme(theme, cx));
+        composer.update(cx, |composer, cx| {
+            composer.set_theme(theme, cx);
+            composer.set_text(&seed, window, cx);
+        });
         self.composer_subscription = Some(cx.subscribe_in(
             &composer,
             window,
             |this, _composer, event: &ComposerEvent, window, cx| match event.clone() {
                 ComposerEvent::Close => this.close_composer(window, cx),
                 ComposerEvent::Send { to, summary } => {
+                    let task = this.composer_task.clone();
                     this.close_composer(window, cx);
+                    this.queued_task = task;
                     this.queue_handoff(to, summary, window, cx);
                 }
             },
@@ -299,6 +475,7 @@ impl Workbench {
     /// Closes the composer and returns focus to the workbench.
     pub fn close_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.composer = None;
+        self.composer_task = None;
         self.composer_subscription = None;
         window.focus(&self.focus, cx);
         cx.notify();
@@ -491,8 +668,9 @@ impl Workbench {
                         .spawn(async move { reader.handoff_receipt(&wanted, &path) })
                         .await;
                     let observation = observe_receipt(&result, &id);
-                    let _ = this.update(cx, |workbench, cx| {
+                    let _ = this.update_in(cx, |workbench, window, cx| {
                         workbench.apply_receipt(&id, Observation::Receipt(observation), cx);
+                        workbench.move_task_after_delivery(&id, window, cx);
                     });
                 }
             }
@@ -524,6 +702,53 @@ impl Workbench {
         }
         self.publish_handoffs(cx);
         cx.notify();
+    }
+
+    /// Hands the task of a delivered handoff to the receiver. Delivery is what the receipt
+    /// proved; a handoff that never arrived leaves the task where it was. The revision is the
+    /// task's current one, so a change made in between is not overwritten silently.
+    pub fn move_task_after_delivery(
+        &mut self,
+        approval_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tracked) = self
+            .handoffs
+            .iter_mut()
+            .find(|tracked| tracked.approval_id == approval_id && tracked.task_move_due())
+        else {
+            return;
+        };
+        tracked.task_moved = true;
+        let (Some(link), to) = (tracked.task.clone(), tracked.to.clone()) else {
+            return;
+        };
+        let receiver = [
+            SessionKind::Claude,
+            SessionKind::Codex,
+            SessionKind::Opencode,
+            SessionKind::Agy,
+        ]
+        .into_iter()
+        .find(|kind| kind.identity() == Some(to.as_str()));
+        let revision = self
+            .inspector
+            .read(cx)
+            .model()
+            .tasks
+            .iter()
+            .find(|task| task.id == link.task_id)
+            .map(|task| task.updated_at.clone());
+        match (receiver, revision) {
+            (Some(kind), Some(revision)) => {
+                self.assign_task(link.task_id, revision, Some(kind), window, cx)
+            }
+            _ => self.say(
+                format!("“{}” görevi güncel listede yok; elle atayın", link.title),
+                cx,
+            ),
+        }
     }
 
     /// Starts the receiver of a pending handoff: the receipt is read again first, and the agent

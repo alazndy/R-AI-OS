@@ -44,6 +44,26 @@ pub fn observe_receipt(
     }
 }
 
+/// The task a handoff carries. It moves to the receiver only after the receipt says delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskLink {
+    /// Task identifier.
+    pub task_id: String,
+    /// Title, for the status line.
+    pub title: String,
+}
+
+/// The text a handoff note starts with: where it comes from and, when there is one, the task.
+/// The user edits it before sending; the usual validation still applies to what is sent.
+pub fn handoff_seed(sender_label: &str, task_title: Option<&str>) -> String {
+    let mut seed = format!("Devreden terminal: {sender_label}\n");
+    if let Some(title) = task_title {
+        seed.push_str(&format!("Görev: {title}\n"));
+    }
+    seed.push_str("Durum ve sıradaki adım: ");
+    seed
+}
+
 /// One handoff this workspace queued, with its lifecycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackedHandoff {
@@ -55,6 +75,10 @@ pub struct TrackedHandoff {
     pub to: String,
     /// Lifecycle of the receipt and of an owned receiver.
     pub view: HandoffView,
+    /// The task that follows the handoff, once it is delivered.
+    pub task: Option<TaskLink>,
+    /// True once the task was handed to the receiver (or the attempt was made).
+    pub task_moved: bool,
 }
 
 impl TrackedHandoff {
@@ -71,7 +95,22 @@ impl TrackedHandoff {
             from,
             to,
             view,
+            task: None,
+            task_moved: false,
         }
+    }
+
+    /// The same handoff, carrying a task.
+    pub fn with_task(mut self, task: Option<TaskLink>) -> Self {
+        self.task = task;
+        self
+    }
+
+    /// True when the receipt proves delivery and the task has not been moved yet.
+    pub fn task_move_due(&self) -> bool {
+        self.task.is_some()
+            && !self.task_moved
+            && matches!(self.view.receipt, ReceiptState::Delivered { .. })
     }
 
     /// Applies one observation.
@@ -207,6 +246,44 @@ mod tests {
             "{}",
             tracked.label()
         );
+    }
+
+    #[test]
+    fn the_task_follows_only_a_delivered_handoff_and_only_once() {
+        let link = TaskLink {
+            task_id: "t-1".into(),
+            title: "Derle".into(),
+        };
+        let mut tracked =
+            TrackedHandoff::queued("a-1".into(), "c".into(), "x".into()).with_task(Some(link));
+        assert!(!tracked.task_move_due());
+
+        tracked.observe(&Observation::Receipt(ReceiptObservation::ResolvedElsewhere));
+        assert!(!tracked.task_move_due(), "approval is not delivery");
+
+        let mut tracked = TrackedHandoff::queued("a-2".into(), "c".into(), "x".into()).with_task(
+            Some(TaskLink {
+                task_id: "t-1".into(),
+                title: "Derle".into(),
+            }),
+        );
+        tracked.observe(&Observation::Receipt(ReceiptObservation::DeliveredByTarget));
+        assert!(tracked.task_move_due());
+        tracked.task_moved = true;
+        assert!(!tracked.task_move_due());
+    }
+
+    #[test]
+    fn the_seed_names_the_sender_and_the_task_and_passes_validation() {
+        let seed = handoff_seed("derleme", Some("Testleri düzelt"));
+        assert!(seed.contains("derleme") && seed.contains("Testleri düzelt"));
+        let text = seed.trim();
+        assert!(crate::handoff_input::validate_summary(
+            text,
+            &crate::handoff_input::looks_like_secret
+        )
+        .is_ok());
+        assert!(!handoff_seed("claude 1", None).contains("Görev:"));
     }
 
     #[test]
