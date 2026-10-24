@@ -128,9 +128,18 @@ impl Workbench {
     ) {
         self.resuming.remove(&key);
         let kind = key.agent();
+        let name = self
+            .offers
+            .iter()
+            .find(|offer| offer.matched.as_ref().map(|matched| &matched.key) == Some(&key))
+            .and_then(|offer| offer.name.clone());
         if !self.spawn_terminal(kind, SessionLaunch::Resume(key.clone()), window, cx) {
             cx.notify();
             return;
+        }
+        // The pane just pushed is the last one; it takes the name the offer carried.
+        if let Some(pane) = self.terminals.last_mut() {
+            pane.name = name;
         }
         self.offers
             .retain(|offer| offer.matched.as_ref().map(|matched| &matched.key) != Some(&key));

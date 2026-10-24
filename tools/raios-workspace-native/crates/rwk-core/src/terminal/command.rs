@@ -66,12 +66,15 @@ pub fn build_command(
             command.args(["resume", key.to_string().as_str()]);
             command
         }
-        SessionLaunch::Fresh { prompt } => {
+        SessionLaunch::Fresh { prompt, name } => {
             let prompt = validate_prompt(prompt.as_deref())?;
             if let Some(agent) = kind.agent() {
                 let mut command = CommandBuilder::new(raios_program(programs)?);
                 command.args(["run", agent, "--project"]);
                 command.arg(root);
+                if let Some(name) = name {
+                    command.args(["--name", name.as_str()]);
+                }
                 if let Some(prompt) = &prompt {
                     command.arg(prompt);
                 }

@@ -19,6 +19,7 @@ fn fresh() -> SessionLaunch {
 fn fresh_with(prompt: &str) -> SessionLaunch {
     SessionLaunch::Fresh {
         prompt: Some(prompt.to_owned()),
+        name: None,
     }
 }
 fn argv(command: &portable_pty::CommandBuilder) -> Vec<String> {
@@ -240,4 +241,63 @@ fn a_resume_gets_the_same_clean_environment_as_any_session() {
     );
     assert!(command.get_env("RAIOS_WRAPPER_RUN_ID").is_none());
     assert!(command.get_env("RAIOS_AGENT_IDENTITY").is_none());
+}
+
+#[test]
+fn an_agent_name_is_one_name_argument_before_the_prompt_and_a_shell_ignores_it() {
+    use rwk_core::sessions::SessionName;
+
+    let root = PathBuf::from("/work/app");
+    let launch = SessionLaunch::Fresh {
+        prompt: Some("fix it".to_owned()),
+        name: Some(SessionName::parse("  api; rm -rf /  ").unwrap()),
+    };
+    let command = build_command(&programs(), &root, SessionKind::Codex, &launch).unwrap();
+    assert_eq!(
+        argv(&command),
+        [
+            "/opt/raios/bin/raios",
+            "run",
+            "codex",
+            "--project",
+            "/work/app",
+            "--name",
+            "api; rm -rf /",
+            "fix it",
+        ]
+    );
+
+    let shell = build_command(&programs(), &root, SessionKind::Shell, &launch).unwrap();
+    assert_eq!(argv(&shell), ["/bin/sh"]);
+}
+
+#[test]
+fn a_session_name_is_trimmed_and_refuses_what_could_harm_the_command_or_the_ledger() {
+    use rwk_core::sessions::{SessionName, MAX_NAME_CHARS};
+
+    assert_eq!(
+        SessionName::parse("  build box ").unwrap().as_str(),
+        "build box"
+    );
+    for bad in [
+        "",
+        "   ",
+        "-rf",
+        "--name",
+        "tab\there",
+        "nul\0x",
+        "line\nbreak",
+    ] {
+        assert_eq!(
+            SessionName::parse(bad).unwrap_err().code,
+            ErrorCode::InvalidInput,
+            "{bad:?}"
+        );
+    }
+    assert!(SessionName::parse(&"é".repeat(MAX_NAME_CHARS)).is_ok());
+    assert!(SessionName::parse(&"é".repeat(MAX_NAME_CHARS + 1)).is_err());
+    assert!(SessionName::parse("token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789").is_err());
+    // A saved file goes through the same rules.
+    assert!(serde_json::from_str::<SessionName>("\"ok\"").is_ok());
+    assert!(serde_json::from_str::<SessionName>("\"-bad\"").is_err());
 }

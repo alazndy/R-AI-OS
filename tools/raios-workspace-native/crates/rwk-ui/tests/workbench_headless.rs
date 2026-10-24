@@ -1015,7 +1015,7 @@ fn enter_never_adds_a_newline_to_the_palette_query() {
 
 use rwk_core::control::fake::{FakeControlPlane, RecordedCall};
 use rwk_core::control::{ControlEvent, ControlPlane, EventSource, PolicyAction, QueuedHandoff};
-use rwk_core::sessions::SessionKind;
+use rwk_core::sessions::{SessionKind, SessionName};
 
 fn connected(rig: &mut Rig, policy: PolicyAction) -> Arc<FakeControlPlane> {
     let fake = Arc::new(FakeControlPlane::new());
@@ -1971,7 +1971,7 @@ fn a_project_reopens_with_its_saved_tabs_layout_and_shells() {
         ],
         active: 1,
         layout: LayoutPreset::Editor,
-        terminals: vec![SavedTerminal::Shell],
+        terminals: vec![SavedTerminal::Shell { name: None }],
     }));
     rig.set_workspace_source(store);
     rig.open_project();
@@ -2004,6 +2004,7 @@ fn a_saved_agent_session_is_offered_and_resuming_runs_raios_resume() {
         terminals: vec![SavedTerminal::Agent {
             kind: SessionKind::Claude,
             native_session: None,
+            name: None,
         }],
     })));
     let fake = connected(&mut rig, PolicyAction::Allow);
@@ -2071,6 +2072,7 @@ fn a_saved_agent_session_is_offered_and_resuming_runs_raios_resume() {
         vec![SavedTerminal::Agent {
             kind: SessionKind::Claude,
             native_session: Some("3294c005-aee0-4e95-860f-5800e045b624".into()),
+            name: None,
         }]
     );
 }
@@ -2088,6 +2090,7 @@ fn an_offer_without_a_catalog_entry_can_only_be_dismissed() {
         terminals: vec![SavedTerminal::Agent {
             kind: SessionKind::Codex,
             native_session: None,
+            name: None,
         }],
     })));
     let saved = rig.record_workspace_changes();
@@ -2136,6 +2139,7 @@ fn a_denied_resume_keeps_the_offer_for_another_try() {
         terminals: vec![SavedTerminal::Agent {
             kind: SessionKind::Codex,
             native_session: None,
+            name: None,
         }],
     })));
     let fake = connected(&mut rig, PolicyAction::Deny);
@@ -2223,6 +2227,140 @@ fn workspace_changes_are_saved_after_the_delay_and_on_close() {
         "the close must flush the pending state"
     );
     let last = states.last().expect("a saved state");
-    assert_eq!(last.terminals, vec![SavedTerminal::Shell]);
+    assert_eq!(last.terminals, vec![SavedTerminal::Shell { name: None }]);
     assert_eq!(last.tabs.len(), 1, "the open tab is part of the state");
+}
+
+#[test]
+fn an_unnamed_terminal_is_titled_by_kind_and_ordinal() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "shell 1");
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(1)), "shell 2");
+    assert_eq!(rig.read(|wb, _| wb.terminal_name(0).cloned()), None);
+}
+
+#[test]
+fn renaming_a_terminal_sets_the_title_and_an_empty_name_clears_it() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+
+    rig.run(CommandId::RenameTerminal);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("the prompt opens");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("  build box ", window, cx);
+            prompt.submit(cx);
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.rename_prompt().is_none())));
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "build box");
+
+    rig.run(CommandId::RenameTerminal);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("the prompt opens again");
+    assert_eq!(rig.read(|_wb, cx| prompt.read(cx).text(cx)), "build box");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("", window, cx);
+            prompt.submit(cx);
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.rename_prompt().is_none())));
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "shell 1");
+}
+
+#[test]
+fn a_bad_terminal_name_is_refused_and_escape_closes_the_prompt() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+
+    for text in ["--evil", "anahtar sk-abcdefghijklmnopqrstuvwx"] {
+        rig.run(CommandId::RenameTerminal);
+        let prompt = rig
+            .read(|wb, _| wb.rename_prompt().cloned())
+            .expect("the prompt opens");
+        rig.with(|_wb, window, cx| {
+            prompt.update(cx, |prompt, cx| {
+                prompt.set_text(text, window, cx);
+                prompt.submit(cx);
+            })
+        });
+        rig.settle_for(50);
+        assert!(rig.read(|wb, cx| wb
+            .rename_prompt()
+            .is_some_and(|prompt| prompt.read(cx).problem().is_some())));
+        assert_eq!(
+            rig.read(|wb, _| wb.terminal_name(0).cloned()),
+            None,
+            "{text:?}"
+        );
+        rig.with(|wb, window, cx| wb.close_rename_prompt(window, cx));
+    }
+
+    rig.run(CommandId::RenameTerminal);
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_some()));
+    rig.cx.simulate_keystrokes("escape");
+    rig.cx.run_until_parked();
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+}
+
+#[test]
+fn a_terminal_name_is_part_of_the_saved_workspace_and_comes_back_on_restore() {
+    let mut rig = rig();
+    let saved = rig.record_workspace_changes();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    rig.with(|wb, _window, cx| {
+        wb.rename_terminal(0, SessionName::parse("api").ok(), cx);
+    });
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a state");
+    assert_eq!(
+        workspace.terminals,
+        vec![SavedTerminal::Shell {
+            name: Some("api".to_owned())
+        }]
+    );
+}
+
+#[test]
+fn a_saved_terminal_name_is_restored_on_the_shell_it_belongs_to() {
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    rig.set_workspace_source(FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root,
+        tabs: vec![],
+        active: 0,
+        layout: LayoutPreset::Balanced,
+        terminals: vec![
+            SavedTerminal::Shell {
+                name: Some("api".to_owned()),
+            },
+            SavedTerminal::Shell { name: None },
+        ],
+    })));
+    rig.open_project();
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "api");
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(1)), "shell 2");
 }
