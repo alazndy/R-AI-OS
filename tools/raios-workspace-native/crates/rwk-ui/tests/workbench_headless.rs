@@ -1971,6 +1971,7 @@ fn a_project_reopens_with_its_saved_tabs_layout_and_shells() {
         ],
         active: 1,
         layout: LayoutPreset::Editor,
+        dock: None,
         terminals: vec![SavedTerminal::Shell { name: None }],
     }));
     rig.set_workspace_source(store);
@@ -2001,6 +2002,7 @@ fn a_saved_agent_session_is_offered_and_resuming_runs_raios_resume() {
         tabs: Vec::new(),
         active: 0,
         layout: LayoutPreset::Balanced,
+        dock: None,
         terminals: vec![SavedTerminal::Agent {
             kind: SessionKind::Claude,
             native_session: None,
@@ -2087,6 +2089,7 @@ fn an_offer_without_a_catalog_entry_can_only_be_dismissed() {
         tabs: Vec::new(),
         active: 0,
         layout: LayoutPreset::Balanced,
+        dock: None,
         terminals: vec![SavedTerminal::Agent {
             kind: SessionKind::Codex,
             native_session: None,
@@ -2136,6 +2139,7 @@ fn a_denied_resume_keeps_the_offer_for_another_try() {
         tabs: Vec::new(),
         active: 0,
         layout: LayoutPreset::Balanced,
+        dock: None,
         terminals: vec![SavedTerminal::Agent {
             kind: SessionKind::Codex,
             native_session: None,
@@ -2177,6 +2181,7 @@ fn a_saved_workspace_of_another_project_is_not_restored() {
         }],
         active: 0,
         layout: LayoutPreset::Agents,
+        dock: None,
         terminals: Vec::new(),
     }));
     rig.set_workspace_source(store);
@@ -2352,6 +2357,7 @@ fn a_saved_terminal_name_is_restored_on_the_shell_it_belongs_to() {
         tabs: vec![],
         active: 0,
         layout: LayoutPreset::Balanced,
+        dock: None,
         terminals: vec![
             SavedTerminal::Shell {
                 name: Some("api".to_owned()),
@@ -2363,4 +2369,291 @@ fn a_saved_terminal_name_is_restored_on_the_shell_it_belongs_to() {
     assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
     assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "api");
     assert_eq!(rig.read(|wb, _| wb.terminal_title(1)), "shell 2");
+}
+
+#[test]
+fn terminals_start_stacked_in_creation_order_and_a_closed_one_leaves_the_dock() {
+    let mut rig = rig();
+    rig.open_project();
+    for _ in 0..3 {
+        rig.run(CommandId::NewTerminal);
+    }
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 3));
+
+    let ids: Vec<_> = rig.read(|wb, _| (0..3).filter_map(|i| wb.terminal_id(i)).collect());
+    assert_eq!(rig.read(|wb, _| wb.dock().sessions()), ids);
+    assert_eq!(rig.read(|wb, _| wb.dock().validate()), Ok(()));
+
+    // Stop the middle terminal; the next terminal makes room by dropping the dead pane.
+    rig.run(CommandId::FocusTerminal(2));
+    rig.run(CommandId::StopTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.running_sessions()) == 2));
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 3));
+    let now: Vec<_> = rig.read(|wb, _| (0..3).filter_map(|i| wb.terminal_id(i)).collect());
+    assert_eq!(rig.read(|wb, _| wb.dock().sessions()), now);
+    assert!(!rig.read(|wb, _| wb.dock().contains(&ids[1])));
+}
+
+#[test]
+fn a_saved_dock_arrangement_is_restored_over_the_shells_that_come_back() {
+    use rwk_core::workbench::{DockLayout, Edge};
+
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    let mut dock = DockLayout::stacked([0_usize, 1, 2]);
+    dock.split(&2, &0, Edge::Right).expect("split");
+    rig.set_workspace_source(FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root,
+        tabs: vec![],
+        active: 0,
+        layout: LayoutPreset::Balanced,
+        terminals: vec![SavedTerminal::Shell { name: None }; 3],
+        dock: Some(dock),
+    })));
+    rig.open_project();
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 3));
+
+    let ids: Vec<_> = rig.read(|wb, _| (0..3).filter_map(|i| wb.terminal_id(i)).collect());
+    // Pane 2 sits to the right of pane 0, then pane 1 below them.
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![ids[0].clone(), ids[2].clone(), ids[1].clone()]
+    );
+    assert_eq!(rig.read(|wb, _| wb.dock().validate()), Ok(()));
+}
+
+#[test]
+fn the_current_dock_arrangement_is_part_of_the_saved_workspace() {
+    let mut rig = rig();
+    let saved = rig.record_workspace_changes();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a state");
+    let dock = workspace.dock.expect("an arrangement");
+    assert_eq!(dock.sessions(), vec![0, 1]);
+}
+
+/// Positions of the dock's title strips in the headless window, found by trying: the dock is the
+/// right-hand panel, each of two stacked terminals has a thin title strip at the top of its half.
+fn two_terminals(rig: &mut Rig) -> (rwk_core::sessions::SessionId, rwk_core::sessions::SessionId) {
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    let first = rig.read(|wb, _| wb.terminal_id(0)).expect("first");
+    let second = rig.read(|wb, _| wb.terminal_id(1)).expect("second");
+    (first, second)
+}
+
+#[test]
+fn dropping_a_terminal_on_the_middle_of_another_makes_it_a_tab_there() {
+    let mut rig = rig();
+    let (first, second) = two_terminals(&mut rig);
+    rig.with(|wb, window, cx| {
+        wb.drop_terminal(
+            &second,
+            &first,
+            rwk_core::workbench::DropZone::Center,
+            window,
+            cx,
+        )
+    });
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![first.clone(), second.clone()]
+    );
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().group_mate(&first)),
+        Some(second.clone())
+    );
+    assert_eq!(rig.read(|wb, _| wb.dock().validate()), Ok(()));
+    // The moved terminal is the selected one and the group shows it.
+    assert!(rig.read(|wb, _| wb.dock().is_shown(&second)));
+    assert_eq!(rig.read(|wb, _| wb.selected_terminal()), 1);
+}
+
+#[test]
+fn dropping_on_an_edge_splits_the_pane_and_the_sessions_keep_running() {
+    let mut rig = rig();
+    let (first, second) = two_terminals(&mut rig);
+    rig.with(|wb, window, cx| {
+        wb.drop_terminal(
+            &second,
+            &first,
+            rwk_core::workbench::DropZone::Edge(rwk_core::workbench::Edge::Right),
+            window,
+            cx,
+        )
+    });
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![first.clone(), second.clone()]
+    );
+    assert!(matches!(
+        rig.read(|wb, _| wb.dock().root().cloned()),
+        Some(rwk_core::workbench::Node::Split {
+            axis: rwk_core::workbench::Axis::Horizontal,
+            ..
+        })
+    ));
+    assert_eq!(
+        rig.read(|wb, _| wb.running_sessions()),
+        2,
+        "rearranging never touches the processes"
+    );
+}
+
+#[test]
+fn a_refused_drop_leaves_the_layout_and_says_why() {
+    let mut rig = rig();
+    let (first, _second) = two_terminals(&mut rig);
+    let before = rig.read(|wb, _| wb.dock().clone());
+    // A lone pane cannot be split from itself.
+    rig.with(|wb, window, cx| {
+        wb.drop_terminal(
+            &first,
+            &first,
+            rwk_core::workbench::DropZone::Edge(rwk_core::workbench::Edge::Right),
+            window,
+            cx,
+        )
+    });
+    assert_eq!(rig.read(|wb, _| wb.dock().clone()), before);
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("taşınamadı")));
+}
+
+#[test]
+fn the_arrangement_commands_do_what_the_drags_do_and_survive_a_refusal() {
+    let mut rig = rig();
+    let (first, second) = two_terminals(&mut rig);
+    // The second terminal is selected: swap it with the first.
+    rig.run(CommandId::MoveTerminalPrevious);
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![second.clone(), first.clone()]
+    );
+    // It is first now; moving further up is refused with a message and changes nothing.
+    rig.run(CommandId::MoveTerminalPrevious);
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![second.clone(), first.clone()]
+    );
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("taşınamadı")));
+    rig.run(CommandId::MoveTerminalNext);
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![first.clone(), second.clone()]
+    );
+
+    rig.run(CommandId::SplitTerminalRight);
+    assert!(matches!(
+        rig.read(|wb, _| wb.dock().root().cloned()),
+        Some(rwk_core::workbench::Node::Split {
+            axis: rwk_core::workbench::Axis::Horizontal,
+            ..
+        })
+    ));
+    rig.run(CommandId::JoinTerminalPrevious);
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().group_mate(&second)),
+        Some(first.clone())
+    );
+    rig.run(CommandId::UngroupTerminal);
+    assert_eq!(rig.read(|wb, _| wb.dock().group_mate(&second)), None);
+    rig.run(CommandId::GrowTerminal);
+    rig.run(CommandId::ShrinkTerminal);
+    assert_eq!(rig.read(|wb, _| wb.dock().validate()), Ok(()));
+    assert_eq!(rig.read(|wb, _| wb.running_sessions()), 2);
+}
+
+#[test]
+fn dragging_a_divider_resizes_and_is_saved() {
+    let mut rig = rig();
+    let saved = rig.record_workspace_changes();
+    let (_first, _second) = two_terminals(&mut rig);
+    rig.with(|wb, _window, cx| wb.drag_divider(&[], 0, 0.8, cx));
+    let weights = rig.read(|wb, _| match wb.dock().root() {
+        Some(rwk_core::workbench::Node::Split { children, .. }) => {
+            children.iter().map(|c| c.weight).collect::<Vec<_>>()
+        }
+        _ => Vec::new(),
+    });
+    assert!((weights[0] - 0.8).abs() < 1e-3, "{weights:?}");
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a state");
+    assert!(workspace.dock.is_some());
+}
+
+#[test]
+fn arrangement_commands_are_unavailable_with_a_single_terminal() {
+    use rwk_core::workbench::{available, WorkbenchState};
+    let state = WorkbenchState {
+        project_open: true,
+        file_open: false,
+        dirty: false,
+        terminals: 1,
+        dock_visible: true,
+        control_plane_features: true,
+        daemon_reachable: true,
+    };
+    assert!(!available(CommandId::MoveTerminalNext, &state).enabled);
+    assert!(available(CommandId::UngroupTerminal, &state).enabled);
+}
+
+#[test]
+fn a_real_drag_of_a_title_onto_another_pane_rearranges_the_dock() {
+    use gpui::{point, px, Modifiers, MouseButton};
+
+    let mut rig = rig();
+    let (first, second) = two_terminals(&mut rig);
+    rig.settle_for(100);
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    // The dock is the right-hand panel; the second terminal's title strip is the first thing
+    // painted in its half, so scan down the dock's left part for the strip that starts a drag.
+    let x = size.width - px(120.0);
+    let target = point(x, size.height * 0.2);
+    let mut moved = false;
+    let mut y = size.height * 0.5;
+    while y < size.height * 0.75 && !moved {
+        rig.cx
+            .simulate_mouse_move(point(x, y), None, Modifiers::default());
+        rig.cx
+            .simulate_mouse_down(point(x, y), MouseButton::Left, Modifiers::default());
+        for step in 1..=6_u8 {
+            let at = point(x, y + (target.y - y) * (f32::from(step) / 6.0));
+            rig.cx
+                .simulate_mouse_move(at, Some(MouseButton::Left), Modifiers::default());
+        }
+        rig.cx
+            .simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+        rig.settle_for(50);
+        moved = rig.read(|wb, _| wb.dock().group_mate(&second)) == Some(first.clone());
+        y += px(4.0);
+    }
+    // Dropped on the middle of the first pane, the dragged terminal joined its group.
+    assert!(moved, "no scanned point started a drag; viewport {size:?}");
+    assert_eq!(rig.read(|wb, _| wb.running_sessions()), 2);
 }
