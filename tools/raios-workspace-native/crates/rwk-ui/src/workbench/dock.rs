@@ -538,6 +538,12 @@ impl Workbench {
                 theme.muted
             }))
             .child(title)
+            .children(pane.task.as_ref().map(|task| {
+                div()
+                    .flex_none()
+                    .text_color(gpui::rgb(theme.accent_ink))
+                    .child(SharedString::from(format!("◆ {}", task.title)))
+            }))
             .child(
                 div()
                     .id(SharedString::from(format!(

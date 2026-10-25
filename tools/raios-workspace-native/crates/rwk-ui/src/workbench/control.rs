@@ -275,6 +275,7 @@ impl Workbench {
                     None => "Görev ataması kaldırıldı".to_owned(),
                 };
                 self.say(text, cx);
+                self.finish_bind(&request.task_id, request.assignee.is_some(), cx);
                 self.refresh_tasks(cx);
             }
             (op, Ok(_)) => {
@@ -289,6 +290,7 @@ impl Workbench {
                     format!("Görev değiştirilemedi: {}", error.message)
                 };
                 drop(op);
+                self.abandon_bind();
                 self.say(text, cx);
                 self.refresh_tasks(cx);
             }
@@ -422,6 +424,9 @@ impl Workbench {
         let kind = self.terminals.get(index).map(|pane| pane.kind);
         match kind {
             Some(kind) if kind.agent().is_some() => {
+                if let Some(pane) = self.terminals.get(index) {
+                    self.begin_bind(task_id.clone(), pane.id.clone());
+                }
                 self.assign_task(task_id, updated_at, Some(kind), window, cx);
             }
             Some(_) => self.say("Bu terminal bir ajan değil; görev atanamaz", cx),
@@ -450,8 +455,24 @@ impl Workbench {
             task.as_ref().map(|task| task.title.as_str()),
         );
         self.composer_task = task;
+        let sender = self
+            .terminals
+            .get(self.selected)
+            .map(|pane| pane.id.clone());
+        let paste_targets: Vec<(rwk_core::sessions::SessionId, String)> = self
+            .terminals
+            .iter()
+            .enumerate()
+            .filter(|(_, pane)| {
+                pane.kind.agent().is_some()
+                    && Some(&pane.id) != sender.as_ref()
+                    && self.session_running(&pane.id)
+            })
+            .map(|(index, pane)| (pane.id.clone(), self.terminal_title(index)))
+            .collect();
         let composer = cx.new(|cx| HandoffComposer::new(from, window, cx));
         composer.update(cx, |composer, cx| {
+            composer.set_paste_targets(paste_targets, cx);
             composer.set_theme(theme, cx);
             composer.set_text(&seed, window, cx);
         });
@@ -460,6 +481,10 @@ impl Workbench {
             window,
             |this, _composer, event: &ComposerEvent, window, cx| match event.clone() {
                 ComposerEvent::Close => this.close_composer(window, cx),
+                ComposerEvent::PasteTo { session, summary } => {
+                    this.close_composer(window, cx);
+                    this.paste_handoff(&session, summary, window, cx);
+                }
                 ComposerEvent::Send { to, summary } => {
                     let task = this.composer_task.clone();
                     this.close_composer(window, cx);
@@ -470,6 +495,38 @@ impl Workbench {
         ));
         self.composer = Some(composer);
         cx.notify();
+    }
+
+    /// Puts the handoff text into the paste preview of a running terminal and selects it. The
+    /// user still has to press Enter there; nothing is recorded in the daemon.
+    fn paste_handoff(
+        &mut self,
+        session: &rwk_core::sessions::SessionId,
+        summary: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.terminals.iter().position(|pane| &pane.id == session) else {
+            self.say("Hedef terminal artık yok", cx);
+            return;
+        };
+        if !self.session_running(session) {
+            self.say("Hedef terminal çalışmıyor", cx);
+            return;
+        }
+        self.select_terminal(index, window, cx);
+        self.terminals[index]
+            .view
+            .update(cx, |view, cx| view.paste_text(summary, cx));
+        let waiting = self.terminals[index].view.read(cx).has_pending_paste();
+        self.say(
+            if waiting {
+                "Metin yapıştırma onayında: Enter gönderir, Esc vazgeçer. Devir kaydı oluşmadı"
+            } else {
+                "Metin terminale yazıldı, gönderilmedi: göndermek için orada Enter'a basın. Devir kaydı oluşmadı"
+            },
+            cx,
+        );
     }
 
     /// Closes the composer and returns focus to the workbench.

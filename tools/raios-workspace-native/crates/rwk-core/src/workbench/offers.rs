@@ -72,6 +72,8 @@ pub struct SessionOffer {
     pub name: Option<SessionName>,
     /// The resumable catalog row this offer belongs to, when one was matched.
     pub matched: Option<MatchedSession>,
+    /// The task the pane carried; the caller fills it from the saved links.
+    pub task: Option<crate::workbench::layout_state::SavedTaskLink>,
 }
 
 /// Matches the agent terminals of a saved workspace against the catalog of `project`.
@@ -130,6 +132,7 @@ pub fn plan_offers(
             native_session: native_session.clone(),
             name: terminal.name(),
             matched,
+            task: None,
         });
     }
     offers

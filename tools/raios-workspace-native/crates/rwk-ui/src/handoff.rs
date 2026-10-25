@@ -8,7 +8,7 @@ use gpui::{
 use gpui::{AppContext, Entity};
 use gpui_base::input::{Input, InputEvent, InputState};
 use rwk_core::handoff_input::{looks_like_secret, validate_summary};
-use rwk_core::sessions::SessionKind;
+use rwk_core::sessions::{SessionId, SessionKind};
 use rwk_core::workbench::{Appearance, Theme};
 
 /// The agents a handoff can be addressed to, in the order the buttons appear.
@@ -29,6 +29,14 @@ pub enum ComposerEvent {
         /// The summary text.
         summary: String,
     },
+    /// The user wants the text pasted into a running terminal instead of queued as a handoff.
+    /// Nothing is recorded: no receipt exists for a paste.
+    PasteTo {
+        /// The terminal to paste into.
+        session: SessionId,
+        /// The text, validated like a handoff summary.
+        summary: String,
+    },
     /// The user closed the composer.
     Close,
 }
@@ -40,6 +48,8 @@ pub struct HandoffComposer {
     input: Entity<InputState>,
     from: SessionKind,
     problem: Option<SharedString>,
+    /// Running agent terminals the text can be pasted into: session and the label on the button.
+    paste_targets: Vec<(SessionId, String)>,
     theme: Theme,
 }
 
@@ -52,6 +62,7 @@ impl HandoffComposer {
             input,
             from,
             problem: None,
+            paste_targets: Vec::new(),
             theme: Theme::of(Appearance::default()),
         }
     }
@@ -59,6 +70,27 @@ impl HandoffComposer {
     /// Repaints the composer with another skin or tone.
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.theme = theme;
+        cx.notify();
+    }
+
+    /// Sets the terminals the text can be pasted into.
+    pub fn set_paste_targets(&mut self, targets: Vec<(SessionId, String)>, cx: &mut Context<Self>) {
+        self.paste_targets = targets;
+        cx.notify();
+    }
+
+    /// Validates the text and, when it passes, asks the workbench to paste it into `session`.
+    pub fn submit_paste(&mut self, session: SessionId, cx: &mut Context<Self>) {
+        let text = self.text(cx);
+        if let Err(problem) = validate_summary(&text, &looks_like_secret) {
+            self.problem = Some(problem.message().into());
+        } else {
+            self.problem = None;
+            cx.emit(ComposerEvent::PasteTo {
+                session,
+                summary: text.trim().to_owned(),
+            });
+        }
         cx.notify();
     }
 
@@ -123,6 +155,24 @@ impl Render for HandoffComposer {
                 .child(SharedString::from(format!("→ {name}")))
                 .on_click(cx.listener(move |this, _, _window, cx| this.submit(to, cx)))
         });
+        let pastes: Vec<_> = self
+            .paste_targets
+            .iter()
+            .enumerate()
+            .map(|(index, (session, label))| {
+                let session = session.clone();
+                div()
+                    .id(SharedString::from(format!("handoff-paste-{index}")))
+                    .px_3()
+                    .py_1()
+                    .border_1()
+                    .border_color(gpui::rgb(theme.line))
+                    .child(SharedString::from(format!("Yapıştır → {label}")))
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.submit_paste(session.clone(), cx)
+                    }))
+            })
+            .collect();
         div()
             .absolute()
             .top_16()
@@ -166,6 +216,19 @@ impl Render for HandoffComposer {
                     .child("Not bir BLOCKER devri olarak kuyruğa alınır; parola ve anahtar yazmayın. Aynı ajana devredilemez (gönderenin düğmesi yoktur). Esc kapatır."),
             )
             .child(div().flex().flex_row().gap_2().children(buttons))
+            .children((!pastes.is_empty()).then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(gpui::rgb(theme.muted))
+                            .child("Çalışan bir terminale yapıştır: metin onay önizlemesinde bekler, Enter ile gider. Bu bir devir kaydı değildir; ajan metni olduğu gibi girdi olarak alır."),
+                    )
+                    .child(div().flex().flex_row().flex_wrap().gap_2().children(pastes))
+            }))
     }
 }
 

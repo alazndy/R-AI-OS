@@ -76,6 +76,31 @@ impl SavedTerminal {
     }
 }
 
+/// The task a terminal carries, as stored. The title is only for display; the id is what the
+/// daemon knows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedTaskLink {
+    /// Task identifier.
+    pub id: String,
+    /// Task title at the time of saving.
+    pub title: String,
+}
+
+impl SavedTaskLink {
+    /// The link when it passes the rules a typed task goes through, else `None`: a hand-edited
+    /// file cannot put control characters or credential-looking text on screen.
+    fn sanitized(self) -> Option<Self> {
+        let id_ok = !self.id.is_empty()
+            && self.id.chars().count() <= 64
+            && self
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        let title = crate::tasks::validate_title(&self.title).ok()?;
+        id_ok.then_some(Self { id: self.id, title })
+    }
+}
+
 /// Everything one project had open at save time.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SavedWorkspace {
@@ -93,6 +118,10 @@ pub struct SavedWorkspace {
     /// Terminal sessions.
     #[serde(default)]
     pub terminals: Vec<SavedTerminal>,
+    /// The task each terminal carries, by position in `terminals`; shorter than `terminals` (or
+    /// absent, in older files) means the rest carry none.
+    #[serde(default)]
+    pub task_links: Vec<Option<SavedTaskLink>>,
     /// How the dock arranges the terminals; each pane is a position in `terminals`. Absent in
     /// older files, which load with the default arrangement.
     #[serde(default)]
@@ -123,6 +152,12 @@ impl SavedWorkspace {
             .retain(|tab| valid_tab_path(&tab.path) && seen.insert(tab.path.clone()));
         self.tabs.truncate(MAX_SAVED_TABS);
         self.terminals.truncate(MAX_SESSIONS);
+        self.task_links.truncate(self.terminals.len());
+        self.task_links = self
+            .task_links
+            .into_iter()
+            .map(|link| link.and_then(SavedTaskLink::sanitized))
+            .collect();
         self.terminals = self
             .terminals
             .into_iter()
@@ -195,6 +230,7 @@ mod tests {
                     name: None,
                 },
             ],
+            task_links: Vec::new(),
         }
     }
 
@@ -280,6 +316,7 @@ mod tests {
             layout: LayoutPreset::Balanced,
             dock: None,
             terminals: more_terminals,
+            task_links: Vec::new(),
         }
         .sanitized();
 
@@ -325,5 +362,41 @@ mod tests {
         // Nothing usable left: the dock falls back to its default arrangement.
         workspace.terminals.clear();
         assert_eq!(workspace.sanitized().dock, None);
+    }
+
+    #[test]
+    fn task_links_are_cleaned_capped_and_optional_in_old_files() {
+        // A file from before task links still loads.
+        let old = parse_workspace(r#"{"project":"/work/app","terminals":[{"terminal":"shell"}]}"#)
+            .expect("parses");
+        assert!(old.task_links.is_empty());
+
+        let mut state = workspace();
+        let link = |id: &str, title: &str| {
+            Some(SavedTaskLink {
+                id: id.into(),
+                title: title.into(),
+            })
+        };
+        state.task_links = vec![
+            link("t-1", "  Derle  "),
+            link("bad id with spaces", "x"),
+            link("t-3", "tab\there"),
+            link(
+                "t-4",
+                "token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+            ),
+        ];
+        // More links than terminals are cut.
+        state
+            .task_links
+            .extend((0..20).map(|n| link(&format!("t-{n}"), "extra")));
+        let clean = state.sanitized();
+        assert!(clean.task_links.len() <= clean.terminals.len());
+        assert_eq!(
+            clean.task_links[0].as_ref().map(|l| l.title.as_str()),
+            Some("Derle")
+        );
+        assert!(clean.task_links[1..].iter().all(Option::is_none) || clean.task_links.len() < 2);
     }
 }

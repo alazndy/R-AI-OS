@@ -50,7 +50,13 @@ impl Workbench {
             native_session: offer.native_session.clone(),
             name: offer.name.as_ref().map(ToString::to_string),
         }));
+        let mut task_links: Vec<Option<rwk_core::workbench::SavedTaskLink>> = saved_panes
+            .iter()
+            .map(|pane| Self::saved_link(&pane.task))
+            .collect();
+        task_links.extend(self.offers.iter().map(|offer| offer.task.clone()));
         Some(SavedWorkspace {
+            task_links,
             project: project.info().root.clone(),
             tabs: self.editor.read(cx).tabs_snapshot(cx),
             active: self.editor.read(cx).active_index(),
@@ -113,6 +119,7 @@ impl Workbench {
         self.editor.update(cx, |editor, cx| {
             editor.restore_tabs(Arc::clone(&project), saved.tabs, saved.active, window, cx)
         });
+        let link_of = |index: usize| saved.task_links.get(index).cloned().flatten();
         let shells: Vec<(usize, Option<SessionName>)> = saved
             .terminals
             .iter()
@@ -128,7 +135,8 @@ impl Workbench {
             if !self.spawn_terminal(SessionKind::Shell, launch, window, cx) {
                 break;
             }
-            if let Some(pane) = self.terminals.last() {
+            if let Some(pane) = self.terminals.last_mut() {
+                pane.task = Self::live_link(link_of(saved_index));
                 started.push((saved_index, pane.id.clone()));
             }
         }
@@ -152,14 +160,15 @@ impl Workbench {
                 }
             }
         }
-        let agents: Vec<SavedTerminal> = saved
+        let (agents, links): (Vec<SavedTerminal>, Vec<_>) = saved
             .terminals
             .iter()
-            .filter(|terminal| matches!(terminal, SavedTerminal::Agent { .. }))
-            .cloned()
-            .collect();
+            .enumerate()
+            .filter(|(_, terminal)| matches!(terminal, SavedTerminal::Agent { .. }))
+            .map(|(index, terminal)| (terminal.clone(), link_of(index)))
+            .unzip();
         if !agents.is_empty() {
-            self.load_offers(agents, root, window, cx);
+            self.load_offers(agents, links, root, window, cx);
         }
     }
 }

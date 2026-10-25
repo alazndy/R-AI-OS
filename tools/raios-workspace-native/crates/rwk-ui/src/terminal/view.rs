@@ -339,6 +339,12 @@ impl TerminalView {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
+        self.paste_text(text, cx);
+    }
+
+    /// Pastes `text` the way a paste from the clipboard goes: a single line goes straight in,
+    /// a multiline text waits in the preview for Enter, an oversized one is refused.
+    pub fn paste_text(&mut self, text: String, cx: &mut Context<Self>) {
         match decide_paste(&text) {
             PasteDecision::Send => self.send_paste(&text, cx),
             PasteDecision::Confirm { .. } => {

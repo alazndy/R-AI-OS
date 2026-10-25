@@ -146,7 +146,7 @@ Each phase ends with a typed review of the core changes before UI work, as in th
 - **Phase C, dock layout model:** `DockLayout`, operations, invariants, persistence with fallback; core tests only, no UI change visible yet beyond the flat list rendering from the tree.
 - **Phase D, drag and drop:** the spike first, then reorder, move, split, keyboard equivalents.
 - **Phase E, tasks (done: assignee is the short agent name; `updated_at` is the optimistic-concurrency token; task list lives in the inspector):** `ControlPlane` task methods, the contract additions, the task panel, assign by drag, policy keys, conflict handling.
-- **Phase F, handoff between terminals (done: composer seed, task rides the handoff and moves on delivery, new-terminal start; paste path and task↔terminal persistence deferred, see open question 2):** composer prefill, task move after delivery, "Yeni terminalde başlat" wiring, optional paste.
+- **Phase F, handoff between terminals (done: composer seed, task rides the handoff and moves on delivery, new-terminal start; the paste path exists as an explicit composer button per running agent terminal and leaves no receipt; the task↔terminal link is kept on the pane and saved with the workspace, see open question 1):** composer prefill, task move after delivery, "Yeni terminalde başlat" wiring, optional paste.
 - **Phase G, gates:** extend `ui-bench` with a 12-terminal drag scenario (no frame above budget, no PTY resize storm), run the three-agent checklist, update the README and `SIGMAP.md`.
 
 ## 10. Testing

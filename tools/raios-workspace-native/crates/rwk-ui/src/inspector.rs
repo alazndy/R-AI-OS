@@ -147,6 +147,8 @@ pub struct InspectorView {
     handoffs: Vec<HandoffLine>,
     /// Groups whose collapsed state the user flipped from its default.
     flipped_groups: std::collections::HashSet<rwk_core::inspector::TaskGroup>,
+    /// Tasks whose terminal was closed.
+    closed_tasks: std::collections::HashSet<String>,
     theme: Theme,
     plane: Option<Arc<dyn ControlPlane>>,
     project: Option<PathBuf>,
@@ -168,6 +170,7 @@ impl InspectorView {
         Self {
             handoffs: Vec::new(),
             flipped_groups: std::collections::HashSet::new(),
+            closed_tasks: std::collections::HashSet::new(),
             theme: Theme::of(Appearance::default()),
             plane: None,
             project: None,
@@ -178,6 +181,23 @@ impl InspectorView {
             _stream_notifications: None,
             _poll: None,
         }
+    }
+
+    /// Sets the tasks whose terminal was closed; their rows say so.
+    pub fn set_closed_tasks(
+        &mut self,
+        closed: std::collections::HashSet<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.closed_tasks != closed {
+            self.closed_tasks = closed;
+            cx.notify();
+        }
+    }
+
+    /// True when the terminal that carried this task was closed.
+    pub fn task_terminal_closed(&self, task_id: &str) -> bool {
+        self.closed_tasks.contains(task_id)
     }
 
     /// True when the task group is shown collapsed.
@@ -514,9 +534,14 @@ impl Render for InspectorView {
                     theme,
                     task.title.clone(),
                     format!(
-                        "{} · {}",
+                        "{} · {}{}",
                         task.status,
-                        task.assignee.as_deref().unwrap_or("atanmamış")
+                        task.assignee.as_deref().unwrap_or("atanmamış"),
+                        if self.closed_tasks.contains(&task.id) {
+                            " · terminal kapandı"
+                        } else {
+                            ""
+                        }
                     ),
                 );
                 let id = task.id.clone();

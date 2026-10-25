@@ -27,8 +27,8 @@ pub use documents::{DocumentSession, SaveBlocked, SaveTicket, SwitchDecision};
 pub use file_types::{presentation, FileIcon, FilePresentation, FileTone};
 pub use layout::{LayoutPreset, MIN_EDITOR_PX, MIN_SIDE_PANE_PX};
 pub use layout_state::{
-    parse_workspace, serialize_workspace, state_file_name, SavedTab, SavedTerminal, SavedWorkspace,
-    WorkspaceStateSource, MAX_SAVED_TABS,
+    parse_workspace, serialize_workspace, state_file_name, SavedTab, SavedTaskLink, SavedTerminal,
+    SavedWorkspace, WorkspaceStateSource, MAX_SAVED_TABS,
 };
 pub use menus::{menu_entries, toolbar, toolbar_pressed, MenuEntry, MenuTarget, ToolbarItem};
 pub use offers::{

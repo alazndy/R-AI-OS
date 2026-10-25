@@ -330,6 +330,7 @@ mod tests {
                     name: None,
                 },
             ],
+            task_links: Vec::new(),
         };
         store.save(&workspace).expect("save");
         assert_eq!(store.load(project), Some(workspace));
@@ -349,6 +350,7 @@ mod tests {
             layout: rwk_core::workbench::LayoutPreset::Balanced,
             terminals: Vec::new(),
             dock: None,
+            task_links: Vec::new(),
         };
         store.save(&state).expect("save");
         assert_eq!(

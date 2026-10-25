@@ -1986,6 +1986,7 @@ fn a_project_reopens_with_its_saved_tabs_layout_and_shells() {
         layout: LayoutPreset::Editor,
         dock: None,
         terminals: vec![SavedTerminal::Shell { name: None }],
+        task_links: Vec::new(),
     }));
     rig.set_workspace_source(store);
     rig.open_project();
@@ -2021,6 +2022,7 @@ fn a_saved_agent_session_is_offered_and_resuming_runs_raios_resume() {
             native_session: None,
             name: None,
         }],
+        task_links: Vec::new(),
     })));
     let fake = connected(&mut rig, PolicyAction::Allow);
     fake.push_launch(Ok(()));
@@ -2108,6 +2110,7 @@ fn an_offer_without_a_catalog_entry_can_only_be_dismissed() {
             native_session: None,
             name: None,
         }],
+        task_links: Vec::new(),
     })));
     let saved = rig.record_workspace_changes();
     rig.open_project();
@@ -2158,6 +2161,7 @@ fn a_denied_resume_keeps_the_offer_for_another_try() {
             native_session: None,
             name: None,
         }],
+        task_links: Vec::new(),
     })));
     let fake = connected(&mut rig, PolicyAction::Deny);
     rig.open_project();
@@ -2196,6 +2200,7 @@ fn a_saved_workspace_of_another_project_is_not_restored() {
         layout: LayoutPreset::Agents,
         dock: None,
         terminals: Vec::new(),
+        task_links: Vec::new(),
     }));
     rig.set_workspace_source(store);
     rig.open_project();
@@ -2377,6 +2382,7 @@ fn a_saved_terminal_name_is_restored_on_the_shell_it_belongs_to() {
             },
             SavedTerminal::Shell { name: None },
         ],
+        task_links: Vec::new(),
     })));
     rig.open_project();
     assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
@@ -2424,6 +2430,7 @@ fn a_saved_dock_arrangement_is_restored_over_the_shells_that_come_back() {
         layout: LayoutPreset::Balanced,
         terminals: vec![SavedTerminal::Shell { name: None }; 3],
         dock: Some(dock),
+        task_links: Vec::new(),
     })));
     rig.open_project();
     assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 3));
@@ -3756,4 +3763,137 @@ fn finished_task_groups_start_collapsed_and_open_on_a_click() {
         inspector.update(cx, |view, cx| view.toggle_group(TaskGroup::Completed, cx))
     });
     assert!(collapsed(&mut rig, TaskGroup::Completed));
+}
+
+#[test]
+fn a_task_given_to_an_agent_terminal_is_carried_saved_and_marked_when_the_terminal_closes() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_assignment(Ok("2026-10-26T09:00:00Z".to_owned()));
+    fake.push_launch(Ok(()));
+    let saved = rig.record_workspace_changes();
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+
+    rig.with(|wb, window, cx| {
+        wb.assign_task_to_terminal("t-1".into(), "rev".into(), 0, window, cx)
+    });
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_task(0).is_some())));
+    assert_eq!(
+        rig.read(|wb, _| wb.terminal_task(0).map(|task| task.task_id.clone())),
+        Some("t-1".to_owned())
+    );
+
+    // The link is part of the saved workspace.
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    rig.settle_for(50);
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a state");
+    assert_eq!(
+        workspace
+            .task_links
+            .first()
+            .cloned()
+            .flatten()
+            .map(|link| link.id),
+        Some("t-1".to_owned())
+    );
+
+    // Closing the terminal leaves the task alone but the list says its terminal is gone.
+    rig.run(CommandId::CloseTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 0));
+    let inspector = rig.read(|wb, _| wb.inspector().clone());
+    assert!(rig.read(|_, cx| inspector.read(cx).task_terminal_closed("t-1")));
+}
+
+#[test]
+fn a_failed_assignment_links_nothing() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_assignment(Err(rwk_core::error::AppError::new(
+        rwk_core::error::ErrorCode::Conflict,
+        "The task changed since it was read",
+    )));
+    fake.push_launch(Ok(()));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    rig.with(|wb, window, cx| {
+        wb.assign_task_to_terminal("t-1".into(), "old".into(), 0, window, cx)
+    });
+    assert!(rig.settle_until(|rig| rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("bu arada değişti"))));
+    assert!(rig.read(|wb, _| wb.terminal_task(0).is_none()));
+}
+
+#[test]
+fn a_handoff_text_can_be_pasted_into_another_running_agent_terminal_without_a_record() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_launch(Ok(()));
+    fake.push_launch(Ok(()));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Claude, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    let sends_before = sends(&fake);
+
+    // The sender is the selected (second) terminal; the first is the only paste target.
+    rig.run(CommandId::Handoff);
+    let composer = rig.read(|wb, _| wb.composer().cloned()).expect("composer");
+    let target = rig.read(|wb, _| wb.terminal_id(0)).expect("first terminal");
+    rig.with(|_, window, cx| {
+        composer.update(cx, |composer, cx| {
+            composer.set_text("satir bir\nsatir iki", window, cx);
+            composer.submit_paste(target.clone(), cx);
+        })
+    });
+    rig.cx.run_until_parked();
+
+    assert!(rig.read(|wb, _| wb.composer().is_none()));
+    let view = rig
+        .read(|wb, _| wb.terminal_view(0).cloned())
+        .expect("view");
+    // The composer text is one line, so it is written to the prompt, not held in a preview;
+    // either way the user still has to press Enter in the terminal.
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("Devir kaydı oluşmadı")));
+    assert_eq!(rig.read(|wb, _| wb.selected_terminal()), 0);
+    let _ = view;
+    assert_eq!(sends(&fake), sends_before, "a paste is not a handoff");
+}
+
+#[test]
+fn a_secret_is_not_pasted_into_a_terminal_either() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_launch(Ok(()));
+    fake.push_launch(Ok(()));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Claude, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    rig.run(CommandId::Handoff);
+    let composer = rig.read(|wb, _| wb.composer().cloned()).expect("composer");
+    let target = rig.read(|wb, _| wb.terminal_id(0)).expect("terminal");
+    rig.with(|_, window, cx| {
+        composer.update(cx, |composer, cx| {
+            composer.set_text("anahtar sk-abcdefghijklmnopqrstuvwx", window, cx);
+            composer.submit_paste(target.clone(), cx);
+        })
+    });
+    rig.cx.run_until_parked();
+    assert!(rig.read(|wb, cx| wb
+        .composer()
+        .is_some_and(|c| c.read(cx).problem().is_some())));
+    let view = rig
+        .read(|wb, _| wb.terminal_view(0).cloned())
+        .expect("view");
+    assert!(!rig.read(|_, cx| view.read(cx).has_pending_paste()));
 }

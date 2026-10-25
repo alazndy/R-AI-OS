@@ -33,6 +33,7 @@ impl Workbench {
     pub(super) fn load_offers(
         &mut self,
         agents: Vec<SavedTerminal>,
+        links: Vec<Option<rwk_core::workbench::SavedTaskLink>>,
         root: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -50,7 +51,7 @@ impl Workbench {
                 .spawn(async move { catalog_of(raios, &root) })
                 .await;
             this.update_in(cx, |workbench, _window, cx| {
-                workbench.apply_offers(generation, &agents, &catalog, cx);
+                workbench.apply_offers(generation, &agents, &links, &catalog, cx);
             })
             .ok();
         })
@@ -62,6 +63,7 @@ impl Workbench {
         &mut self,
         generation: u64,
         agents: &[SavedTerminal],
+        links: &[Option<rwk_core::workbench::SavedTaskLink>],
         catalog: &SessionCatalog,
         cx: &mut Context<Self>,
     ) {
@@ -72,6 +74,10 @@ impl Workbench {
             return;
         };
         self.offers = plan_offers(agents, catalog, &project.info().root);
+        // One offer per saved agent pane, in the same order.
+        for (offer, link) in self.offers.iter_mut().zip(links) {
+            offer.task = link.clone();
+        }
         cx.notify();
     }
 
@@ -132,7 +138,8 @@ impl Workbench {
             .offers
             .iter()
             .find(|offer| offer.matched.as_ref().map(|matched| &matched.key) == Some(&key))
-            .and_then(|offer| offer.name.clone());
+            .map(|offer| (offer.name.clone(), offer.task.clone()));
+        let (name, task) = name.unwrap_or((None, None));
         if !self.spawn_terminal(kind, SessionLaunch::Resume(key.clone()), window, cx) {
             cx.notify();
             return;
@@ -140,6 +147,7 @@ impl Workbench {
         // The pane just pushed is the last one; it takes the name the offer carried.
         if let Some(pane) = self.terminals.last_mut() {
             pane.name = name;
+            pane.task = Self::live_link(task);
         }
         self.offers
             .retain(|offer| offer.matched.as_ref().map(|matched| &matched.key) != Some(&key));

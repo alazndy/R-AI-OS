@@ -1,6 +1,7 @@
 //! The workbench: the window's three panes, the terminal dock and the single place where
 //! commands take effect.
 
+pub mod binding;
 pub mod control;
 pub mod dock;
 pub mod host;
@@ -210,6 +211,8 @@ struct TerminalPane {
     /// Where a remote shell (SSH) leads. Such a pane is not part of the saved workspace:
     /// reopening the project never connects anywhere by itself.
     ssh: Option<rwk_core::ssh::SshTarget>,
+    /// The task given to this terminal's agent from the task list.
+    task: Option<rwk_core::handoff_flow::TaskLink>,
     view: Entity<TerminalView>,
 }
 
@@ -289,6 +292,10 @@ pub struct Workbench {
     workspace_save_task: Option<Task<()>>,
     /// Previous agent sessions offered for continuation, in saved order.
     offers: Vec<SessionOffer>,
+    /// The task and terminal of an assignment that was sent and not yet answered.
+    pending_bind: Option<(String, SessionId)>,
+    /// Tasks whose terminal was closed; the task list says so.
+    closed_tasks: std::collections::HashSet<String>,
     /// Bumped by every offer plan; a plan that finishes after a project switch is dropped.
     offers_generation: u64,
     /// Offers whose continuation is being validated or started right now.
@@ -502,6 +509,8 @@ impl Workbench {
             pending_workspace: None,
             workspace_save_task: None,
             offers: Vec::new(),
+            pending_bind: None,
+            closed_tasks: std::collections::HashSet::new(),
             offers_generation: 0,
             resuming: std::collections::HashSet::new(),
             programs,
@@ -1383,12 +1392,18 @@ impl Workbench {
             name,
             resume,
             ssh,
+            task: None,
             view,
         });
         self.dock_visible = true;
         let last = self.terminals.len() - 1;
         self.select_terminal(last, window, cx);
         true
+    }
+
+    /// The view of terminal `index`.
+    pub fn terminal_view(&self, index: usize) -> Option<&Entity<TerminalView>> {
+        self.terminals.get(index).map(|pane| &pane.view)
     }
 
     /// The name of terminal `index`, when the user gave it one.

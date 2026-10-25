@@ -82,7 +82,9 @@ impl Workbench {
             return;
         };
         let running = self.session_running(id);
-        let pane = self.terminals.remove(index);
+        let mut pane = self.terminals.remove(index);
+        let carried = pane.task.take();
+        self.mark_terminal_closed(carried, cx);
         self.dock.remove(&pane.id);
         self.gates.detach(&pane.id);
         if self
