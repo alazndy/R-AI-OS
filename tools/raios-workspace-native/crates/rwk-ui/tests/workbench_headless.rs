@@ -3734,3 +3734,26 @@ fn clicking_along_the_toolbar_presses_real_buttons() {
         "no toolbar click started a terminal"
     );
 }
+
+#[test]
+fn finished_task_groups_start_collapsed_and_open_on_a_click() {
+    use rwk_core::inspector::TaskGroup;
+
+    let mut rig = rig();
+    let inspector = rig.read(|wb, _| wb.inspector().clone());
+    let collapsed =
+        |rig: &mut Rig, group| rig.read(|_, cx| inspector.read(cx).group_collapsed(group));
+    assert!(!collapsed(&mut rig, TaskGroup::InProgress));
+    assert!(!collapsed(&mut rig, TaskGroup::Open));
+    assert!(collapsed(&mut rig, TaskGroup::Completed));
+    assert!(collapsed(&mut rig, TaskGroup::Cancelled));
+
+    rig.with(|_, _, cx| {
+        inspector.update(cx, |view, cx| view.toggle_group(TaskGroup::Completed, cx))
+    });
+    assert!(!collapsed(&mut rig, TaskGroup::Completed));
+    rig.with(|_, _, cx| {
+        inspector.update(cx, |view, cx| view.toggle_group(TaskGroup::Completed, cx))
+    });
+    assert!(collapsed(&mut rig, TaskGroup::Completed));
+}

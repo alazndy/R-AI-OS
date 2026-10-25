@@ -145,6 +145,8 @@ pub type HandoffLine = (String, String, bool);
 /// The inspector panel.
 pub struct InspectorView {
     handoffs: Vec<HandoffLine>,
+    /// Groups whose collapsed state the user flipped from its default.
+    flipped_groups: std::collections::HashSet<rwk_core::inspector::TaskGroup>,
     theme: Theme,
     plane: Option<Arc<dyn ControlPlane>>,
     project: Option<PathBuf>,
@@ -165,6 +167,7 @@ impl InspectorView {
     pub fn new() -> Self {
         Self {
             handoffs: Vec::new(),
+            flipped_groups: std::collections::HashSet::new(),
             theme: Theme::of(Appearance::default()),
             plane: None,
             project: None,
@@ -175,6 +178,19 @@ impl InspectorView {
             _stream_notifications: None,
             _poll: None,
         }
+    }
+
+    /// True when the task group is shown collapsed.
+    pub fn group_collapsed(&self, group: rwk_core::inspector::TaskGroup) -> bool {
+        group.collapsed_by_default() != self.flipped_groups.contains(&group)
+    }
+
+    /// Collapses or expands a task group.
+    pub fn toggle_group(&mut self, group: rwk_core::inspector::TaskGroup, cx: &mut Context<Self>) {
+        if !self.flipped_groups.remove(&group) {
+            self.flipped_groups.insert(group);
+        }
+        cx.notify();
     }
 
     /// Sets (or removes) the daemon connection and restarts polling.
@@ -488,138 +504,187 @@ impl Render for InspectorView {
                 .text_color(gpui::rgb(color))
                 .child(SharedString::from(text))
         });
-        let tasks = self.model.tasks.iter().map(|task| {
-            let line = row(
-                theme,
-                task.title.clone(),
-                format!(
-                    "{} · {}",
-                    task.status,
-                    task.assignee.as_deref().unwrap_or("atanmamış")
-                ),
-            );
-            let id = task.id.clone();
-            let revision = task.updated_at.clone();
-            let carried = DraggedTask {
-                task_id: id.clone(),
-                updated_at: revision.clone(),
-                title: SharedString::from(task.title.clone()),
-            };
-            let mut actions: Vec<gpui::AnyElement> = Vec::new();
-            for (label, status) in [
-                ("Başlat", rwk_core::tasks::TaskStatus::InProgress),
-                ("Bitir", rwk_core::tasks::TaskStatus::Completed),
-                ("İptal", rwk_core::tasks::TaskStatus::Cancelled),
-            ] {
-                if task.status == status.as_str() {
-                    continue;
+        let tasks: Vec<(rwk_core::inspector::TaskGroup, gpui::AnyElement)> = self
+            .model
+            .tasks
+            .iter()
+            .map(|task| {
+                let group = rwk_core::inspector::TaskGroup::of(&task.status);
+                let line = row(
+                    theme,
+                    task.title.clone(),
+                    format!(
+                        "{} · {}",
+                        task.status,
+                        task.assignee.as_deref().unwrap_or("atanmamış")
+                    ),
+                );
+                let id = task.id.clone();
+                let revision = task.updated_at.clone();
+                let carried = DraggedTask {
+                    task_id: id.clone(),
+                    updated_at: revision.clone(),
+                    title: SharedString::from(task.title.clone()),
+                };
+                let mut actions: Vec<gpui::AnyElement> = Vec::new();
+                for (label, status) in [
+                    ("Başlat", rwk_core::tasks::TaskStatus::InProgress),
+                    ("Bitir", rwk_core::tasks::TaskStatus::Completed),
+                    ("İptal", rwk_core::tasks::TaskStatus::Cancelled),
+                ] {
+                    if task.status == status.as_str() {
+                        continue;
+                    }
+                    let task_id = id.clone();
+                    actions.push(
+                        task_button(theme, format!("task-{label}-{id}"), label, theme.line)
+                            .on_click(cx.listener(move |_, _, _window, cx| {
+                                cx.emit(InspectorEvent::SetTaskStatus {
+                                    task_id: task_id.clone(),
+                                    status,
+                                });
+                            }))
+                            .into_any_element(),
+                    );
                 }
-                let task_id = id.clone();
-                actions.push(
-                    task_button(theme, format!("task-{label}-{id}"), label, theme.line)
+                {
+                    let (task_id, revision) = (id.clone(), revision.clone());
+                    actions.push(
+                        task_button(
+                            theme,
+                            format!("task-assign-{id}"),
+                            "Seçili terminale ata",
+                            theme.accent_ink,
+                        )
                         .on_click(cx.listener(move |_, _, _window, cx| {
-                            cx.emit(InspectorEvent::SetTaskStatus {
+                            cx.emit(InspectorEvent::AssignToSelected {
                                 task_id: task_id.clone(),
-                                status,
+                                updated_at: revision.clone(),
                             });
                         }))
                         .into_any_element(),
+                    );
+                }
+                {
+                    let (task_id, title) = (id.clone(), task.title.clone());
+                    actions.push(
+                        task_button(
+                            theme,
+                            format!("task-handoff-{id}"),
+                            "Devret…",
+                            theme.accent_ink,
+                        )
+                        .on_click(cx.listener(move |_, _, _window, cx| {
+                            cx.emit(InspectorEvent::HandoffTask {
+                                task_id: task_id.clone(),
+                                title: title.clone(),
+                            });
+                        }))
+                        .into_any_element(),
+                    );
+                }
+                if task.assignee.is_some() {
+                    let (task_id, revision) = (id.clone(), revision.clone());
+                    actions.push(
+                        task_button(
+                            theme,
+                            format!("task-clear-{id}"),
+                            "Atamayı kaldır",
+                            theme.line,
+                        )
+                        .on_click(cx.listener(move |_, _, _window, cx| {
+                            cx.emit(InspectorEvent::ClearAssignee {
+                                task_id: task_id.clone(),
+                                updated_at: revision.clone(),
+                            });
+                        }))
+                        .into_any_element(),
+                    );
+                }
+                let menu_task = (
+                    id.clone(),
+                    task.title.clone(),
+                    task.status.clone(),
+                    task.assignee.is_some(),
+                    revision.clone(),
                 );
-            }
-            {
-                let (task_id, revision) = (id.clone(), revision.clone());
-                actions.push(
-                    task_button(
-                        theme,
-                        format!("task-assign-{id}"),
-                        "Seçili terminale ata",
-                        theme.accent_ink,
+                let element = div()
+                    .id(SharedString::from(format!("task-row-{id}")))
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |_, event: &gpui::MouseDownEvent, _window, cx| {
+                            let (task_id, title, status, assigned, updated_at) = menu_task.clone();
+                            cx.emit(InspectorEvent::TaskMenu {
+                                task_id,
+                                title,
+                                status,
+                                assigned,
+                                updated_at,
+                                position: event.position,
+                            });
+                            cx.stop_propagation();
+                        }),
                     )
-                    .on_click(cx.listener(move |_, _, _window, cx| {
-                        cx.emit(InspectorEvent::AssignToSelected {
-                            task_id: task_id.clone(),
-                            updated_at: revision.clone(),
-                        });
-                    }))
-                    .into_any_element(),
-                );
-            }
-            {
-                let (task_id, title) = (id.clone(), task.title.clone());
-                actions.push(
-                    task_button(
-                        theme,
-                        format!("task-handoff-{id}"),
-                        "Devret…",
-                        theme.accent_ink,
+                    .on_drag(carried, |dragged, _offset, _window, cx| {
+                        let label = dragged.title.clone();
+                        cx.new(|_| TaskDragLabel(label))
+                    })
+                    .child(line)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .gap_1()
+                            .px_3()
+                            .pb_1()
+                            .children(actions),
                     )
-                    .on_click(cx.listener(move |_, _, _window, cx| {
-                        cx.emit(InspectorEvent::HandoffTask {
-                            task_id: task_id.clone(),
-                            title: title.clone(),
-                        });
-                    }))
-                    .into_any_element(),
-                );
+                    .into_any_element();
+                (group, element)
+            })
+            .collect();
+        let mut task_groups: Vec<gpui::AnyElement> = Vec::new();
+        for group in rwk_core::inspector::TaskGroup::ALL {
+            let count = tasks.iter().filter(|(g, _)| *g == group).count();
+            if count == 0 {
+                continue;
             }
-            if task.assignee.is_some() {
-                let (task_id, revision) = (id.clone(), revision.clone());
-                actions.push(
-                    task_button(
-                        theme,
-                        format!("task-clear-{id}"),
-                        "Atamayı kaldır",
-                        theme.line,
-                    )
-                    .on_click(cx.listener(move |_, _, _window, cx| {
-                        cx.emit(InspectorEvent::ClearAssignee {
-                            task_id: task_id.clone(),
-                            updated_at: revision.clone(),
-                        });
-                    }))
+            let collapsed = self.group_collapsed(group);
+            task_groups.push(
+                div()
+                    .id(SharedString::from(format!("task-group-{group:?}")))
+                    .px_3()
+                    .pt_1()
+                    .text_xs()
+                    .cursor_pointer()
+                    .text_color(gpui::rgb(theme.muted))
+                    .hover(move |style| style.text_color(gpui::rgb(theme.text)))
+                    .child(SharedString::from(format!(
+                        "{} {} ({count})",
+                        if collapsed { "▸" } else { "▾" },
+                        group.label()
+                    )))
+                    .on_click(cx.listener(move |this, _, _window, cx| this.toggle_group(group, cx)))
                     .into_any_element(),
-                );
-            }
-            let menu_task = (
-                id.clone(),
-                task.title.clone(),
-                task.status.clone(),
-                task.assignee.is_some(),
-                revision.clone(),
             );
-            div()
-                .id(SharedString::from(format!("task-row-{id}")))
-                .on_mouse_down(
-                    gpui::MouseButton::Right,
-                    cx.listener(move |_, event: &gpui::MouseDownEvent, _window, cx| {
-                        let (task_id, title, status, assigned, updated_at) = menu_task.clone();
-                        cx.emit(InspectorEvent::TaskMenu {
-                            task_id,
-                            title,
-                            status,
-                            assigned,
-                            updated_at,
-                            position: event.position,
-                        });
-                        cx.stop_propagation();
-                    }),
-                )
-                .on_drag(carried, |dragged, _offset, _window, cx| {
-                    let label = dragged.title.clone();
-                    cx.new(|_| TaskDragLabel(label))
-                })
-                .child(line)
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap_1()
-                        .px_3()
-                        .pb_1()
-                        .children(actions),
-                )
-        });
+        }
+        let mut tasks = tasks;
+        // Rows follow their group's heading; a collapsed group shows none.
+        let mut shown: Vec<gpui::AnyElement> = Vec::new();
+        let mut headings = task_groups.into_iter();
+        for group in rwk_core::inspector::TaskGroup::ALL {
+            if !tasks.iter().any(|(g, _)| *g == group) {
+                continue;
+            }
+            shown.extend(headings.next());
+            let collapsed = self.group_collapsed(group);
+            let (mine, rest): (Vec<_>, Vec<_>) = tasks.into_iter().partition(|(g, _)| *g == group);
+            tasks = rest;
+            if !collapsed {
+                shown.extend(mine.into_iter().map(|(_, element)| element));
+            }
+        }
         let runs = self.model.runs.iter().map(|run| {
             row(
                 theme,
@@ -776,7 +841,7 @@ impl Render for InspectorView {
             .child(heading(theme, "Çalışanlar", self.model.runs.len()))
             .children(runs)
             .child(heading(theme, "Görevler", self.model.tasks.len()))
-            .children(tasks)
+            .children(shown)
             .child(heading(theme, "Devirler", self.handoffs.len()))
             .children(handoffs)
             .children(empty)
