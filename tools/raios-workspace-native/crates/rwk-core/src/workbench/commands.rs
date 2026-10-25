@@ -49,6 +49,8 @@ pub enum CommandId {
     CloseTerminal,
     /// End the selected session at once (SIGKILL, no grace for an agent) and remove its pane.
     KillTerminal,
+    /// Start the selected SSH shell again after its connection ended.
+    Reconnect,
     /// Open a remote shell over SSH.
     Ssh,
     /// Give the selected terminal a name.
@@ -160,7 +162,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 49] = [
+const COMMANDS: [Command; 50] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -293,6 +295,7 @@ const COMMANDS: [Command; 49] = [
         &[bind_terminal("w", true, false)],
     ),
     cmd(CommandId::KillTerminal, "Terminali zorla öldür…", None, &[]),
+    cmd(CommandId::Reconnect, "SSH'e yeniden bağlan", None, &[]),
     cmd(
         CommandId::Ssh,
         "SSH ile bağlan…",
@@ -513,6 +516,8 @@ pub struct WorkbenchState {
     pub control_plane_features: bool,
     /// The daemon answered its last request.
     pub daemon_reachable: bool,
+    /// The selected terminal is an SSH shell whose connection has ended.
+    pub reconnectable: bool,
 }
 
 /// Why a command can or cannot run right now.
@@ -578,6 +583,13 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("En fazla 12 terminal açılabilir")
             } else {
                 allow()
+            }
+        }
+        Reconnect => {
+            if state.reconnectable {
+                allow()
+            } else {
+                deny("Seçili terminal bitmiş bir SSH oturumu değil")
             }
         }
         ToggleTerminal => allow(),
@@ -655,7 +667,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 49);
+        assert_eq!(catalog().len(), 50);
     }
 
     #[test]

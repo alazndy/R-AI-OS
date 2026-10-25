@@ -23,8 +23,11 @@ impl Workbench {
     pub(super) fn workspace_snapshot(&self, cx: &gpui::App) -> Option<SavedWorkspace> {
         let project = self.project.as_ref()?;
         // A remote shell is never saved: reopening a project must not connect anywhere.
-        let saved_panes: Vec<&super::TerminalPane> =
-            self.terminals.iter().filter(|pane| !pane.remote).collect();
+        let saved_panes: Vec<&super::TerminalPane> = self
+            .terminals
+            .iter()
+            .filter(|pane| pane.ssh.is_none())
+            .collect();
         let mut terminals: Vec<SavedTerminal> = saved_panes
             .iter()
             .map(|pane| match pane.kind {

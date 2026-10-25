@@ -27,7 +27,7 @@ impl Workbench {
     }
 
     /// True when the session of terminal `id` is still running.
-    fn session_running(&self, id: &SessionId) -> bool {
+    pub(super) fn session_running(&self, id: &SessionId) -> bool {
         self.sessions
             .list()
             .iter()
@@ -165,6 +165,24 @@ impl Workbench {
         self.ssh_subscription = None;
         window.focus(&self.focus, cx);
         cx.notify();
+    }
+
+    /// Reconnects the selected SSH shell whose connection has ended: a new shell to the same
+    /// target replaces the dead pane, whose output is dropped with it.
+    pub(super) fn reconnect_ssh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pane) = self.terminals.get(self.selected) else {
+            return;
+        };
+        let (Some(target), true) = (pane.ssh.clone(), !self.session_running(&pane.id)) else {
+            return;
+        };
+        let dead = pane.id.clone();
+        if self.spawn_terminal(SessionKind::Shell, SessionLaunch::Ssh(target), window, cx) {
+            self.remove_terminal(&dead, false, window, cx);
+            let last = self.terminals.len().saturating_sub(1);
+            self.select_terminal(last, window, cx);
+            self.after_started_terminal(window, cx);
+        }
     }
 
     /// Starts a terminal that runs `ssh` to `target`. The pane is named after the target; it is

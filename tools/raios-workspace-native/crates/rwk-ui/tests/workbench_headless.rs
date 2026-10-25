@@ -2631,6 +2631,7 @@ fn arrangement_commands_are_unavailable_with_a_single_terminal() {
         dock_visible: true,
         control_plane_features: true,
         daemon_reachable: true,
+        reconnectable: false,
     };
     assert!(!available(CommandId::MoveTerminalNext, &state).enabled);
     assert!(available(CommandId::UngroupTerminal, &state).enabled);
@@ -3672,4 +3673,29 @@ fn right_clicking_the_editor_text_opens_the_text_menu() {
         }
     }
     assert!(found, "no point of the editor opened the text menu");
+}
+
+#[test]
+fn an_ended_ssh_shell_can_be_reconnected_into_a_fresh_pane() {
+    let mut rig = rig();
+    rig.open_project();
+    let home = tempfile::tempdir().unwrap();
+    rig.with(|wb, _, _| wb.set_ssh_home(Some(home.path().to_path_buf())));
+    let target = rwk_core::ssh::SshTarget::parse("me@10.0.0.7").unwrap();
+    rig.with(|wb, window, cx| wb.connect_ssh(target, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    // While it runs there is nothing to reconnect.
+    assert!(!rig.read(|wb, cx| wb.state(cx).reconnectable));
+
+    let first = rig.read(|wb, _| wb.terminal_id(0));
+    rig.run(CommandId::StopTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, cx| wb.state(cx).reconnectable)));
+
+    rig.run(CommandId::Reconnect);
+    assert!(
+        rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1
+            && rig.read(|wb, _| wb.terminal_id(0)) != first)
+    );
+    assert!(!rig.read(|wb, cx| wb.state(cx).reconnectable));
 }

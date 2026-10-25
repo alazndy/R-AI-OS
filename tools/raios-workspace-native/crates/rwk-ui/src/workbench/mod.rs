@@ -207,9 +207,9 @@ struct TerminalPane {
     name: Option<SessionName>,
     /// The saved conversation this pane continues, when it was started from an offer.
     resume: Option<ResumeKey>,
-    /// A remote shell (SSH). It is not part of the saved workspace: reopening the project never
-    /// connects anywhere by itself.
-    remote: bool,
+    /// Where a remote shell (SSH) leads. Such a pane is not part of the saved workspace:
+    /// reopening the project never connects anywhere by itself.
+    ssh: Option<rwk_core::ssh::SshTarget>,
     view: Entity<TerminalView>,
 }
 
@@ -534,6 +534,10 @@ impl Workbench {
                     self.inspector.read(cx).model().banner,
                     rwk_core::inspector::Banner::Unreachable(_)
                 ),
+            reconnectable: self
+                .terminals
+                .get(self.selected)
+                .is_some_and(|pane| pane.ssh.is_some() && !self.session_running(&pane.id)),
         }
     }
 
@@ -751,6 +755,7 @@ impl Workbench {
             CommandId::CloseTerminal => self.request_close_terminal(false, window, cx),
             CommandId::KillTerminal => self.request_close_terminal(true, window, cx),
             CommandId::Ssh => self.open_ssh_picker(window, cx),
+            CommandId::Reconnect => self.reconnect_ssh(window, cx),
             CommandId::RenameTerminal => self.open_rename_prompt(self.selected, window, cx),
             CommandId::NewTask => self.open_new_task_prompt(window, cx),
             CommandId::MoveTerminalPrevious
@@ -1360,14 +1365,17 @@ impl Workbench {
             // A remote shell is named after where it leads.
             SessionLaunch::Ssh(target) => (None, SessionName::parse(&target.display()).ok()),
         };
-        let remote = matches!(launch, SessionLaunch::Ssh(_));
+        let ssh = match &launch {
+            SessionLaunch::Ssh(target) => Some(target.clone()),
+            _ => None,
+        };
         let _ = self.dock.push_default(info.id.clone());
         self.terminals.push(TerminalPane {
             kind,
             id: info.id,
             name,
             resume,
-            remote,
+            ssh,
             view,
         });
         self.dock_visible = true;

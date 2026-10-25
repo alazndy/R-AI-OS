@@ -147,6 +147,10 @@ impl Workbench {
                 MenuEntry::Command(id) => {
                     let command = catalog().iter().find(|command| command.id == *id)?;
                     let verdict = available(*id, &state);
+                    // Only offered where it applies; elsewhere it would be noise.
+                    if *id == CommandId::Reconnect && !verdict.enabled {
+                        return None;
+                    }
                     Some(if verdict.enabled {
                         (
                             Line::item(command.label, command.shortcut),
