@@ -131,6 +131,7 @@ pub fn run_pty_flood(
     let counter = wakes.clone();
     let host = PtyTerminalHost::new(
         ProgramPaths {
+            ssh: None,
             shell: Some(script),
             raios: None,
         },

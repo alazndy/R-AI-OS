@@ -9,6 +9,7 @@ pub mod memory;
 pub mod menus;
 pub mod offers;
 pub mod palette;
+pub mod remote;
 pub mod search;
 pub mod usage;
 pub mod workspace;
@@ -95,6 +96,13 @@ pub enum PendingAction {
     CloseWindow,
     /// Stop this terminal session.
     StopTerminal(SessionId),
+    /// End this terminal session and remove its pane; `force` skips an agent's grace period.
+    CloseTerminal {
+        /// The terminal.
+        id: SessionId,
+        /// End it at once.
+        force: bool,
+    },
     /// Choose which agent to start.
     ChooseAgent,
     /// A command whose policy is `confirm` waits for an explicit yes; the text is derived from
@@ -153,6 +161,16 @@ impl PendingAction {
                 message: "Seçili terminal oturumu durdurulacak.".to_owned(),
                 buttons: vec![(Decision::Confirm, "Durdur"), (Decision::Cancel, "Vazgeç")],
             },
+            PendingAction::CloseTerminal { force: false, .. } => Dialog {
+                title: "Terminali kapat",
+                message: "Terminalde çalışan işlem sonlandırılacak ve panel kaldırılacak. Bir ajan oturumuna kapanması için kısa bir süre tanınır.".to_owned(),
+                buttons: vec![(Decision::Confirm, "Kapat"), (Decision::Cancel, "Vazgeç")],
+            },
+            PendingAction::CloseTerminal { force: true, .. } => Dialog {
+                title: "Terminali zorla öldür",
+                message: "Terminaldeki tüm işlemler hemen SIGKILL ile öldürülecek. Bir ajan oturumu temiz kapanamaz ve RAIOS'ta açık bir çalıştırma kaydı kalabilir.".to_owned(),
+                buttons: vec![(Decision::Confirm, "Öldür"), (Decision::Cancel, "Vazgeç")],
+            },
             PendingAction::OpenProjectStoppingSessions(_) => Dialog {
                 title: "Projeyi değiştir",
                 message: "Çalışan terminal ve ajan oturumları durdurulacak.".to_owned(),
@@ -189,6 +207,9 @@ struct TerminalPane {
     name: Option<SessionName>,
     /// The saved conversation this pane continues, when it was started from an offer.
     resume: Option<ResumeKey>,
+    /// A remote shell (SSH). It is not part of the saved workspace: reopening the project never
+    /// connects anywhere by itself.
+    remote: bool,
     view: Entity<TerminalView>,
 }
 
@@ -226,6 +247,11 @@ pub struct Workbench {
     rename_prompt: Option<Entity<crate::rename::RenameTerminalPrompt>>,
     /// The open context menu.
     menu: Option<menus::OpenMenu>,
+    /// The open SSH picker.
+    ssh_picker: Option<Entity<crate::ssh_picker::SshPicker>>,
+    ssh_subscription: Option<Subscription>,
+    /// Where `~/.ssh` is read from; `None` means `$HOME`.
+    ssh_home: Option<PathBuf>,
     rename_subscription: Option<Subscription>,
     handoffs: Vec<TrackedHandoff>,
     /// The task the open composer was started for.
@@ -424,6 +450,9 @@ impl Workbench {
             drop_hint: None,
             rename_prompt: None,
             menu: None,
+            ssh_picker: None,
+            ssh_subscription: None,
+            ssh_home: None,
             rename_subscription: None,
             handoffs: Vec::new(),
             composer_task: None,
@@ -697,6 +726,9 @@ impl Workbench {
                     cx.notify();
                 }
             }
+            CommandId::CloseTerminal => self.request_close_terminal(false, window, cx),
+            CommandId::KillTerminal => self.request_close_terminal(true, window, cx),
+            CommandId::Ssh => self.open_ssh_picker(window, cx),
             CommandId::RenameTerminal => self.open_rename_prompt(self.selected, window, cx),
             CommandId::NewTask => self.open_new_task_prompt(window, cx),
             CommandId::MoveTerminalPrevious
@@ -1047,6 +1079,7 @@ impl Workbench {
             (
                 Decision::Save | Decision::Discard,
                 PendingAction::StopTerminal(_)
+                | PendingAction::CloseTerminal { .. }
                 | PendingAction::OpenProjectStoppingSessions(_)
                 | PendingAction::ChooseAgent
                 | PendingAction::Consent(..),
@@ -1070,7 +1103,9 @@ impl Workbench {
             }
             (
                 Decision::Confirm,
-                PendingAction::StopTerminal(_) | PendingAction::OpenProjectStoppingSessions(_),
+                PendingAction::StopTerminal(_)
+                | PendingAction::CloseTerminal { .. }
+                | PendingAction::OpenProjectStoppingSessions(_),
             ) => self.perform(action, window, cx),
             (Decision::Confirm, _) => {}
         }
@@ -1194,6 +1229,9 @@ impl Workbench {
                 self.stop_terminals(true);
                 self.close_confirmed = true;
             }
+            PendingAction::CloseTerminal { id, force } => {
+                self.remove_terminal(&id, force, window, cx);
+            }
             PendingAction::StopTerminal(id) => {
                 if let Err(error) = self.sessions.stop(&id) {
                     self.say(error.message, cx);
@@ -1292,13 +1330,17 @@ impl Workbench {
         let (resume, name) = match &launch {
             SessionLaunch::Resume(key) => (Some(key.clone()), None),
             SessionLaunch::Fresh { name, .. } => (None, name.clone()),
+            // A remote shell is named after where it leads.
+            SessionLaunch::Ssh(target) => (None, SessionName::parse(&target.display()).ok()),
         };
+        let remote = matches!(launch, SessionLaunch::Ssh(_));
         let _ = self.dock.push_default(info.id.clone());
         self.terminals.push(TerminalPane {
             kind,
             id: info.id,
             name,
             resume,
+            remote,
             view,
         });
         self.dock_visible = true;
@@ -1469,7 +1511,7 @@ impl Workbench {
                     .contains_focused(window, cx)
             }),
             dialog: self.pending.is_some(),
-            input: self.palette.is_some(),
+            input: self.palette.is_some() || self.ssh_picker.is_some(),
         }
     }
 
@@ -1656,6 +1698,7 @@ impl Render for Workbench {
                     ),
             )
             .children(self.palette.clone())
+            .children(self.ssh_picker.clone())
             .children(self.composer.clone())
             .children(self.reject_prompt.clone())
             .children(self.rename_prompt.clone())

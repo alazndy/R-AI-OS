@@ -24,6 +24,8 @@ pub struct ProgramPaths {
     pub shell: Option<PathBuf>,
     /// The `raios` executable for agent sessions. Default: the first `raios` on `PATH`.
     pub raios: Option<PathBuf>,
+    /// The `ssh` client for remote shells. Default: the first `ssh` on `PATH`.
+    pub ssh: Option<PathBuf>,
 }
 
 /// Checks an optional first prompt and returns it trimmed, or `None` when it is empty.
@@ -64,6 +66,23 @@ pub fn build_command(
             }
             let mut command = CommandBuilder::new(raios_program(programs)?);
             command.args(["resume", key.to_string().as_str()]);
+            command
+        }
+        SessionLaunch::Ssh(target) => {
+            if kind != SessionKind::Shell {
+                return Err(AppError::new(
+                    ErrorCode::InvalidInput,
+                    "Only a shell session can connect over SSH.",
+                ));
+            }
+            let program = match &programs.ssh {
+                Some(path) => path.clone(),
+                None => find_in_path(OsStr::new("ssh")).ok_or_else(|| {
+                    AppError::new(ErrorCode::NotFound, "The ssh client is not installed.")
+                })?,
+            };
+            let mut command = CommandBuilder::new(program);
+            command.args(target.args());
             command
         }
         SessionLaunch::Fresh { prompt, name } => {

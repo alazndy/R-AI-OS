@@ -64,6 +64,7 @@ fn host(programs: ProgramPaths) -> PtyTerminalHost {
 
 fn shell_host(shell: PathBuf) -> PtyTerminalHost {
     host(ProgramPaths {
+        ssh: None,
         shell: Some(shell),
         raios: None,
     })
@@ -273,6 +274,7 @@ fn stopping_an_agent_lets_the_wrapper_finish_before_it_is_killed() {
         ),
     );
     let host = host(ProgramPaths {
+        ssh: None,
         shell: None,
         raios: Some(wrapper),
     });
@@ -310,6 +312,7 @@ fn a_resume_pane_runs_raios_resume_with_the_exact_key() {
     let fixture = Fixture::new();
     let wrapper = fixture.script("raios", "echo \"args: $*\"\nsleep 600");
     let host = host(ProgramPaths {
+        ssh: None,
         shell: None,
         raios: Some(wrapper),
     });
@@ -373,6 +376,7 @@ unsafe fn libc_kill(pid: i32) {
 fn a_bad_prompt_or_unknown_session_is_refused() {
     let fixture = Fixture::new();
     let host = host(ProgramPaths {
+        ssh: None,
         shell: None,
         raios: Some(fixture.script("raios", "true")),
     });
@@ -439,4 +443,66 @@ fn a_running_session_is_not_removed() {
     assert!(host.is_running(&id));
     host.stop(&id).unwrap();
     wait_for("the session to end", || !host.is_running(&id));
+}
+
+#[test]
+fn a_remote_shell_hands_ssh_the_destination_as_arguments_not_command_text() {
+    use rwk_core::ssh::SshTarget;
+
+    let fixture = Fixture::new();
+    let ssh = fixture.script("ssh", "echo \"ssh args: $*\"\nsleep 600");
+    let host = host(ProgramPaths {
+        ssh: Some(ssh),
+        shell: None,
+        raios: None,
+    });
+    let project = fixture.project();
+    let target = SshTarget::parse("me@10.0.0.7:2200").unwrap();
+    let id = spawn_launch(
+        &host,
+        &project,
+        SessionKind::Shell,
+        &SessionLaunch::Ssh(target),
+        size(120, 24),
+    );
+
+    wait_for_screen(&host, &id, "ssh args: -p 2200 -- me@10.0.0.7");
+    host.stop(&id).unwrap();
+}
+
+#[test]
+fn kill_ends_an_agent_at_once_where_stop_gives_its_wrapper_a_grace_period() {
+    // A wrapper that is itself the long-lived leader and ignores termination: ending its
+    // children does not end it, so `stop` waits out the grace period and `kill` does not.
+    let fixture = Fixture::new();
+    let wrapper = fixture.script("raios", "trap '' HUP TERM\necho ready\nsleep 600 &\nwait");
+    let host = host(ProgramPaths {
+        ssh: None,
+        shell: None,
+        raios: Some(wrapper),
+    });
+    let project = fixture.project();
+    let id = spawn(&host, &project, SessionKind::Claude, None, size(120, 24));
+    wait_for_screen(&host, &id, "ready");
+
+    let started = Instant::now();
+    host.kill(&id).unwrap();
+    wait_for("the killed session to end", || !host.is_running(&id));
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "kill must not wait out the agent grace period, took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn killing_a_session_that_already_ended_is_harmless() {
+    let fixture = Fixture::new();
+    let shell = fixture.script("sh", "exit 0");
+    let host = shell_host(shell);
+    let project = fixture.project();
+    let id = spawn(&host, &project, SessionKind::Shell, None, size(80, 24));
+    wait_for("the shell to exit", || !host.is_running(&id));
+    host.kill(&id).unwrap();
+    host.stop(&id).unwrap();
 }

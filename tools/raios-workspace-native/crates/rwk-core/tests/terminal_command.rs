@@ -32,6 +32,7 @@ fn argv(command: &portable_pty::CommandBuilder) -> Vec<String> {
 
 fn programs() -> ProgramPaths {
     ProgramPaths {
+        ssh: None,
         shell: Some(PathBuf::from("/bin/sh")),
         raios: Some(PathBuf::from("/opt/raios/bin/raios")),
     }
@@ -142,12 +143,14 @@ fn a_bad_prompt_is_refused_before_anything_is_built() {
 #[test]
 fn a_missing_raios_executable_is_reported_as_not_found() {
     let nothing = ProgramPaths {
+        ssh: None,
         shell: None,
         raios: Some(PathBuf::from("/nonexistent/raios")),
     };
     // An explicit path is trusted as given; the spawn itself then fails. Only a missing PATH
     // lookup is reported here, so make the lookup impossible.
     let lookup = ProgramPaths {
+        ssh: None,
         shell: None,
         raios: None,
     };
@@ -300,4 +303,77 @@ fn a_session_name_is_trimmed_and_refuses_what_could_harm_the_command_or_the_ledg
     // A saved file goes through the same rules.
     assert!(serde_json::from_str::<SessionName>("\"ok\"").is_ok());
     assert!(serde_json::from_str::<SessionName>("\"-bad\"").is_err());
+}
+
+fn ssh_programs() -> ProgramPaths {
+    ProgramPaths {
+        ssh: Some(PathBuf::from("/usr/bin/ssh")),
+        shell: Some(PathBuf::from("/bin/sh")),
+        raios: None,
+    }
+}
+
+#[test]
+fn a_remote_shell_runs_ssh_with_the_destination_after_double_dash() {
+    use rwk_core::ssh::SshTarget;
+
+    let root = PathBuf::from("/work/app");
+    let target = SshTarget::parse("deploy@build.example.com:2222").unwrap();
+    let command = build_command(
+        &ssh_programs(),
+        &root,
+        SessionKind::Shell,
+        &SessionLaunch::Ssh(target),
+    )
+    .unwrap();
+
+    assert_eq!(
+        argv(&command),
+        vec![
+            "/usr/bin/ssh",
+            "-p",
+            "2222",
+            "--",
+            "deploy@build.example.com"
+        ]
+    );
+    assert_eq!(
+        command.get_cwd().map(OsString::as_os_str),
+        Some(root.as_os_str())
+    );
+}
+
+#[test]
+fn only_a_shell_session_can_be_remote_and_a_missing_client_is_reported() {
+    use rwk_core::ssh::SshTarget;
+
+    let target = SshTarget::parse("prod").unwrap();
+    let root = PathBuf::from("/work/app");
+    let refused = build_command(
+        &ssh_programs(),
+        &root,
+        SessionKind::Claude,
+        &SessionLaunch::Ssh(target.clone()),
+    );
+    assert_eq!(refused.unwrap_err().code, ErrorCode::InvalidInput);
+
+    // No client configured and none on a PATH that has nothing on it.
+    let nothing = ProgramPaths {
+        ssh: None,
+        shell: Some(PathBuf::from("/bin/sh")),
+        raios: None,
+    };
+    let saved = std::env::var_os("PATH");
+    std::env::set_var("PATH", "/nonexistent-dir");
+    let missing = build_command(
+        &nothing,
+        &root,
+        SessionKind::Shell,
+        &SessionLaunch::Ssh(target),
+    );
+    match saved {
+        Some(path) => std::env::set_var("PATH", path),
+        None => std::env::remove_var("PATH"),
+    }
+    assert_eq!(missing.unwrap_err().code, ErrorCode::NotFound);
 }

@@ -78,6 +78,8 @@ fn rig() -> Rig {
     )));
     app.update(gpui_base::init);
     let programs = ProgramPaths {
+        // The same script stands in for ssh: it logs the arguments it was started with.
+        ssh: Some(script.clone()),
         shell: Some(script.clone()),
         raios: Some(script),
     };
@@ -3319,4 +3321,237 @@ fn every_toolbar_command_runs_through_the_same_check_as_the_palette() {
         rig.read(|wb, _| wb.toast()),
         Some("Açık dosya yok".to_owned())
     );
+}
+
+// ----- closing, killing and SSH ----------------------------------------------------------
+
+fn argv_log(rig: &Rig) -> String {
+    std::fs::read_to_string(rig.dir.path().join(".argv")).unwrap_or_default()
+}
+
+#[test]
+fn closing_a_running_terminal_asks_first_then_removes_the_pane_and_ends_the_process() {
+    let mut rig = rig();
+    let (first, second) = two_terminals(&mut rig);
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 3));
+    let _ = first;
+    rig.run(CommandId::FocusTerminal(2));
+
+    rig.run(CommandId::CloseTerminal);
+    let dialog = rig.read(|wb, _| wb.dialog()).expect("a question");
+    assert_eq!(dialog.title, "Terminali kapat");
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 3, "nothing yet");
+
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 2);
+    assert!(!rig.read(|wb, _| wb.dock().contains(&second)));
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Terminal kapatıldı".to_owned())
+    );
+    // The selection moved to a terminal that exists, and the process is really gone.
+    assert!(rig.read(|wb, _| wb.selected_terminal()) < 2);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.running_sessions()) == 2));
+}
+
+#[test]
+fn killing_says_what_it_skips_and_cancelling_leaves_everything_alone() {
+    let mut rig = rig();
+    let (_first, _second) = two_terminals(&mut rig);
+
+    rig.run(CommandId::KillTerminal);
+    let dialog = rig.read(|wb, _| wb.dialog()).expect("a question");
+    assert_eq!(dialog.title, "Terminali zorla öldür");
+    assert!(dialog.message.contains("SIGKILL"));
+    rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 2);
+    assert_eq!(rig.read(|wb, _| wb.running_sessions()), 2);
+
+    rig.run(CommandId::KillTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 1);
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Terminal öldürüldü".to_owned())
+    );
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.running_sessions()) == 1));
+}
+
+#[test]
+fn the_last_terminal_can_be_closed_and_a_new_one_starts_after_it() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+
+    rig.run(CommandId::CloseTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+    assert!(rig.read(|wb, _| wb.dock().is_empty()));
+
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+}
+
+#[test]
+fn a_middle_click_on_a_terminal_title_asks_to_close_it() {
+    use gpui::{Modifiers, MouseButton};
+
+    let mut rig = rig();
+    let (_first, _second) = two_terminals(&mut rig);
+    rig.settle_for(100);
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    let x = size.width - px(160.0);
+    let mut asked = false;
+    let mut y = size.height * 0.5 + px(20.0);
+    while y < size.height * 0.8 && !asked {
+        rig.cx
+            .simulate_mouse_down(point(x, y), MouseButton::Middle, Modifiers::default());
+        rig.settle_for(30);
+        asked = rig.read(|wb, _| wb.dialog()).is_some();
+        y += px(4.0);
+    }
+    assert!(asked, "no scanned point was a title; viewport {size:?}");
+    assert_eq!(
+        rig.read(|wb, _| wb.dialog()).map(|dialog| dialog.title),
+        Some("Terminali kapat")
+    );
+    assert_eq!(
+        rig.read(|wb, _| wb.terminal_count()),
+        2,
+        "the question comes first"
+    );
+}
+
+fn ssh_home_with(config: &str) -> tempfile::TempDir {
+    let home = tempfile::tempdir().expect("home");
+    let ssh = home.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).expect("ssh dir");
+    std::fs::write(ssh.join("config"), config).expect("config");
+    home
+}
+
+#[test]
+fn the_ssh_picker_lists_known_hosts_and_connecting_starts_ssh_with_the_destination() {
+    let mut rig = rig();
+    rig.open_project();
+    let home = ssh_home_with("Host prod\n  HostName 10.1.2.3\n  User deploy\n  Port 2200\n");
+    rig.with(|wb, _, _| wb.set_ssh_home(Some(home.path().to_path_buf())));
+
+    rig.run(CommandId::Ssh);
+    let picker = rig
+        .read(|wb, _| wb.ssh_picker().cloned())
+        .expect("a picker");
+    let rows = rig.read(|_, cx| picker.read(cx).rows().to_vec());
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].label.starts_with("prod"), "{}", rows[0].label);
+
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.ssh_picker().is_none()));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "prod");
+    assert!(
+        rig.settle_until(|rig| argv_log(rig).contains("-- prod")),
+        "{}",
+        argv_log(&rig)
+    );
+}
+
+#[test]
+fn a_typed_target_connects_and_text_that_is_not_a_target_does_not() {
+    let mut rig = rig();
+    rig.open_project();
+    let home = ssh_home_with("");
+    rig.with(|wb, _, _| wb.set_ssh_home(Some(home.path().to_path_buf())));
+
+    rig.run(CommandId::Ssh);
+    let picker = rig
+        .read(|wb, _| wb.ssh_picker().cloned())
+        .expect("a picker");
+    // Option-looking text offers no row, and Enter does nothing.
+    rig.with(|_, window, cx| {
+        picker.update(cx, |picker, cx| {
+            picker.set_query("-oProxyCommand=touch /tmp/pwned", window, cx)
+        })
+    });
+    assert!(rig.read(|_, cx| picker.read(cx).rows().is_empty()));
+    rig.cx.simulate_keystrokes("enter");
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+    assert!(rig.read(|wb, _| wb.ssh_picker().is_some()));
+
+    rig.with(|_, window, cx| {
+        picker.update(cx, |picker, cx| {
+            picker.set_query("me@10.0.0.7:2200", window, cx)
+        })
+    });
+    let rows = rig.read(|_, cx| picker.read(cx).rows().to_vec());
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].typed);
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert!(
+        rig.settle_until(|rig| argv_log(rig).contains("-p 2200 -- me@10.0.0.7")),
+        "{}",
+        argv_log(&rig)
+    );
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "me@10.0.0.7:2200");
+}
+
+#[test]
+fn escape_closes_the_picker_and_a_remote_pane_is_never_saved() {
+    let mut rig = rig();
+    rig.open_project();
+    let home = ssh_home_with("Host prod\n");
+    rig.with(|wb, _, _| wb.set_ssh_home(Some(home.path().to_path_buf())));
+    let saved = rig.record_workspace_changes();
+
+    rig.run(CommandId::Ssh);
+    rig.cx.simulate_keystrokes("escape");
+    assert!(rig.read(|wb, _| wb.ssh_picker().is_none()));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+
+    // One local shell and one remote shell: only the local one is written down.
+    rig.run(CommandId::NewTerminal);
+    rig.with(|wb, window, cx| {
+        wb.connect_ssh(rwk_core::ssh::SshTarget::parse("prod").unwrap(), window, cx)
+    });
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    rig.settle_for(50);
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a state");
+    assert_eq!(workspace.terminals.len(), 1, "{:?}", workspace.terminals);
+    assert!(workspace.dock.as_ref().is_some_and(|dock| dock.len() == 1));
+}
+
+#[test]
+fn ssh_is_unavailable_without_a_project_and_listed_in_the_menus_and_toolbar() {
+    let mut rig = rig();
+    let button = toolbar_button(&mut rig, CommandId::Ssh);
+    assert!(!button.enabled);
+    rig.open_project();
+    assert!(toolbar_button(&mut rig, CommandId::Ssh).enabled);
+    let no_terminal = toolbar_button(&mut rig, CommandId::CloseTerminal);
+    assert!(!no_terminal.enabled && no_terminal.tip.contains("Açık terminal yok"));
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert!(toolbar_button(&mut rig, CommandId::CloseTerminal)
+        .tip
+        .contains("Ctrl Shift W"));
+
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::DockBackground,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    let ssh = line_index(&mut rig, &MenuAction::Command(CommandId::Ssh));
+    let _ = ssh;
 }

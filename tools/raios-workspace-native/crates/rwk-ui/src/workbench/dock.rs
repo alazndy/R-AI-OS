@@ -511,6 +511,8 @@ impl Workbench {
         let drop_target = id.clone();
         let task_target = id.clone();
         let menu_target = id.clone();
+        let close_target = id.clone();
+        let middle_target = id.clone();
         let carried = DraggedTerminal {
             id: id.clone(),
             title: title.clone(),
@@ -521,6 +523,10 @@ impl Workbench {
                 id.as_str()
             )))
             .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
             .px_2()
             .min_h(px(18.0))
             .text_xs()
@@ -532,6 +538,41 @@ impl Workbench {
                 theme.muted
             }))
             .child(title)
+            .child(
+                div()
+                    .id(SharedString::from(format!(
+                        "terminal-close-{}",
+                        id.as_str()
+                    )))
+                    .flex_none()
+                    .px_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(gpui::rgb(theme.muted))
+                    .hover(move |style| {
+                        style
+                            .bg(gpui::rgb(theme.raised))
+                            .text_color(gpui::rgb(theme.bad))
+                    })
+                    .child("×")
+                    // A press on the cross must not start dragging the title.
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(
+                        move |this: &mut Workbench, _: &ClickEvent, window: &mut Window, cx| {
+                            cx.stop_propagation();
+                            this.close_terminal_by_id(&close_target, window, cx);
+                        },
+                    )),
+            )
+            .on_mouse_down(
+                gpui::MouseButton::Middle,
+                cx.listener(
+                    move |this: &mut Workbench, _: &gpui::MouseDownEvent, window, cx| {
+                        this.close_terminal_by_id(&middle_target, window, cx);
+                        cx.stop_propagation();
+                    },
+                ),
+            )
             .on_mouse_down(
                 gpui::MouseButton::Right,
                 cx.listener(

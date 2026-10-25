@@ -43,8 +43,14 @@ pub enum CommandId {
     CopyTerminal,
     /// Paste into the selected terminal.
     PasteTerminal,
-    /// Stop the selected session.
+    /// Stop the selected session; its pane stays so the output can still be read.
     StopTerminal,
+    /// Stop the selected session and remove its pane.
+    CloseTerminal,
+    /// End the selected session at once (SIGKILL, no grace for an agent) and remove its pane.
+    KillTerminal,
+    /// Open a remote shell over SSH.
+    Ssh,
     /// Give the selected terminal a name.
     RenameTerminal,
     /// Swap the selected terminal with the one before it in the dock.
@@ -154,7 +160,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 46] = [
+const COMMANDS: [Command; 49] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -280,6 +286,19 @@ const COMMANDS: [Command; 46] = [
         &[bind_terminal("v", true, false)],
     ),
     cmd(CommandId::StopTerminal, "Seçili oturumu durdur…", None, &[]),
+    cmd(
+        CommandId::CloseTerminal,
+        "Terminali kapat",
+        Some("Ctrl Shift W"),
+        &[bind_terminal("w", true, false)],
+    ),
+    cmd(CommandId::KillTerminal, "Terminali zorla öldür…", None, &[]),
+    cmd(
+        CommandId::Ssh,
+        "SSH ile bağlan…",
+        Some("Ctrl Shift S"),
+        &[bind_terminal("s", true, false)],
+    ),
     cmd(
         CommandId::RenameTerminal,
         "Terminali yeniden adlandır…",
@@ -552,7 +571,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("Açık dosya yok")
             }
         }
-        NewTerminal => {
+        NewTerminal | Ssh => {
             if !state.project_open {
                 deny("Önce bir proje klasörü açın")
             } else if usize::from(state.terminals) >= MAX_SESSIONS {
@@ -570,7 +589,9 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             }
         }
         NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
-        | StopTerminal | RenameTerminal | UngroupTerminal => needs_terminal(),
+        | StopTerminal | CloseTerminal | KillTerminal | RenameTerminal | UngroupTerminal => {
+            needs_terminal()
+        }
         MoveTerminalPrevious | MoveTerminalNext | SplitTerminalRight | SplitTerminalDown
         | JoinTerminalPrevious | GrowTerminal | ShrinkTerminal => {
             if state.terminals >= 2 {
@@ -634,7 +655,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 46);
+        assert_eq!(catalog().len(), 49);
     }
 
     #[test]

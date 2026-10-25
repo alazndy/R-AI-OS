@@ -11,5 +11,6 @@ pub mod inspector;
 pub mod memory;
 pub mod rename;
 pub mod search;
+pub mod ssh_picker;
 pub mod terminal;
 pub mod workbench;

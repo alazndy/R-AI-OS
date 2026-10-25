@@ -90,6 +90,7 @@ impl Fixture {
     fn host(&self) -> PtyTerminalHost {
         PtyTerminalHost::new(
             ProgramPaths {
+                ssh: None,
                 shell: None,
                 raios: Some(self.fake_raios()),
             },

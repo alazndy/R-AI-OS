@@ -49,6 +49,8 @@ const TERMINAL_TITLE: &[MenuEntry] = &[
     Command(C::NewTask),
     Separator,
     Command(C::StopTerminal),
+    Command(C::CloseTerminal),
+    Command(C::KillTerminal),
 ];
 
 const TERMINAL_BODY: &[MenuEntry] = &[
@@ -64,10 +66,13 @@ const TERMINAL_BODY: &[MenuEntry] = &[
     Command(C::NewTask),
     Separator,
     Command(C::StopTerminal),
+    Command(C::CloseTerminal),
+    Command(C::KillTerminal),
 ];
 
 const DOCK_BACKGROUND: &[MenuEntry] = &[
     Command(C::NewTerminal),
+    Command(C::Ssh),
     Command(C::Agent),
     Separator,
     Command(C::NewTask),
@@ -113,6 +118,7 @@ const TOOLBAR: &[ToolbarItem] = &[
     Button(C::Save, "Kaydet"),
     Gap,
     Button(C::NewTerminal, "Terminal +"),
+    Button(C::Ssh, "SSH"),
     Button(C::Agent, "Ajan"),
     Button(C::RenameTerminal, "Ad ver"),
     Button(C::SplitTerminalRight, "Böl →"),
@@ -120,6 +126,7 @@ const TOOLBAR: &[ToolbarItem] = &[
     Button(C::GrowTerminal, "Büyüt"),
     Button(C::ShrinkTerminal, "Küçült"),
     Button(C::StopTerminal, "Durdur"),
+    Button(C::CloseTerminal, "Kapat"),
     Gap,
     Button(C::NewTask, "Görev +"),
     Button(C::Handoff, "Devret"),

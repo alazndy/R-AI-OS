@@ -207,6 +207,8 @@ pub enum SessionLaunch {
     },
     /// A saved conversation continued in place: `raios resume <key>`.
     Resume(ResumeKey),
+    /// A remote shell: `ssh [-p port] -- [user@]host`.
+    Ssh(crate::ssh::SshTarget),
 }
 
 impl Default for SessionLaunch {
@@ -275,6 +277,13 @@ pub trait TerminalHost: Send + Sync {
 
     /// Stops one session and its descendants.
     fn stop(&self, id: &SessionId) -> Result<()>;
+
+    /// Ends one session and its descendants at once, without the grace an agent gets in
+    /// [`TerminalHost::stop`]. The default is `stop`, which is what a host without a grace
+    /// period already does.
+    fn kill(&self, id: &SessionId) -> Result<()> {
+        self.stop(id)
+    }
 
     /// True while the session's child is alive.
     fn is_running(&self, id: &SessionId) -> bool;
@@ -369,6 +378,21 @@ impl SessionRegistry {
                 AppError::new(ErrorCode::NotFound, "No owned session matches this ID.")
             })?;
         self.host.stop(id)?;
+        session.running = false;
+        Ok(())
+    }
+
+    /// Ends one app-owned session at once: no grace for an agent's wrapper to close its run.
+    pub fn kill(&self, id: &SessionId) -> Result<()> {
+        let mut state = self.lock();
+        let session = state
+            .sessions
+            .iter_mut()
+            .find(|session| &session.id == id)
+            .ok_or_else(|| {
+                AppError::new(ErrorCode::NotFound, "No owned session matches this ID.")
+            })?;
+        self.host.kill(id)?;
         session.running = false;
         Ok(())
     }

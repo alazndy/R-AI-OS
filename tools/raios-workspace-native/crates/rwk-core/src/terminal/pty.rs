@@ -207,6 +207,12 @@ impl TerminalHost for PtyTerminalHost {
         Ok(())
     }
 
+    fn kill(&self, id: &SessionId) -> Result<()> {
+        let session = self.find(id)?;
+        kill_session(&session);
+        Ok(())
+    }
+
     fn is_running(&self, id: &SessionId) -> bool {
         self.find(id)
             .is_ok_and(|session| session.running.load(Ordering::Acquire))
@@ -272,6 +278,14 @@ fn stop_session(session: &Session) {
         if !session.running.load(Ordering::Acquire) {
             return;
         }
+    }
+    kill_session(session);
+}
+
+/// SIGKILL for the whole session: every descendant, then the leader. No grace.
+fn kill_session(session: &Session) {
+    if !session.running.load(Ordering::Acquire) {
+        return;
     }
     let child = lock(&session.child);
     if child.is_none() {

@@ -151,6 +151,7 @@ fn app_idle(cx: &mut App) {
         fail(&format!("could not seed the project: {error}"));
     }
     let programs = ProgramPaths {
+        ssh: None,
         shell: Some(script),
         raios: None,
     };
@@ -221,6 +222,7 @@ fn dock_arrange(cx: &mut App) {
         fail(&format!("could not write the session script: {error}"));
     }
     let programs = ProgramPaths {
+        ssh: None,
         shell: Some(script),
         raios: None,
     };

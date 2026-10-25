@@ -141,6 +141,7 @@ fn rig(script_body: &str) -> Result<Rig, String> {
     let wake_registry = Arc::clone(&registry);
     let host = Arc::new(PtyTerminalHost::new(
         ProgramPaths {
+            ssh: None,
             shell: Some(script),
             raios: None,
         },

@@ -22,8 +22,10 @@ impl Workbench {
     /// The workspace state as it is right now, or `None` while no project is open.
     pub(super) fn workspace_snapshot(&self, cx: &gpui::App) -> Option<SavedWorkspace> {
         let project = self.project.as_ref()?;
-        let mut terminals: Vec<SavedTerminal> = self
-            .terminals
+        // A remote shell is never saved: reopening a project must not connect anywhere.
+        let saved_panes: Vec<&super::TerminalPane> =
+            self.terminals.iter().filter(|pane| !pane.remote).collect();
+        let mut terminals: Vec<SavedTerminal> = saved_panes
             .iter()
             .map(|pane| match pane.kind {
                 SessionKind::Shell => SavedTerminal::Shell {
@@ -55,7 +57,7 @@ impl Workbench {
             // listed above; a session id means nothing in the next run.
             dock: Some(
                 self.dock
-                    .filter_map(&|id| self.terminals.iter().position(|pane| &pane.id == id)),
+                    .filter_map(&|id| saved_panes.iter().position(|pane| &pane.id == id)),
             )
             .filter(|dock| !dock.is_empty()),
         })
