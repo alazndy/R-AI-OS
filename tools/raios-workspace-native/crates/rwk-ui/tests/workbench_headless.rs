@@ -3699,3 +3699,38 @@ fn an_ended_ssh_shell_can_be_reconnected_into_a_fresh_pane() {
     );
     assert!(!rig.read(|wb, cx| wb.state(cx).reconnectable));
 }
+
+#[test]
+fn clicking_along_the_toolbar_presses_real_buttons() {
+    use gpui::{Modifiers, MouseButton};
+
+    let mut rig = rig();
+    rig.open_project();
+    rig.settle_for(100);
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    // The toolbar is the row under the title area; sweep it from the left until a click
+    // opens a terminal (the "Terminal +" button) or the row is exhausted.
+    let mut x = px(4.0);
+    while x < size.width && rig.read(|wb, _| wb.terminal_count()) == 0 {
+        for y in [px(14.0), px(30.0), px(44.0)] {
+            let at = point(x, y);
+            rig.cx
+                .simulate_mouse_down(at, MouseButton::Left, Modifiers::default());
+            rig.cx
+                .simulate_mouse_up(at, MouseButton::Left, Modifiers::default());
+        }
+        rig.settle_for(20);
+        // Buttons that open overlays (project, files, search…) would swallow later clicks.
+        if rig.read(|wb, _| {
+            wb.palette().is_some() || wb.ssh_picker().is_some() || wb.context_menu().is_some()
+        }) {
+            rig.cx.simulate_keystrokes("escape");
+            rig.settle_for(20);
+        }
+        x += px(10.0);
+    }
+    assert!(
+        rig.read(|wb, _| wb.terminal_count()) >= 1,
+        "no toolbar click started a terminal"
+    );
+}
