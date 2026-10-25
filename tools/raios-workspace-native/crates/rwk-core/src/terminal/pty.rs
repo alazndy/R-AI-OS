@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -63,9 +63,16 @@ pub struct PtyTerminalHost {
     options: EngineOptions,
     wake: Arc<dyn Fn(&SessionId) + Send + Sync>,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    resizes: AtomicU64,
 }
 
 impl PtyTerminalHost {
+    /// How many resizes have been requested of this host since it was created. A layout change
+    /// that makes every terminal resize repeatedly shows up here.
+    pub fn resize_count(&self) -> u64 {
+        self.resizes.load(Ordering::Relaxed)
+    }
+
     /// Creates a host. `wake` is called, from a background thread, when a session has new
     /// output or has exited; it must be cheap and must not call back into the host.
     pub fn new(programs: ProgramPaths, wake: Arc<dyn Fn(&SessionId) + Send + Sync>) -> Self {
@@ -84,6 +91,7 @@ impl PtyTerminalHost {
             options,
             wake,
             sessions: Mutex::new(HashMap::new()),
+            resizes: AtomicU64::new(0),
         }
     }
 
@@ -196,6 +204,7 @@ impl TerminalHost for PtyTerminalHost {
 
     fn resize(&self, id: &SessionId, size: TerminalSize) -> Result<()> {
         let session = self.find(id)?;
+        self.resizes.fetch_add(1, Ordering::Relaxed);
         session.engine.resize(size)?;
         let resized = lock(&session.master).resize(pty_size(size));
         resized.map_err(pty_error)

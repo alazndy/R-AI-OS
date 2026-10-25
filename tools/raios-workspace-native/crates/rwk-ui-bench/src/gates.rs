@@ -125,9 +125,21 @@ pub const DOCK_ARRANGE_OVER_FLOOR: Gate = Gate {
     direction: Direction::AtMost,
 };
 
+/// How many PTY resizes one dock arrangement command causes, with twelve live terminals. The
+/// count is deterministic (258 resizes over 160 commands, 1.6 each, on every run so far), so
+/// this catches a layout that makes terminals resize over and over: a storm would be near
+/// twelve per command. The limit, 3, is a hypothesis of about twice what is measured.
+pub const DOCK_RESIZES_PER_OP: Gate = Gate {
+    id: "D2",
+    name: "dock arrange PTY resizes per command",
+    unit: "n",
+    limit: 3.0,
+    direction: Direction::AtMost,
+};
+
 /// Every gate, in report order.
 #[cfg(test)]
-pub const ALL_GATES: [Gate; 10] = [
+pub const ALL_GATES: [Gate; 11] = [
     COLD_START,
     FLOOD_FPS,
     FLOOD4_FPS,
@@ -138,6 +150,7 @@ pub const ALL_GATES: [Gate; 10] = [
     APP_COLD_START,
     APP_IDLE_PSS,
     DOCK_ARRANGE_OVER_FLOOR,
+    DOCK_RESIZES_PER_OP,
 ];
 
 /// A gate together with what was measured.

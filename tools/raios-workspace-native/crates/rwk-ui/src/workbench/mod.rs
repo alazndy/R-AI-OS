@@ -651,6 +651,12 @@ impl Workbench {
         &self.files
     }
 
+    /// Resizes requested of the PTY host so far (a layout that makes terminals resize over
+    /// and over shows here).
+    pub fn pty_resize_count(&self) -> u64 {
+        self.host.0.resize_count()
+    }
+
     /// Sessions that are still running, according to the registry.
     pub fn running_sessions(&self) -> usize {
         self.sessions

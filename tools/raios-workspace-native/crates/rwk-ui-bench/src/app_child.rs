@@ -250,6 +250,9 @@ fn dock_arrange(cx: &mut App) {
         if !window_receives_frames(handle.into(), cx).await {
             finish("RESULT scenario=dock-arrange status=noframes".to_owned());
         }
+        let resizes_before = handle
+            .update(cx, |workbench, _, _| workbench.pty_resize_count())
+            .unwrap_or_default();
         let mut samples: Vec<u64> = Vec::with_capacity(ARRANGE_OPS);
         let mut baseline: Vec<u64> = Vec::with_capacity(BASELINE_OPS);
         // The first BASELINE_OPS rounds send no command: they time a bare refresh, which is the
@@ -288,16 +291,22 @@ fn dock_arrange(cx: &mut App) {
                 baseline.push(micros);
             }
         }
+        let resizes = handle
+            .update(cx, |workbench, _, _| workbench.pty_resize_count())
+            .unwrap_or_default()
+            .saturating_sub(resizes_before);
         let floor = crate::stats::summarize(baseline);
         let summary = crate::stats::summarize(samples);
         finish(format!(
-            "RESULT scenario=dock-arrange status=ok p50_ms={:.3} p99_ms={:.3} max_ms={:.3} samples={} floor_p50_ms={:.3} over_floor_ms={:.3}",
+            "RESULT scenario=dock-arrange status=ok p50_ms={:.3} p99_ms={:.3} max_ms={:.3} samples={} floor_p50_ms={:.3} over_floor_ms={:.3} resizes={} resizes_per_op={:.2}",
             summary.p50_us as f64 / 1000.0,
             summary.p99_us as f64 / 1000.0,
             summary.max_us as f64 / 1000.0,
             summary.count,
             floor.p50_us as f64 / 1000.0,
-            summary.p99_us.saturating_sub(floor.p50_us) as f64 / 1000.0
+            summary.p99_us.saturating_sub(floor.p50_us) as f64 / 1000.0,
+            resizes,
+            resizes as f64 / ARRANGE_OPS as f64
         ));
     })
     .detach();
