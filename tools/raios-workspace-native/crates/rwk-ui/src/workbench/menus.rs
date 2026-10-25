@@ -20,6 +20,7 @@ use rwk_core::workbench::{
 
 use super::Workbench;
 use crate::context_menu::{ContextMenu, ContextMenuEvent, Line};
+use crate::editor::view::TextEdit;
 
 /// What choosing a menu line does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +52,24 @@ pub enum MenuAction {
         /// Revision the row was displayed at.
         updated_at: String,
     },
+    /// An edit of the open file's text.
+    Edit(TextEdit),
+    /// Approve a pending handoff.
+    ApproveHandoff {
+        /// Approval identifier.
+        approval_id: String,
+        /// Revision the row was displayed at.
+        revision: i64,
+    },
+    /// Reject a pending handoff (a reason is asked for).
+    RejectHandoff {
+        /// Approval identifier.
+        approval_id: String,
+        /// Revision the row was displayed at.
+        revision: i64,
+    },
+    /// Start the receiver of a handoff.
+    StartReceiver(String),
     /// Hand a task over through the handoff composer.
     TaskHandoff {
         /// Task identifier.
@@ -251,6 +270,115 @@ impl Workbench {
         self.open_menu(lines, at, window, cx);
     }
 
+    /// Opens the menu of the editor text.
+    pub fn open_text_menu(
+        &mut self,
+        selection: bool,
+        editable: bool,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let item = |label: &'static str, hint: &'static str, edit, on: bool, why: &'static str| {
+            if on {
+                (Line::item(label, Some(hint)), Some(MenuAction::Edit(edit)))
+            } else {
+                (
+                    Line::disabled(label, if why.is_empty() { None } else { Some(why) }),
+                    None,
+                )
+            }
+        };
+        let lines = vec![
+            item("Geri al", "Ctrl+Z", TextEdit::Undo, editable, "Salt okunur"),
+            item(
+                "Yinele",
+                "Ctrl+Shift+Z",
+                TextEdit::Redo,
+                editable,
+                "Salt okunur",
+            ),
+            (Line::Rule, None),
+            item(
+                "Kes",
+                "Ctrl+X",
+                TextEdit::Cut,
+                editable && selection,
+                "Seçim yok",
+            ),
+            item("Kopyala", "Ctrl+C", TextEdit::Copy, selection, "Seçim yok"),
+            item(
+                "Yapıştır",
+                "Ctrl+V",
+                TextEdit::Paste,
+                editable,
+                "Salt okunur",
+            ),
+            (Line::Rule, None),
+            item("Tümünü seç", "Ctrl+A", TextEdit::SelectAll, true, ""),
+        ];
+        self.open_menu(lines, at, window, cx);
+    }
+
+    /// Opens the menu of a pending approval row.
+    pub fn open_approval_menu(
+        &mut self,
+        approval_id: String,
+        revision: i64,
+        decidable: bool,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let lines = if decidable {
+            vec![
+                (
+                    Line::item("Onayla", None),
+                    Some(MenuAction::ApproveHandoff {
+                        approval_id: approval_id.clone(),
+                        revision,
+                    }),
+                ),
+                (
+                    Line::item("Reddet…", None),
+                    Some(MenuAction::RejectHandoff {
+                        approval_id,
+                        revision,
+                    }),
+                ),
+            ]
+        } else {
+            vec![(
+                Line::disabled("Onayla", Some("Bu onay burada karara bağlanamaz")),
+                None,
+            )]
+        };
+        self.open_menu(lines, at, window, cx);
+    }
+
+    /// Opens the menu of a handoff row.
+    pub fn open_handoff_menu(
+        &mut self,
+        id: String,
+        can_start: bool,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let lines = vec![if can_start {
+            (
+                Line::item("Alıcıyı başlat", None),
+                Some(MenuAction::StartReceiver(id)),
+            )
+        } else {
+            (
+                Line::disabled("Alıcıyı başlat", Some("Henüz onaylanmadı")),
+                None,
+            )
+        }];
+        self.open_menu(lines, at, window, cx);
+    }
+
     fn open_menu(
         &mut self,
         lines: Vec<(Line, Option<MenuAction>)>,
@@ -347,6 +475,19 @@ impl Workbench {
                 task_id,
                 updated_at,
             } => self.assign_task(task_id, updated_at, None, window, cx),
+            MenuAction::Edit(edit) => {
+                self.editor
+                    .update(cx, |editor, cx| editor.edit(edit, window, cx));
+            }
+            MenuAction::ApproveHandoff {
+                approval_id,
+                revision,
+            } => self.approve_handoff(approval_id, revision, window, cx),
+            MenuAction::RejectHandoff {
+                approval_id,
+                revision,
+            } => self.request_reject_handoff(approval_id, revision, window, cx),
+            MenuAction::StartReceiver(id) => self.start_receiver(id, window, cx),
             MenuAction::TaskHandoff { task_id, title } => {
                 self.open_composer(Some(TaskLink { task_id, title }), window, cx);
             }
@@ -443,7 +584,7 @@ impl Workbench {
             .flex_row()
             .items_center()
             .gap_0p5()
-            .overflow_hidden()
+            .overflow_x_scroll()
             .bg(gpui::rgb(theme.panel))
             .border_b_1()
             .border_color(gpui::rgb(theme.line))

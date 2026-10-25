@@ -3555,3 +3555,121 @@ fn ssh_is_unavailable_without_a_project_and_listed_in_the_menus_and_toolbar() {
     let ssh = line_index(&mut rig, &MenuAction::Command(CommandId::Ssh));
     let _ = ssh;
 }
+
+fn enabled_labels(rig: &mut Rig) -> Vec<String> {
+    menu_lines(rig)
+        .into_iter()
+        .filter_map(|line| match line {
+            Line::Item {
+                label,
+                enabled: true,
+                ..
+            } => Some(label.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_approval_menu_offers_both_decisions_only_for_handoffs() {
+    let mut rig = rig();
+    rig.with(|wb, window, cx| {
+        wb.open_approval_menu(
+            "a-1".into(),
+            4,
+            true,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    assert_eq!(enabled_labels(&mut rig), ["Onayla", "Reddet…"]);
+    line_index(
+        &mut rig,
+        &MenuAction::RejectHandoff {
+            approval_id: "a-1".into(),
+            revision: 4,
+        },
+    );
+
+    rig.with(|wb, window, cx| {
+        wb.open_approval_menu(
+            "a-2".into(),
+            1,
+            false,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    assert!(enabled_labels(&mut rig).is_empty());
+}
+
+#[test]
+fn a_handoff_menu_starts_the_receiver_only_when_it_can_be_started() {
+    let mut rig = rig();
+    rig.with(|wb, window, cx| {
+        wb.open_handoff_menu("h-1".into(), true, point(px(900.0), px(300.0)), window, cx)
+    });
+    line_index(&mut rig, &MenuAction::StartReceiver("h-1".into()));
+
+    rig.with(|wb, window, cx| {
+        wb.open_handoff_menu("h-2".into(), false, point(px(900.0), px(300.0)), window, cx)
+    });
+    assert!(enabled_labels(&mut rig).is_empty());
+}
+
+#[test]
+fn the_text_menu_enables_cut_and_copy_only_with_a_selection_and_edits_only_when_editable() {
+    let mut rig = rig();
+    rig.with(|wb, window, cx| {
+        wb.open_text_menu(false, true, point(px(400.0), px(300.0)), window, cx)
+    });
+    assert_eq!(
+        enabled_labels(&mut rig),
+        ["Geri al", "Yinele", "Yapıştır", "Tümünü seç"]
+    );
+    rig.with(|wb, window, cx| {
+        wb.open_text_menu(true, true, point(px(400.0), px(300.0)), window, cx)
+    });
+    assert!(enabled_labels(&mut rig).contains(&"Kes".to_owned()));
+    assert!(enabled_labels(&mut rig).contains(&"Kopyala".to_owned()));
+    rig.with(|wb, window, cx| {
+        wb.open_text_menu(true, false, point(px(400.0), px(300.0)), window, cx)
+    });
+    assert_eq!(enabled_labels(&mut rig), ["Kopyala", "Tümünü seç"]);
+}
+
+#[test]
+fn right_clicking_the_editor_text_opens_the_text_menu() {
+    use gpui::{Modifiers, MouseButton};
+
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    let mut found = false;
+    'scan: for row in 0..14 {
+        for column in 0..8 {
+            let at = point(
+                size.width * (0.2 + 0.05 * column as f32),
+                size.height * (0.12 + 0.03 * row as f32),
+            );
+            rig.cx
+                .simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+            rig.cx
+                .simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
+            rig.settle_for(30);
+            if rig.read(|wb, _| wb.context_menu().is_some()) {
+                if enabled_labels(&mut rig).contains(&"Tümünü seç".to_owned()) {
+                    found = true;
+                    break 'scan;
+                }
+                rig.cx.simulate_keystrokes("escape");
+                rig.settle_for(30);
+            }
+        }
+    }
+    assert!(found, "no point of the editor opened the text menu");
+}

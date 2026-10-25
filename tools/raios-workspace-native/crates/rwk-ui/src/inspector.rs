@@ -80,6 +80,26 @@ pub enum InspectorEvent {
         /// Where the pointer was.
         position: gpui::Point<gpui::Pixels>,
     },
+    /// The user right-clicked a pending approval.
+    ApprovalMenu {
+        /// Target approval identifier.
+        approval_id: String,
+        /// Revision the row was displayed at.
+        revision: i64,
+        /// The approval is a handoff, which can be decided here.
+        decidable: bool,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
+    /// The user right-clicked a handoff row.
+    HandoffMenu {
+        /// Handoff approval identifier.
+        id: String,
+        /// The receiver can be started.
+        can_start: bool,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
     /// The user wants to reject a pending handoff approval; a reason is asked for before sending.
     RejectHandoff {
         /// Target approval identifier.
@@ -664,7 +684,25 @@ impl Render for InspectorView {
                             })),
                     )
             });
-            div().child(line).children(decisions)
+            let menu_id = approval.id.clone();
+            let menu_revision = approval.revision;
+            let decidable = approval.kind == "handover";
+            div()
+                .id(SharedString::from(format!("approval-row-{menu_id}")))
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |_, event: &gpui::MouseDownEvent, _window, cx| {
+                        cx.emit(InspectorEvent::ApprovalMenu {
+                            approval_id: menu_id.clone(),
+                            revision: menu_revision,
+                            decidable,
+                            position: event.position,
+                        });
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(line)
+                .children(decisions)
         });
         let handoffs: Vec<_> = self
             .handoffs
@@ -685,7 +723,23 @@ impl Render for InspectorView {
                             cx.emit(InspectorEvent::StartReceiver(id.clone()));
                         }))
                 });
-                div().child(line).children(start)
+                let menu_id = id.clone();
+                let can_start = *can_start;
+                div()
+                    .id(SharedString::from(format!("handoff-row-{menu_id}")))
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |_, event: &gpui::MouseDownEvent, _window, cx| {
+                            cx.emit(InspectorEvent::HandoffMenu {
+                                id: menu_id.clone(),
+                                can_start,
+                                position: event.position,
+                            });
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .child(line)
+                    .children(start)
             })
             .collect();
         let empty = (self.model.is_empty()

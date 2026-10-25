@@ -258,13 +258,107 @@ fn read_limited(path: &Path) -> Option<String> {
     Some(text)
 }
 
+/// Deepest `Include` nesting followed.
+const MAX_INCLUDE_DEPTH: usize = 3;
+/// Most files read through `Include` lines in one discovery.
+const MAX_INCLUDED_FILES: usize = 64;
+
+/// Matches `name` against a pattern with `*` and `?` wildcards.
+fn wildcard_match(pattern: &[char], name: &[char]) -> bool {
+    match (pattern.first(), name.first()) {
+        (None, None) => true,
+        (Some('*'), _) => {
+            wildcard_match(&pattern[1..], name)
+                || (!name.is_empty() && wildcard_match(pattern, &name[1..]))
+        }
+        (Some('?'), Some(_)) => wildcard_match(&pattern[1..], &name[1..]),
+        (Some(a), Some(b)) if a == b => wildcard_match(&pattern[1..], &name[1..]),
+        _ => false,
+    }
+}
+
+/// The files an `Include` operand names: `~/` is the home directory, a relative path is
+/// relative to `~/.ssh`, and `*` / `?` may appear in the file name part only. Matches are
+/// returned in name order.
+fn include_files(home: &Path, operand: &str) -> Vec<std::path::PathBuf> {
+    let ssh = home.join(".ssh");
+    let path = match operand.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None if operand.starts_with('/') => std::path::PathBuf::from(operand),
+        None => ssh.join(operand),
+    };
+    let Some(name) = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+    else {
+        return Vec::new();
+    };
+    if !name.contains(['*', '?']) {
+        return vec![path];
+    }
+    let Some(dir) = path.parent() else {
+        return Vec::new();
+    };
+    let pattern: Vec<char> = name.chars().collect();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .filter(|entry| {
+            let candidate: Vec<char> = entry.file_name().to_string_lossy().chars().collect();
+            wildcard_match(&pattern, &candidate)
+        })
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect();
+    files.sort();
+    files
+}
+
+/// `text` with every `Include` line replaced by the text of the files it names, up to
+/// [`MAX_INCLUDE_DEPTH`] levels and [`MAX_INCLUDED_FILES`] files in all.
+fn expand_includes(home: &Path, text: &str, depth: usize, budget: &mut usize) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let operands = trimmed
+            .split_once(|c: char| c.is_whitespace() || c == '=')
+            .filter(|(keyword, _)| keyword.eq_ignore_ascii_case("include"))
+            .map(|(_, rest)| rest);
+        match operands {
+            Some(rest) if depth < MAX_INCLUDE_DEPTH => {
+                for operand in rest.split_whitespace() {
+                    for file in include_files(home, operand) {
+                        if *budget == 0 {
+                            return out;
+                        }
+                        *budget -= 1;
+                        if let Some(included) = read_limited(&file) {
+                            out.push_str(&expand_includes(home, &included, depth + 1, budget));
+                            out.push('\n');
+                        }
+                    }
+                }
+            }
+            Some(_) => {}
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
 /// The hosts of `~/.ssh` under `home`: config aliases first, then hosts only `known_hosts`
 /// knows. Duplicates are dropped, entries that are not valid targets are left out, and at
-/// most [`MAX_HOSTS`] are returned.
+/// most [`MAX_HOSTS`] are returned. `Include` lines of the config are followed.
 pub fn discover(home: &Path) -> Vec<SshHost> {
     let ssh = home.join(".ssh");
+    let mut budget = MAX_INCLUDED_FILES;
     let mut hosts = read_limited(&ssh.join("config"))
-        .map(|text| parse_ssh_config(&text))
+        .map(|text| parse_ssh_config(&expand_includes(home, &text, 0, &mut budget)))
         .unwrap_or_default();
     let known = read_limited(&ssh.join("known_hosts"))
         .map(|text| parse_known_hosts(&text))
@@ -423,6 +517,59 @@ github.com,140.82.1.1 ssh-ed25519 AAAA
         assert_eq!(hosts[0].detail.as_deref(), Some("10.0.0.1"));
         // No ~/.ssh at all is simply no hosts.
         assert!(discover(&home.path().join("nowhere")).is_empty());
+    }
+
+    #[test]
+    fn include_lines_pull_in_other_files_with_wildcards_and_a_depth_limit() {
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        std::fs::create_dir_all(ssh.join("config.d")).unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            "Include config.d/*.conf\nInclude ~/extra\nHost main\n",
+        )
+        .unwrap();
+        std::fs::write(
+            ssh.join("config.d/a.conf"),
+            "Host alpha\n  HostName a.example\n",
+        )
+        .unwrap();
+        std::fs::write(ssh.join("config.d/b.conf"), "Host beta\n").unwrap();
+        std::fs::write(ssh.join("config.d/skip.txt"), "Host skipped\n").unwrap();
+        std::fs::write(
+            home.path().join("extra"),
+            "Host extra\nInclude config.d/b.conf\n",
+        )
+        .unwrap();
+        // A file that includes itself must not loop.
+        std::fs::write(ssh.join("loop"), "Include loop\nHost looped\n").unwrap();
+        std::fs::write(ssh.join("config.d/c.conf"), "Include loop\n").unwrap();
+
+        let hosts = discover(home.path());
+        let names: Vec<&str> = hosts.iter().map(|h| h.alias.as_str()).collect();
+        for expected in ["alpha", "beta", "extra", "main", "looped"] {
+            assert!(names.contains(&expected), "{names:?} lacks {expected}");
+        }
+        assert!(!names.contains(&"skipped"), "{names:?}");
+        // beta is listed once although two Include lines reach it.
+        assert_eq!(names.iter().filter(|name| **name == "beta").count(), 1);
+        let alpha = hosts.iter().find(|h| h.alias == "alpha").unwrap();
+        assert_eq!(alpha.detail.as_deref(), Some("a.example"));
+    }
+
+    #[test]
+    fn wildcards_match_names_only() {
+        let m = |p: &str, n: &str| {
+            wildcard_match(
+                &p.chars().collect::<Vec<_>>(),
+                &n.chars().collect::<Vec<_>>(),
+            )
+        };
+        assert!(m("*.conf", "a.conf"));
+        assert!(m("a?c", "abc"));
+        assert!(m("*", ""));
+        assert!(!m("*.conf", "a.txt"));
+        assert!(!m("a?c", "ac"));
     }
 
     #[test]

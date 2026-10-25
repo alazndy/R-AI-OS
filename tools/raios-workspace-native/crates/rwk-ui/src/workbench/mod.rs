@@ -340,6 +340,28 @@ impl Workbench {
                 crate::inspector::InspectorEvent::StartReceiver(id) => {
                     this.start_receiver(id.clone(), window, cx);
                 }
+                crate::inspector::InspectorEvent::ApprovalMenu {
+                    approval_id,
+                    revision,
+                    decidable,
+                    position,
+                } => {
+                    this.open_approval_menu(
+                        approval_id.clone(),
+                        *revision,
+                        *decidable,
+                        *position,
+                        window,
+                        cx,
+                    );
+                }
+                crate::inspector::InspectorEvent::HandoffMenu {
+                    id,
+                    can_start,
+                    position,
+                } => {
+                    this.open_handoff_menu(id.clone(), *can_start, *position, window, cx);
+                }
                 crate::inspector::InspectorEvent::ApproveHandoff {
                     approval_id,
                     revision,
@@ -1147,6 +1169,11 @@ impl Workbench {
                     cx,
                 );
             }
+            EditorEvent::TextContextMenu {
+                position,
+                selection,
+                editable,
+            } => self.open_text_menu(*selection, *editable, *position, window, cx),
             EditorEvent::Edited
             | EditorEvent::Opened(_)
             | EditorEvent::Closed(_)
