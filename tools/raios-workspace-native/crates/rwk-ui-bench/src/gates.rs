@@ -126,7 +126,7 @@ pub const DOCK_ARRANGE_OVER_FLOOR: Gate = Gate {
 };
 
 /// How many PTY resizes one dock arrangement command causes, with twelve live terminals. The
-/// count is deterministic (258 resizes over 160 commands, 1.6 each, on every run so far), so
+/// count was the same on every run here (258 resizes over 160 commands, 1.6 each), but it may differ with window size or dock cycle, so
 /// this catches a layout that makes terminals resize over and over: a storm would be near
 /// twelve per command. The limit, 3, is a hypothesis of about twice what is measured.
 pub const DOCK_RESIZES_PER_OP: Gate = Gate {

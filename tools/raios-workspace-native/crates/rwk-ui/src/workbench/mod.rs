@@ -652,7 +652,8 @@ impl Workbench {
     }
 
     /// Resizes requested of the PTY host so far (a layout that makes terminals resize over
-    /// and over shows here).
+    /// and over shows here). Read by the benchmark.
+    #[doc(hidden)]
     pub fn pty_resize_count(&self) -> u64 {
         self.host.0.resize_count()
     }

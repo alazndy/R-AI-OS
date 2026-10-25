@@ -250,9 +250,8 @@ fn dock_arrange(cx: &mut App) {
         if !window_receives_frames(handle.into(), cx).await {
             finish("RESULT scenario=dock-arrange status=noframes".to_owned());
         }
-        let resizes_before = handle
-            .update(cx, |workbench, _, _| workbench.pty_resize_count())
-            .unwrap_or_default();
+        // Read just before the first command, so the bare-refresh rounds are not counted.
+        let resizes_before: Rc<Cell<u64>> = Rc::default();
         let mut samples: Vec<u64> = Vec::with_capacity(ARRANGE_OPS);
         let mut baseline: Vec<u64> = Vec::with_capacity(BASELINE_OPS);
         // The first BASELINE_OPS rounds send no command: they time a bare refresh, which is the
@@ -263,8 +262,12 @@ fn dock_arrange(cx: &mut App) {
                 .map(|n| ARRANGE_CYCLE[n % ARRANGE_CYCLE.len()]);
             let done: Rc<Cell<Option<Duration>>> = Rc::default();
             let signal = Rc::clone(&done);
+            let before = Rc::clone(&resizes_before);
             let started = Instant::now();
             let sent = handle.update(cx, move |workbench, window, cx| {
+                if step == BASELINE_OPS {
+                    before.set(workbench.pty_resize_count());
+                }
                 if let Some(command) = command {
                     workbench.run(command, window, cx);
                 }
@@ -291,10 +294,11 @@ fn dock_arrange(cx: &mut App) {
                 baseline.push(micros);
             }
         }
-        let resizes = handle
-            .update(cx, |workbench, _, _| workbench.pty_resize_count())
-            .unwrap_or_default()
-            .saturating_sub(resizes_before);
+        let Ok(resizes_after) = handle.update(cx, |workbench, _, _| workbench.pty_resize_count())
+        else {
+            fail("the window is gone");
+        };
+        let resizes = resizes_after.saturating_sub(resizes_before.get());
         let floor = crate::stats::summarize(baseline);
         let summary = crate::stats::summarize(samples);
         finish(format!(

@@ -67,8 +67,9 @@ pub struct PtyTerminalHost {
 }
 
 impl PtyTerminalHost {
-    /// How many resizes have been requested of this host since it was created. A layout change
-    /// that makes every terminal resize repeatedly shows up here.
+    /// How many resizes have been requested of this host since it was created, whether or not
+    /// the size changed. A layout change that makes every terminal resize repeatedly shows up
+    /// here. It is read by the benchmark (gate D2).
     pub fn resize_count(&self) -> u64 {
         self.resizes.load(Ordering::Relaxed)
     }
