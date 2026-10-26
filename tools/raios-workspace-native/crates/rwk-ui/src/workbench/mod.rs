@@ -274,6 +274,8 @@ pub struct Workbench {
     format_on_save: bool,
     /// The checked-out git branch of the project.
     branch: Option<String>,
+    /// Bumped on every status read for the tree marks; an older answer is dropped.
+    badge_generation: u64,
     /// The state of each language server that was started.
     server_status: Vec<(String, rwk_core::lsp::ServerStatus)>,
     /// Footer items the application added.
@@ -518,6 +520,7 @@ impl Workbench {
                     this.auto_save_now(cx);
                 } else {
                     this.refresh_branch(cx);
+                    this.refresh_git_badges(cx);
                 }
             }),
         ];
@@ -537,6 +540,7 @@ impl Workbench {
             auto_save: false,
             format_on_save: false,
             branch: None,
+            badge_generation: 0,
             server_status: Vec::new(),
             extra_footer: Vec::new(),
             task_source: None,
@@ -1304,6 +1308,7 @@ impl Workbench {
         match event {
             EditorEvent::Saved(saved) => {
                 self.save_queue.retain(|path| path != &saved.path);
+                self.refresh_git_badges(cx);
                 self.save_next(window, cx);
             }
             EditorEvent::Conflict | EditorEvent::SaveFailed(_) => {
@@ -1411,6 +1416,7 @@ impl Workbench {
                     self.project = Some(project);
                     self.server_status.clear();
                     self.refresh_branch(cx);
+                    self.refresh_git_badges(cx);
                     self.restart_language_servers(cx);
                     self.inspector
                         .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));

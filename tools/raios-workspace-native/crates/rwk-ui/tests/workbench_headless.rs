@@ -4411,6 +4411,48 @@ fn renaming_a_symbol_edits_open_tabs_and_writes_the_other_files() {
 }
 
 #[test]
+fn changed_files_and_their_folders_carry_git_marks_in_the_tree() {
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .expect("git")
+            .success());
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/a.rs"), "one\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "first"]);
+    std::fs::write(root.join("src/a.rs"), "two\n").unwrap();
+    std::fs::write(root.join("new.txt"), "x").unwrap();
+
+    rig.open_project();
+    let mark = |rig: &mut Rig, path: &str| {
+        let path = path.to_owned();
+        rig.read(move |wb, cx| wb.files().read(cx).badge(&path).map(|b| b.letter))
+    };
+    assert!(rig.settle_until(|rig| mark(rig, "src/a.rs") == Some('M')));
+    assert_eq!(mark(&mut rig, "src"), Some('•'));
+    assert_eq!(mark(&mut rig, "new.txt"), Some('U'));
+
+    // Saving a change to a clean file marks it as soon as the write lands.
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "second"]);
+    rig.open_file("src/a.rs");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two\n"));
+    rig.type_text("!");
+    rig.run(CommandId::Save);
+    assert!(rig.settle_until(|rig| mark(rig, "src/a.rs") == Some('M')));
+}
+
+#[test]
 fn the_hunk_panel_stages_one_hunk_of_a_changed_file() {
     let mut rig = rig();
     let root = rig.dir.path().to_path_buf();
