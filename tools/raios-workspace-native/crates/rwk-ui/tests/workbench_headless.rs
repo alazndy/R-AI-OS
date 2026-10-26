@@ -5220,3 +5220,89 @@ fn rust_analyzer_formats_a_file_and_answers_completion_and_hover() {
         "no completions after v.le"
     );
 }
+
+#[test]
+fn rust_analyzer_lists_usages_and_the_outline_of_a_file() {
+    // A rustup proxy answers `--version` with a failure when the component is missing.
+    if !std::process::Command::new("rust-analyzer")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return;
+    }
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/util.rs"),
+        "pub fn helper() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/main.rs"),
+        "mod util;\nstruct Shape;\nfn main() {\n    let _ = (Shape, util::helper(), util::helper());\n}\n",
+    )
+    .unwrap();
+    rig.with(|wb, _, _| wb.set_language_server_launcher(Some(rwk_core::lsp::default_launcher())));
+    rig.open_project();
+    rig.open_file("src/main.rs");
+    assert!(rig.settle_until(|rig| rig.editor_text().contains("helper")));
+
+    let list = |rig: &mut Rig| {
+        rig.read(|wb, cx| {
+            wb.locations_view().map(|view| {
+                view.read(cx)
+                    .problems()
+                    .iter()
+                    .map(|p| (p.path.clone(), p.line, p.message.clone()))
+                    .collect::<Vec<_>>()
+            })
+        })
+    };
+
+    // The server needs a while to load the crate; ask again until it answers with the usages.
+    let started = Instant::now();
+    let mut usages = None;
+    while started.elapsed() < Duration::from_secs(120) && usages.is_none() {
+        rig.with(|wb, window, cx| {
+            wb.editor()
+                .clone()
+                .update(cx, |editor, cx| editor.set_cursor(3, 28, window, cx))
+        });
+        rig.run(CommandId::FindReferences);
+        rig.settle_for(2500);
+        usages = list(&mut rig).filter(|lines| lines.len() >= 3);
+        if usages.is_none() {
+            rig.with(|wb, window, cx| wb.close_overlay(window, cx));
+        }
+    }
+    let usages = usages.expect("rust-analyzer listed the usages");
+    assert!(
+        usages.iter().any(|(path, _, _)| path == "src/util.rs"),
+        "{usages:?}"
+    );
+    assert!(
+        usages
+            .iter()
+            .any(|(_, _, text)| text.contains("util::helper()")),
+        "{usages:?}"
+    );
+
+    // The outline of main.rs names its struct and function.
+    rig.with(|wb, window, cx| wb.close_overlay(window, cx));
+    rig.run(CommandId::Outline);
+    assert!(rig.settle_until(|rig| list(rig).is_some()));
+    let outline: Vec<String> = list(&mut rig)
+        .unwrap()
+        .into_iter()
+        .map(|(_, _, label)| label)
+        .collect();
+    assert!(outline.contains(&"struct Shape".to_owned()), "{outline:?}");
+    assert!(outline.contains(&"fn main".to_owned()), "{outline:?}");
+}
