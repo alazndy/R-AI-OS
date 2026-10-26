@@ -4450,6 +4450,11 @@ fn changed_files_and_their_folders_carry_git_marks_in_the_tree() {
     rig.type_text("!");
     rig.run(CommandId::Save);
     assert!(rig.settle_until(|rig| mark(rig, "src/a.rs") == Some('M')));
+    // The open tab carries the same mark.
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).badge("src/a.rs").map(|b| b.letter)),
+        Some('M')
+    );
 }
 
 #[test]
@@ -4916,4 +4921,203 @@ fn the_footer_shows_the_workspace_and_takes_items_from_the_application() {
     assert_eq!(mine, ["iki"]);
     rig.with(|wb, _, cx| wb.remove_footer_item("mine", cx));
     assert!(!ids(&mut rig).iter().any(|id| id == "mine"));
+}
+
+/// The real rust-analyzer on a tiny cargo project: diagnostics, hover, completion-free
+/// navigation and a rename across files. Skipped where it is not installed.
+#[test]
+fn rust_analyzer_finds_problems_and_renames_a_function_across_files() {
+    // A rustup proxy answers `--version` with a failure when the component is missing.
+    if !std::process::Command::new("rust-analyzer")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return;
+    }
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/util.rs"),
+        "pub fn helper() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/main.rs"),
+        "mod util;\nfn main() {\n    let n: i32 = \"text\";\n    let _ = (n, util::helper());\n}\n",
+    )
+    .unwrap();
+    rig.with(|wb, _, _| wb.set_language_server_launcher(Some(rwk_core::lsp::default_launcher())));
+    rig.open_project();
+    rig.open_file("src/main.rs");
+
+    // rust-analyzer loads the crate first; the type error arrives once it has.
+    let started = Instant::now();
+    let mut found = false;
+    while started.elapsed() < Duration::from_secs(120) && !found {
+        found = rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some()));
+    }
+    assert!(found, "rust-analyzer reported no problem for a type error");
+
+    // Rename `helper` from its call in main.rs: both files change, util.rs on disk.
+    rig.with(|wb, window, cx| {
+        wb.editor()
+            .clone()
+            .update(cx, |editor, cx| editor.set_cursor(3, 28, window, cx))
+    });
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).symbol_at_cursor(cx).map(|s| s.3)),
+        Some("helper".to_owned())
+    );
+    rig.run(CommandId::RenameSymbol);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("the prompt opens");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("assist", window, cx);
+            prompt.submit(cx);
+        })
+    });
+    let util = root.join("src/util.rs");
+    let mut renamed = false;
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(60) && !renamed {
+        renamed = rig.settle_until(|_| {
+            std::fs::read_to_string(&util).is_ok_and(|text| text.contains("fn assist"))
+        });
+    }
+    assert!(renamed, "util.rs was not renamed");
+    assert!(
+        rig.editor_text().contains("util::assist()"),
+        "{}",
+        rig.editor_text()
+    );
+}
+
+#[test]
+fn rust_analyzer_formats_a_file_and_answers_completion_and_hover() {
+    use gpui_base::input::{CompletionProvider, DefinitionProvider, HoverProvider, Rope};
+    use rwk_ui::editor::lsp::ServerProvider;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // A rustup proxy answers `--version` with a failure when the component is missing.
+    if !std::process::Command::new("rust-analyzer")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return;
+    }
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    let messy = "fn   main( ){let   v:Vec<i32>=Vec::new();\nlet _=v.len();}\n";
+    std::fs::write(root.join("src/main.rs"), messy).unwrap();
+    rig.with(|wb, _, _| wb.set_language_server_launcher(Some(rwk_core::lsp::default_launcher())));
+    rig.open_project();
+    rig.open_file("src/main.rs");
+    assert!(rig.settle_until(|rig| rig.editor_text() == messy));
+
+    // The server needs a while to load the crate; format answers once it has.
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(120) && rig.editor_text() == messy {
+        rig.run(CommandId::Format);
+        rig.settle_for(1500);
+    }
+    let formatted = rig.editor_text();
+    assert!(
+        formatted.contains("fn main() {") && formatted.contains("let v: Vec<i32> = Vec::new();"),
+        "{formatted}"
+    );
+
+    // The server gets the new text after a typing pause; the test clock is not real time.
+    rig.cx.executor().advance_clock(Duration::from_secs(2));
+    rig.settle_for(1500);
+
+    // Hover, definition and completion through the same provider the editor uses.
+    let requester = rig
+        .read(|wb, _| wb.language_requester())
+        .expect("a server is running");
+    let provider = ServerProvider::new("src/main.rs", &requester);
+    let rope = Rope::from(formatted.as_str());
+    let at_vec = formatted.find("Vec::new").unwrap() + 1;
+    let at_len = formatted.find(".len").unwrap() + 2;
+    // The server may still be reading the text the format just produced; ask until it answers.
+    let (mut hover, mut definitions, mut completions);
+    let attempts = Instant::now();
+    loop {
+        hover = Rc::new(RefCell::new(None));
+        definitions = Rc::new(RefCell::new(None));
+        completions = Rc::new(RefCell::new(None));
+        rig.cx.update(|window, cx| {
+            let task = provider.hover(&rope, at_vec, window, cx);
+            let slot = hover.clone();
+            cx.spawn(async move |_| *slot.borrow_mut() = Some(task.await))
+                .detach();
+            let task = provider.definitions(&rope, at_vec, window, cx);
+            let slot = definitions.clone();
+            cx.spawn(async move |_| *slot.borrow_mut() = Some(task.await))
+                .detach();
+            let context = rwk_core::lsp::lsp_types::CompletionContext {
+                trigger_kind: rwk_core::lsp::lsp_types::CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            };
+            let task = provider.completions(&rope, at_len, context, window, cx);
+            let slot = completions.clone();
+            cx.spawn(async move |_| *slot.borrow_mut() = Some(task.await))
+                .detach();
+        });
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(20)
+            && (hover.borrow().is_none()
+                || definitions.borrow().is_none()
+                || completions.borrow().is_none())
+        {
+            rig.settle_for(200);
+        }
+        let good = matches!(&*hover.borrow(), Some(Ok(Some(_))))
+            && matches!(&*definitions.borrow(), Some(Ok(links)) if !links.is_empty())
+            && completions.borrow().as_ref().is_some_and(|c| c.is_ok());
+        if good || attempts.elapsed() > Duration::from_secs(90) {
+            break;
+        }
+        rig.settle_for(1000);
+    }
+    let hovered = hover.borrow_mut().take().expect("hover answered");
+    assert!(
+        hovered.is_ok_and(|hover| hover.is_some()),
+        "hover over Vec gave nothing"
+    );
+    let defined = definitions
+        .borrow_mut()
+        .take()
+        .expect("definition answered");
+    assert!(
+        defined.is_ok_and(|links| !links.is_empty()),
+        "no definition for Vec::new"
+    );
+    let completed = completions
+        .borrow_mut()
+        .take()
+        .expect("completion answered");
+    assert!(
+        completed.is_ok_and(|response| match response {
+            rwk_core::lsp::lsp_types::CompletionResponse::Array(items) => !items.is_empty(),
+            rwk_core::lsp::lsp_types::CompletionResponse::List(list) => !list.items.is_empty(),
+        }),
+        "no completions after v.le"
+    );
 }

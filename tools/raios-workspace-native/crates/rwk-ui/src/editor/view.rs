@@ -137,6 +137,8 @@ pub struct EditorView {
     split: Option<String>,
     /// The message under the editor (last action's outcome).
     status: Option<SharedString>,
+    /// Git marks by project-relative path, shown on the tabs.
+    badges: HashMap<String, rwk_core::git::Badge>,
     /// Bumped by every read request; a read that finishes for a superseded request is dropped.
     next_request: u64,
     /// In-flight read per path; a closed tab's entry is removed so its read cannot reopen it.
@@ -171,6 +173,7 @@ impl EditorView {
             active: 0,
             diff_split: false,
             status: None,
+            badges: HashMap::new(),
             next_request: 0,
             requests: HashMap::new(),
             diff_generation: 0,
@@ -186,6 +189,23 @@ impl EditorView {
             .get(self.active)
             .map(|tab| tab.state.read(cx).value().to_string())
             .unwrap_or_default()
+    }
+
+    /// Replaces the git marks shown on the tabs.
+    pub fn set_badges(
+        &mut self,
+        badges: HashMap<String, rwk_core::git::Badge>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.badges != badges {
+            self.badges = badges;
+            cx.notify();
+        }
+    }
+
+    /// The git mark a tab shows, when its file has one.
+    pub fn badge(&self, path: &str) -> Option<rwk_core::git::Badge> {
+        self.badges.get(path).copied()
     }
 
     /// The 1-based line of the cursor, when a document is open.
@@ -599,6 +619,21 @@ impl EditorView {
         state.update(cx, |state, _| {
             super::lsp::attach(state, path, requester, open)
         });
+    }
+
+    /// Puts the cursor of the active file at the 0-based `line` and `character`.
+    pub fn set_cursor(
+        &mut self,
+        line: u32,
+        character: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.state.update(cx, |state, cx| {
+                state.set_cursor_position(Position::new(line, character), window, cx)
+            });
+        }
     }
 
     /// The symbol under the cursor: path, 0-based line and column, and its name.
@@ -1252,6 +1287,7 @@ impl Render for EditorView {
                         true => format!("{path} ●"),
                         false => path.clone(),
                     };
+                    let badge = self.badges.get(&path).copied();
                     let active = index == self.active;
                     let activate = path.clone();
                     let close = path.clone();
@@ -1300,6 +1336,13 @@ impl Render for EditorView {
                                     view.activate_tab(&activate, window, cx);
                                 })),
                         )
+                        .children(badge.map(|badge| {
+                            div()
+                                .text_color(gpui::rgb(crate::file_tree::view::badge_color(
+                                    badge.kind, theme.dark,
+                                )))
+                                .child(SharedString::from(badge.letter.to_string()))
+                        }))
                         .child(
                             div()
                                 .id(SharedString::from(format!("tab-close-{path}")))
