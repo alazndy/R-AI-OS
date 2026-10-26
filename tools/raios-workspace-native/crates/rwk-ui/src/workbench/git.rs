@@ -179,7 +179,12 @@ impl Workbench {
 
     /// Reloads open tabs without edits whose file git rewrote. An empty path stands for every
     /// open tab (a branch switch).
-    fn reload_clean_tabs(&mut self, paths: &[String], window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn reload_clean_tabs(
+        &mut self,
+        paths: &[String],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(project) = self.project.clone() else {
             return;
         };

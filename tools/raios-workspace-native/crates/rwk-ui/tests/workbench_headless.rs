@@ -1905,6 +1905,92 @@ fn a_search_runs_on_enter_and_a_hit_opens_the_file_at_its_line() {
 }
 
 #[test]
+fn replace_all_previews_first_then_writes_and_leaves_unsaved_files_alone() {
+    let mut rig = rig();
+    rig.open_project();
+    std::fs::write(rig.dir.path().join("c.txt"), "beta one\nbeta two").expect("c");
+    std::fs::write(rig.dir.path().join("d.txt"), "beta").expect("d");
+    rig.script_search(vec![
+        (
+            Duration::ZERO,
+            hits(&[
+                ("c.txt", 1, "beta one"),
+                ("c.txt", 2, "beta two"),
+                ("d.txt", 1, "beta"),
+            ]),
+        ),
+        (Duration::ZERO, Vec::new()),
+    ]);
+    // d.txt is open with an unsaved edit, so it must not be rewritten underneath it.
+    rig.open_file("d.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "beta"));
+    rig.type_text("!");
+    rig.run(CommandId::Search);
+    rig.search_query("beta");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.search_hits().len() == 3));
+
+    let view = rig.read(|wb, _| wb.search().cloned()).expect("view");
+    rig.with(|_wb, window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_replacement("gamma", window, cx);
+            view.press_replace(cx);
+        })
+    });
+    let note = |rig: &mut Rig| {
+        rig.cx
+            .update(|_, cx| view.read(cx).replace_note().map(str::to_owned))
+    };
+    assert!(rig.settle_until(|rig| note(rig).is_some_and(|n| n.contains("onaylamak"))));
+    let note_text = note(&mut rig).unwrap();
+    assert!(
+        note_text.contains("1 dosyada 2 yer") && note_text.contains("d.txt"),
+        "{note_text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(rig.dir.path().join("c.txt")).unwrap(),
+        "beta one\nbeta two",
+        "a preview writes nothing"
+    );
+
+    rig.with(|_wb, _window, cx| view.update(cx, |view, cx| view.press_replace(cx)));
+    let c = rig.dir.path().join("c.txt");
+    assert!(rig.settle_until(|_| {
+        std::fs::read_to_string(&c).is_ok_and(|text| text == "gamma one\ngamma two")
+    }));
+    assert_eq!(
+        std::fs::read_to_string(rig.dir.path().join("d.txt")).unwrap(),
+        "beta"
+    );
+}
+
+#[test]
+fn a_clicked_path_in_terminal_output_opens_the_file_at_its_line() {
+    use rwk_ui::terminal::TerminalEvent;
+    let mut rig = rig();
+    rig.open_project();
+    std::fs::write(rig.dir.path().join("c.txt"), "one\ntwo\nthree").expect("c");
+    rig.run(CommandId::NewTerminal);
+    let view = rig
+        .read(|wb, _| wb.terminal_view(0).cloned())
+        .expect("terminal");
+    let line = "error: c.txt:3:1 broke";
+    rig.with(|_wb, _w, cx| {
+        view.update(cx, |_, cx| {
+            cx.emit(TerminalEvent::Open {
+                line: line.to_owned(),
+                column: 9,
+            })
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("c.txt")));
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(3)
+    );
+}
+
+#[test]
 fn escape_closes_the_search_overlay() {
     let mut rig = rig();
     rig.open_project();
@@ -4086,6 +4172,12 @@ while True:
     elif method == 'textDocument/formatting':
         e = lambda l, c0, c1, t: {'range': {'start': {'line': l, 'character': c0}, 'end': {'line': l, 'character': c1}}, 'newText': t}
         send({'jsonrpc': '2.0', 'id': m['id'], 'result': [e(0, 0, 2, 'FN'), e(1, 5, 5, ';')]})
+    elif method == 'textDocument/rename':
+        uri = m['params']['textDocument']['uri']
+        name = m['params']['newName']
+        e = lambda t: {'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 2}}, 'newText': t}
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'changes': {
+            uri: [e(name)], uri.replace('a.rs', 'b.rs'): [e(name)]}}})
     elif method == 'textDocument/completion':
         send({'jsonrpc': '2.0', 'id': m['id'], 'result': [{'label': 'alpha'}]})
     elif method == 'shutdown':
@@ -4259,6 +4351,52 @@ fn the_format_command_applies_the_servers_edits_last_first() {
 
     rig.run(CommandId::Format);
     assert!(rig.settle_until(|rig| rig.editor_text() == "FN a() {}\nlet x;\n"));
+}
+
+#[test]
+fn renaming_a_symbol_edits_open_tabs_and_writes_the_other_files() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    std::fs::write(rig.dir.path().join("b.rs"), "fn b() {}\n").expect("b.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+
+    // The cursor starts on `fn`, which is what the prompt offers.
+    rig.run(CommandId::RenameSymbol);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("the prompt opens");
+    assert_eq!(rig.read(|_wb, cx| prompt.read(cx).text(cx)), "fn");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("pub", window, cx);
+            prompt.submit(cx);
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.editor_text() == "pub a() {}\nlet x\n"));
+    let other = rig.dir.path().join("b.rs");
+    assert!(
+        rig.settle_until(
+            |_| std::fs::read_to_string(&other).is_ok_and(|text| text == "pub b() {}\n")
+        )
+    );
 }
 
 #[test]

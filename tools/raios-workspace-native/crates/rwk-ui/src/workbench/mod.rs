@@ -77,6 +77,13 @@ pub enum WorkbenchEvent {
     /// The open project's workspace changed (tabs, layout, sessions); the application writes
     /// it so the next start reopens the project as it was left.
     WorkspaceChanged(SavedWorkspace),
+    /// An editing switch (auto-save, format on save) changed; the application stores it.
+    PreferencesChanged {
+        /// Save changed files when the window loses focus.
+        auto_save: bool,
+        /// Format with the language server before saving.
+        format_on_save: bool,
+    },
 }
 
 impl gpui::EventEmitter<WorkbenchEvent> for Workbench {}
@@ -241,6 +248,8 @@ struct TerminalPane {
     /// A command from the user's task file runs here; the pane is not saved with the workspace.
     run: bool,
     view: Entity<TerminalView>,
+    /// Opens a `path:line` that was Ctrl-clicked in the output.
+    _open_location: Subscription,
 }
 
 /// The application's main view.
@@ -882,6 +891,7 @@ impl Workbench {
             CommandId::SourceControl => self.open_git(window, cx),
             CommandId::RunTask => self.open_task_palette(window, cx),
             CommandId::OpenOutputLocation => self.open_output_location(window, cx),
+            CommandId::RenameSymbol => self.open_symbol_prompt(window, cx),
             CommandId::Format => self
                 .editor
                 .update(cx, |editor, cx| editor.format(window, cx)),
@@ -1530,6 +1540,14 @@ impl Workbench {
             _ => None,
         };
         let _ = self.dock.push_default(info.id.clone());
+        let open_location = cx.subscribe_in(
+            &view,
+            window,
+            |this, _view, event: &crate::terminal::TerminalEvent, window, cx| {
+                let crate::terminal::TerminalEvent::Open { line, column } = event;
+                this.open_clicked_location(line, *column, window, cx);
+            },
+        );
         self.terminals.push(TerminalPane {
             kind,
             id: info.id,
@@ -1539,6 +1557,7 @@ impl Workbench {
             task: None,
             run: matches!(launch, SessionLaunch::Task(_)),
             view,
+            _open_location: open_location,
         });
         self.dock_visible = true;
         let last = self.terminals.len() - 1;

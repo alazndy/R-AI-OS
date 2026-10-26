@@ -118,6 +118,13 @@ fn main() {
                     Arc::new(persistence::FsTaskStore::new(&home));
                 workbench.update(cx, |workbench, _| workbench.set_task_source(Some(source)));
             }
+            let preferences_file = config_home().map(|home| persistence::preferences_path(&home));
+            if let Some(file) = &preferences_file {
+                let stored = persistence::load_preferences(file);
+                workbench.update(cx, |workbench, _| {
+                    workbench.set_editing_preferences(stored.auto_save, stored.format_on_save)
+                });
+            }
             let workspace_store_for_events = workspace_store.clone();
             cx.subscribe(
                 &workbench,
@@ -133,6 +140,20 @@ fn main() {
                         if let Some(file) = &registered_file {
                             if let Err(error) = persistence::remember_registered(file, project) {
                                 eprintln!("rwk-app: could not remember the registration: {error}");
+                            }
+                        }
+                    }
+                    WorkbenchEvent::PreferencesChanged {
+                        auto_save,
+                        format_on_save,
+                    } => {
+                        if let Some(file) = &preferences_file {
+                            let preferences = persistence::Preferences {
+                                auto_save: *auto_save,
+                                format_on_save: *format_on_save,
+                            };
+                            if let Err(error) = persistence::save_preferences(file, preferences) {
+                                eprintln!("rwk-app: could not save the preferences: {error}");
                             }
                         }
                     }

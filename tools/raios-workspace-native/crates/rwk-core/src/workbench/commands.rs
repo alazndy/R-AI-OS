@@ -19,6 +19,8 @@ pub enum CommandId {
     Problems,
     /// Format the open file with its language server.
     Format,
+    /// Rename the symbol under the cursor in every file, through the language server.
+    RenameSymbol,
     /// Show the next open file read-only beside the active one, or close that split.
     SplitEditor,
     /// Find text in the open file.
@@ -182,7 +184,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 60] = [
+const COMMANDS: [Command; 61] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -408,6 +410,12 @@ const COMMANDS: [Command; 60] = [
         &[],
     ),
     cmd(CommandId::Format, "Dosyayı biçimlendir", None, &[]),
+    cmd(
+        CommandId::RenameSymbol,
+        "Sembolü yeniden adlandır",
+        None,
+        &[],
+    ),
     cmd(CommandId::Problems, "Sorunları göster", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
     cmd(
@@ -620,8 +628,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor | CloseTab | Format | FindInFile | ReplaceInFile
-        | SplitEditor => {
+        Diff | DiffSplit | FocusEditor | CloseTab | Format | RenameSymbol | FindInFile
+        | ReplaceInFile | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -718,7 +726,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 60);
+        assert_eq!(catalog().len(), 61);
     }
 
     #[test]

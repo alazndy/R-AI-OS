@@ -270,6 +270,39 @@ pub fn format_request(
     receiver
 }
 
+/// Asks the server to rename the symbol at `line`:`character`; the answer is a workspace edit.
+pub fn rename_request(
+    requester: &Requester,
+    path: &str,
+    line: u32,
+    character: u32,
+    new_name: &str,
+    timeout: std::time::Duration,
+) -> async_channel::Receiver<rwk_core::error::Result<Value>> {
+    let (sender, receiver) = async_channel::bounded(1);
+    let late = sender.clone();
+    let _ = std::thread::Builder::new()
+        .name("lsp-rename-timeout".into())
+        .spawn(move || {
+            std::thread::sleep(timeout);
+            let _ = late.try_send(Err(rwk_core::error::AppError::new(
+                rwk_core::error::ErrorCode::NotFound,
+                "Dil sunucusu zamanında yanıt vermedi",
+            )));
+        });
+    requester.request(
+        path,
+        "textDocument/rename",
+        line,
+        character,
+        serde_json::json!({"newName": new_name}),
+        Box::new(move |answer| {
+            let _ = sender.send_blocking(answer);
+        }),
+    );
+    receiver
+}
+
 /// Reads a formatting answer into edits ready to apply.
 pub fn formatting_edits(answer: Value) -> rwk_core::error::Result<Vec<TextEdit>> {
     let edits: Option<Vec<TextEdit>> = serde_json::from_value(answer).map_err(|_| {

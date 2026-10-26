@@ -103,17 +103,37 @@ pub struct Location {
     pub column: Option<usize>,
 }
 
+fn is_break(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '(' | ')' | '[' | ']' | '"' | '\'' | '`' | '<' | '>' | '='
+        )
+}
+
+/// The location written at character `column` of `line`, if the word there is one.
+pub fn location_at(line: &str, column: usize) -> Option<Location> {
+    let characters: Vec<char> = line.chars().collect();
+    if column >= characters.len() || is_break(characters[column]) {
+        return None;
+    }
+    let mut from = column;
+    while from > 0 && !is_break(characters[from - 1]) {
+        from -= 1;
+    }
+    let mut to = column;
+    while to + 1 < characters.len() && !is_break(characters[to + 1]) {
+        to += 1;
+    }
+    let word: String = characters[from..=to].iter().collect();
+    locations(&word).into_iter().next()
+}
+
 /// Every `path:line` or `path:line:col` in `text`, in order. Anything with `://` is a URL and
 /// is skipped. Whether the path exists is for the caller to check.
 pub fn locations(text: &str) -> Vec<Location> {
     let mut found = Vec::new();
-    for word in text.split(|c: char| {
-        c.is_whitespace()
-            || matches!(
-                c,
-                '(' | ')' | '[' | ']' | '"' | '\'' | '`' | '<' | '>' | '='
-            )
-    }) {
+    for word in text.split(is_break) {
         if word.contains("://") {
             continue;
         }
@@ -225,5 +245,17 @@ mod tests {
             Some(("src/b.rs".to_owned(), 20))
         );
         assert_eq!(last_project_location("gone.rs:5", root, &exists), None);
+    }
+
+    #[test]
+    fn the_location_under_a_column_is_the_word_there() {
+        let line = "error at src/main.rs:12:5, see (lib.rs:3) ok";
+        let at = |column| location_at(line, column).map(|l| (l.path, l.line));
+        assert_eq!(at(12), Some(("src/main.rs".to_owned(), 12)));
+        assert_eq!(at(20), Some(("src/main.rs".to_owned(), 12)));
+        assert_eq!(at(0), None);
+        assert_eq!(at(36), Some(("lib.rs".to_owned(), 3)));
+        assert_eq!(at(8), None, "a space is not a location");
+        assert_eq!(at(500), None);
     }
 }
