@@ -129,18 +129,22 @@ pub fn footer_items(info: &FooterInfo) -> Vec<FooterItem> {
                 (
                     format!("{name} yok"),
                     format!(
-                        "{program} PATH'te bulunamadı; kurulunca bu dilde tamamlama ve sorunlar çalışır"
+                        "{program} PATH'te bulunamadı; kurulunca bu dilde tamamlama ve sorunlar çalışır; tıklayınca yeniden dener"
                     ),
                     FooterLevel::Warn,
                 )
             }
             ServerStatus::Crashed => (
                 format!("{name} çöktü"),
-                "Dil sunucusu çöktü ve yeniden başlatılamadı".to_owned(),
+                "Dil sunucusu çöktü ve yeniden başlatılamadı; tıklayınca yeniden dener".to_owned(),
                 FooterLevel::Bad,
             ),
         };
-        items.push(FooterItem::info(&format!("lsp-{name}"), text, tip).level(level));
+        let mut item = FooterItem::info(&format!("lsp-{name}"), text, tip).level(level);
+        if matches!(status, ServerStatus::Unavailable(_) | ServerStatus::Crashed) {
+            item = item.on_click(CommandId::RestartServers);
+        }
+        items.push(item);
     }
     if info.dirty_files > 0 {
         items.push(
@@ -273,7 +277,7 @@ mod tests {
             "{}",
             by("lsp-rust").tip
         );
-        assert_eq!(by("lsp-rust").command, None);
+        assert_eq!(by("lsp-rust").command, Some(CommandId::RestartServers));
         assert_eq!(by("dirty").text, "● 3 kaydedilmedi");
         assert_eq!(by("terminals").text, "⌨ 2/4");
         assert_eq!(by("auto-save").level, FooterLevel::Good);

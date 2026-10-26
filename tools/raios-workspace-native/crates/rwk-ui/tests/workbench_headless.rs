@@ -5306,3 +5306,58 @@ fn rust_analyzer_lists_usages_and_the_outline_of_a_file() {
     assert!(outline.contains(&"struct Shape".to_owned()), "{outline:?}");
     assert!(outline.contains(&"fn main".to_owned()), "{outline:?}");
 }
+
+/// A server that was missing shows in the footer; once it can start, clicking its item
+/// (the restart command) brings it up without reopening the project.
+#[test]
+fn restarting_language_servers_recovers_one_that_gave_up() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    let installed = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&installed);
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            if !flag.load(Ordering::SeqCst) {
+                return Err(rwk_core::error::AppError::new(
+                    rwk_core::error::ErrorCode::NotFound,
+                    "not installed",
+                ));
+            }
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+
+    let server_item = |rig: &mut Rig| {
+        rig.read(|wb, cx| {
+            wb.footer_items(cx)
+                .into_iter()
+                .find(|item| item.id.starts_with("lsp-"))
+        })
+    };
+    assert!(rig.settle_until(|rig| server_item(rig).is_some_and(|i| i.text.ends_with("yok"))));
+    let item = server_item(&mut rig).unwrap();
+    assert_eq!(item.command, Some(CommandId::RestartServers));
+    assert_eq!(rig.read(|wb, _| wb.problem_summary()), None);
+
+    installed.store(true, Ordering::SeqCst);
+    rig.run(item.command.unwrap());
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+    let item = server_item(&mut rig).unwrap();
+    assert!(item.text.ends_with('✓'), "{}", item.text);
+    assert_eq!(item.command, None);
+}

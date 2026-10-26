@@ -81,6 +81,16 @@ impl Workbench {
         }));
     }
 
+    /// Starts the servers again, those that gave up included.
+    pub(super) fn restart_servers(&mut self, cx: &mut Context<Self>) {
+        let Some(servers) = &self.servers else {
+            self.say("Dil sunucuları kapalı", cx);
+            return;
+        };
+        servers.restart();
+        self.say("Dil sunucuları yeniden başlatılıyor…", cx);
+    }
+
     /// Stops the servers; waiting for them to exit happens off the UI thread.
     pub(super) fn stop_language_servers(&mut self, cx: &mut Context<Self>) {
         self.lsp_task = None;
