@@ -21,7 +21,11 @@ impl EventEmitter<ProblemsEvent> for ProblemsView {}
 
 /// The Problems view.
 pub struct ProblemsView {
+    /// The servers' list, errors first.
+    raw: Vec<Problem>,
+    /// What is on screen, in order: `raw`, or by file when `grouped`.
     problems: Vec<Problem>,
+    grouped: bool,
     selected: usize,
     theme: Theme,
     focus: FocusHandle,
@@ -33,7 +37,9 @@ impl ProblemsView {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         Self {
+            raw: problems.clone(),
             problems,
+            grouped: false,
             selected: 0,
             theme: Theme::of(Appearance::default()),
             focus,
@@ -48,9 +54,32 @@ impl ProblemsView {
 
     /// Replaces the list (the servers sent new diagnostics while the view is open).
     pub fn set_problems(&mut self, problems: Vec<Problem>, cx: &mut Context<Self>) {
-        self.problems = problems;
+        self.raw = problems;
+        self.arrange();
         self.selected = self.selected.min(self.problems.len().saturating_sub(1));
         cx.notify();
+    }
+
+    /// Puts the list in the order on screen.
+    fn arrange(&mut self) {
+        self.problems = self.raw.clone();
+        if self.grouped {
+            self.problems
+                .sort_by(|a, b| (&a.path, a.line, a.column).cmp(&(&b.path, b.line, b.column)));
+        }
+    }
+
+    /// Switches between the severity order and one section per file.
+    pub fn toggle_grouping(&mut self, cx: &mut Context<Self>) {
+        self.grouped = !self.grouped;
+        self.arrange();
+        self.selected = 0;
+        cx.notify();
+    }
+
+    /// Whether the list is grouped by file.
+    pub fn grouped(&self) -> bool {
+        self.grouped
     }
 
     /// The lines on screen.
@@ -108,12 +137,40 @@ impl Render for ProblemsView {
         } else {
             format!("{} sorun", self.problems.len())
         };
+        let grouped = self.grouped;
+        let counts: std::collections::HashMap<String, (usize, usize)> =
+            self.problems
+                .iter()
+                .fold(std::collections::HashMap::new(), |mut map, problem| {
+                    let entry: &mut (usize, usize) = map.entry(problem.path.clone()).or_default();
+                    match problem.severity {
+                        Severity::Error => entry.0 += 1,
+                        _ => entry.1 += 1,
+                    }
+                    map
+                });
+        let mut previous: Option<String> = None;
         let rows = self
             .problems
             .iter()
             .cloned()
             .enumerate()
             .map(|(ix, problem)| {
+                let header =
+                    (grouped && previous.as_deref() != Some(problem.path.as_str())).then(|| {
+                        let (errors, others) =
+                            counts.get(&problem.path).copied().unwrap_or_default();
+                        div()
+                            .mt_2()
+                            .px_3()
+                            .text_xs()
+                            .text_color(gpui::rgb(theme.muted))
+                            .child(SharedString::from(format!(
+                                "{} · {errors} hata, {others} diğer",
+                                problem.path
+                            )))
+                    });
+                previous = Some(problem.path.clone());
                 let color = match problem.severity {
                     Severity::Error => theme.accent_ink,
                     _ => theme.muted,
@@ -154,11 +211,12 @@ impl Render for ProblemsView {
                         this.selected = ix;
                         this.choose_selected(cx);
                     }));
-                if ix == selected {
+                let row = if ix == selected {
                     row.bg(gpui::rgb(theme.selected))
                 } else {
                     row
-                }
+                };
+                div().flex().flex_col().children(header).child(row)
             });
         div()
             .absolute()
@@ -193,6 +251,23 @@ impl Render for ProblemsView {
                             .flex_1()
                             .text_color(gpui::rgb(theme.muted))
                             .child("SORUNLAR"),
+                    )
+                    .child(
+                        div()
+                            .id("problems-group")
+                            .px_3()
+                            .py_0p5()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(gpui::rgb(if grouped {
+                                theme.accent_ink
+                            } else {
+                                theme.line
+                            }))
+                            .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+                            .child("Dosyaya göre")
+                            .on_click(cx.listener(|this, _, _window, cx| this.toggle_grouping(cx))),
                     )
                     .child(
                         div()

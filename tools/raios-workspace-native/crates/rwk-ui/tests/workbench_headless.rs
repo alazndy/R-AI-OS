@@ -4227,6 +4227,17 @@ fn language_server_problems_reach_the_editor_the_status_line_and_the_problems_vi
     });
     let first = first.flatten().expect("the view lists problems");
     assert_eq!((first.path.as_str(), first.line), ("a.rs", 2));
+
+    // Grouped by file the order follows the lines instead of the severity.
+    let view = rig.read(|wb, _| wb.problems_view().cloned()).unwrap();
+    rig.with(|_wb, _w, cx| view.update(cx, |view, cx| view.toggle_grouping(cx)));
+    let lines = rig.cx.update(|_, cx| {
+        let view = view.read(cx);
+        assert!(view.grouped());
+        view.problems().iter().map(|p| p.line).collect::<Vec<_>>()
+    });
+    assert_eq!(lines, [1, 2]);
+    rig.with(|_wb, _w, cx| view.update(cx, |view, cx| view.toggle_grouping(cx)));
     rig.cx.simulate_keystrokes("enter");
     assert!(rig.read(|wb, _| wb.problems_view().is_none()));
     assert_eq!(
