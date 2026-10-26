@@ -1965,6 +1965,32 @@ fn replace_all_previews_first_then_writes_and_leaves_unsaved_files_alone() {
 }
 
 #[test]
+fn a_clicked_path_in_terminal_output_opens_the_file_at_its_line() {
+    use rwk_ui::terminal::TerminalEvent;
+    let mut rig = rig();
+    rig.open_project();
+    std::fs::write(rig.dir.path().join("c.txt"), "one\ntwo\nthree").expect("c");
+    rig.run(CommandId::NewTerminal);
+    let view = rig
+        .read(|wb, _| wb.terminal_view(0).cloned())
+        .expect("terminal");
+    let line = "error: c.txt:3:1 broke";
+    rig.with(|_wb, _w, cx| {
+        view.update(cx, |_, cx| {
+            cx.emit(TerminalEvent::Open {
+                line: line.to_owned(),
+                column: 9,
+            })
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("c.txt")));
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(3)
+    );
+}
+
+#[test]
 fn escape_closes_the_search_overlay() {
     let mut rig = rig();
     rig.open_project();

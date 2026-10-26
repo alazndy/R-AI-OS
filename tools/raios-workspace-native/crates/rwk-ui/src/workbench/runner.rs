@@ -68,6 +68,30 @@ impl Workbench {
         }
     }
 
+    /// Opens the project file a Ctrl-click on `column` of a terminal `line` points at.
+    pub(super) fn open_clicked_location(
+        &mut self,
+        line: &str,
+        column: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        let Some(location) = rwk_core::runner::location_at(line, column) else {
+            return;
+        };
+        let root = project.info().root.clone();
+        let written = format!("{}:{}", location.path, location.line);
+        match last_project_location(&written, &root, &|relative| {
+            project.read_document(relative).is_ok()
+        }) {
+            Some((path, line)) => self.request_open_file_at(path, Some(line), window, cx),
+            None => self.say(format!("{} proje dosyası değil", location.path), cx),
+        }
+    }
+
     /// Opens the file and line that the selected terminal's screen mentions last.
     pub(super) fn open_output_location(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(project), Some(pane)) = (self.project.clone(), self.terminals.get(self.selected))

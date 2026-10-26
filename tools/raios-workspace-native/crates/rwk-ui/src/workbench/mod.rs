@@ -248,6 +248,8 @@ struct TerminalPane {
     /// A command from the user's task file runs here; the pane is not saved with the workspace.
     run: bool,
     view: Entity<TerminalView>,
+    /// Opens a `path:line` that was Ctrl-clicked in the output.
+    _open_location: Subscription,
 }
 
 /// The application's main view.
@@ -1538,6 +1540,14 @@ impl Workbench {
             _ => None,
         };
         let _ = self.dock.push_default(info.id.clone());
+        let open_location = cx.subscribe_in(
+            &view,
+            window,
+            |this, _view, event: &crate::terminal::TerminalEvent, window, cx| {
+                let crate::terminal::TerminalEvent::Open { line, column } = event;
+                this.open_clicked_location(line, *column, window, cx);
+            },
+        );
         self.terminals.push(TerminalPane {
             kind,
             id: info.id,
@@ -1547,6 +1557,7 @@ impl Workbench {
             task: None,
             run: matches!(launch, SessionLaunch::Task(_)),
             view,
+            _open_location: open_location,
         });
         self.dock_visible = true;
         let last = self.terminals.len() - 1;

@@ -229,6 +229,20 @@ fn hex(color: Rgb) -> u32 {
     (u32::from(color.0) << 16) | (u32::from(color.1) << 8) | u32::from(color.2)
 }
 
+/// What the terminal view tells the workbench.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalEvent {
+    /// The user Ctrl-clicked this text of a screen line at this column (in characters).
+    Open {
+        /// The screen line.
+        line: String,
+        /// The clicked character.
+        column: usize,
+    },
+}
+
+impl gpui::EventEmitter<TerminalEvent> for TerminalView {}
+
 impl TerminalView {
     /// The message currently shown to the user, if any.
     pub fn status(&self) -> Option<String> {
@@ -411,6 +425,19 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
+        if event.button == GpuiButton::Left && event.modifiers.secondary() {
+            // Ctrl-click (Cmd on macOS) opens a `path:line` under the pointer, even while the
+            // program inside asks for mouse reports.
+            let (row, col, _) = self.cell_at(event.position);
+            let text = self.shared.screen_text.borrow().clone();
+            if let Some(line) = text.lines().nth(usize::from(row)) {
+                cx.emit(TerminalEvent::Open {
+                    line: line.to_owned(),
+                    column: usize::from(col),
+                });
+            }
+            return;
+        }
         if self.reporting_mouse(event.modifiers.shift) {
             if let Some(button) = report_button(event.button) {
                 self.report_mouse(
