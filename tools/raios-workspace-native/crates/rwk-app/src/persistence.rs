@@ -321,13 +321,16 @@ mod tests {
             }],
             active: 0,
             layout: LayoutPreset::Editor,
+            dock: None,
             terminals: vec![
-                SavedTerminal::Shell,
+                SavedTerminal::Shell { name: None },
                 SavedTerminal::Agent {
                     kind: rwk_core::sessions::SessionKind::Claude,
                     native_session: None,
+                    name: None,
                 },
             ],
+            task_links: Vec::new(),
         };
         store.save(&workspace).expect("save");
         assert_eq!(store.load(project), Some(workspace));
@@ -346,6 +349,8 @@ mod tests {
             active: 0,
             layout: rwk_core::workbench::LayoutPreset::Balanced,
             terminals: Vec::new(),
+            dock: None,
+            task_links: Vec::new(),
         };
         store.save(&state).expect("save");
         assert_eq!(

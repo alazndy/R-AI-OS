@@ -113,9 +113,33 @@ pub const APP_IDLE_PSS: Gate = Gate {
     direction: Direction::AtMost,
 };
 
+/// What a dock arrangement command adds to the frame pacing of the window, with twelve live
+/// terminals: its 99th-percentile time to the next painted frame minus the median time a bare
+/// refresh takes (about 24 ms on the development compositor, which is pacing, not work). The
+/// limit, 25 ms, is a hypothesis of about one and a half 60 Hz frames.
+pub const DOCK_ARRANGE_OVER_FLOOR: Gate = Gate {
+    id: "D1",
+    name: "dock arrange over frame floor, 12 terminals, p99",
+    unit: "ms",
+    limit: 25.0,
+    direction: Direction::AtMost,
+};
+
+/// How many PTY resizes one dock arrangement command causes, with twelve live terminals. The
+/// count was the same on every run here (258 resizes over 160 commands, 1.6 each), but it may differ with window size or dock cycle, so
+/// this catches a layout that makes terminals resize over and over: a storm would be near
+/// twelve per command. The limit, 3, is a hypothesis of about twice what is measured.
+pub const DOCK_RESIZES_PER_OP: Gate = Gate {
+    id: "D2",
+    name: "dock arrange PTY resizes per command",
+    unit: "n",
+    limit: 3.0,
+    direction: Direction::AtMost,
+};
+
 /// Every gate, in report order.
 #[cfg(test)]
-pub const ALL_GATES: [Gate; 9] = [
+pub const ALL_GATES: [Gate; 11] = [
     COLD_START,
     FLOOD_FPS,
     FLOOD4_FPS,
@@ -125,6 +149,8 @@ pub const ALL_GATES: [Gate; 9] = [
     EDITOR_OPEN_500K,
     APP_COLD_START,
     APP_IDLE_PSS,
+    DOCK_ARRANGE_OVER_FLOOR,
+    DOCK_RESIZES_PER_OP,
 ];
 
 /// A gate together with what was measured.

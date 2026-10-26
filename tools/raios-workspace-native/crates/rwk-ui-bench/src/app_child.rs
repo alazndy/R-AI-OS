@@ -66,6 +66,7 @@ pub fn run(scenario: Scenario) -> ! {
             Scenario::EditorOpen30k => editor_open(scenario, LINES_30K, cx),
             Scenario::EditorOpen500k => editor_open(scenario, LINES_500K, cx),
             Scenario::AppIdle => app_idle(cx),
+            Scenario::DockArrange => dock_arrange(cx),
             _ => fail("not a P3 scenario"),
         }
     });
@@ -127,6 +128,7 @@ fn scenario_name(scenario: Scenario) -> &'static str {
     match scenario {
         Scenario::EditorOpen30k => "editor-open-30k",
         Scenario::EditorOpen500k => "editor-open-500k",
+        Scenario::DockArrange => "dock-arrange",
         _ => "app-idle",
     }
 }
@@ -149,6 +151,7 @@ fn app_idle(cx: &mut App) {
         fail(&format!("could not seed the project: {error}"));
     }
     let programs = ProgramPaths {
+        ssh: None,
         shell: Some(script),
         raios: None,
     };
@@ -184,6 +187,130 @@ fn app_idle(cx: &mut App) {
         };
         finish(format!(
             "RESULT scenario=app-idle status=ok pss_mb={pss:.1}"
+        ));
+    })
+    .detach();
+}
+
+/// Arrangement commands applied in turn; each is a drag gesture's keyboard twin.
+const ARRANGE_CYCLE: [CommandId; 8] = [
+    CommandId::NextTerminal,
+    CommandId::MoveTerminalNext,
+    CommandId::SplitTerminalRight,
+    CommandId::NextTerminal,
+    CommandId::SplitTerminalDown,
+    CommandId::JoinTerminalPrevious,
+    CommandId::GrowTerminal,
+    CommandId::UngroupTerminal,
+];
+/// Arrangement commands per run.
+const ARRANGE_OPS: usize = 160;
+/// Bare refreshes timed first, as the frame-pacing floor.
+const BASELINE_OPS: usize = 40;
+/// Frames that may pass for one command before the run is abandoned.
+const ARRANGE_DEADLINE: Duration = Duration::from_secs(5);
+
+fn dock_arrange(cx: &mut App) {
+    let dir = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(error) => fail(&format!("no temporary project: {error}")),
+    };
+    let script = dir.path().join(".session.sh");
+    let written = std::fs::write(&script, "#!/bin/bash\nexec sleep 100000\n")
+        .and_then(|()| std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)));
+    if let Err(error) = written {
+        fail(&format!("could not write the session script: {error}"));
+    }
+    let programs = ProgramPaths {
+        ssh: None,
+        shell: Some(script),
+        raios: None,
+    };
+    let handle = match cx.open_window(WindowOptions::default(), move |window, cx| {
+        cx.new(|cx| Workbench::new(programs, Appearance::default(), window, cx))
+    }) {
+        Ok(handle) => handle,
+        Err(error) => fail(&format!("could not open the window: {error}")),
+    };
+    cx.activate(true);
+    let root = dir.path().to_path_buf();
+    cx.spawn(async move |cx| {
+        let _dir = dir;
+        let _ = handle.update(cx, |workbench, window, cx| {
+            workbench.open_project(root, window, cx);
+        });
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        let _ = handle.update(cx, |workbench, window, cx| {
+            for _ in 0..12 {
+                workbench.run(CommandId::NewTerminal, window, cx);
+            }
+        });
+        if !window_receives_frames(handle.into(), cx).await {
+            finish("RESULT scenario=dock-arrange status=noframes".to_owned());
+        }
+        // Read just before the first command, so the bare-refresh rounds are not counted.
+        let resizes_before: Rc<Cell<u64>> = Rc::default();
+        let mut samples: Vec<u64> = Vec::with_capacity(ARRANGE_OPS);
+        let mut baseline: Vec<u64> = Vec::with_capacity(BASELINE_OPS);
+        // The first BASELINE_OPS rounds send no command: they time a bare refresh, which is the
+        // floor (frame pacing) the real commands are read against.
+        for step in 0..BASELINE_OPS + ARRANGE_OPS {
+            let command = step
+                .checked_sub(BASELINE_OPS)
+                .map(|n| ARRANGE_CYCLE[n % ARRANGE_CYCLE.len()]);
+            let done: Rc<Cell<Option<Duration>>> = Rc::default();
+            let signal = Rc::clone(&done);
+            let before = Rc::clone(&resizes_before);
+            let started = Instant::now();
+            let sent = handle.update(cx, move |workbench, window, cx| {
+                if step == BASELINE_OPS {
+                    before.set(workbench.pty_resize_count());
+                }
+                if let Some(command) = command {
+                    workbench.run(command, window, cx);
+                }
+                // A refused command repaints nothing by itself; the callback still fires on the
+                // next frame the window produces.
+                window.refresh();
+                window.on_next_frame(move |_window, _cx| signal.set(Some(started.elapsed())));
+            });
+            if sent.is_err() {
+                fail("the window is gone");
+            }
+            while done.get().is_none() {
+                if started.elapsed() > ARRANGE_DEADLINE {
+                    finish("RESULT scenario=dock-arrange status=noframes".to_owned());
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(1))
+                    .await;
+            }
+            let micros = done.get().unwrap_or_default().as_micros() as u64;
+            if command.is_some() {
+                samples.push(micros);
+            } else {
+                baseline.push(micros);
+            }
+        }
+        let Ok(resizes_after) = handle.update(cx, |workbench, _, _| workbench.pty_resize_count())
+        else {
+            fail("the window is gone");
+        };
+        let resizes = resizes_after.saturating_sub(resizes_before.get());
+        let floor = crate::stats::summarize(baseline);
+        let summary = crate::stats::summarize(samples);
+        finish(format!(
+            "RESULT scenario=dock-arrange status=ok p50_ms={:.3} p99_ms={:.3} max_ms={:.3} samples={} floor_p50_ms={:.3} over_floor_ms={:.3} resizes={} resizes_per_op={:.2}",
+            summary.p50_us as f64 / 1000.0,
+            summary.p99_us as f64 / 1000.0,
+            summary.max_us as f64 / 1000.0,
+            summary.count,
+            floor.p50_us as f64 / 1000.0,
+            summary.p99_us.saturating_sub(floor.p50_us) as f64 / 1000.0,
+            resizes,
+            resizes as f64 / ARRANGE_OPS as f64
         ));
     })
     .detach();

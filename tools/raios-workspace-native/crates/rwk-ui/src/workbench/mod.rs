@@ -1,12 +1,17 @@
 //! The workbench: the window's three panes, the terminal dock and the single place where
 //! commands take effect.
 
+pub mod binding;
 pub mod control;
+pub mod dock;
+pub mod entries;
 pub mod host;
 pub mod layout;
 pub mod memory;
+pub mod menus;
 pub mod offers;
 pub mod palette;
+pub mod remote;
 pub mod search;
 pub mod usage;
 pub mod workspace;
@@ -26,13 +31,14 @@ use rwk_core::guarded::Guarded;
 use rwk_core::handoff_flow::TrackedHandoff;
 use rwk_core::project::ProjectRoot;
 use rwk_core::sessions::{
-    ResumeKey, SessionId, SessionKind, SessionLaunch, SessionRegistry, TerminalHost, TerminalSize,
-    MAX_SESSIONS,
+    ResumeKey, SessionId, SessionKind, SessionLaunch, SessionName, SessionRegistry, TerminalHost,
+    TerminalSize, MAX_SESSIONS,
 };
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
 use rwk_core::workbench::{
-    available, resolve_shortcut, Appearance, CommandId, KeyboardContext, Keystroke, SavedWorkspace,
-    SessionOffer, Skin, SwitchDecision, Theme, Tone, WorkbenchState, WorkspaceStateSource,
+    available, resolve_shortcut, Appearance, CommandId, DockLayout, KeyboardContext, Keystroke,
+    SavedWorkspace, SessionOffer, Skin, SwitchDecision, Theme, Tone, WorkbenchState,
+    WorkspaceStateSource,
 };
 
 use crate::editor::view::{EditorEvent, EditorView};
@@ -56,7 +62,7 @@ const NEW_TERMINAL_SIZE: TerminalSize = TerminalSize {
 const WORKSPACE_SAVE_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// What the workbench tells the application around it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WorkbenchEvent {
     /// The user changed skin or tone; the application stores it.
     AppearanceChanged(Appearance),
@@ -92,6 +98,20 @@ pub enum PendingAction {
     CloseWindow,
     /// Stop this terminal session.
     StopTerminal(SessionId),
+    /// End this terminal session and remove its pane; `force` skips an agent's grace period.
+    CloseTerminal {
+        /// The terminal.
+        id: SessionId,
+        /// End it at once.
+        force: bool,
+    },
+    /// Delete this file, or this folder when it is empty (project-relative path).
+    DeleteEntry {
+        /// Project-relative path.
+        path: String,
+        /// The entry is a folder.
+        folder: bool,
+    },
     /// Choose which agent to start.
     ChooseAgent,
     /// A command whose policy is `confirm` waits for an explicit yes; the text is derived from
@@ -150,6 +170,28 @@ impl PendingAction {
                 message: "Seçili terminal oturumu durdurulacak.".to_owned(),
                 buttons: vec![(Decision::Confirm, "Durdur"), (Decision::Cancel, "Vazgeç")],
             },
+            PendingAction::CloseTerminal { force: false, .. } => Dialog {
+                title: "Terminali kapat",
+                message: "Terminalde çalışan işlem sonlandırılacak ve panel kaldırılacak. Bir ajan oturumuna kapanması için kısa bir süre tanınır.".to_owned(),
+                buttons: vec![(Decision::Confirm, "Kapat"), (Decision::Cancel, "Vazgeç")],
+            },
+            PendingAction::CloseTerminal { force: true, .. } => Dialog {
+                title: "Terminali zorla öldür",
+                message: "Terminaldeki tüm işlemler hemen SIGKILL ile öldürülecek. Bir ajan oturumu temiz kapanamaz ve RAIOS'ta açık bir çalıştırma kaydı kalabilir.".to_owned(),
+                buttons: vec![(Decision::Confirm, "Öldür"), (Decision::Cancel, "Vazgeç")],
+            },
+            PendingAction::DeleteEntry { path, folder } => Dialog {
+                title: if *folder { "Klasörü sil" } else { "Dosyayı sil" },
+                message: format!(
+                    "{path} kalıcı olarak silinecek; geri alınamaz.{}",
+                    if *folder {
+                        " Yalnızca boş klasörler silinir."
+                    } else {
+                        ""
+                    }
+                ),
+                buttons: vec![(Decision::Confirm, "Sil"), (Decision::Cancel, "Vazgeç")],
+            },
             PendingAction::OpenProjectStoppingSessions(_) => Dialog {
                 title: "Projeyi değiştir",
                 message: "Çalışan terminal ve ajan oturumları durdurulacak.".to_owned(),
@@ -182,8 +224,15 @@ impl PendingAction {
 struct TerminalPane {
     kind: SessionKind,
     id: SessionId,
+    /// The name the user gave the terminal, when there is one.
+    name: Option<SessionName>,
     /// The saved conversation this pane continues, when it was started from an offer.
     resume: Option<ResumeKey>,
+    /// Where a remote shell (SSH) leads. Such a pane is not part of the saved workspace:
+    /// reopening the project never connects anywhere by itself.
+    ssh: Option<rwk_core::ssh::SshTarget>,
+    /// The task given to this terminal's agent from the task list.
+    task: Option<rwk_core::handoff_flow::TaskLink>,
     view: Entity<TerminalView>,
 }
 
@@ -214,7 +263,24 @@ pub struct Workbench {
     composer_subscription: Option<Subscription>,
     reject_prompt: Option<Entity<crate::handoff::RejectHandoffPrompt>>,
     reject_prompt_subscription: Option<Subscription>,
+    /// How the dock arranges the terminal panes.
+    dock: DockLayout<SessionId>,
+    /// Where the terminal being dragged would land, while a drag is over a pane.
+    drop_hint: Option<(SessionId, rwk_core::workbench::DropZone)>,
+    rename_prompt: Option<Entity<crate::rename::RenameTerminalPrompt>>,
+    /// The open context menu.
+    menu: Option<menus::OpenMenu>,
+    /// The open SSH picker.
+    ssh_picker: Option<Entity<crate::ssh_picker::SshPicker>>,
+    ssh_subscription: Option<Subscription>,
+    /// Where `~/.ssh` is read from; `None` means `$HOME`.
+    ssh_home: Option<PathBuf>,
+    rename_subscription: Option<Subscription>,
     handoffs: Vec<TrackedHandoff>,
+    /// The task the open composer was started for.
+    composer_task: Option<rwk_core::handoff_flow::TaskLink>,
+    /// The task of a handoff that is waiting for policy and consent.
+    queued_task: Option<rwk_core::handoff_flow::TaskLink>,
     receipt_task: Option<Task<()>>,
     receiver_for: Option<String>,
     /// Projects already known to be registered with the daemon.
@@ -246,6 +312,10 @@ pub struct Workbench {
     workspace_save_task: Option<Task<()>>,
     /// Previous agent sessions offered for continuation, in saved order.
     offers: Vec<SessionOffer>,
+    /// The task and terminal of an assignment that was sent and not yet answered.
+    pending_bind: Option<(String, SessionId)>,
+    /// Tasks whose terminal was closed; the task list says so.
+    closed_tasks: std::collections::HashSet<String>,
     /// Bumped by every offer plan; a plan that finishes after a project switch is dropped.
     offers_generation: u64,
     /// Offers whose continuation is being validated or started right now.
@@ -297,6 +367,28 @@ impl Workbench {
                 crate::inspector::InspectorEvent::StartReceiver(id) => {
                     this.start_receiver(id.clone(), window, cx);
                 }
+                crate::inspector::InspectorEvent::ApprovalMenu {
+                    approval_id,
+                    revision,
+                    decidable,
+                    position,
+                } => {
+                    this.open_approval_menu(
+                        approval_id.clone(),
+                        *revision,
+                        *decidable,
+                        *position,
+                        window,
+                        cx,
+                    );
+                }
+                crate::inspector::InspectorEvent::HandoffMenu {
+                    id,
+                    can_start,
+                    position,
+                } => {
+                    this.open_handoff_menu(id.clone(), *can_start, *position, window, cx);
+                }
                 crate::inspector::InspectorEvent::ApproveHandoff {
                     approval_id,
                     revision,
@@ -309,6 +401,52 @@ impl Workbench {
                 } => {
                     this.request_reject_handoff(approval_id.clone(), *revision, window, cx);
                 }
+                crate::inspector::InspectorEvent::SetTaskStatus { task_id, status } => {
+                    this.set_task_status(task_id.clone(), *status, window, cx);
+                }
+                crate::inspector::InspectorEvent::AssignToSelected {
+                    task_id,
+                    updated_at,
+                } => {
+                    let selected = this.selected;
+                    this.assign_task_to_terminal(
+                        task_id.clone(),
+                        updated_at.clone(),
+                        selected,
+                        window,
+                        cx,
+                    );
+                }
+                crate::inspector::InspectorEvent::TaskMenu {
+                    task_id,
+                    title,
+                    status,
+                    assigned,
+                    updated_at,
+                    position,
+                } => {
+                    let info = menus::TaskMenuInfo {
+                        task_id: task_id.clone(),
+                        title: title.clone(),
+                        status: status.clone(),
+                        assigned: *assigned,
+                        updated_at: updated_at.clone(),
+                    };
+                    this.open_task_menu(info, *position, window, cx);
+                }
+                crate::inspector::InspectorEvent::HandoffTask { task_id, title } => {
+                    let link = rwk_core::handoff_flow::TaskLink {
+                        task_id: task_id.clone(),
+                        title: title.clone(),
+                    };
+                    this.open_composer(Some(link), window, cx);
+                }
+                crate::inspector::InspectorEvent::ClearAssignee {
+                    task_id,
+                    updated_at,
+                } => {
+                    this.assign_task(task_id.clone(), updated_at.clone(), None, window, cx);
+                }
             },
         );
         let subscriptions = vec![
@@ -316,9 +454,15 @@ impl Workbench {
             cx.subscribe_in(
                 &files,
                 window,
-                |this, _files, event: &FileTreeEvent, window, cx| {
-                    let FileTreeEvent::OpenFile(path) = event;
-                    this.request_open_file(path.clone(), window, cx);
+                |this, _files, event: &FileTreeEvent, window, cx| match event {
+                    FileTreeEvent::OpenFile(path) => {
+                        this.request_open_file(path.clone(), window, cx);
+                    }
+                    FileTreeEvent::ContextMenu {
+                        path,
+                        folder,
+                        position,
+                    } => this.open_file_menu(path.clone(), *folder, *position, window, cx),
                 },
             ),
             cx.subscribe_in(
@@ -351,7 +495,17 @@ impl Workbench {
             composer_subscription: None,
             reject_prompt: None,
             reject_prompt_subscription: None,
+            dock: DockLayout::new(),
+            drop_hint: None,
+            rename_prompt: None,
+            menu: None,
+            ssh_picker: None,
+            ssh_subscription: None,
+            ssh_home: None,
+            rename_subscription: None,
             handoffs: Vec::new(),
+            composer_task: None,
+            queued_task: None,
             receipt_task: None,
             receiver_for: None,
             known_projects: std::collections::HashSet::new(),
@@ -375,6 +529,8 @@ impl Workbench {
             pending_workspace: None,
             workspace_save_task: None,
             offers: Vec::new(),
+            pending_bind: None,
+            closed_tasks: std::collections::HashSet::new(),
             offers_generation: 0,
             resuming: std::collections::HashSet::new(),
             programs,
@@ -407,6 +563,10 @@ impl Workbench {
                     self.inspector.read(cx).model().banner,
                     rwk_core::inspector::Banner::Unreachable(_)
                 ),
+            reconnectable: self
+                .terminals
+                .get(self.selected)
+                .is_some_and(|pane| pane.ssh.is_some() && !self.session_running(&pane.id)),
         }
     }
 
@@ -520,6 +680,13 @@ impl Workbench {
         &self.files
     }
 
+    /// Resizes requested of the PTY host so far (a layout that makes terminals resize over
+    /// and over shows here). Read by the benchmark.
+    #[doc(hidden)]
+    pub fn pty_resize_count(&self) -> u64 {
+        self.host.0.resize_count()
+    }
+
     /// Sessions that are still running, according to the registry.
     pub fn running_sessions(&self) -> usize {
         self.sessions
@@ -621,6 +788,20 @@ impl Workbench {
                     cx.notify();
                 }
             }
+            CommandId::CloseTerminal => self.request_close_terminal(false, window, cx),
+            CommandId::KillTerminal => self.request_close_terminal(true, window, cx),
+            CommandId::Ssh => self.open_ssh_picker(window, cx),
+            CommandId::Reconnect => self.reconnect_ssh(window, cx),
+            CommandId::RenameTerminal => self.open_rename_prompt(self.selected, window, cx),
+            CommandId::NewTask => self.open_new_task_prompt(window, cx),
+            CommandId::MoveTerminalPrevious
+            | CommandId::MoveTerminalNext
+            | CommandId::SplitTerminalRight
+            | CommandId::SplitTerminalDown
+            | CommandId::JoinTerminalPrevious
+            | CommandId::UngroupTerminal
+            | CommandId::GrowTerminal
+            | CommandId::ShrinkTerminal => self.arrange(id, window, cx),
             CommandId::Refresh => self.files.update(cx, |files, cx| files.refresh(cx)),
             CommandId::Settings => self.toggle_tone(cx),
             CommandId::Skin => self.toggle_skin(cx),
@@ -633,7 +814,7 @@ impl Workbench {
             CommandId::Files => self.open_file_palette(window, cx),
             CommandId::Search => self.open_search(window, cx),
             CommandId::Agent => self.open_agent_chooser(cx),
-            CommandId::Handoff => self.open_composer(window, cx),
+            CommandId::Handoff => self.open_composer(None, window, cx),
             CommandId::RegisterProject => self.register_project(window, cx),
             CommandId::Memory => self.open_memory(window, cx),
         }
@@ -806,6 +987,9 @@ impl Workbench {
         if let Some(prompt) = &self.reject_prompt {
             prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
         }
+        if let Some(prompt) = &self.rename_prompt {
+            prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        }
         if let Some(memory) = &self.memory {
             memory.update(cx, |memory, cx| memory.set_theme(theme, cx));
         }
@@ -958,6 +1142,8 @@ impl Workbench {
             (
                 Decision::Save | Decision::Discard,
                 PendingAction::StopTerminal(_)
+                | PendingAction::CloseTerminal { .. }
+                | PendingAction::DeleteEntry { .. }
                 | PendingAction::OpenProjectStoppingSessions(_)
                 | PendingAction::ChooseAgent
                 | PendingAction::Consent(..),
@@ -981,7 +1167,10 @@ impl Workbench {
             }
             (
                 Decision::Confirm,
-                PendingAction::StopTerminal(_) | PendingAction::OpenProjectStoppingSessions(_),
+                PendingAction::StopTerminal(_)
+                | PendingAction::CloseTerminal { .. }
+                | PendingAction::DeleteEntry { .. }
+                | PendingAction::OpenProjectStoppingSessions(_),
             ) => self.perform(action, window, cx),
             (Decision::Confirm, _) => {}
         }
@@ -1015,6 +1204,19 @@ impl Workbench {
             EditorEvent::CloseRequested(path) => {
                 self.request_close_tab(path.clone(), window, cx);
             }
+            EditorEvent::TabContextMenu { position, .. } => {
+                self.open_context_menu(
+                    rwk_core::workbench::MenuTarget::EditorTab,
+                    *position,
+                    window,
+                    cx,
+                );
+            }
+            EditorEvent::TextContextMenu {
+                position,
+                selection,
+                editable,
+            } => self.open_text_menu(*selection, *editable, *position, window, cx),
             EditorEvent::Edited
             | EditorEvent::Opened(_)
             | EditorEvent::Closed(_)
@@ -1097,6 +1299,10 @@ impl Workbench {
                 self.stop_terminals(true);
                 self.close_confirmed = true;
             }
+            PendingAction::CloseTerminal { id, force } => {
+                self.remove_terminal(&id, force, window, cx);
+            }
+            PendingAction::DeleteEntry { path, .. } => self.delete_entry(&path, cx),
             PendingAction::StopTerminal(id) => {
                 if let Err(error) = self.sessions.stop(&id) {
                     self.say(error.message, cx);
@@ -1125,6 +1331,7 @@ impl Workbench {
             self.gates.detach(&pane.id);
             self.host.0.remove(&pane.id);
         }
+        self.dock = DockLayout::new();
         self.selected = 0;
     }
 
@@ -1139,14 +1346,19 @@ impl Workbench {
             .collect();
         let gates = Arc::clone(&self.gates);
         let host = self.host.0.clone();
+        let mut gone = Vec::new();
         self.terminals.retain(|pane| {
             let alive = running.contains(&pane.id);
             if !alive {
                 gates.detach(&pane.id);
                 host.remove(&pane.id);
+                gone.push(pane.id.clone());
             }
             alive
         });
+        for id in gone {
+            self.dock.remove(&id);
+        }
         self.selected = self.selected.min(self.terminals.len().saturating_sub(1));
     }
 
@@ -1186,20 +1398,127 @@ impl Workbench {
         let appearance = terminal_appearance(self.theme());
         let id = info.id.clone();
         let view = cx.new(|cx| TerminalView::new(engine, host, id, appearance, gate, receiver, cx));
-        let resume = match &launch {
-            SessionLaunch::Resume(key) => Some(key.clone()),
-            SessionLaunch::Fresh { .. } => None,
+        let (resume, name) = match &launch {
+            SessionLaunch::Resume(key) => (Some(key.clone()), None),
+            SessionLaunch::Fresh { name, .. } => (None, name.clone()),
+            // A remote shell is named after where it leads.
+            SessionLaunch::Ssh(target) => (None, SessionName::parse(&target.display()).ok()),
         };
+        let ssh = match &launch {
+            SessionLaunch::Ssh(target) => Some(target.clone()),
+            _ => None,
+        };
+        let _ = self.dock.push_default(info.id.clone());
         self.terminals.push(TerminalPane {
             kind,
             id: info.id,
+            name,
             resume,
+            ssh,
+            task: None,
             view,
         });
         self.dock_visible = true;
         let last = self.terminals.len() - 1;
         self.select_terminal(last, window, cx);
         true
+    }
+
+    /// The view of terminal `index`.
+    pub fn terminal_view(&self, index: usize) -> Option<&Entity<TerminalView>> {
+        self.terminals.get(index).map(|pane| &pane.view)
+    }
+
+    /// The name of terminal `index`, when the user gave it one.
+    pub fn terminal_name(&self, index: usize) -> Option<&SessionName> {
+        self.terminals.get(index)?.name.as_ref()
+    }
+
+    /// What the title strip of terminal `index` shows: its name, or the kind with an ordinal
+    /// among the terminals of the same kind ("claude 2"), so unnamed panes stay tellable apart.
+    pub fn terminal_title(&self, index: usize) -> String {
+        let Some(pane) = self.terminals.get(index) else {
+            return String::new();
+        };
+        if let Some(name) = &pane.name {
+            return name.to_string();
+        }
+        let label = pane.kind.agent().unwrap_or("shell");
+        let ordinal = self.terminals[..=index]
+            .iter()
+            .filter(|other| other.kind == pane.kind)
+            .count();
+        format!("{label} {ordinal}")
+    }
+
+    /// Sets or clears the name of terminal `index` and remembers it in the saved workspace. The
+    /// daemon keeps the name a run started with; this is the local label.
+    pub fn rename_terminal(
+        &mut self,
+        index: usize,
+        name: Option<SessionName>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane) = self.terminals.get_mut(index) else {
+            return;
+        };
+        pane.name = name;
+        self.note_workspace_change(cx);
+        cx.notify();
+    }
+
+    /// The open rename prompt.
+    pub fn rename_prompt(&self) -> Option<&Entity<crate::rename::RenameTerminalPrompt>> {
+        self.rename_prompt.as_ref()
+    }
+
+    /// Asks for a new name for terminal `index`.
+    pub fn open_rename_prompt(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::rename::{RenamePromptEvent, RenameTerminalPrompt};
+
+        if self.rename_prompt.is_some() {
+            return;
+        }
+        let Some(pane) = self.terminals.get(index) else {
+            return;
+        };
+        let current = pane.name.clone();
+        let running_agent = pane.kind != SessionKind::Shell;
+        let theme = self.theme();
+        let prompt =
+            cx.new(|cx| RenameTerminalPrompt::new(current.as_ref(), running_agent, window, cx));
+        prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        // The pane is found again by id: terminals may have come and gone while the prompt was open.
+        let id = pane.id.clone();
+        self.rename_subscription = Some(cx.subscribe_in(
+            &prompt,
+            window,
+            move |this, _prompt, event: &RenamePromptEvent, window, cx| match event {
+                RenamePromptEvent::Rename(name) => {
+                    if let Some(index) = this.terminals.iter().position(|pane| pane.id == id) {
+                        this.rename_terminal(index, name.clone(), cx);
+                    }
+                    this.close_rename_prompt(window, cx);
+                }
+                RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
+                RenamePromptEvent::NewTask(_) | RenamePromptEvent::EntryName(_) => {}
+            },
+        ));
+        self.rename_prompt = Some(prompt);
+        cx.notify();
+    }
+
+    /// Closes the rename prompt and returns focus to the workbench.
+    pub fn close_rename_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.rename_prompt = None;
+        self.rename_subscription = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 
     fn new_terminal(&mut self, kind: SessionKind, window: &mut Window, cx: &mut Context<Self>) {
@@ -1223,8 +1542,17 @@ impl Workbench {
             return;
         };
         self.selected = index;
+        let id = pane.id.clone();
         let handle = pane.view.read(cx).focus_handle().clone();
-        window.focus(&handle, cx);
+        // A tab that was hidden is painted for the first time on the next frame; focus can only
+        // land on it then.
+        let was_shown = self.dock.is_shown(&id);
+        self.dock.activate(&id);
+        if was_shown {
+            window.focus(&handle, cx);
+        } else {
+            window.on_next_frame(move |window, cx| window.focus(&handle, cx));
+        }
         cx.notify();
     }
 
@@ -1263,7 +1591,7 @@ impl Workbench {
                     .contains_focused(window, cx)
             }),
             dialog: self.pending.is_some(),
-            input: self.palette.is_some(),
+            input: self.palette.is_some() || self.ssh_picker.is_some(),
         }
     }
 
@@ -1280,6 +1608,11 @@ impl Workbench {
             if let Some(decision) = decision {
                 self.resolve(decision, window, cx);
             }
+            cx.stop_propagation();
+            return;
+        }
+        // An open menu owns the keyboard like a dialog does.
+        if self.menu_key(event.keystroke.key.as_str(), cx) {
             cx.stop_propagation();
             return;
         }
@@ -1314,11 +1647,28 @@ fn terminal_appearance(theme: Theme) -> TerminalAppearance {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frames += 1;
+        // A process that ended on its own is noticed here; the task list only repaints when the
+        // set of marked tasks changed.
+        self.sync_task_marks(cx);
         let theme = self.theme();
         let dock = div()
+            .id("dock-panel")
             .size_full()
             .flex()
             .flex_col()
+            // Terminals, titles, the inspector and the offers stop their own right clicks; what
+            // reaches the panel itself is the empty part of the dock.
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.open_context_menu(
+                        rwk_core::workbench::MenuTarget::DockBackground,
+                        event.position,
+                        window,
+                        cx,
+                    );
+                }),
+            )
             .children(self.inspector_visible.then(|| {
                 div()
                     .h(px(INSPECTOR_HEIGHT))
@@ -1328,14 +1678,7 @@ impl Render for Workbench {
                     .child(self.inspector.clone())
             }))
             .children(self.offer_rows(cx))
-            .children(self.terminals.iter().enumerate().map(|(index, pane)| {
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .border_1()
-                    .when_selected(theme, index == self.selected)
-                    .child(pane.view.clone())
-            }));
+            .children(self.dock_tree(theme, cx));
         let main = h_resizable("workbench")
             .with_state(&self.sizes)
             .child(resizable_panel().size(px(260.0)).child(self.files.clone()))
@@ -1402,6 +1745,7 @@ impl Render for Workbench {
                     .lcars
                     .then(|| lcars_header(theme, self.project_name(), window)),
             )
+            .child(self.toolbar_row(theme, cx))
             .child(div().flex_1().min_h_0().child(main))
             .child(
                 div()
@@ -1437,10 +1781,13 @@ impl Render for Workbench {
                     ),
             )
             .children(self.palette.clone())
+            .children(self.ssh_picker.clone())
             .children(self.composer.clone())
             .children(self.reject_prompt.clone())
+            .children(self.rename_prompt.clone())
             .children(self.memory.clone())
             .children(self.search.clone())
+            .children(self.menu.as_ref().map(|open| open.view.clone()))
             .children(dialog)
     }
 }

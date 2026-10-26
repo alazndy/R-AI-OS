@@ -7,6 +7,7 @@
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crate::error::{AppError, ErrorCode, Result};
+use crate::handoff_input::looks_like_secret;
 use crate::project::{ProjectId, ProjectRoot};
 
 /// Maximum number of concurrent sessions, in the UI and in the backend.
@@ -70,6 +71,67 @@ impl SessionKind {
             "opencode" => Some(Self::Opencode),
             _ => None,
         }
+    }
+}
+
+/// Longest terminal name, in characters. `raios run --name` enforces the same limit.
+pub const MAX_NAME_CHARS: usize = 120;
+
+/// A user-chosen terminal name: trimmed, 1 to [`MAX_NAME_CHARS`] characters, no control
+/// characters, no leading `-` (it reaches `raios run` as one argument and must not read as an
+/// option) and nothing that looks like a credential (the daemon records the name).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct SessionName(String);
+
+impl SessionName {
+    /// Validates a name typed by the user or read from a saved file.
+    pub fn parse(raw: &str) -> Result<Self> {
+        let name = raw.trim();
+        let invalid = |message: &str| Err(AppError::new(ErrorCode::InvalidInput, message));
+        if name.is_empty() {
+            return invalid("Terminal adı boş olamaz.");
+        }
+        if name.chars().count() > MAX_NAME_CHARS {
+            return invalid(&format!(
+                "Terminal adı en fazla {MAX_NAME_CHARS} karakter olabilir."
+            ));
+        }
+        if name.chars().any(char::is_control) {
+            return invalid("Terminal adı denetim karakteri içeremez.");
+        }
+        if name.starts_with('-') {
+            return invalid("Terminal adı '-' ile başlayamaz.");
+        }
+        if looks_like_secret(name) {
+            return invalid("Ad bir kimlik bilgisi gibi görünüyor; adı değiştirin.");
+        }
+        Ok(Self(name.to_owned()))
+    }
+
+    /// The name text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for SessionName {
+    type Error = String;
+
+    fn try_from(raw: String) -> std::result::Result<Self, String> {
+        Self::parse(&raw).map_err(|error| error.message)
+    }
+}
+
+impl From<SessionName> for String {
+    fn from(name: SessionName) -> Self {
+        name.0
+    }
+}
+
+impl std::fmt::Display for SessionName {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 
@@ -140,14 +202,21 @@ pub enum SessionLaunch {
     Fresh {
         /// Optional first prompt for an agent run.
         prompt: Option<String>,
+        /// Optional name; an agent run hands it to the daemon as `--name`, a shell ignores it.
+        name: Option<SessionName>,
     },
     /// A saved conversation continued in place: `raios resume <key>`.
     Resume(ResumeKey),
+    /// A remote shell: `ssh [-p port] -- [user@]host`.
+    Ssh(crate::ssh::SshTarget),
 }
 
 impl Default for SessionLaunch {
     fn default() -> Self {
-        Self::Fresh { prompt: None }
+        Self::Fresh {
+            prompt: None,
+            name: None,
+        }
     }
 }
 
@@ -208,6 +277,13 @@ pub trait TerminalHost: Send + Sync {
 
     /// Stops one session and its descendants.
     fn stop(&self, id: &SessionId) -> Result<()>;
+
+    /// Ends one session and its descendants at once, without the grace an agent gets in
+    /// [`TerminalHost::stop`]. The default is `stop`, which is what a host without a grace
+    /// period already does.
+    fn kill(&self, id: &SessionId) -> Result<()> {
+        self.stop(id)
+    }
 
     /// True while the session's child is alive.
     fn is_running(&self, id: &SessionId) -> bool;
@@ -302,6 +378,21 @@ impl SessionRegistry {
                 AppError::new(ErrorCode::NotFound, "No owned session matches this ID.")
             })?;
         self.host.stop(id)?;
+        session.running = false;
+        Ok(())
+    }
+
+    /// Ends one app-owned session at once: no grace for an agent's wrapper to close its run.
+    pub fn kill(&self, id: &SessionId) -> Result<()> {
+        let mut state = self.lock();
+        let session = state
+            .sessions
+            .iter_mut()
+            .find(|session| &session.id == id)
+            .ok_or_else(|| {
+                AppError::new(ErrorCode::NotFound, "No owned session matches this ID.")
+            })?;
+        self.host.kill(id)?;
         session.running = false;
         Ok(())
     }

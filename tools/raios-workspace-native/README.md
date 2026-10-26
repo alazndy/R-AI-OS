@@ -8,7 +8,7 @@ Nested Cargo workspace for the native (GPUI) RAIOS workspace. Design: `docs/supe
 | `rwk-ui` | terminal view (`terminal`), code editor and highlighter (`editor`), file tree (`file_tree`), inspector, handoff composer, memory view, bundled assets (Breeze icons, Antonio), workbench shell, palette and dialogs (`workbench`) | yes |
 | `rwk-app` | the application binary: window, folder picker, appearance persistence, daemon token source | yes |
 | `rwk-bench` | headless terminal gates G1-G8 (`term-bench`) | no |
-| `rwk-ui-bench` | UI-bound gates U1-U5, E1-E2, A1-A2 (`ui-bench`) | yes |
+| `rwk-ui-bench` | UI-bound gates U1-U5, E1-E2, A1-A2, D1-D2 (`ui-bench`; D1 = dock rearrangement with 12 terminals, D2 = PTY resizes per rearrangement) | yes |
 
 ## Running the application
 
@@ -17,6 +17,20 @@ cargo run --release -p rwk-app -- /path/to/project
 ```
 
 `Ctrl+O` picks a folder, `Ctrl+Shift+P` opens the command palette (it lists every command with its shortcut and, for unavailable ones, why). `Ctrl+S` saves, `Ctrl+Shift+T` opens a terminal (up to twelve), `Ctrl+1/2/3` switch the layout. While a terminal has focus only the shortcuts that carry Shift or Alt are taken by the workbench: plain Ctrl keys (`Ctrl+C`, `Ctrl+K`, `Ctrl+L`, ...) reach the shell. Unsaved edits are never discarded without a choice (Save / Discard / Cancel).
+
+Every terminal has a title strip: its name, or the kind with an ordinal ("shell 2", "claude 1"). Double-click the strip or use the palette's "Terminali yeniden adlandır…" to name it (up to 120 characters, no control characters, no leading `-`, nothing credential-looking; an empty name clears it). The name is saved with the project's terminals and comes back on restore. A fresh agent started with a name runs `raios run <agent> --name <name>`; renaming an agent that is already running only changes the local label, because the daemon keeps the name a run started with.
+
+The terminals sit in a dock layout tree (`rwk-core::workbench::dock`): groups of tabs and splits with weighted shares, at most four levels deep and twelve panes. Every terminal starts in a group of its own, stacked in a column with equal heights. Arrange them by dragging: drag a terminal's title onto another title to make it a tab there, onto the middle of a pane to join that pane's group, or onto the edge band of a pane (the outer quarter, highlighted while you drag) to split it off on that side; drag the thin divider between panes to resize. Every gesture has a palette command for the keyboard: "Terminali öncekiyle / sonrakiyle yer değiştir", "Terminali komşusunun sağına / altına böl", "Terminali öncekinin sekmesi yap", "Terminali sekme grubundan ayır", "Terminali büyüt / küçült". A refused move (a lone pane cannot be split from itself, nesting too deep) changes nothing and says why. Moving a terminal never touches its process. The arrangement is saved with the project and restored for the shells that come back; agent terminals rejoin at the end as their resume offers are taken.
+
+Ending a terminal has three levels. "Durdur" ends the process and keeps the pane so the output stays readable. "Kapat" (Ctrl Shift W, the × on a title, a middle click on a title) ends it and removes the pane; a running process is asked about first, a pane whose process already ended is removed without a question. "Zorla öldür…" ends every process of the terminal at once with SIGKILL, without the grace period an agent's wrapper otherwise gets to close its run in the daemon, and says so in its question. Ending a process happens off the UI thread; the pane is gone from the layout immediately.
+
+"SSH ile bağlan…" (Ctrl Shift S, the SSH toolbar button) opens a picker over the hosts in `~/.ssh/config` (aliases with their `HostName`, `User` and `Port`) and the plain names in `~/.ssh/known_hosts`. Typing filters them; anything typed that is a valid `[user@]host[:port]` (or `[ipv6]:port`) can be connected to as well. The target is validated and given to `ssh` as separate arguments after `--` (`ssh [-p port] -- [user@]host`), never as command text; option-looking text, whitespace and control characters are refused. The terminal is named after the target. A remote shell is not part of the saved workspace: reopening a project never connects anywhere by itself.
+
+A toolbar above the panes holds the everyday commands (project, file and text search, save, terminals, split and resize, tasks and handoff, layouts, panels, palette). Every button is a catalog command: it is dimmed when the command cannot run, its tooltip gives the label and shortcut or the reason, a click on a dimmed button states the reason, and the dock and inspector buttons show a pressed state.
+
+Right click opens a context menu on a terminal title, a terminal screen (unless the program inside asked for mouse reports; Shift takes the click back), the empty dock, an editor tab, a file-tree row and a task row. The click selects what it hit first, and the lines are the same catalog commands as the palette, with the same shortcuts shown and the same reasons when unavailable. Arrow keys, Home/End, Enter and Escape drive the menu; a click elsewhere only closes it; shortcuts do not fire behind it.
+
+Tasks are the daemon's own operator tasks (shared with `raios task`, the TUI and VS Code). The inspector lists them; "Yeni görev" (palette) adds one, buttons change status or assign it to an agent kind (claude, codex, opencode, agy), and a task can be dragged onto an agent terminal's title or body to assign it to that agent. Every change goes through the consent guard and the daemon's audit ledger; an assignment carries the revision the user saw, so a task changed elsewhere is refused with "bu arada değişti" instead of overwritten. A shell terminal is never an assignee. "Devret…" on a task row opens the handoff composer seeded with the sending terminal's name and the task title. The task is attached to that handoff and moves to the receiving agent only after the receipt shows the receiver's own wrapper consumed it; an expired or rejected handoff leaves the task where it was. The receiver is started in a new terminal ("Alıcıyı başlat"); pasting into an already running agent is deliberately not offered.
 
 `Ctrl+Shift+D` (or the palette) shows the inspector above the terminals, `Ctrl+Shift+A` starts an agent, `Ctrl+Shift+H` writes a handoff, the palette's "Proje hafızasını göster" opens the memory view and "GT-LCARS görünümünü aç / kapat" switches the skin; `Ctrl+,` switches dark and light, `Ctrl+Alt+.` / `Ctrl+Alt+,` move the dock divider.
 
@@ -37,6 +51,8 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
 Skin (standard or GT-LCARS) and tone (dark or light) are independent and persisted; switching repaints every pane, the editor and the terminal surface without recreating sessions. The 28 KDE Breeze file icons are bundled unmodified (checksums in `crates/rwk-ui/assets/file-icons/provenance.json`, licenses in `crates/rwk-ui/assets/licenses`) and tinted by file type; Antonio (OFL) is the LCARS display font.
 
 The palette's "Diff: yan yana / birleşik" switches the Git diff between one unified column and two aligned columns (old and new); the terminal shows IME pre-edit text at the cursor until it is committed.
+
+File tree rows have a right-click menu to create a file or folder, rename and delete. Every operation goes through the project capability, never replaces an existing entry, refuses names with separators or control characters, deletes folders only when empty, and refuses to rename or delete anything open in an editor tab.
 
 Known limits: approvals cannot be approved or rejected here (read-only until the contract carries an expected revision).
 

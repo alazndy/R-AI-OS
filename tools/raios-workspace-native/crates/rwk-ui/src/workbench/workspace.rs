@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use gpui::{Context, Window};
-use rwk_core::sessions::{SessionKind, SessionLaunch, MAX_SESSIONS};
+use rwk_core::sessions::{SessionKind, SessionLaunch, SessionName, MAX_SESSIONS};
 use rwk_core::workbench::{SavedTerminal, SavedWorkspace, WorkspaceStateSource};
 
 use super::{Workbench, WORKSPACE_SAVE_DELAY};
@@ -22,13 +22,21 @@ impl Workbench {
     /// The workspace state as it is right now, or `None` while no project is open.
     pub(super) fn workspace_snapshot(&self, cx: &gpui::App) -> Option<SavedWorkspace> {
         let project = self.project.as_ref()?;
-        let mut terminals: Vec<SavedTerminal> = self
+        // A remote shell is never saved: reopening a project must not connect anywhere.
+        let saved_panes: Vec<&super::TerminalPane> = self
             .terminals
             .iter()
+            .filter(|pane| pane.ssh.is_none())
+            .collect();
+        let mut terminals: Vec<SavedTerminal> = saved_panes
+            .iter()
             .map(|pane| match pane.kind {
-                SessionKind::Shell => SavedTerminal::Shell,
+                SessionKind::Shell => SavedTerminal::Shell {
+                    name: pane.name.as_ref().map(ToString::to_string),
+                },
                 kind => SavedTerminal::Agent {
                     kind,
+                    name: pane.name.as_ref().map(ToString::to_string),
                     // A pane started from an offer knows the conversation it continues; a fresh
                     // run does not, and is matched by agent when the project opens again.
                     native_session: pane.resume.as_ref().map(|key| key.native_id().to_owned()),
@@ -40,13 +48,27 @@ impl Workbench {
         terminals.extend(self.offers.iter().map(|offer| SavedTerminal::Agent {
             kind: offer.kind,
             native_session: offer.native_session.clone(),
+            name: offer.name.as_ref().map(ToString::to_string),
         }));
+        let mut task_links: Vec<Option<rwk_core::workbench::SavedTaskLink>> = saved_panes
+            .iter()
+            .map(|pane| Self::saved_link(&pane.task))
+            .collect();
+        task_links.extend(self.offers.iter().map(|offer| offer.task.clone()));
         Some(SavedWorkspace {
+            task_links,
             project: project.info().root.clone(),
             tabs: self.editor.read(cx).tabs_snapshot(cx),
             active: self.editor.read(cx).active_index(),
             layout: self.layout,
             terminals,
+            // Panes are stored as their position among the terminals, which is how they are
+            // listed above; a session id means nothing in the next run.
+            dock: Some(
+                self.dock
+                    .filter_map(&|id| saved_panes.iter().position(|pane| &pane.id == id)),
+            )
+            .filter(|dock| !dock.is_empty()),
         })
     }
 
@@ -97,25 +119,56 @@ impl Workbench {
         self.editor.update(cx, |editor, cx| {
             editor.restore_tabs(Arc::clone(&project), saved.tabs, saved.active, window, cx)
         });
-        let shells = saved
+        let link_of = |index: usize| saved.task_links.get(index).cloned().flatten();
+        let shells: Vec<(usize, Option<SessionName>)> = saved
             .terminals
             .iter()
-            .filter(|terminal| matches!(terminal, SavedTerminal::Shell))
+            .enumerate()
+            .filter(|(_, terminal)| matches!(terminal, SavedTerminal::Shell { .. }))
             .take(MAX_SESSIONS)
-            .count();
-        for _ in 0..shells {
-            if !self.spawn_terminal(SessionKind::Shell, SessionLaunch::default(), window, cx) {
+            .map(|(index, terminal)| (index, terminal.name()))
+            .collect();
+        // Saved position -> the session started for it.
+        let mut started: Vec<(usize, rwk_core::sessions::SessionId)> = Vec::new();
+        for (saved_index, name) in shells {
+            let launch = SessionLaunch::Fresh { prompt: None, name };
+            if !self.spawn_terminal(SessionKind::Shell, launch, window, cx) {
                 break;
             }
+            if let Some(pane) = self.terminals.last_mut() {
+                pane.task = Self::live_link(link_of(saved_index));
+                started.push((saved_index, pane.id.clone()));
+            }
         }
-        let agents: Vec<SavedTerminal> = saved
+        // The saved arrangement covers the shells that came back; agents rejoin the dock one by
+        // one as their offers are taken. Any shell the arrangement does not mention keeps the
+        // place the default gave it.
+        if let Some(arrangement) = saved.dock.as_ref().map(|dock| {
+            dock.filter_map(&|saved_index: &usize| {
+                started
+                    .iter()
+                    .find(|(index, _)| index == saved_index)
+                    .map(|(_, id)| id.clone())
+            })
+        }) {
+            if !arrangement.is_empty() {
+                self.dock = arrangement;
+                for pane in &self.terminals {
+                    if !self.dock.contains(&pane.id) {
+                        let _ = self.dock.push_default(pane.id.clone());
+                    }
+                }
+            }
+        }
+        let (agents, links): (Vec<SavedTerminal>, Vec<_>) = saved
             .terminals
             .iter()
-            .filter(|terminal| matches!(terminal, SavedTerminal::Agent { .. }))
-            .cloned()
-            .collect();
+            .enumerate()
+            .filter(|(_, terminal)| matches!(terminal, SavedTerminal::Agent { .. }))
+            .map(|(index, terminal)| (terminal.clone(), link_of(index)))
+            .unzip();
         if !agents.is_empty() {
-            self.load_offers(agents, root, window, cx);
+            self.load_offers(agents, links, root, window, cx);
         }
     }
 }

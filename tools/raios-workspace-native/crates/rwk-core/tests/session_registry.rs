@@ -23,6 +23,7 @@ fn fresh() -> SessionLaunch {
 fn fresh_with(prompt: &str) -> SessionLaunch {
     SessionLaunch::Fresh {
         prompt: Some(prompt.to_owned()),
+        name: None,
     }
 }
 

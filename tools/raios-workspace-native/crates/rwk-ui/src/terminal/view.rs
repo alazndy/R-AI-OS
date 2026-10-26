@@ -295,6 +295,12 @@ impl TerminalView {
         (row, col, side)
     }
 
+    /// True while the program in the terminal asks for mouse reports; a right click then
+    /// belongs to it (Shift takes the click back).
+    pub fn wants_mouse(&self) -> bool {
+        self.reporting_mouse(false)
+    }
+
     fn reporting_mouse(&self, shift: bool) -> bool {
         let modes = self.shared.modes.get();
         modes.mouse_report && modes.sgr_mouse && !shift
@@ -333,6 +339,12 @@ impl TerminalView {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
+        self.paste_text(text, cx);
+    }
+
+    /// Pastes `text` the way a paste from the clipboard goes: a single line goes straight in,
+    /// a multiline text waits in the preview for Enter, an oversized one is refused.
+    pub fn paste_text(&mut self, text: String, cx: &mut Context<Self>) {
         match decide_paste(&text) {
             PasteDecision::Send => self.send_paste(&text, cx),
             PasteDecision::Confirm { .. } => {

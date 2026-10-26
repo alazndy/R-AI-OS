@@ -43,12 +43,40 @@ pub enum CommandId {
     CopyTerminal,
     /// Paste into the selected terminal.
     PasteTerminal,
-    /// Stop the selected session.
+    /// Stop the selected session; its pane stays so the output can still be read.
     StopTerminal,
+    /// Stop the selected session and remove its pane.
+    CloseTerminal,
+    /// End the selected session at once (SIGKILL, no grace for an agent) and remove its pane.
+    KillTerminal,
+    /// Start the selected SSH shell again after its connection ended.
+    Reconnect,
+    /// Open a remote shell over SSH.
+    Ssh,
+    /// Give the selected terminal a name.
+    RenameTerminal,
+    /// Swap the selected terminal with the one before it in the dock.
+    MoveTerminalPrevious,
+    /// Swap the selected terminal with the one after it in the dock.
+    MoveTerminalNext,
+    /// Place the selected terminal to the right of its neighbour.
+    SplitTerminalRight,
+    /// Place the selected terminal below its neighbour.
+    SplitTerminalDown,
+    /// Make the selected terminal a tab of the group before it.
+    JoinTerminalPrevious,
+    /// Take the selected terminal out of its tab group.
+    UngroupTerminal,
+    /// Give the selected terminal more room.
+    GrowTerminal,
+    /// Give the selected terminal less room.
+    ShrinkTerminal,
     /// Launch an agent.
     Agent,
     /// Create a handoff.
     Handoff,
+    /// Add an operator task to the open project.
+    NewTask,
     /// Show the project memory.
     Memory,
     /// Register the open project with Raios.
@@ -134,7 +162,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 36] = [
+const COMMANDS: [Command; 50] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -261,6 +289,64 @@ const COMMANDS: [Command; 36] = [
     ),
     cmd(CommandId::StopTerminal, "Seçili oturumu durdur…", None, &[]),
     cmd(
+        CommandId::CloseTerminal,
+        "Terminali kapat",
+        Some("Ctrl Shift W"),
+        &[bind_terminal("w", true, false)],
+    ),
+    cmd(CommandId::KillTerminal, "Terminali zorla öldür…", None, &[]),
+    cmd(CommandId::Reconnect, "SSH'e yeniden bağlan", None, &[]),
+    cmd(
+        CommandId::Ssh,
+        "SSH ile bağlan…",
+        Some("Ctrl Shift S"),
+        &[bind_terminal("s", true, false)],
+    ),
+    cmd(
+        CommandId::RenameTerminal,
+        "Terminali yeniden adlandır…",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::MoveTerminalPrevious,
+        "Terminali öncekiyle yer değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::MoveTerminalNext,
+        "Terminali sonrakiyle yer değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::SplitTerminalRight,
+        "Terminali komşusunun sağına böl",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::SplitTerminalDown,
+        "Terminali komşusunun altına böl",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::JoinTerminalPrevious,
+        "Terminali öncekinin sekmesi yap",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::UngroupTerminal,
+        "Terminali sekme grubundan ayır",
+        None,
+        &[],
+    ),
+    cmd(CommandId::GrowTerminal, "Terminali büyüt", None, &[]),
+    cmd(CommandId::ShrinkTerminal, "Terminali küçült", None, &[]),
+    cmd(
         CommandId::Agent,
         "Ajan başlat",
         Some("Ctrl Shift A"),
@@ -272,6 +358,7 @@ const COMMANDS: [Command; 36] = [
         Some("Ctrl Shift H"),
         &[bind_terminal("h", true, false)],
     ),
+    cmd(CommandId::NewTask, "Yeni görev…", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
     cmd(
         CommandId::RegisterProject,
@@ -429,6 +516,8 @@ pub struct WorkbenchState {
     pub control_plane_features: bool,
     /// The daemon answered its last request.
     pub daemon_reachable: bool,
+    /// The selected terminal is an SSH shell whose connection has ended.
+    pub reconnectable: bool,
 }
 
 /// Why a command can or cannot run right now.
@@ -487,13 +576,20 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("Açık dosya yok")
             }
         }
-        NewTerminal => {
+        NewTerminal | Ssh => {
             if !state.project_open {
                 deny("Önce bir proje klasörü açın")
             } else if usize::from(state.terminals) >= MAX_SESSIONS {
                 deny("En fazla 12 terminal açılabilir")
             } else {
                 allow()
+            }
+        }
+        Reconnect => {
+            if state.reconnectable {
+                allow()
+            } else {
+                deny("Seçili terminal bitmiş bir SSH oturumu değil")
             }
         }
         ToggleTerminal => allow(),
@@ -505,7 +601,17 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             }
         }
         NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
-        | StopTerminal => needs_terminal(),
+        | StopTerminal | CloseTerminal | KillTerminal | RenameTerminal | UngroupTerminal => {
+            needs_terminal()
+        }
+        MoveTerminalPrevious | MoveTerminalNext | SplitTerminalRight | SplitTerminalDown
+        | JoinTerminalPrevious | GrowTerminal | ShrinkTerminal => {
+            if state.terminals >= 2 {
+                allow()
+            } else {
+                deny("En az iki terminal gerekir")
+            }
+        }
         FocusTerminal(index) => {
             if index >= 1 && index <= state.terminals {
                 allow()
@@ -513,7 +619,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("Böyle bir terminal yok")
             }
         }
-        Agent | Handoff | RegisterProject => {
+        Agent | Handoff | NewTask | RegisterProject => {
             if !state.control_plane_features {
                 deny("Daemon bağlantısı yapılandırılmadı")
             } else if !state.project_open {
@@ -561,7 +667,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 36);
+        assert_eq!(catalog().len(), 50);
     }
 
     #[test]

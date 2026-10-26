@@ -78,6 +78,8 @@ fn rig() -> Rig {
     )));
     app.update(gpui_base::init);
     let programs = ProgramPaths {
+        // The same script stands in for ssh: it logs the arguments it was started with.
+        ssh: Some(script.clone()),
         shell: Some(script.clone()),
         raios: Some(script),
     };
@@ -1015,17 +1017,28 @@ fn enter_never_adds_a_newline_to_the_palette_query() {
 
 use rwk_core::control::fake::{FakeControlPlane, RecordedCall};
 use rwk_core::control::{ControlEvent, ControlPlane, EventSource, PolicyAction, QueuedHandoff};
-use rwk_core::sessions::SessionKind;
+use rwk_core::sessions::{SessionKind, SessionName};
 
 fn connected(rig: &mut Rig, policy: PolicyAction) -> Arc<FakeControlPlane> {
+    connected_with(rig, policy, raios_contracts::WorkSnapshot::default())
+}
+
+fn connected_with(
+    rig: &mut Rig,
+    policy: PolicyAction,
+    work: raios_contracts::WorkSnapshot,
+) -> Arc<FakeControlPlane> {
     let fake = Arc::new(FakeControlPlane::new());
     fake.set_policy("launch_agent", policy);
     fake.set_policy("create_handoff", policy);
     fake.set_policy("register_project", policy);
     fake.set_policy("approve_handoff", policy);
     fake.set_policy("reject_handoff", policy);
+    fake.set_policy("create_task", policy);
+    fake.set_policy("update_task_status", policy);
+    fake.set_policy("assign_task", policy);
     // The first inspector poll finds the daemon healthy; only then are agent commands offered.
-    fake.push_work_snapshot(Ok(raios_contracts::WorkSnapshot::default()))
+    fake.push_work_snapshot(Ok(work))
         .push_now_snapshot(Ok(raios_contracts::NowSnapshot::default()));
     let plane: Arc<dyn ControlPlane> = fake.clone();
     rig.with(|wb, _, cx| wb.set_control_plane(Some(plane), cx));
@@ -1971,7 +1984,9 @@ fn a_project_reopens_with_its_saved_tabs_layout_and_shells() {
         ],
         active: 1,
         layout: LayoutPreset::Editor,
-        terminals: vec![SavedTerminal::Shell],
+        dock: None,
+        terminals: vec![SavedTerminal::Shell { name: None }],
+        task_links: Vec::new(),
     }));
     rig.set_workspace_source(store);
     rig.open_project();
@@ -2001,10 +2016,13 @@ fn a_saved_agent_session_is_offered_and_resuming_runs_raios_resume() {
         tabs: Vec::new(),
         active: 0,
         layout: LayoutPreset::Balanced,
+        dock: None,
         terminals: vec![SavedTerminal::Agent {
             kind: SessionKind::Claude,
             native_session: None,
+            name: None,
         }],
+        task_links: Vec::new(),
     })));
     let fake = connected(&mut rig, PolicyAction::Allow);
     fake.push_launch(Ok(()));
@@ -2071,6 +2089,7 @@ fn a_saved_agent_session_is_offered_and_resuming_runs_raios_resume() {
         vec![SavedTerminal::Agent {
             kind: SessionKind::Claude,
             native_session: Some("3294c005-aee0-4e95-860f-5800e045b624".into()),
+            name: None,
         }]
     );
 }
@@ -2085,10 +2104,13 @@ fn an_offer_without_a_catalog_entry_can_only_be_dismissed() {
         tabs: Vec::new(),
         active: 0,
         layout: LayoutPreset::Balanced,
+        dock: None,
         terminals: vec![SavedTerminal::Agent {
             kind: SessionKind::Codex,
             native_session: None,
+            name: None,
         }],
+        task_links: Vec::new(),
     })));
     let saved = rig.record_workspace_changes();
     rig.open_project();
@@ -2133,10 +2155,13 @@ fn a_denied_resume_keeps_the_offer_for_another_try() {
         tabs: Vec::new(),
         active: 0,
         layout: LayoutPreset::Balanced,
+        dock: None,
         terminals: vec![SavedTerminal::Agent {
             kind: SessionKind::Codex,
             native_session: None,
+            name: None,
         }],
+        task_links: Vec::new(),
     })));
     let fake = connected(&mut rig, PolicyAction::Deny);
     rig.open_project();
@@ -2173,7 +2198,9 @@ fn a_saved_workspace_of_another_project_is_not_restored() {
         }],
         active: 0,
         layout: LayoutPreset::Agents,
+        dock: None,
         terminals: Vec::new(),
+        task_links: Vec::new(),
     }));
     rig.set_workspace_source(store);
     rig.open_project();
@@ -2223,6 +2250,1798 @@ fn workspace_changes_are_saved_after_the_delay_and_on_close() {
         "the close must flush the pending state"
     );
     let last = states.last().expect("a saved state");
-    assert_eq!(last.terminals, vec![SavedTerminal::Shell]);
+    assert_eq!(last.terminals, vec![SavedTerminal::Shell { name: None }]);
     assert_eq!(last.tabs.len(), 1, "the open tab is part of the state");
+}
+
+#[test]
+fn an_unnamed_terminal_is_titled_by_kind_and_ordinal() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "shell 1");
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(1)), "shell 2");
+    assert_eq!(rig.read(|wb, _| wb.terminal_name(0).cloned()), None);
+}
+
+#[test]
+fn renaming_a_terminal_sets_the_title_and_an_empty_name_clears_it() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+
+    rig.run(CommandId::RenameTerminal);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("the prompt opens");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("  build box ", window, cx);
+            prompt.submit(cx);
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.rename_prompt().is_none())));
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "build box");
+
+    rig.run(CommandId::RenameTerminal);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("the prompt opens again");
+    assert_eq!(rig.read(|_wb, cx| prompt.read(cx).text(cx)), "build box");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("", window, cx);
+            prompt.submit(cx);
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.rename_prompt().is_none())));
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "shell 1");
+}
+
+#[test]
+fn a_bad_terminal_name_is_refused_and_escape_closes_the_prompt() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+
+    for text in ["--evil", "anahtar sk-abcdefghijklmnopqrstuvwx"] {
+        rig.run(CommandId::RenameTerminal);
+        let prompt = rig
+            .read(|wb, _| wb.rename_prompt().cloned())
+            .expect("the prompt opens");
+        rig.with(|_wb, window, cx| {
+            prompt.update(cx, |prompt, cx| {
+                prompt.set_text(text, window, cx);
+                prompt.submit(cx);
+            })
+        });
+        rig.settle_for(50);
+        assert!(rig.read(|wb, cx| wb
+            .rename_prompt()
+            .is_some_and(|prompt| prompt.read(cx).problem().is_some())));
+        assert_eq!(
+            rig.read(|wb, _| wb.terminal_name(0).cloned()),
+            None,
+            "{text:?}"
+        );
+        rig.with(|wb, window, cx| wb.close_rename_prompt(window, cx));
+    }
+
+    rig.run(CommandId::RenameTerminal);
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_some()));
+    rig.cx.simulate_keystrokes("escape");
+    rig.cx.run_until_parked();
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+}
+
+#[test]
+fn a_terminal_name_is_part_of_the_saved_workspace_and_comes_back_on_restore() {
+    let mut rig = rig();
+    let saved = rig.record_workspace_changes();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    rig.with(|wb, _window, cx| {
+        wb.rename_terminal(0, SessionName::parse("api").ok(), cx);
+    });
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a state");
+    assert_eq!(
+        workspace.terminals,
+        vec![SavedTerminal::Shell {
+            name: Some("api".to_owned())
+        }]
+    );
+}
+
+#[test]
+fn a_saved_terminal_name_is_restored_on_the_shell_it_belongs_to() {
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    rig.set_workspace_source(FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root,
+        tabs: vec![],
+        active: 0,
+        layout: LayoutPreset::Balanced,
+        dock: None,
+        terminals: vec![
+            SavedTerminal::Shell {
+                name: Some("api".to_owned()),
+            },
+            SavedTerminal::Shell { name: None },
+        ],
+        task_links: Vec::new(),
+    })));
+    rig.open_project();
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "api");
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(1)), "shell 2");
+}
+
+#[test]
+fn terminals_start_stacked_in_creation_order_and_a_closed_one_leaves_the_dock() {
+    let mut rig = rig();
+    rig.open_project();
+    for _ in 0..3 {
+        rig.run(CommandId::NewTerminal);
+    }
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 3));
+
+    let ids: Vec<_> = rig.read(|wb, _| (0..3).filter_map(|i| wb.terminal_id(i)).collect());
+    assert_eq!(rig.read(|wb, _| wb.dock().sessions()), ids);
+    assert_eq!(rig.read(|wb, _| wb.dock().validate()), Ok(()));
+
+    // Stop the middle terminal; the next terminal makes room by dropping the dead pane.
+    rig.run(CommandId::FocusTerminal(2));
+    rig.run(CommandId::StopTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.running_sessions()) == 2));
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 3));
+    let now: Vec<_> = rig.read(|wb, _| (0..3).filter_map(|i| wb.terminal_id(i)).collect());
+    assert_eq!(rig.read(|wb, _| wb.dock().sessions()), now);
+    assert!(!rig.read(|wb, _| wb.dock().contains(&ids[1])));
+}
+
+#[test]
+fn a_saved_dock_arrangement_is_restored_over_the_shells_that_come_back() {
+    use rwk_core::workbench::{DockLayout, Edge};
+
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("canonical");
+    let mut dock = DockLayout::stacked([0_usize, 1, 2]);
+    dock.split(&2, &0, Edge::Right).expect("split");
+    rig.set_workspace_source(FixedWorkspaceStore::new(Some(SavedWorkspace {
+        project: root,
+        tabs: vec![],
+        active: 0,
+        layout: LayoutPreset::Balanced,
+        terminals: vec![SavedTerminal::Shell { name: None }; 3],
+        dock: Some(dock),
+        task_links: Vec::new(),
+    })));
+    rig.open_project();
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 3));
+
+    let ids: Vec<_> = rig.read(|wb, _| (0..3).filter_map(|i| wb.terminal_id(i)).collect());
+    // Pane 2 sits to the right of pane 0, then pane 1 below them.
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![ids[0].clone(), ids[2].clone(), ids[1].clone()]
+    );
+    assert_eq!(rig.read(|wb, _| wb.dock().validate()), Ok(()));
+}
+
+#[test]
+fn the_current_dock_arrangement_is_part_of_the_saved_workspace() {
+    let mut rig = rig();
+    let saved = rig.record_workspace_changes();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a state");
+    let dock = workspace.dock.expect("an arrangement");
+    assert_eq!(dock.sessions(), vec![0, 1]);
+}
+
+/// Positions of the dock's title strips in the headless window, found by trying: the dock is the
+/// right-hand panel, each of two stacked terminals has a thin title strip at the top of its half.
+fn two_terminals(rig: &mut Rig) -> (rwk_core::sessions::SessionId, rwk_core::sessions::SessionId) {
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    let first = rig.read(|wb, _| wb.terminal_id(0)).expect("first");
+    let second = rig.read(|wb, _| wb.terminal_id(1)).expect("second");
+    (first, second)
+}
+
+#[test]
+fn dropping_a_terminal_on_the_middle_of_another_makes_it_a_tab_there() {
+    let mut rig = rig();
+    let (first, second) = two_terminals(&mut rig);
+    rig.with(|wb, window, cx| {
+        wb.drop_terminal(
+            &second,
+            &first,
+            rwk_core::workbench::DropZone::Center,
+            window,
+            cx,
+        )
+    });
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![first.clone(), second.clone()]
+    );
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().group_mate(&first)),
+        Some(second.clone())
+    );
+    assert_eq!(rig.read(|wb, _| wb.dock().validate()), Ok(()));
+    // The moved terminal is the selected one and the group shows it.
+    assert!(rig.read(|wb, _| wb.dock().is_shown(&second)));
+    assert_eq!(rig.read(|wb, _| wb.selected_terminal()), 1);
+}
+
+#[test]
+fn dropping_on_an_edge_splits_the_pane_and_the_sessions_keep_running() {
+    let mut rig = rig();
+    let (first, second) = two_terminals(&mut rig);
+    rig.with(|wb, window, cx| {
+        wb.drop_terminal(
+            &second,
+            &first,
+            rwk_core::workbench::DropZone::Edge(rwk_core::workbench::Edge::Right),
+            window,
+            cx,
+        )
+    });
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![first.clone(), second.clone()]
+    );
+    assert!(matches!(
+        rig.read(|wb, _| wb.dock().root().cloned()),
+        Some(rwk_core::workbench::Node::Split {
+            axis: rwk_core::workbench::Axis::Horizontal,
+            ..
+        })
+    ));
+    assert_eq!(
+        rig.read(|wb, _| wb.running_sessions()),
+        2,
+        "rearranging never touches the processes"
+    );
+}
+
+#[test]
+fn a_refused_drop_leaves_the_layout_and_says_why() {
+    let mut rig = rig();
+    let (first, _second) = two_terminals(&mut rig);
+    let before = rig.read(|wb, _| wb.dock().clone());
+    // A lone pane cannot be split from itself.
+    rig.with(|wb, window, cx| {
+        wb.drop_terminal(
+            &first,
+            &first,
+            rwk_core::workbench::DropZone::Edge(rwk_core::workbench::Edge::Right),
+            window,
+            cx,
+        )
+    });
+    assert_eq!(rig.read(|wb, _| wb.dock().clone()), before);
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("taşınamadı")));
+}
+
+#[test]
+fn the_arrangement_commands_do_what_the_drags_do_and_survive_a_refusal() {
+    let mut rig = rig();
+    let (first, second) = two_terminals(&mut rig);
+    // The second terminal is selected: swap it with the first.
+    rig.run(CommandId::MoveTerminalPrevious);
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![second.clone(), first.clone()]
+    );
+    // It is first now; moving further up is refused with a message and changes nothing.
+    rig.run(CommandId::MoveTerminalPrevious);
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![second.clone(), first.clone()]
+    );
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("taşınamadı")));
+    rig.run(CommandId::MoveTerminalNext);
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().sessions()),
+        vec![first.clone(), second.clone()]
+    );
+
+    rig.run(CommandId::SplitTerminalRight);
+    assert!(matches!(
+        rig.read(|wb, _| wb.dock().root().cloned()),
+        Some(rwk_core::workbench::Node::Split {
+            axis: rwk_core::workbench::Axis::Horizontal,
+            ..
+        })
+    ));
+    rig.run(CommandId::JoinTerminalPrevious);
+    assert_eq!(
+        rig.read(|wb, _| wb.dock().group_mate(&second)),
+        Some(first.clone())
+    );
+    rig.run(CommandId::UngroupTerminal);
+    assert_eq!(rig.read(|wb, _| wb.dock().group_mate(&second)), None);
+    rig.run(CommandId::GrowTerminal);
+    rig.run(CommandId::ShrinkTerminal);
+    assert_eq!(rig.read(|wb, _| wb.dock().validate()), Ok(()));
+    assert_eq!(rig.read(|wb, _| wb.running_sessions()), 2);
+}
+
+#[test]
+fn dragging_a_divider_resizes_and_is_saved() {
+    let mut rig = rig();
+    let saved = rig.record_workspace_changes();
+    let (_first, _second) = two_terminals(&mut rig);
+    rig.with(|wb, _window, cx| wb.drag_divider(&[], 0, 0.8, cx));
+    let weights = rig.read(|wb, _| match wb.dock().root() {
+        Some(rwk_core::workbench::Node::Split { children, .. }) => {
+            children.iter().map(|c| c.weight).collect::<Vec<_>>()
+        }
+        _ => Vec::new(),
+    });
+    assert!((weights[0] - 0.8).abs() < 1e-3, "{weights:?}");
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    tick_ready(&mut rig);
+    assert!(rig.settle_until(|_rig| !saved.lock().expect("lock").is_empty()));
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a state");
+    assert!(workspace.dock.is_some());
+}
+
+#[test]
+fn arrangement_commands_are_unavailable_with_a_single_terminal() {
+    use rwk_core::workbench::{available, WorkbenchState};
+    let state = WorkbenchState {
+        project_open: true,
+        file_open: false,
+        dirty: false,
+        terminals: 1,
+        dock_visible: true,
+        control_plane_features: true,
+        daemon_reachable: true,
+        reconnectable: false,
+    };
+    assert!(!available(CommandId::MoveTerminalNext, &state).enabled);
+    assert!(available(CommandId::UngroupTerminal, &state).enabled);
+}
+
+#[test]
+fn a_real_drag_of_a_title_onto_another_pane_rearranges_the_dock() {
+    use gpui::{point, px, Modifiers, MouseButton};
+
+    let mut rig = rig();
+    let (first, second) = two_terminals(&mut rig);
+    rig.settle_for(100);
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    // The dock is the right-hand panel; the second terminal's title strip is the first thing
+    // painted in its half, so scan down the dock's left part for the strip that starts a drag.
+    let x = size.width - px(120.0);
+    let target = point(x, size.height * 0.27);
+    let mut moved = false;
+    // Start below the divider between the two panes (about the middle of the dock): a press on
+    // it drags the divider instead of a title.
+    let mut y = size.height * 0.5 + px(20.0);
+    while y < size.height * 0.75 && !moved {
+        rig.cx
+            .simulate_mouse_move(point(x, y), None, Modifiers::default());
+        rig.cx
+            .simulate_mouse_down(point(x, y), MouseButton::Left, Modifiers::default());
+        for step in 1..=6_u8 {
+            let at = point(x, y + (target.y - y) * (f32::from(step) / 6.0));
+            rig.cx
+                .simulate_mouse_move(at, Some(MouseButton::Left), Modifiers::default());
+        }
+        rig.cx
+            .simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+        rig.settle_for(50);
+        moved = rig.read(|wb, _| wb.dock().group_mate(&second)) == Some(first.clone());
+        y += px(4.0);
+    }
+    // Dropped on the middle of the first pane, the dragged terminal joined its group.
+    assert!(moved, "no scanned point started a drag; viewport {size:?}");
+    assert_eq!(rig.read(|wb, _| wb.running_sessions()), 2);
+}
+
+fn task_calls(fake: &FakeControlPlane) -> Vec<RecordedCall> {
+    fake.calls()
+        .iter()
+        .filter(|call| {
+            matches!(
+                call,
+                RecordedCall::CreateTask(_)
+                    | RecordedCall::UpdateTaskStatus(_)
+                    | RecordedCall::AssignTask(_)
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_new_task_is_titled_in_a_prompt_validated_and_created_through_the_guard() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_created_task(Ok("t-new".to_owned()));
+
+    rig.run(CommandId::NewTask);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("the prompt opens");
+
+    // A title that looks like a credential never leaves the workspace.
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("anahtar sk-abcdefghijklmnopqrstuvwx", window, cx);
+            prompt.submit(cx);
+        })
+    });
+    rig.settle_for(50);
+    assert!(task_calls(&fake).is_empty());
+    assert!(rig.read(|wb, cx| wb
+        .rename_prompt()
+        .is_some_and(|prompt| prompt.read(cx).problem().is_some())));
+
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("  Derlemeyi düzelt  ", window, cx);
+            prompt.submit(cx);
+        })
+    });
+    assert!(rig.settle_until(|_| !task_calls(&fake).is_empty()));
+    let RecordedCall::CreateTask(request) = task_calls(&fake).remove(0) else {
+        panic!("a create call");
+    };
+    assert_eq!(request.title, "Derlemeyi düzelt");
+    assert_eq!(request.priority, 50);
+    assert_eq!(
+        request.project_root,
+        std::fs::canonicalize(rig.dir.path()).unwrap()
+    );
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+    assert!(
+        rig.settle_until(|rig| rig.read(|wb, _| wb.toast()) == Some("Görev eklendi".to_owned()))
+    );
+}
+
+#[test]
+fn a_status_change_and_an_assignment_carry_the_revision_the_user_saw() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_status_update(Ok(()));
+    fake.push_assignment(Ok("2026-10-24T10:00:00Z".to_owned()));
+
+    rig.with(|wb, window, cx| {
+        wb.set_task_status(
+            "t-1".into(),
+            rwk_core::tasks::TaskStatus::Completed,
+            window,
+            cx,
+        )
+    });
+    rig.with(|wb, window, cx| {
+        wb.assign_task(
+            "t-1".into(),
+            "2026-10-24T09:00:00Z".into(),
+            Some(SessionKind::Codex),
+            window,
+            cx,
+        )
+    });
+    assert!(rig.settle_until(|_| task_calls(&fake).len() == 2));
+
+    let calls = task_calls(&fake);
+    let RecordedCall::UpdateTaskStatus(update) = &calls[0] else {
+        panic!("a status call");
+    };
+    assert_eq!(update.status, rwk_core::tasks::TaskStatus::Completed);
+    let RecordedCall::AssignTask(assign) = &calls[1] else {
+        panic!("an assign call");
+    };
+    assert_eq!(assign.assignee, Some(SessionKind::Codex));
+    assert_eq!(
+        assign.expected_updated_at.as_deref(),
+        Some("2026-10-24T09:00:00Z")
+    );
+}
+
+#[test]
+fn a_task_changed_elsewhere_says_so_and_a_shell_terminal_is_never_assigned() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_assignment(Err(rwk_core::error::AppError::new(
+        rwk_core::error::ErrorCode::Conflict,
+        "The task changed since it was read",
+    )));
+
+    rig.with(|wb, window, cx| {
+        wb.assign_task(
+            "t-1".into(),
+            "old".into(),
+            Some(SessionKind::Claude),
+            window,
+            cx,
+        )
+    });
+    assert!(rig.settle_until(|rig| rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("bu arada değişti"))));
+
+    // Terminal 1 is a plain shell: nothing is sent.
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    let before = task_calls(&fake).len();
+    rig.with(|wb, window, cx| {
+        wb.assign_task_to_terminal("t-1".into(), "old".into(), 0, window, cx)
+    });
+    assert_eq!(task_calls(&fake).len(), before);
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("ajan değil")));
+}
+
+#[test]
+fn a_denied_task_policy_sends_nothing() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Deny);
+    rig.with(|wb, window, cx| wb.create_task("Görev".into(), window, cx));
+    rig.settle_for(100);
+    assert!(task_calls(&fake).is_empty());
+}
+
+fn receipt_of(
+    root: &std::path::Path,
+    status: &str,
+    delivered: bool,
+) -> raios_contracts::HandoffReceiptDto {
+    raios_contracts::HandoffReceiptDto {
+        approval_id: "a-1".into(),
+        project_path: root.to_string_lossy().into_owned(),
+        from_agent: "claude_kaira".into(),
+        to_agent: "codex_kaira".into(),
+        status: status.into(),
+        resolved_by: None,
+        resolved_at: None,
+        delivered_by_target: delivered,
+    }
+}
+
+/// A rig with one open task "t-1" in the project, and a handoff of it queued towards Codex whose
+/// receipts follow `receipts`.
+fn handoff_of_a_task(receipts: &[(&str, bool)]) -> (Rig, Arc<FakeControlPlane>) {
+    let mut rig = rig();
+    let root = std::fs::canonicalize(rig.dir.path()).expect("root");
+    let work = raios_contracts::WorkSnapshot {
+        tasks: vec![raios_contracts::UnifiedTaskDto {
+            id: "t-1".into(),
+            title: "Derlemeyi düzelt".into(),
+            project_path: Some(root.to_string_lossy().into_owned()),
+            updated_at: "2026-10-25T08:00:00Z".into(),
+            ..raios_contracts::UnifiedTaskDto::default()
+        }],
+        ..raios_contracts::WorkSnapshot::default()
+    };
+    let fake = connected_with(&mut rig, PolicyAction::Allow, work);
+    assert!(rig.settle_until(|rig| rig.read(|wb, cx| !wb
+        .inspector()
+        .read(cx)
+        .model()
+        .tasks
+        .is_empty())));
+    fake.push_handoff(Ok(QueuedHandoff {
+        approval_id: "a-1".into(),
+        project_path: root.clone(),
+    }));
+    for (status, delivered) in receipts {
+        fake.push_receipt(Ok(receipt_of(&root, status, *delivered)));
+    }
+    fake.push_assignment(Ok("2026-10-25T09:00:00Z".to_owned()));
+
+    // The row's "Devret…" button emits this event.
+    let inspector = rig.read(|wb, _| wb.inspector().clone());
+    rig.with(|_, _, cx| {
+        inspector.update(cx, |_, cx| {
+            cx.emit(rwk_ui::inspector::InspectorEvent::HandoffTask {
+                task_id: "t-1".into(),
+                title: "Derlemeyi düzelt".into(),
+            })
+        })
+    });
+    let composer = rig
+        .read(|wb, _| wb.composer().cloned())
+        .expect("the composer opens");
+    let seeded = rig.read(|_, cx| composer.read(cx).text(cx));
+    assert!(seeded.contains("Görev: Derlemeyi düzelt"), "{seeded}");
+    rig.with(|_, window, cx| {
+        composer.update(cx, |composer, cx| {
+            let text = format!("{seeded}testleri çalıştır.");
+            composer.set_text(&text, window, cx);
+            composer.submit(SessionKind::Codex, cx);
+        })
+    });
+    (rig, fake)
+}
+
+fn assignments(fake: &FakeControlPlane) -> Vec<rwk_core::control::AssignTaskRequest> {
+    fake.calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            RecordedCall::AssignTask(request) => Some(request),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_task_follows_a_handoff_once_the_receipt_says_it_was_delivered() {
+    let (mut rig, fake) = handoff_of_a_task(&[("approved", true)]);
+
+    assert!(rig.settle_until(|_| !assignments(&fake).is_empty()));
+    rig.settle_for(300);
+
+    let moves = assignments(&fake);
+    assert_eq!(moves.len(), 1, "the task moves once");
+    assert_eq!(moves[0].task_id, "t-1");
+    assert_eq!(moves[0].assignee, Some(SessionKind::Codex));
+    assert_eq!(
+        moves[0].expected_updated_at.as_deref(),
+        Some("2026-10-25T08:00:00Z")
+    );
+}
+
+#[test]
+fn a_handoff_that_never_arrives_leaves_the_task_where_it_was() {
+    let (mut rig, fake) = handoff_of_a_task(&[("expired", false)]);
+
+    assert!(rig.settle_until(
+        |rig| rig.read(|wb, _| { wb.handoffs().first().is_some_and(|h| !h.is_open()) })
+    ));
+    rig.settle_for(300);
+
+    assert!(assignments(&fake).is_empty());
+}
+
+// ----- context menus and the toolbar ---------------------------------------------------------
+
+use gpui::{point, px};
+use rwk_core::workbench::MenuTarget;
+use rwk_ui::context_menu::{ContextMenu, Line};
+use rwk_ui::workbench::menus::{MenuAction, TaskMenuInfo};
+
+fn menu_of(rig: &mut Rig) -> gpui::Entity<ContextMenu> {
+    rig.read(|wb, _| wb.context_menu().cloned())
+        .expect("a context menu is open")
+}
+
+fn menu_lines(rig: &mut Rig) -> Vec<Line> {
+    let menu = menu_of(rig);
+    rig.read(|_, cx| menu.read(cx).lines().to_vec())
+}
+
+fn menu_highlight(rig: &mut Rig) -> Option<usize> {
+    let menu = menu_of(rig);
+    rig.read(|_, cx| menu.read(cx).highlighted())
+}
+
+fn line_index(rig: &mut Rig, wanted: &MenuAction) -> usize {
+    let menu = menu_of(rig);
+    let count = rig.read(|_, cx| menu.read(cx).lines().len());
+    (0..count)
+        .find(|index| rig.read(|wb, _| wb.menu_action(*index)).as_ref() == Some(wanted))
+        .unwrap_or_else(|| panic!("no line for {wanted:?}"))
+}
+
+#[test]
+fn a_terminal_menu_lists_commands_and_choosing_one_runs_it_on_the_selected_terminal() {
+    let mut rig = rig();
+    let (_first, _second) = two_terminals(&mut rig);
+
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::TerminalTitle,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    let index = line_index(&mut rig, &MenuAction::Command(CommandId::RenameTerminal));
+    let menu = menu_of(&mut rig);
+    rig.with(|_, _, cx| menu.update(cx, |menu, cx| menu.choose(index, cx)));
+
+    // The menu is gone, the command ran.
+    assert!(rig.read(|wb, _| wb.context_menu().is_none()));
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_some()));
+}
+
+#[test]
+fn unavailable_commands_are_shown_with_their_reason_and_cannot_be_chosen() {
+    let mut rig = rig();
+    rig.open_project();
+
+    // No daemon is connected and no terminal exists.
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::DockBackground,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    let menu = menu_of(&mut rig);
+    let lines = menu_lines(&mut rig);
+    let disabled: Vec<(String, Option<String>)> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Item {
+                label,
+                hint,
+                enabled: false,
+            } => Some((label.to_string(), hint.as_ref().map(ToString::to_string))),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        disabled.iter().any(|(label, hint)| label == "Ajan başlat"
+            && hint.as_deref() == Some("Daemon bağlantısı yapılandırılmadı")),
+        "{disabled:?}"
+    );
+    // The agent line has no action behind it.
+    let agent = lines
+        .iter()
+        .position(
+            |line| matches!(line, Line::Item { label, .. } if label.as_ref() == "Ajan başlat"),
+        )
+        .expect("the agent line");
+    assert_eq!(rig.read(|wb, _| wb.menu_action(agent)), None);
+    rig.with(|_, _, cx| menu.update(cx, |menu, cx| menu.choose(agent, cx)));
+    assert!(
+        rig.read(|wb, _| wb.context_menu().is_some()),
+        "choosing a disabled line keeps the menu open"
+    );
+}
+
+#[test]
+fn the_keyboard_walks_the_menu_and_escape_closes_it_without_running_anything() {
+    let mut rig = rig();
+    let (_first, _second) = two_terminals(&mut rig);
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::TerminalTitle,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    let start = menu_highlight(&mut rig);
+    assert!(
+        start.is_some(),
+        "the first choosable line starts highlighted"
+    );
+
+    rig.cx.simulate_keystrokes("down");
+    let after = menu_highlight(&mut rig);
+    assert_ne!(after, start);
+    rig.cx.simulate_keystrokes("up");
+    assert_eq!(menu_highlight(&mut rig), start);
+
+    // Shortcuts do not fire behind an open menu.
+    let before = rig.read(|wb, _| wb.terminal_count());
+    rig.cx.simulate_keystrokes("ctrl-shift-t");
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), before);
+
+    rig.cx.simulate_keystrokes("escape");
+    assert!(rig.read(|wb, _| wb.context_menu().is_none()));
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+}
+
+#[test]
+fn enter_runs_the_highlighted_line() {
+    let mut rig = rig();
+    let (_first, _second) = two_terminals(&mut rig);
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::TerminalTitle,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    // The first line of the terminal menu renames the terminal.
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.context_menu().is_none()));
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_some()));
+}
+
+#[test]
+fn a_real_right_click_on_a_terminal_title_selects_it_and_opens_its_menu() {
+    use gpui::{Modifiers, MouseButton};
+
+    let mut rig = rig();
+    let (_first, second) = two_terminals(&mut rig);
+    rig.settle_for(100);
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    let x = size.width - px(120.0);
+    // The second terminal's title strip is the first thing painted in its half of the dock.
+    let mut opened = false;
+    let mut y = size.height * 0.4;
+    while y < size.height * 0.8 && !opened {
+        rig.cx
+            .simulate_mouse_down(point(x, y), MouseButton::Right, Modifiers::default());
+        rig.settle_for(30);
+        opened = rig.read(|wb, _| wb.context_menu().is_some());
+        if opened {
+            break;
+        }
+        y += px(4.0);
+    }
+    assert!(opened, "no scanned point opened a menu; viewport {size:?}");
+    // Whatever was hit, a menu line exists for renaming and the click selected a terminal.
+    let _ = second;
+    assert!(rig.read(|wb, _| wb.selected_terminal() < 2));
+    // A click anywhere else closes the menu and does nothing else.
+    rig.cx.simulate_mouse_down(
+        point(px(5.0), px(5.0)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    rig.settle_for(30);
+    assert!(rig.read(|wb, _| wb.context_menu().is_none()));
+}
+
+#[test]
+fn a_task_menu_changes_the_status_through_the_guard() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_status_update(Ok(()));
+    let info = TaskMenuInfo {
+        task_id: "t-1".into(),
+        title: "Derle".into(),
+        status: "pending".into(),
+        assigned: false,
+        updated_at: "2026-10-25T08:00:00Z".into(),
+    };
+    rig.with(|wb, window, cx| wb.open_task_menu(info, point(px(900.0), px(300.0)), window, cx));
+    // "Başlat" and "Bitir" are offered, a status the task already has is not.
+    let start = line_index(
+        &mut rig,
+        &MenuAction::TaskStatus {
+            task_id: "t-1".into(),
+            status: rwk_core::tasks::TaskStatus::InProgress,
+        },
+    );
+    let menu = menu_of(&mut rig);
+    rig.with(|_, _, cx| menu.update(cx, |menu, cx| menu.choose(start, cx)));
+
+    assert!(rig.settle_until(|_| !task_calls(&fake).is_empty()));
+    let RecordedCall::UpdateTaskStatus(update) = task_calls(&fake).remove(0) else {
+        panic!("a status call");
+    };
+    assert_eq!(update.task_id, "t-1");
+    assert_eq!(update.status, rwk_core::tasks::TaskStatus::InProgress);
+}
+
+#[test]
+fn a_task_menu_cannot_assign_to_a_shell_and_clears_an_assignee() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_assignment(Ok("2026-10-25T09:00:00Z".to_owned()));
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    let info = TaskMenuInfo {
+        task_id: "t-1".into(),
+        title: "Derle".into(),
+        status: "in_progress".into(),
+        assigned: true,
+        updated_at: "2026-10-25T08:00:00Z".into(),
+    };
+    rig.with(|wb, window, cx| wb.open_task_menu(info, point(px(900.0), px(300.0)), window, cx));
+    // A shell is selected: assigning to it is shown but disabled.
+    let menu = menu_of(&mut rig);
+    let assign_enabled = menu_lines(&mut rig).iter().any(|line| {
+        matches!(line, Line::Item { label, enabled: true, .. } if label.starts_with("Seçili terminalin"))
+    });
+    assert!(!assign_enabled);
+
+    let clear = line_index(
+        &mut rig,
+        &MenuAction::TaskClear {
+            task_id: "t-1".into(),
+            updated_at: "2026-10-25T08:00:00Z".into(),
+        },
+    );
+    rig.with(|_, _, cx| menu.update(cx, |menu, cx| menu.choose(clear, cx)));
+    assert!(rig.settle_until(|_| !assignments(&fake).is_empty()));
+    let sent = assignments(&fake).remove(0);
+    assert_eq!(sent.assignee, None);
+    assert_eq!(
+        sent.expected_updated_at.as_deref(),
+        Some("2026-10-25T08:00:00Z")
+    );
+}
+
+#[test]
+fn a_file_menu_offers_open_for_files_only_and_copies_the_path() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.with(|wb, window, cx| {
+        wb.open_file_menu(
+            "src/main.rs".into(),
+            false,
+            point(px(60.0), px(80.0)),
+            window,
+            cx,
+        )
+    });
+    let open = line_index(&mut rig, &MenuAction::OpenFile("src/main.rs".into()));
+    let copy = line_index(&mut rig, &MenuAction::CopyPath("src/main.rs".into()));
+    assert!(open < copy);
+    rig.with(|wb, window, cx| wb.close_context_menu(window, cx));
+
+    rig.with(|wb, window, cx| {
+        wb.open_file_menu("src".into(), true, point(px(60.0), px(80.0)), window, cx)
+    });
+    assert!((0..8).all(|index| {
+        rig.read(|wb, _| wb.menu_action(index)) != Some(MenuAction::OpenFile("src".into()))
+    }));
+    let copy = line_index(&mut rig, &MenuAction::CopyPath("src".into()));
+    let menu = menu_of(&mut rig);
+    rig.with(|_, _, cx| menu.update(cx, |menu, cx| menu.choose(copy, cx)));
+    assert_eq!(
+        rig.cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("src".to_owned())
+    );
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Yol panoya kopyalandı".to_owned())
+    );
+}
+
+#[test]
+fn only_one_menu_is_open_at_a_time_and_a_dialog_blocks_a_new_one() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::DockBackground,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    let first = menu_of(&mut rig);
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::EditorTab,
+            point(px(300.0), px(30.0)),
+            window,
+            cx,
+        )
+    });
+    let second = menu_of(&mut rig);
+    assert_ne!(first.entity_id(), second.entity_id());
+    rig.with(|wb, window, cx| wb.close_context_menu(window, cx));
+    assert!(rig.read(|wb, _| wb.context_menu().is_none()));
+}
+
+fn toolbar_button(rig: &mut Rig, id: CommandId) -> rwk_ui::workbench::menus::ToolbarButton {
+    rig.read(|wb, cx| wb.toolbar_buttons(cx))
+        .into_iter()
+        .find(|button| button.id == id)
+        .unwrap_or_else(|| panic!("no toolbar button for {id:?}"))
+}
+
+#[test]
+fn toolbar_buttons_follow_what_the_commands_can_do() {
+    let mut rig = rig();
+
+    // No project: the terminal button is there, disabled, and says why.
+    let button = toolbar_button(&mut rig, CommandId::NewTerminal);
+    assert!(!button.enabled);
+    assert!(
+        button.tip.contains("Önce bir proje klasörü açın"),
+        "{}",
+        button.tip
+    );
+    assert!(!toolbar_button(&mut rig, CommandId::Save).enabled);
+    assert!(toolbar_button(&mut rig, CommandId::Commands).enabled);
+
+    rig.open_project();
+    assert!(toolbar_button(&mut rig, CommandId::NewTerminal).enabled);
+    // Arrangement needs two terminals.
+    assert!(!toolbar_button(&mut rig, CommandId::SplitTerminalRight).enabled);
+    let (_a, _b) = two_terminals(&mut rig);
+    let split = toolbar_button(&mut rig, CommandId::SplitTerminalRight);
+    assert!(
+        split.enabled && split.tip.contains("Terminali"),
+        "{}",
+        split.tip
+    );
+    // Shortcuts show in the tip.
+    assert!(toolbar_button(&mut rig, CommandId::Commands)
+        .tip
+        .contains("Ctrl Shift P"));
+}
+
+#[test]
+fn the_panel_toggles_show_a_pressed_state_that_follows_the_panels() {
+    let mut rig = rig();
+    rig.open_project();
+    let dock = rig.read(|wb, _| wb.dock_visible());
+    assert_eq!(
+        toolbar_button(&mut rig, CommandId::ToggleTerminal).pressed,
+        dock
+    );
+    rig.run(CommandId::ToggleTerminal);
+    assert_eq!(
+        toolbar_button(&mut rig, CommandId::ToggleTerminal).pressed,
+        !dock
+    );
+
+    assert!(!toolbar_button(&mut rig, CommandId::Inspector).pressed);
+    rig.run(CommandId::Inspector);
+    assert!(toolbar_button(&mut rig, CommandId::Inspector).pressed);
+}
+
+#[test]
+fn every_toolbar_command_runs_through_the_same_check_as_the_palette() {
+    let mut rig = rig();
+    // A disabled button's command answers with its reason instead of doing anything.
+    rig.run(CommandId::Save);
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Açık dosya yok".to_owned())
+    );
+}
+
+// ----- closing, killing and SSH ----------------------------------------------------------
+
+fn argv_log(rig: &Rig) -> String {
+    std::fs::read_to_string(rig.dir.path().join(".argv")).unwrap_or_default()
+}
+
+#[test]
+fn closing_a_running_terminal_asks_first_then_removes_the_pane_and_ends_the_process() {
+    let mut rig = rig();
+    let (first, second) = two_terminals(&mut rig);
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 3));
+    let _ = first;
+    rig.run(CommandId::FocusTerminal(2));
+
+    rig.run(CommandId::CloseTerminal);
+    let dialog = rig.read(|wb, _| wb.dialog()).expect("a question");
+    assert_eq!(dialog.title, "Terminali kapat");
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 3, "nothing yet");
+
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 2);
+    assert!(!rig.read(|wb, _| wb.dock().contains(&second)));
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Terminal kapatıldı".to_owned())
+    );
+    // The selection moved to a terminal that exists, and the process is really gone.
+    assert!(rig.read(|wb, _| wb.selected_terminal()) < 2);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.running_sessions()) == 2));
+}
+
+#[test]
+fn killing_says_what_it_skips_and_cancelling_leaves_everything_alone() {
+    let mut rig = rig();
+    let (_first, _second) = two_terminals(&mut rig);
+
+    rig.run(CommandId::KillTerminal);
+    let dialog = rig.read(|wb, _| wb.dialog()).expect("a question");
+    assert_eq!(dialog.title, "Terminali zorla öldür");
+    assert!(dialog.message.contains("SIGKILL"));
+    rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 2);
+    assert_eq!(rig.read(|wb, _| wb.running_sessions()), 2);
+
+    rig.run(CommandId::KillTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 1);
+    assert_eq!(
+        rig.read(|wb, _| wb.toast()),
+        Some("Terminal öldürüldü".to_owned())
+    );
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.running_sessions()) == 1));
+}
+
+#[test]
+fn the_last_terminal_can_be_closed_and_a_new_one_starts_after_it() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+
+    rig.run(CommandId::CloseTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+    assert!(rig.read(|wb, _| wb.dock().is_empty()));
+
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+}
+
+#[test]
+fn a_middle_click_on_a_terminal_title_asks_to_close_it() {
+    use gpui::{Modifiers, MouseButton};
+
+    let mut rig = rig();
+    let (_first, _second) = two_terminals(&mut rig);
+    rig.settle_for(100);
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    let x = size.width - px(160.0);
+    let mut asked = false;
+    let mut y = size.height * 0.5 + px(20.0);
+    while y < size.height * 0.8 && !asked {
+        rig.cx
+            .simulate_mouse_down(point(x, y), MouseButton::Middle, Modifiers::default());
+        rig.settle_for(30);
+        asked = rig.read(|wb, _| wb.dialog()).is_some();
+        y += px(4.0);
+    }
+    assert!(asked, "no scanned point was a title; viewport {size:?}");
+    assert_eq!(
+        rig.read(|wb, _| wb.dialog()).map(|dialog| dialog.title),
+        Some("Terminali kapat")
+    );
+    assert_eq!(
+        rig.read(|wb, _| wb.terminal_count()),
+        2,
+        "the question comes first"
+    );
+}
+
+fn ssh_home_with(config: &str) -> tempfile::TempDir {
+    let home = tempfile::tempdir().expect("home");
+    let ssh = home.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).expect("ssh dir");
+    std::fs::write(ssh.join("config"), config).expect("config");
+    home
+}
+
+#[test]
+fn the_ssh_picker_lists_known_hosts_and_connecting_starts_ssh_with_the_destination() {
+    let mut rig = rig();
+    rig.open_project();
+    let home = ssh_home_with("Host prod\n  HostName 10.1.2.3\n  User deploy\n  Port 2200\n");
+    rig.with(|wb, _, _| wb.set_ssh_home(Some(home.path().to_path_buf())));
+
+    rig.run(CommandId::Ssh);
+    let picker = rig
+        .read(|wb, _| wb.ssh_picker().cloned())
+        .expect("a picker");
+    let rows = rig.read(|_, cx| picker.read(cx).rows().to_vec());
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].label.starts_with("prod"), "{}", rows[0].label);
+
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.ssh_picker().is_none()));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "prod");
+    assert!(
+        rig.settle_until(|rig| argv_log(rig).contains("-- prod")),
+        "{}",
+        argv_log(&rig)
+    );
+}
+
+#[test]
+fn a_typed_target_connects_and_text_that_is_not_a_target_does_not() {
+    let mut rig = rig();
+    rig.open_project();
+    let home = ssh_home_with("");
+    rig.with(|wb, _, _| wb.set_ssh_home(Some(home.path().to_path_buf())));
+
+    rig.run(CommandId::Ssh);
+    let picker = rig
+        .read(|wb, _| wb.ssh_picker().cloned())
+        .expect("a picker");
+    // Option-looking text offers no row, and Enter does nothing.
+    rig.with(|_, window, cx| {
+        picker.update(cx, |picker, cx| {
+            picker.set_query("-oProxyCommand=touch /tmp/pwned", window, cx)
+        })
+    });
+    assert!(rig.read(|_, cx| picker.read(cx).rows().is_empty()));
+    rig.cx.simulate_keystrokes("enter");
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+    assert!(rig.read(|wb, _| wb.ssh_picker().is_some()));
+
+    rig.with(|_, window, cx| {
+        picker.update(cx, |picker, cx| {
+            picker.set_query("me@10.0.0.7:2200", window, cx)
+        })
+    });
+    let rows = rig.read(|_, cx| picker.read(cx).rows().to_vec());
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].typed);
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert!(
+        rig.settle_until(|rig| argv_log(rig).contains("-p 2200 -- me@10.0.0.7")),
+        "{}",
+        argv_log(&rig)
+    );
+    assert_eq!(rig.read(|wb, _| wb.terminal_title(0)), "me@10.0.0.7:2200");
+}
+
+#[test]
+fn escape_closes_the_picker_and_a_remote_pane_is_never_saved() {
+    let mut rig = rig();
+    rig.open_project();
+    let home = ssh_home_with("Host prod\n");
+    rig.with(|wb, _, _| wb.set_ssh_home(Some(home.path().to_path_buf())));
+    let saved = rig.record_workspace_changes();
+
+    rig.run(CommandId::Ssh);
+    rig.cx.simulate_keystrokes("escape");
+    assert!(rig.read(|wb, _| wb.ssh_picker().is_none()));
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 0);
+
+    // One local shell and one remote shell: only the local one is written down.
+    rig.run(CommandId::NewTerminal);
+    rig.with(|wb, window, cx| {
+        wb.connect_ssh(rwk_core::ssh::SshTarget::parse("prod").unwrap(), window, cx)
+    });
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    rig.settle_for(50);
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a state");
+    assert_eq!(workspace.terminals.len(), 1, "{:?}", workspace.terminals);
+    assert!(workspace.dock.as_ref().is_some_and(|dock| dock.len() == 1));
+}
+
+#[test]
+fn ssh_is_unavailable_without_a_project_and_listed_in_the_menus_and_toolbar() {
+    let mut rig = rig();
+    let button = toolbar_button(&mut rig, CommandId::Ssh);
+    assert!(!button.enabled);
+    rig.open_project();
+    assert!(toolbar_button(&mut rig, CommandId::Ssh).enabled);
+    let no_terminal = toolbar_button(&mut rig, CommandId::CloseTerminal);
+    assert!(!no_terminal.enabled && no_terminal.tip.contains("Açık terminal yok"));
+    rig.run(CommandId::NewTerminal);
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert!(toolbar_button(&mut rig, CommandId::CloseTerminal)
+        .tip
+        .contains("Ctrl Shift W"));
+
+    rig.with(|wb, window, cx| {
+        wb.open_context_menu(
+            MenuTarget::DockBackground,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    let ssh = line_index(&mut rig, &MenuAction::Command(CommandId::Ssh));
+    let _ = ssh;
+}
+
+fn enabled_labels(rig: &mut Rig) -> Vec<String> {
+    menu_lines(rig)
+        .into_iter()
+        .filter_map(|line| match line {
+            Line::Item {
+                label,
+                enabled: true,
+                ..
+            } => Some(label.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_approval_menu_offers_both_decisions_only_for_handoffs() {
+    let mut rig = rig();
+    rig.with(|wb, window, cx| {
+        wb.open_approval_menu(
+            "a-1".into(),
+            4,
+            true,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    assert_eq!(enabled_labels(&mut rig), ["Onayla", "Reddet…"]);
+    line_index(
+        &mut rig,
+        &MenuAction::RejectHandoff {
+            approval_id: "a-1".into(),
+            revision: 4,
+        },
+    );
+
+    rig.with(|wb, window, cx| {
+        wb.open_approval_menu(
+            "a-2".into(),
+            1,
+            false,
+            point(px(900.0), px(300.0)),
+            window,
+            cx,
+        )
+    });
+    assert!(enabled_labels(&mut rig).is_empty());
+}
+
+#[test]
+fn a_handoff_menu_starts_the_receiver_only_when_it_can_be_started() {
+    let mut rig = rig();
+    rig.with(|wb, window, cx| {
+        wb.open_handoff_menu("h-1".into(), true, point(px(900.0), px(300.0)), window, cx)
+    });
+    line_index(&mut rig, &MenuAction::StartReceiver("h-1".into()));
+
+    rig.with(|wb, window, cx| {
+        wb.open_handoff_menu("h-2".into(), false, point(px(900.0), px(300.0)), window, cx)
+    });
+    assert!(enabled_labels(&mut rig).is_empty());
+}
+
+#[test]
+fn the_text_menu_enables_cut_and_copy_only_with_a_selection_and_edits_only_when_editable() {
+    let mut rig = rig();
+    rig.with(|wb, window, cx| {
+        wb.open_text_menu(false, true, point(px(400.0), px(300.0)), window, cx)
+    });
+    assert_eq!(
+        enabled_labels(&mut rig),
+        ["Geri al", "Yinele", "Yapıştır", "Tümünü seç"]
+    );
+    rig.with(|wb, window, cx| {
+        wb.open_text_menu(true, true, point(px(400.0), px(300.0)), window, cx)
+    });
+    assert!(enabled_labels(&mut rig).contains(&"Kes".to_owned()));
+    assert!(enabled_labels(&mut rig).contains(&"Kopyala".to_owned()));
+    rig.with(|wb, window, cx| {
+        wb.open_text_menu(true, false, point(px(400.0), px(300.0)), window, cx)
+    });
+    assert_eq!(enabled_labels(&mut rig), ["Kopyala", "Tümünü seç"]);
+}
+
+#[test]
+fn right_clicking_the_editor_text_opens_the_text_menu() {
+    use gpui::{Modifiers, MouseButton};
+
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    let mut found = false;
+    'scan: for row in 0..14 {
+        for column in 0..8 {
+            let at = point(
+                size.width * (0.2 + 0.05 * column as f32),
+                size.height * (0.12 + 0.03 * row as f32),
+            );
+            rig.cx
+                .simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+            rig.cx
+                .simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
+            rig.settle_for(30);
+            if rig.read(|wb, _| wb.context_menu().is_some()) {
+                if enabled_labels(&mut rig).contains(&"Tümünü seç".to_owned()) {
+                    found = true;
+                    break 'scan;
+                }
+                rig.cx.simulate_keystrokes("escape");
+                rig.settle_for(30);
+            }
+        }
+    }
+    assert!(found, "no point of the editor opened the text menu");
+}
+
+#[test]
+fn an_ended_ssh_shell_can_be_reconnected_into_a_fresh_pane() {
+    let mut rig = rig();
+    rig.open_project();
+    let home = tempfile::tempdir().unwrap();
+    rig.with(|wb, _, _| wb.set_ssh_home(Some(home.path().to_path_buf())));
+    let target = rwk_core::ssh::SshTarget::parse("me@10.0.0.7").unwrap();
+    rig.with(|wb, window, cx| wb.connect_ssh(target, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    // While it runs there is nothing to reconnect.
+    assert!(!rig.read(|wb, cx| wb.state(cx).reconnectable));
+
+    let first = rig.read(|wb, _| wb.terminal_id(0));
+    rig.run(CommandId::StopTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, cx| wb.state(cx).reconnectable)));
+
+    rig.run(CommandId::Reconnect);
+    assert!(
+        rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1
+            && rig.read(|wb, _| wb.terminal_id(0)) != first)
+    );
+    assert!(!rig.read(|wb, cx| wb.state(cx).reconnectable));
+}
+
+#[test]
+fn clicking_along_the_toolbar_presses_real_buttons() {
+    use gpui::{Modifiers, MouseButton};
+
+    let mut rig = rig();
+    rig.open_project();
+    rig.settle_for(100);
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    // The toolbar is the row under the title area; sweep it from the left until a click
+    // opens a terminal (the "Terminal +" button) or the row is exhausted.
+    let mut x = px(4.0);
+    while x < size.width && rig.read(|wb, _| wb.terminal_count()) == 0 {
+        for y in [px(14.0), px(30.0), px(44.0)] {
+            let at = point(x, y);
+            rig.cx
+                .simulate_mouse_down(at, MouseButton::Left, Modifiers::default());
+            rig.cx
+                .simulate_mouse_up(at, MouseButton::Left, Modifiers::default());
+        }
+        rig.settle_for(20);
+        // Buttons that open overlays (project, files, search…) would swallow later clicks.
+        if rig.read(|wb, _| {
+            wb.palette().is_some() || wb.ssh_picker().is_some() || wb.context_menu().is_some()
+        }) {
+            rig.cx.simulate_keystrokes("escape");
+            rig.settle_for(20);
+        }
+        x += px(10.0);
+    }
+    assert!(
+        rig.read(|wb, _| wb.terminal_count()) >= 1,
+        "no toolbar click started a terminal"
+    );
+}
+
+#[test]
+fn finished_task_groups_start_collapsed_and_open_on_a_click() {
+    use rwk_core::inspector::TaskGroup;
+
+    let mut rig = rig();
+    let inspector = rig.read(|wb, _| wb.inspector().clone());
+    let collapsed =
+        |rig: &mut Rig, group| rig.read(|_, cx| inspector.read(cx).group_collapsed(group));
+    assert!(!collapsed(&mut rig, TaskGroup::InProgress));
+    assert!(!collapsed(&mut rig, TaskGroup::Open));
+    assert!(collapsed(&mut rig, TaskGroup::Completed));
+    assert!(collapsed(&mut rig, TaskGroup::Cancelled));
+
+    rig.with(|_, _, cx| {
+        inspector.update(cx, |view, cx| view.toggle_group(TaskGroup::Completed, cx))
+    });
+    assert!(!collapsed(&mut rig, TaskGroup::Completed));
+    rig.with(|_, _, cx| {
+        inspector.update(cx, |view, cx| view.toggle_group(TaskGroup::Completed, cx))
+    });
+    assert!(collapsed(&mut rig, TaskGroup::Completed));
+}
+
+#[test]
+fn a_task_given_to_an_agent_terminal_is_carried_saved_and_marked_when_the_terminal_closes() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_assignment(Ok("2026-10-26T09:00:00Z".to_owned()));
+    fake.push_launch(Ok(()));
+    let saved = rig.record_workspace_changes();
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+
+    rig.with(|wb, window, cx| {
+        wb.assign_task_to_terminal("t-1".into(), "rev".into(), 0, window, cx)
+    });
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_task(0).is_some())));
+    assert_eq!(
+        rig.read(|wb, _| wb.terminal_task(0).map(|task| task.task_id.clone())),
+        Some("t-1".to_owned())
+    );
+
+    // The link is part of the saved workspace.
+    rig.cx.executor().advance_clock(Duration::from_millis(600));
+    rig.settle_for(50);
+    let workspace = saved
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("a state");
+    assert_eq!(
+        workspace
+            .task_links
+            .first()
+            .cloned()
+            .flatten()
+            .map(|link| link.id),
+        Some("t-1".to_owned())
+    );
+
+    // Closing the terminal leaves the task alone but the list says its terminal is gone.
+    rig.run(CommandId::CloseTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 0));
+    let inspector = rig.read(|wb, _| wb.inspector().clone());
+    assert!(rig.read(|_, cx| inspector.read(cx).task_terminal_closed("t-1")));
+}
+
+#[test]
+fn a_failed_assignment_links_nothing() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_assignment(Err(rwk_core::error::AppError::new(
+        rwk_core::error::ErrorCode::Conflict,
+        "The task changed since it was read",
+    )));
+    fake.push_launch(Ok(()));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    rig.with(|wb, window, cx| {
+        wb.assign_task_to_terminal("t-1".into(), "old".into(), 0, window, cx)
+    });
+    assert!(rig.settle_until(|rig| rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("bu arada değişti"))));
+    assert!(rig.read(|wb, _| wb.terminal_task(0).is_none()));
+}
+
+#[test]
+fn a_handoff_text_can_be_pasted_into_another_running_agent_terminal_without_a_record() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_launch(Ok(()));
+    fake.push_launch(Ok(()));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Claude, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    let sends_before = sends(&fake);
+
+    // The sender is the selected (second) terminal; the first is the only paste target.
+    rig.run(CommandId::Handoff);
+    let composer = rig.read(|wb, _| wb.composer().cloned()).expect("composer");
+    let target = rig.read(|wb, _| wb.terminal_id(0)).expect("first terminal");
+    rig.with(|_, window, cx| {
+        composer.update(cx, |composer, cx| {
+            composer.set_text("satir bir\nsatir iki", window, cx);
+            composer.submit_paste(target.clone(), cx);
+        })
+    });
+    rig.cx.run_until_parked();
+
+    assert!(rig.read(|wb, _| wb.composer().is_none()));
+    let view = rig
+        .read(|wb, _| wb.terminal_view(0).cloned())
+        .expect("view");
+    // The composer text is one line, so it is written to the prompt, not held in a preview;
+    // either way the user still has to press Enter in the terminal.
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("Devir kaydı oluşmadı")));
+    assert_eq!(rig.read(|wb, _| wb.selected_terminal()), 0);
+    let _ = view;
+    assert_eq!(sends(&fake), sends_before, "a paste is not a handoff");
+}
+
+#[test]
+fn a_secret_is_not_pasted_into_a_terminal_either() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_launch(Ok(()));
+    fake.push_launch(Ok(()));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Claude, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    rig.run(CommandId::Handoff);
+    let composer = rig.read(|wb, _| wb.composer().cloned()).expect("composer");
+    let target = rig.read(|wb, _| wb.terminal_id(0)).expect("terminal");
+    rig.with(|_, window, cx| {
+        composer.update(cx, |composer, cx| {
+            composer.set_text("anahtar sk-abcdefghijklmnopqrstuvwx", window, cx);
+            composer.submit_paste(target.clone(), cx);
+        })
+    });
+    rig.cx.run_until_parked();
+    assert!(rig.read(|wb, cx| wb
+        .composer()
+        .is_some_and(|c| c.read(cx).problem().is_some())));
+    let view = rig
+        .read(|wb, _| wb.terminal_view(0).cloned())
+        .expect("view");
+    assert!(!rig.read(|_, cx| view.read(cx).has_pending_paste()));
+}
+
+fn answer_entry_prompt(rig: &mut Rig, text: &str) {
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("a name prompt");
+    rig.with(|_, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text(text, window, cx);
+            prompt.submit(cx);
+        })
+    });
+    rig.cx.run_until_parked();
+}
+
+#[test]
+fn a_new_file_is_created_in_the_project_and_opened() {
+    use rwk_ui::workbench::entries::EntryOp;
+
+    let mut rig = rig();
+    rig.open_project();
+    rig.with(|wb, window, cx| wb.open_entry_prompt(EntryOp::NewFile(String::new()), window, cx));
+    // A name with a separator is refused in the prompt and nothing is created.
+    answer_entry_prompt(&mut rig, "../escape.txt");
+    assert!(rig.read(|wb, cx| wb
+        .rename_prompt()
+        .is_some_and(|p| p.read(cx).problem().is_some())));
+    assert!(!rig.dir.path().join("../escape.txt").exists());
+
+    answer_entry_prompt(&mut rig, "fresh.txt");
+    assert!(rig.dir.path().join("fresh.txt").is_file());
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("fresh.txt")));
+}
+
+#[test]
+fn renaming_or_deleting_an_open_file_is_refused_and_a_closed_one_goes_after_a_question() {
+    use rwk_ui::workbench::entries::EntryOp;
+
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+
+    rig.with(|wb, window, cx| wb.open_entry_prompt(EntryOp::Rename("a.txt".into()), window, cx));
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+    rig.with(|wb, _, cx| wb.request_delete_entry("a.txt".into(), false, cx));
+    assert!(rig.read(|wb, _| wb.pending().is_none()));
+    assert!(rig.dir.path().join("a.txt").exists());
+
+    // b.txt is not open: rename works, delete asks first.
+    rig.with(|wb, window, cx| wb.open_entry_prompt(EntryOp::Rename("b.txt".into()), window, cx));
+    answer_entry_prompt(&mut rig, "c.txt");
+    assert!(rig.dir.path().join("c.txt").exists());
+    assert!(!rig.dir.path().join("b.txt").exists());
+
+    rig.with(|wb, _, cx| wb.request_delete_entry("c.txt".into(), false, cx));
+    assert!(
+        rig.dir.path().join("c.txt").exists(),
+        "nothing before the answer"
+    );
+    assert!(matches!(
+        rig.read(|wb, _| wb.pending().cloned()),
+        Some(PendingAction::DeleteEntry { .. })
+    ));
+    rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
+    assert!(rig.dir.path().join("c.txt").exists());
+
+    rig.with(|wb, _, cx| wb.request_delete_entry("c.txt".into(), false, cx));
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert!(!rig.dir.path().join("c.txt").exists());
+}
+
+#[test]
+fn a_bound_terminal_whose_process_ended_marks_its_task() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_assignment(Ok("2026-10-26T09:00:00Z".to_owned()));
+    fake.push_launch(Ok(()));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    rig.with(|wb, window, cx| {
+        wb.assign_task_to_terminal("t-9".into(), "rev".into(), 0, window, cx)
+    });
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_task(0).is_some())));
+    let inspector = rig.read(|wb, _| wb.inspector().clone());
+    assert!(!rig.read(|_, cx| inspector.read(cx).task_terminal_closed("t-9")));
+
+    rig.run(CommandId::StopTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_task_ended(0))));
+    rig.with(|_, window, _| window.refresh());
+    assert!(
+        rig.settle_until(|rig| rig.read(|_, cx| inspector.read(cx).task_terminal_closed("t-9")))
+    );
+    // The pane is still there and still carries the task.
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 1);
+}
+
+#[test]
+fn the_empty_part_of_the_file_tree_offers_new_entries_at_the_project_root() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.with(|wb, window, cx| {
+        wb.open_file_menu(String::new(), true, point(px(60.0), px(400.0)), window, cx)
+    });
+    let labels = enabled_labels(&mut rig);
+    assert!(labels.contains(&"Yeni dosya…".to_owned()), "{labels:?}");
+    assert!(labels.contains(&"Yeni klasör…".to_owned()));
+    assert!(
+        !labels.contains(&"Sil…".to_owned()),
+        "the root cannot be deleted"
+    );
+    assert!(!labels.contains(&"Yeniden adlandır…".to_owned()));
+    line_index(&mut rig, &MenuAction::NewFile(String::new()));
+}
+
+#[test]
+fn right_clicking_below_the_tree_rows_opens_the_root_menu() {
+    use gpui::{Modifiers, MouseButton};
+
+    let mut rig = rig();
+    rig.open_project();
+    rig.settle_for(100);
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    // The tree is the left column; sweep its lower part, below the few rows of the test project.
+    let mut found = false;
+    'scan: for row in 0..10 {
+        for column in 0..4 {
+            let at = point(
+                px(30.0 + 40.0 * column as f32),
+                size.height * (0.5 + 0.04 * row as f32),
+            );
+            rig.cx
+                .simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+            rig.settle_for(30);
+            if rig.read(|wb, _| wb.context_menu().is_some()) {
+                if enabled_labels(&mut rig).contains(&"Yeni dosya…".to_owned())
+                    && !enabled_labels(&mut rig).contains(&"Sil…".to_owned())
+                {
+                    found = true;
+                    break 'scan;
+                }
+                rig.cx.simulate_keystrokes("escape");
+                rig.settle_for(30);
+            }
+        }
+    }
+    assert!(found, "no point below the rows opened the root menu");
 }

@@ -23,6 +23,15 @@ use crate::assets::icon_path;
 pub enum FileTreeEvent {
     /// The user chose a file (relative path). The workbench decides whether it may open.
     OpenFile(String),
+    /// The user right-clicked a row (relative path); the row is selected.
+    ContextMenu {
+        /// Relative path of the row.
+        path: String,
+        /// The row is a folder.
+        folder: bool,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
 }
 
 /// Marks the placeholder child of a folder that has not been listed yet.
@@ -326,6 +335,7 @@ impl Render for FileTreeView {
             .enumerate()
             .map(|(ix, (id, label, depth, folder, open))| {
                 let look = presentation(&label, folder, open);
+                let menu_id = id.clone();
                 let is_selected = selected.as_deref() == Some(id.as_str());
                 let chevron = match (folder, open) {
                     (true, true) => "▾",
@@ -369,6 +379,18 @@ impl Render for FileTreeView {
                             .text_color(gpui::rgb(glyph_color)),
                     )
                     .child(label)
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |view, event: &gpui::MouseDownEvent, _window, cx| {
+                            view.select(&menu_id, cx);
+                            cx.emit(FileTreeEvent::ContextMenu {
+                                path: menu_id.clone(),
+                                folder,
+                                position: event.position,
+                            });
+                            cx.stop_propagation();
+                        }),
+                    )
                     .on_click(cx.listener(move |view, _, _window, cx| {
                         view.select(&id, cx);
                         if folder {
@@ -435,6 +457,19 @@ impl Render for FileTreeView {
                     .min_h_0()
                     .py_1()
                     .overflow_y_scroll()
+                    // The empty part below the rows (rows stop their own right clicks): the
+                    // project root, so a file can be created at the top level.
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(|_, event: &gpui::MouseDownEvent, _window, cx| {
+                            cx.emit(FileTreeEvent::ContextMenu {
+                                path: String::new(),
+                                folder: true,
+                                position: event.position,
+                            });
+                            cx.stop_propagation();
+                        }),
+                    )
                     .children(rows),
             )
             .child(

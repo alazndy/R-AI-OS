@@ -44,6 +44,39 @@ pub enum EditorEvent {
     Closed(String),
     /// The active tab changed.
     Activated(String),
+    /// The user right-clicked a tab; it is active now.
+    TabContextMenu {
+        /// Relative path of the tab.
+        path: String,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
+    /// The user right-clicked the text; the cursor is under the pointer.
+    TextContextMenu {
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+        /// Some text is selected.
+        selection: bool,
+        /// The text can be edited (not a read-only diff or a disabled view).
+        editable: bool,
+    },
+}
+
+/// An edit the text menu can run on the focused editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEdit {
+    /// Cut the selection.
+    Cut,
+    /// Copy the selection.
+    Copy,
+    /// Paste the clipboard.
+    Paste,
+    /// Select everything.
+    SelectAll,
+    /// Undo the last edit.
+    Undo,
+    /// Redo the undone edit.
+    Redo,
 }
 
 /// Builds an editor state with the settings every editor in the workspace uses: soft wrap off
@@ -265,6 +298,24 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Runs `edit` on the active editor, which takes focus first so the action reaches it.
+    pub fn edit(&self, edit: TextEdit, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_base::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        tab.state.update(cx, |state, cx| state.focus(window, cx));
+        let action: Box<dyn gpui::Action> = match edit {
+            TextEdit::Cut => Box::new(Cut),
+            TextEdit::Copy => Box::new(Copy),
+            TextEdit::Paste => Box::new(Paste),
+            TextEdit::SelectAll => Box::new(SelectAll),
+            TextEdit::Undo => Box::new(Undo),
+            TextEdit::Redo => Box::new(Redo),
+        };
+        window.dispatch_action(action, cx);
+    }
+
     /// Gives the active editor keyboard focus.
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(tab) = self.tabs.get(self.active) {
@@ -317,6 +368,20 @@ impl EditorView {
             Some(index) => index,
             None => {
                 let state = cx.new(|cx| new_editor_state(self.theme, window, cx));
+                let view = cx.entity().downgrade();
+                state.update(cx, |state, _| {
+                    state.on_context_menu(std::rc::Rc::new(
+                        move |_menu, capabilities, position, _window, cx| {
+                            let _ = view.update(cx, |_, cx| {
+                                cx.emit(EditorEvent::TextContextMenu {
+                                    position,
+                                    selection: capabilities.has_selection(),
+                                    editable: capabilities.is_editable(),
+                                });
+                            });
+                        },
+                    ));
+                });
                 let tab_path = path.clone();
                 let subscription =
                     cx.subscribe(&state, move |this, _state, event: &InputEvent, cx| {
@@ -791,7 +856,19 @@ impl Render for EditorView {
                     let active = index == self.active;
                     let activate = path.clone();
                     let close = path.clone();
+                    let menu_path = path.clone();
                     div()
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |view, event: &gpui::MouseDownEvent, window, cx| {
+                                view.activate_tab(&menu_path, window, cx);
+                                cx.emit(EditorEvent::TabContextMenu {
+                                    path: menu_path.clone(),
+                                    position: event.position,
+                                });
+                                cx.stop_propagation();
+                            }),
+                        )
                         .flex()
                         .flex_row()
                         .items_center()

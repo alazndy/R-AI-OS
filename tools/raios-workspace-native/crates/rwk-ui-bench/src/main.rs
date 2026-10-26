@@ -5,7 +5,7 @@
 //!
 //! Scenarios: `cold-start` (U1), `flood` (U2), `flood4` (U3), `keystroke` (U4), `idle` (U5),
 //! `editor-open` (E1, E2), `app-cold-start` (A1, needs `rwk-app` built next to `ui-bench`),
-//! `app-idle` (A2), `all`. Rates and times use the median of the runs, latencies and memory the worst.
+//! `app-idle` (A2), `dock-arrange` (D1, twelve terminals rearranged by dock commands), `dock-resizes` (D2, PTY resizes those commands cause), `all`. Rates and times use the median of the runs, latencies and memory the worst.
 //!
 //! Exit status with `--enforce`: 0 every gate passed, 1 a gate failed on a quiet machine,
 //! 3 inconclusive (a failure on a busy machine, or a gate that could not be measured because the
@@ -28,7 +28,8 @@ use std::time::{Duration, Instant};
 use child::Scenario;
 use gates::{
     parse_result_line, verdict, Gate, Outcome, Verdict, APP_COLD_START, APP_IDLE_PSS, COLD_START,
-    EDITOR_OPEN_30K, EDITOR_OPEN_500K, FLOOD4_FPS, FLOOD_FPS, IDLE_PSS, KEYSTROKE_P99,
+    DOCK_ARRANGE_OVER_FLOOR, DOCK_RESIZES_PER_OP, EDITOR_OPEN_30K, EDITOR_OPEN_500K, FLOOD4_FPS,
+    FLOOD_FPS, IDLE_PSS, KEYSTROKE_P99,
 };
 use machine::Meter;
 use stats::median;
@@ -224,6 +225,8 @@ fn measure(name: &str, runs: usize) -> Result<Vec<GateResult>, String> {
             "editor-open-500k",
             "app-cold-start",
             "app-idle",
+            "dock-arrange",
+            "dock-resizes",
         ]
     } else if name == "editor-open" {
         vec!["editor-open-30k", "editor-open-500k"]
@@ -269,6 +272,16 @@ fn measure(name: &str, runs: usize) -> Result<Vec<GateResult>, String> {
                 APP_IDLE_PSS,
                 true,
                 repeat(runs, || run_result("app-idle", "pss_mb"))?,
+            ),
+            "dock-arrange" => (
+                DOCK_ARRANGE_OVER_FLOOR,
+                true,
+                repeat(runs, || run_result("dock-arrange", "over_floor_ms"))?,
+            ),
+            "dock-resizes" => (
+                DOCK_RESIZES_PER_OP,
+                true,
+                repeat(runs, || run_result("dock-arrange", "resizes_per_op"))?,
             ),
             other => return Err(format!("unknown scenario {other:?}")),
         };
