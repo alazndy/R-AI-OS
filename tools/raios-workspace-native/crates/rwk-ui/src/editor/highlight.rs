@@ -35,12 +35,27 @@ pub fn highlight_enabled(len: usize) -> bool {
 }
 
 /// The languages Workspace 0.1 highlighted, plus the TypeScript family.
-const LANGUAGES: [(&str, &[&str]); 5] = [
+const LANGUAGES: [(&str, &[&str]); 20] = [
     ("rust", &["rs"]),
-    ("json", &["json"]),
+    ("json", &["json", "jsonc", "webmanifest"]),
     ("markdown", &["md", "markdown"]),
     ("javascript", &["js", "mjs", "cjs", "jsx"]),
     ("typescript", &["ts", "mts", "cts"]),
+    ("tsx", &["tsx"]),
+    ("python", &["py", "pyi", "pyw"]),
+    ("bash", &["sh", "bash", "zsh"]),
+    ("html", &["html", "htm"]),
+    ("css", &["css"]),
+    ("go", &["go"]),
+    ("c", &["c", "h"]),
+    ("cpp", &["cpp", "cc", "cxx", "hpp", "hh", "hxx"]),
+    ("toml", &["toml"]),
+    ("yaml", &["yml", "yaml"]),
+    ("r", &["r"]),
+    ("java", &["java"]),
+    ("kotlin", &["kt", "kts"]),
+    ("sql", &["sql"]),
+    ("xml", &["xml", "svg", "xsd", "xsl", "plist"]),
 ];
 
 /// The language for a file path, by extension.
@@ -71,6 +86,12 @@ pub enum TokenClass {
     Constant,
     /// Punctuation.
     Punctuation,
+    /// Keys and field names (TOML, YAML, JSON, CSS properties).
+    Property,
+    /// Markup tags (HTML, XML).
+    Tag,
+    /// Attributes and annotations.
+    Attribute,
 }
 
 impl TokenClass {
@@ -85,6 +106,9 @@ impl TokenClass {
             TokenClass::Function => "function",
             TokenClass::Constant => "constant",
             TokenClass::Punctuation => "punctuation",
+            TokenClass::Property => "property",
+            TokenClass::Tag => "tag",
+            TokenClass::Attribute => "attribute",
         }
     }
 
@@ -111,6 +135,9 @@ impl TokenClass {
             "constant" => Some(Self::Constant),
             "comment" => Some(Self::Comment),
             "punctuation" | "delimiter" => Some(Self::Punctuation),
+            "property" | "field" | "label" => Some(Self::Property),
+            "tag" => Some(Self::Tag),
+            "attribute" | "annotation" => Some(Self::Attribute),
             _ => None,
         }
     }
@@ -161,10 +188,178 @@ fn build_grammar(name: &str) -> Option<Grammar> {
                 tree_sitter_typescript::HIGHLIGHTS_QUERY,
             ],
         ),
+        "tsx" => (
+            tree_sitter_typescript::LANGUAGE_TSX.into(),
+            vec![
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY,
+                tree_sitter_typescript::HIGHLIGHTS_QUERY,
+            ],
+        ),
+        "python" => (
+            tree_sitter_python::LANGUAGE.into(),
+            vec![tree_sitter_python::HIGHLIGHTS_QUERY],
+        ),
+        "bash" => (
+            tree_sitter_bash::LANGUAGE.into(),
+            vec![tree_sitter_bash::HIGHLIGHT_QUERY],
+        ),
+        "html" => (
+            tree_sitter_html::LANGUAGE.into(),
+            vec![tree_sitter_html::HIGHLIGHTS_QUERY],
+        ),
+        "css" => (
+            tree_sitter_css::LANGUAGE.into(),
+            vec![tree_sitter_css::HIGHLIGHTS_QUERY],
+        ),
+        "go" => (
+            tree_sitter_go::LANGUAGE.into(),
+            vec![tree_sitter_go::HIGHLIGHTS_QUERY],
+        ),
+        "c" => (
+            tree_sitter_c::LANGUAGE.into(),
+            vec![tree_sitter_c::HIGHLIGHT_QUERY],
+        ),
+        "cpp" => (
+            tree_sitter_cpp::LANGUAGE.into(),
+            vec![
+                tree_sitter_c::HIGHLIGHT_QUERY,
+                tree_sitter_cpp::HIGHLIGHT_QUERY,
+            ],
+        ),
+        "toml" => (
+            tree_sitter_toml_ng::LANGUAGE.into(),
+            vec![tree_sitter_toml_ng::HIGHLIGHTS_QUERY],
+        ),
+        "yaml" => (
+            tree_sitter_yaml::LANGUAGE.into(),
+            vec![tree_sitter_yaml::HIGHLIGHTS_QUERY],
+        ),
+        "r" => (
+            tree_sitter_r::LANGUAGE.into(),
+            vec![tree_sitter_r::HIGHLIGHTS_QUERY],
+        ),
+        "java" => (
+            tree_sitter_java::LANGUAGE.into(),
+            vec![tree_sitter_java::HIGHLIGHTS_QUERY],
+        ),
+        "sql" => (
+            tree_sitter_sequel::LANGUAGE.into(),
+            vec![tree_sitter_sequel::HIGHLIGHTS_QUERY],
+        ),
+        "xml" => (
+            tree_sitter_xml::LANGUAGE_XML.into(),
+            vec![tree_sitter_xml::XML_HIGHLIGHT_QUERY],
+        ),
+        "kotlin" => {
+            let language: Language = tree_sitter_kotlin_ng::LANGUAGE.into();
+            let query = kotlin_query(&language);
+            return grammar_from(language, &query);
+        }
         _ => return None,
     };
     // Later patterns win when two match the same node, so the base language's query goes first.
-    let query = Query::new(&language, &sources.join("\n")).ok()?;
+    grammar_from(language, &sources.join("\n"))
+}
+
+/// The Kotlin grammar ships no highlight query, so this one is written here. Every pattern is
+/// compiled on its own and only the ones this grammar version accepts are kept, so a renamed
+/// node in a newer grammar loses a colour instead of the whole language.
+fn kotlin_query(language: &Language) -> String {
+    const KEYWORDS: &[&str] = &[
+        "package",
+        "import",
+        "class",
+        "interface",
+        "object",
+        "fun",
+        "val",
+        "var",
+        "typealias",
+        "if",
+        "else",
+        "when",
+        "for",
+        "while",
+        "do",
+        "return",
+        "break",
+        "continue",
+        "throw",
+        "try",
+        "catch",
+        "finally",
+        "is",
+        "in",
+        "as",
+        "this",
+        "super",
+        "companion",
+        "constructor",
+        "init",
+        "by",
+        "where",
+        "get",
+        "set",
+        "override",
+        "open",
+        "abstract",
+        "final",
+        "private",
+        "public",
+        "protected",
+        "internal",
+        "data",
+        "sealed",
+        "enum",
+        "annotation",
+        "inner",
+        "suspend",
+        "inline",
+        "lateinit",
+        "const",
+        "vararg",
+        "operator",
+        "infix",
+        "tailrec",
+    ];
+    let mut patterns: Vec<String> = vec![
+        "(line_comment) @comment".into(),
+        "(block_comment) @comment".into(),
+        "(shebang) @comment".into(),
+        "(string_literal) @string".into(),
+        "(multiline_string_literal) @string".into(),
+        "(character_literal) @string".into(),
+        "(escape_sequence) @string.escape".into(),
+        "(number_literal) @number".into(),
+        "(float_literal) @number".into(),
+        "(annotation) @attribute".into(),
+        "(user_type (identifier) @type)".into(),
+        "(class_declaration name: (identifier) @type)".into(),
+        "(object_declaration name: (identifier) @type)".into(),
+        "(function_declaration name: (identifier) @function)".into(),
+        "(call_expression (identifier) @function)".into(),
+        "(call_expression (navigation_expression (identifier) @function .))".into(),
+        "(this_expression) @constant".into(),
+    ];
+    patterns.extend(KEYWORDS.iter().map(|word| format!("\"{word}\" @keyword")));
+    patterns.extend(
+        [
+            "\"true\" @constant",
+            "\"false\" @constant",
+            "\"null\" @constant",
+        ]
+        .map(String::from),
+    );
+    patterns
+        .into_iter()
+        .filter(|pattern| Query::new(language, pattern).is_ok())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn grammar_from(language: Language, source: &str) -> Option<Grammar> {
+    let query = Query::new(&language, source).ok()?;
     let classes = query
         .capture_names()
         .iter()
@@ -372,6 +567,55 @@ pub fn fold_ranges_for(language: &str, text: &str) -> Vec<(usize, usize)> {
         for (start, _) in open {
             if last_line > start {
                 ranges.push((start, last_line));
+            }
+        }
+    } else if matches!(language, "python" | "yaml" | "html" | "xml") {
+        // Structure by indentation: a line folds with the deeper lines under it.
+        let mut stack: Vec<(usize, usize)> = Vec::new();
+        let mut last = 0;
+        for (index, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let indent = line.len() - line.trim_start().len();
+            while let Some(&(start, open_indent)) = stack.last() {
+                if open_indent < indent {
+                    break;
+                }
+                stack.pop();
+                if last > start {
+                    ranges.push((start, last));
+                }
+            }
+            stack.push((index, indent));
+            last = index;
+        }
+        for (start, _) in stack {
+            if last > start {
+                ranges.push((start, last));
+            }
+        }
+    } else if language == "toml" {
+        // A `[table]` header folds with the keys under it, up to the next header.
+        let mut open: Option<usize> = None;
+        let mut last = 0;
+        for (index, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if line.trim_start().starts_with('[') {
+                if let Some(start) = open {
+                    if last > start {
+                        ranges.push((start, last));
+                    }
+                }
+                open = Some(index);
+            }
+            last = index;
+        }
+        if let Some(start) = open {
+            if last > start {
+                ranges.push((start, last));
             }
         }
     } else {
@@ -691,6 +935,63 @@ mod tests {
         for span in &spans {
             assert!(source.is_char_boundary(span.range.start), "{spans:?}");
             assert!(source.is_char_boundary(span.range.end), "{spans:?}");
+        }
+    }
+
+    #[test]
+    fn indentation_and_toml_tables_fold() {
+        let python = "def a():\n    x = 1\n    if x:\n        y = 2\n\nz = 3\n";
+        assert_eq!(fold_ranges_for("python", python), vec![(0, 3), (2, 3)]);
+        let yaml = "a:\n  b: 1\n  c:\n    d: 2\ne: 3\n";
+        assert_eq!(fold_ranges_for("yaml", yaml), vec![(0, 3), (2, 3)]);
+        let toml = "[a]\nx = 1\n\n[b]\ny = 2\nz = 3\n";
+        assert_eq!(fold_ranges_for("toml", toml), vec![(0, 1), (3, 5)]);
+    }
+
+    #[test]
+    fn every_language_in_the_table_has_a_working_grammar_and_colours_its_keywords_or_keys() {
+        let samples: [(&str, &str); 20] = [
+            ("rust", "fn main() { let x = 1; }"),
+            ("json", "{\"a\": 1}"),
+            ("markdown", "# Title\n\ntext"),
+            ("javascript", "const a = 1; function f() {}"),
+            ("typescript", "const a: number = 1; interface I {}"),
+            ("tsx", "const a = <div className=\"x\">hi</div>;"),
+            ("python", "def f(x):\n    return 1  # c\n"),
+            ("bash", "if [ -f x ]; then echo \"hi\"; fi"),
+            ("html", "<div class=\"a\">hi</div>"),
+            ("css", "a { color: red; }"),
+            ("go", "package main\nfunc main() {}\n"),
+            ("c", "int main(void) { return 0; }"),
+            ("cpp", "class A { public: int f(); };"),
+            ("toml", "[package]\nname = \"x\"\n"),
+            ("yaml", "name: x\nlist:\n  - 1\n"),
+            ("r", "f <- function(x) { x + 1 }"),
+            ("java", "class A { void f() { int x = 1; } }"),
+            ("kotlin", "fun main() { val x = \"a\" // c\n }"),
+            ("sql", "SELECT a FROM t WHERE b = 1;"),
+            ("xml", "<a b=\"c\">d</a>"),
+        ];
+        for (language, text) in samples {
+            let spans = highlight_spans(language, text)
+                .unwrap_or_else(|| panic!("{language} has no grammar"));
+            assert!(!spans.is_empty(), "{language} coloured nothing");
+            let covered: usize = spans.iter().map(|span| span.range.len()).sum();
+            assert!(
+                covered * 5 >= text.len().min(8),
+                "{language}: {covered} bytes coloured"
+            );
+        }
+        // A file's extension finds its language.
+        for (path, language) in [
+            ("a.tsx", "tsx"),
+            ("a.kt", "kotlin"),
+            ("deploy.yml", "yaml"),
+            ("Cargo.toml", "toml"),
+            ("run.sh", "bash"),
+            ("x.R", "r"),
+        ] {
+            assert_eq!(language_for_path(path), Some(language), "{path}");
         }
     }
 

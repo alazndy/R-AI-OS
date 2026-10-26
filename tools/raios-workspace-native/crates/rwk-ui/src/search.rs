@@ -272,6 +272,7 @@ impl Render for SearchView {
         });
         div()
             .absolute()
+            .occlude()
             .top_8()
             .bottom_8()
             .left_0()

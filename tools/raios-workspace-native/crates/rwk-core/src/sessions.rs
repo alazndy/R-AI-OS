@@ -209,6 +209,9 @@ pub enum SessionLaunch {
     Resume(ResumeKey),
     /// A remote shell: `ssh [-p port] -- [user@]host`.
     Ssh(crate::ssh::SshTarget),
+    /// A task from the user's task file: its program and arguments, run directly in the
+    /// project folder.
+    Task(crate::runner::RunTask),
 }
 
 impl Default for SessionLaunch {

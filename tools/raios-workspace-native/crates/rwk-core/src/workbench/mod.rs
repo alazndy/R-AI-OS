@@ -6,6 +6,7 @@ pub mod commands;
 pub mod dock;
 pub mod documents;
 pub mod file_types;
+pub mod footer;
 pub mod layout;
 pub mod layout_state;
 pub mod menus;
@@ -25,12 +26,16 @@ pub use dock::{
 };
 pub use documents::{DocumentSession, SaveBlocked, SaveTicket, SwitchDecision};
 pub use file_types::{presentation, FileIcon, FilePresentation, FileTone};
+pub use footer::{footer_items, upsert as upsert_footer_item, FooterInfo, FooterItem, FooterLevel};
 pub use layout::{LayoutPreset, MIN_EDITOR_PX, MIN_SIDE_PANE_PX};
 pub use layout_state::{
     parse_workspace, serialize_workspace, state_file_name, SavedTab, SavedTaskLink, SavedTerminal,
     SavedWorkspace, WorkspaceStateSource, MAX_SAVED_TABS,
 };
-pub use menus::{menu_entries, toolbar, toolbar_pressed, MenuEntry, MenuTarget, ToolbarItem};
+pub use menus::{
+    menu_entries, toolbar, toolbar_icon, toolbar_pressed, MenuEntry, MenuTarget, ToolbarGroup,
+    ToolbarItem,
+};
 pub use offers::{
     parse_catalog, plan_offers, MatchedSession, SavedSessionRow, SessionCatalog, SessionOffer,
 };

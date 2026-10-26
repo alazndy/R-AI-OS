@@ -26,6 +26,48 @@ pub fn config_home(xdg: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
     }
 }
 
+/// File name of the user's task list.
+const TASKS_FILE: &str = "tasks.json";
+/// Largest task file read, in bytes.
+const MAX_TASKS_FILE_BYTES: u64 = 256 * 1024;
+
+/// The tasks file inside a config home.
+pub fn tasks_path(config_home: &Path) -> PathBuf {
+    config_home.join(APP_DIR).join(TASKS_FILE)
+}
+
+/// Reads the user's task file on every call, so edits apply without a restart.
+pub struct FsTaskStore {
+    path: PathBuf,
+}
+
+impl FsTaskStore {
+    /// A store over the tasks file inside `config_home`.
+    pub fn new(config_home: &Path) -> Self {
+        Self {
+            path: tasks_path(config_home),
+        }
+    }
+}
+
+impl rwk_core::runner::TaskSource for FsTaskStore {
+    fn load(&self, project: &Path) -> Vec<rwk_core::runner::RunTask> {
+        use std::io::Read;
+        let Ok(file) = std::fs::File::open(&self.path) else {
+            return Vec::new();
+        };
+        let mut text = String::new();
+        if file
+            .take(MAX_TASKS_FILE_BYTES)
+            .read_to_string(&mut text)
+            .is_err()
+        {
+            return Vec::new();
+        }
+        rwk_core::runner::tasks_for(&text, project)
+    }
+}
+
 /// File name of the projects the daemon confirmed as registered.
 const REGISTERED_FILE: &str = "registered-projects.json";
 
@@ -368,5 +410,28 @@ mod tests {
             .mode();
         assert_eq!(dir_mode & 0o077, 0, "{dir_mode:o}");
         assert_eq!(file_mode & 0o077, 0, "{file_mode:o}");
+    }
+}
+
+#[cfg(test)]
+mod task_store_tests {
+    use super::*;
+    use rwk_core::runner::TaskSource;
+
+    #[test]
+    fn the_task_file_is_read_from_the_config_directory_and_a_missing_one_gives_no_tasks() {
+        let home = tempfile::tempdir().unwrap();
+        let store = FsTaskStore::new(home.path());
+        assert!(store.load(Path::new("/work/app")).is_empty());
+        let path = tasks_path(home.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"projects": {"/work/app": [{"name": "test", "command": ["cargo", "test"]}]}}"#,
+        )
+        .unwrap();
+        let tasks = store.load(Path::new("/work/app"));
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].name, "test");
     }
 }

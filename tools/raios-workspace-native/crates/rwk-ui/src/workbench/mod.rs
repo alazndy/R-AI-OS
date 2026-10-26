@@ -4,14 +4,19 @@
 pub mod binding;
 pub mod control;
 pub mod dock;
+pub mod editing;
 pub mod entries;
+pub mod footer;
+pub mod git;
 pub mod host;
 pub mod layout;
+pub mod lsp;
 pub mod memory;
 pub mod menus;
 pub mod offers;
 pub mod palette;
 pub mod remote;
+pub mod runner;
 pub mod search;
 pub mod usage;
 pub mod workspace;
@@ -233,6 +238,8 @@ struct TerminalPane {
     ssh: Option<rwk_core::ssh::SshTarget>,
     /// The task given to this terminal's agent from the task list.
     task: Option<rwk_core::handoff_flow::TaskLink>,
+    /// A command from the user's task file runs here; the pane is not saved with the workspace.
+    run: bool,
     view: Entity<TerminalView>,
 }
 
@@ -251,6 +258,31 @@ pub struct Workbench {
     search_subscription: Option<Subscription>,
     /// Bumped on every search and on every close; an answer for an older search is dropped.
     search_generation: u64,
+    /// How language servers are started; `None` turns them off.
+    /// Save changed files when the window loses focus.
+    auto_save: bool,
+    /// Format with the language server before saving.
+    format_on_save: bool,
+    /// The checked-out git branch of the project.
+    branch: Option<String>,
+    /// The state of each language server that was started.
+    server_status: Vec<(String, rwk_core::lsp::ServerStatus)>,
+    /// Footer items the application added.
+    extra_footer: Vec<rwk_core::workbench::FooterItem>,
+    task_source: Option<Arc<dyn rwk_core::runner::TaskSource>>,
+    /// The open palette lists tasks, not files.
+    palette_picks_tasks: bool,
+    git_view: Option<Entity<crate::git::GitView>>,
+    git_subscription: Option<Subscription>,
+    /// Bumped by every git action and on close; an answer for an older one is dropped.
+    git_generation: u64,
+    lsp_launcher: Option<rwk_core::lsp::Launcher>,
+    servers: Option<rwk_core::lsp::LanguageServers>,
+    problems: rwk_core::lsp::Problems,
+    problems_view: Option<Entity<crate::problems::ProblemsView>>,
+    problems_subscription: Option<Subscription>,
+    lsp_task: Option<Task<()>>,
+    lsp_sync_task: Option<Task<()>>,
     /// Where the quota signal is read from (the application sets it).
     usage_source: Option<Arc<dyn rwk_core::usage::UsageSource>>,
     /// The last quota reading, shown at the right of the status bar.
@@ -472,6 +504,13 @@ impl Workbench {
                     this.on_editor_event(event, window, cx);
                 },
             ),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.auto_save_now(cx);
+                } else {
+                    this.refresh_branch(cx);
+                }
+            }),
         ];
         Self {
             files,
@@ -486,6 +525,23 @@ impl Workbench {
             search: None,
             search_subscription: None,
             search_generation: 0,
+            auto_save: false,
+            format_on_save: false,
+            branch: None,
+            server_status: Vec::new(),
+            extra_footer: Vec::new(),
+            task_source: None,
+            palette_picks_tasks: false,
+            git_view: None,
+            git_subscription: None,
+            git_generation: 0,
+            lsp_launcher: None,
+            servers: None,
+            problems: rwk_core::lsp::Problems::default(),
+            problems_view: None,
+            problems_subscription: None,
+            lsp_task: None,
+            lsp_sync_task: None,
             usage_source: None,
             quota: None,
             usage_task: None,
@@ -734,7 +790,12 @@ impl Workbench {
         }
         match id {
             CommandId::Project => self.pick_project(window, cx),
-            CommandId::Save => self.save(cx),
+            CommandId::Save => self.save(window, cx),
+            CommandId::SplitEditor => self.editor.update(cx, |editor, cx| editor.toggle_split(cx)),
+            CommandId::FindInFile => self.find(false, window, cx),
+            CommandId::ReplaceInFile => self.find(true, window, cx),
+            CommandId::ToggleAutoSave => self.toggle_auto_save(cx),
+            CommandId::ToggleFormatOnSave => self.toggle_format_on_save(cx),
             CommandId::CloseTab => {
                 if let Some(path) = self.editor.read(cx).path().map(str::to_owned) {
                     self.request_close_tab(path, window, cx);
@@ -817,6 +878,13 @@ impl Workbench {
             CommandId::Handoff => self.open_composer(None, window, cx),
             CommandId::RegisterProject => self.register_project(window, cx),
             CommandId::Memory => self.open_memory(window, cx),
+            CommandId::Problems => self.open_problems(window, cx),
+            CommandId::SourceControl => self.open_git(window, cx),
+            CommandId::RunTask => self.open_task_palette(window, cx),
+            CommandId::OpenOutputLocation => self.open_output_location(window, cx),
+            CommandId::Format => self
+                .editor
+                .update(cx, |editor, cx| editor.format(window, cx)),
         }
     }
 
@@ -844,8 +912,13 @@ impl Workbench {
             |this, _palette, event: &PaletteEvent, window, cx| match event.clone() {
                 PaletteEvent::Close => this.close_palette(window, cx),
                 PaletteEvent::OpenFile(path) => {
+                    let tasks = std::mem::take(&mut this.palette_picks_tasks);
                     this.close_palette(window, cx);
-                    this.request_open_file(path, window, cx);
+                    if tasks {
+                        this.run_named_task(&path, window, cx);
+                    } else {
+                        this.request_open_file(path, window, cx);
+                    }
                 }
                 PaletteEvent::Run(id) => {
                     this.close_palette(window, cx);
@@ -899,8 +972,45 @@ impl Workbench {
         }));
     }
 
+    /// Whether a panel (palette, picker, prompt or view) floats over the workbench.
+    pub fn overlay_open(&self) -> bool {
+        self.palette.is_some()
+            || self.ssh_picker.is_some()
+            || self.composer.is_some()
+            || self.reject_prompt.is_some()
+            || self.rename_prompt.is_some()
+            || self.memory.is_some()
+            || self.search.is_some()
+            || self.problems_view.is_some()
+            || self.git_view.is_some()
+    }
+
+    /// Closes the panel on top (the one opened last).
+    pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.git_view.is_some() {
+            self.close_git(window, cx);
+        } else if self.problems_view.is_some() {
+            self.close_problems(window, cx);
+        } else if self.search.is_some() {
+            self.close_search(window, cx);
+        } else if self.memory.is_some() {
+            self.close_memory(window, cx);
+        } else if self.rename_prompt.is_some() {
+            self.close_rename_prompt(window, cx);
+        } else if self.reject_prompt.is_some() {
+            self.close_reject_prompt(window, cx);
+        } else if self.composer.is_some() {
+            self.close_composer(window, cx);
+        } else if self.ssh_picker.is_some() {
+            self.close_ssh_picker(window, cx);
+        } else if self.palette.is_some() {
+            self.close_palette(window, cx);
+        }
+    }
+
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.file_search_task = None;
+        self.palette_picks_tasks = false;
         self.palette = None;
         self.palette_subscription = None;
         window.focus(&self.focus, cx);
@@ -930,13 +1040,6 @@ impl Workbench {
             .ok();
         })
         .detach();
-    }
-
-    fn save(&mut self, cx: &mut Context<Self>) {
-        if let Some(project) = self.project.clone() {
-            self.editor
-                .update(cx, |editor, cx| editor.save(project, cx));
-        }
     }
 
     fn toggle_tone(&mut self, cx: &mut Context<Self>) {
@@ -1217,10 +1320,22 @@ impl Workbench {
                 selection,
                 editable,
             } => self.open_text_menu(*selection, *editable, *position, window, cx),
-            EditorEvent::Edited
-            | EditorEvent::Opened(_)
-            | EditorEvent::Closed(_)
-            | EditorEvent::Activated(_) => self.note_workspace_change(cx),
+            EditorEvent::Opened(path) => {
+                self.lsp_opened(path, cx);
+                self.note_workspace_change(cx);
+            }
+            EditorEvent::Closed(path) => {
+                self.lsp_closed(path, cx);
+                self.note_workspace_change(cx);
+            }
+            EditorEvent::Edited => {
+                self.lsp_edited(cx);
+                self.note_workspace_change(cx);
+            }
+            EditorEvent::Activated(_) => self.note_workspace_change(cx),
+            EditorEvent::OpenLocation { path, line } => {
+                self.request_open_file_at(path.clone(), Some(*line), window, cx);
+            }
         }
     }
 
@@ -1274,6 +1389,8 @@ impl Workbench {
                     self.flush_workspace(cx);
                     self.close_palette(window, cx);
                     self.close_search(window, cx);
+                    self.close_problems(window, cx);
+                    self.close_git(window, cx);
                     self.stop_terminals(false);
                     self.editor
                         .update(cx, |editor, cx| editor.clear(window, cx));
@@ -1282,6 +1399,9 @@ impl Workbench {
                         .update(cx, |files, cx| files.set_project(Arc::clone(&project), cx));
                     let root = project.info().root.clone();
                     self.project = Some(project);
+                    self.server_status.clear();
+                    self.refresh_branch(cx);
+                    self.restart_language_servers(cx);
                     self.inspector
                         .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));
                     self.register_if_unknown(window, cx);
@@ -1403,6 +1523,7 @@ impl Workbench {
             SessionLaunch::Fresh { name, .. } => (None, name.clone()),
             // A remote shell is named after where it leads.
             SessionLaunch::Ssh(target) => (None, SessionName::parse(&target.display()).ok()),
+            SessionLaunch::Task(task) => (None, SessionName::parse(&task.name).ok()),
         };
         let ssh = match &launch {
             SessionLaunch::Ssh(target) => Some(target.clone()),
@@ -1416,6 +1537,7 @@ impl Workbench {
             resume,
             ssh,
             task: None,
+            run: matches!(launch, SessionLaunch::Task(_)),
             view,
         });
         self.dock_visible = true;
@@ -1689,7 +1811,6 @@ impl Render for Workbench {
                     .visible(self.dock_visible)
                     .child(dock),
             );
-        let toast = self.toast.clone().unwrap_or_default();
         let dialog = self.dialog().map(|dialog| {
             let buttons = dialog.buttons.iter().map(|(decision, label)| {
                 let decision = *decision;
@@ -1766,20 +1887,23 @@ impl Render for Workbench {
                             .lcars
                             .then(|| div().h(px(3.0)).mb_1().bg(gpui::rgb(theme.blue))),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_3()
-                            .child(div().flex_1().min_w_0().child(toast))
-                            .children(
-                                self.quota
-                                    .clone()
-                                    .map(|quota| div().flex_none().child(quota)),
-                            ),
-                    ),
+                    .child(self.footer_bar(cx)),
             )
+            .children(self.overlay_open().then(|| {
+                // A click beside an overlay closes it, and never also presses what is below.
+                div()
+                    .id("overlay-backdrop")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .occlude()
+                    .bg(gpui::rgba(0x00000055))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, window, cx| this.close_overlay(window, cx)),
+                    )
+            }))
             .children(self.palette.clone())
             .children(self.ssh_picker.clone())
             .children(self.composer.clone())
@@ -1787,6 +1911,8 @@ impl Render for Workbench {
             .children(self.rename_prompt.clone())
             .children(self.memory.clone())
             .children(self.search.clone())
+            .children(self.problems_view.clone())
+            .children(self.git_view.clone())
             .children(self.menu.as_ref().map(|open| open.view.clone()))
             .children(dialog)
     }

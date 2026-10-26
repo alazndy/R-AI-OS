@@ -203,6 +203,11 @@ impl Render for RenameTerminalPrompt {
         div()
             .id("rename-terminal-prompt")
             .absolute()
+            .occlude()
+            .child(
+                crate::overlay::close_button(self.theme, "rename-close")
+                    .on_click(cx.listener(|_, _, _window, cx| cx.emit(RenamePromptEvent::Close))),
+            )
             .top_16()
             .left_0()
             .right_0()

@@ -580,7 +580,9 @@ fn an_unavailable_command_stays_in_the_palette_instead_of_running() {
         .read(|wb, _| wb.palette().cloned())
         .expect("palette is open");
     rig.with(|_wb, window, cx| {
-        palette.update(cx, |palette, cx| palette.set_query("kaydet", window, cx))
+        palette.update(cx, |palette, cx| {
+            palette.set_query("dosyayı kaydet", window, cx)
+        })
     });
     rig.cx
         .update(|_w, cx| palette.update(cx, |palette, cx| palette.confirm(cx)));
@@ -4044,4 +4046,626 @@ fn right_clicking_below_the_tree_rows_opens_the_root_menu() {
         }
     }
     assert!(found, "no point below the rows opened the root menu");
+}
+
+/// A language server stand-in: answers `initialize` and reports one error on line 2 and one
+/// warning on line 1 of every file it is sent. Needs `python3`.
+const FAKE_LSP: &str = r#"
+import json, sys
+def read():
+    length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: return None
+        line = line.strip()
+        if not line: break
+        if line.lower().startswith(b'content-length:'): length = int(line.split(b':')[1])
+    return json.loads(sys.stdin.buffer.read(length))
+def send(value):
+    body = json.dumps(value).encode()
+    sys.stdout.buffer.write(b'Content-Length: %d\r\n\r\n' % len(body) + body)
+    sys.stdout.buffer.flush()
+while True:
+    m = read()
+    if m is None: break
+    method = m.get('method')
+    if method == 'initialize':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'capabilities': {}}})
+    elif method == 'textDocument/didOpen':
+        uri = m['params']['textDocument']['uri']
+        r = lambda l: {'start': {'line': l, 'character': 0}, 'end': {'line': l, 'character': 2}}
+        send({'jsonrpc': '2.0', 'method': 'textDocument/publishDiagnostics', 'params': {'uri': uri, 'diagnostics': [
+            {'range': r(1), 'severity': 1, 'message': 'broken'},
+            {'range': r(0), 'severity': 2, 'message': 'odd'}]}})
+    elif method == 'textDocument/hover':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'contents': 'fn a()'}})
+    elif method == 'textDocument/definition':
+        uri = m['params']['textDocument']['uri'].replace('a.rs', 'b.rs')
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'uri': uri,
+            'range': {'start': {'line': 4, 'character': 1}, 'end': {'line': 4, 'character': 3}}}})
+    elif method == 'textDocument/formatting':
+        e = lambda l, c0, c1, t: {'range': {'start': {'line': l, 'character': c0}, 'end': {'line': l, 'character': c1}}, 'newText': t}
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': [e(0, 0, 2, 'FN'), e(1, 5, 5, ';')]})
+    elif method == 'textDocument/completion':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': [{'label': 'alpha'}]})
+    elif method == 'shutdown':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': None})
+    elif method == 'exit':
+        break
+"#;
+
+#[test]
+fn language_server_problems_reach_the_editor_the_status_line_and_the_problems_view() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+    assert_eq!(
+        rig.read(|wb, _| wb.problem_summary()),
+        Some("1 hata · 1 uyarı".to_owned())
+    );
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).diagnostic_count("a.rs", cx)),
+        2
+    );
+
+    // The Problems view lists the error first; choosing it opens the file on that line.
+    rig.run(CommandId::Problems);
+    let first = rig.read(|wb, cx| {
+        wb.problems_view()
+            .map(|view| view.read(cx).problems().first().cloned())
+    });
+    let first = first.flatten().expect("the view lists problems");
+    assert_eq!((first.path.as_str(), first.line), ("a.rs", 2));
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.problems_view().is_none()));
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(2)
+    );
+
+    // Closing the tab forgets its problems.
+    rig.with(|wb, window, cx| wb.request_close_tab("a.rs".to_owned(), window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_none())));
+}
+
+#[test]
+fn language_server_answers_hover_definition_and_completion() {
+    use gpui_base::input::{CompletionProvider, DefinitionProvider, HoverProvider, Rope};
+    use rwk_ui::editor::lsp::ServerProvider;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+
+    let requester = rig
+        .read(|wb, _| wb.language_requester())
+        .expect("a project with servers");
+    let provider = ServerProvider::new("a.rs", &requester);
+    let rope = Rope::from("fn a() {}\nlet x\n");
+
+    let hover = Rc::new(RefCell::new(None));
+    let definitions = Rc::new(RefCell::new(None));
+    let completions = Rc::new(RefCell::new(None));
+    rig.cx.update(|window, cx| {
+        let task = provider.hover(&rope, 3, window, cx);
+        let slot = hover.clone();
+        cx.spawn(async move |_| *slot.borrow_mut() = Some(task.await))
+            .detach();
+        let task = provider.definitions(&rope, 3, window, cx);
+        let slot = definitions.clone();
+        cx.spawn(async move |_| *slot.borrow_mut() = Some(task.await))
+            .detach();
+        let context = rwk_core::lsp::lsp_types::CompletionContext {
+            trigger_kind: rwk_core::lsp::lsp_types::CompletionTriggerKind::INVOKED,
+            trigger_character: None,
+        };
+        let task = provider.completions(&rope, 3, context, window, cx);
+        let slot = completions.clone();
+        cx.spawn(async move |_| *slot.borrow_mut() = Some(task.await))
+            .detach();
+    });
+    assert!(rig.settle_until(|_| {
+        hover.borrow().is_some() && definitions.borrow().is_some() && completions.borrow().is_some()
+    }));
+
+    let hover = hover.borrow_mut().take().unwrap().expect("hover answers");
+    assert!(hover.is_some());
+    let definitions = definitions
+        .borrow_mut()
+        .take()
+        .unwrap()
+        .expect("definition answers");
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(
+        requester
+            .relative_path(&definitions[0].target_uri.to_string())
+            .as_deref(),
+        Some("b.rs")
+    );
+    assert_eq!(definitions[0].target_selection_range.start.line, 4);
+    let completions = completions
+        .borrow_mut()
+        .take()
+        .unwrap()
+        .expect("completion answers");
+    assert!(matches!(
+        completions,
+        rwk_core::lsp::lsp_types::CompletionResponse::Array(items) if items[0].label == "alpha"
+    ));
+}
+
+#[test]
+fn the_format_command_applies_the_servers_edits_last_first() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+
+    rig.run(CommandId::Format);
+    assert!(rig.settle_until(|rig| rig.editor_text() == "FN a() {}\nlet x;\n"));
+}
+
+#[test]
+fn the_source_control_view_stages_commits_and_discards_in_a_real_repository() {
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "t@example.com"],
+        &["config", "user.name", "T"],
+        &["config", "commit.gpgsign", "false"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .expect("git")
+            .success());
+    }
+    rig.open_project();
+    rig.run(CommandId::SourceControl);
+    let view = rig
+        .read(|wb, _| wb.git_view().cloned())
+        .expect("view opens");
+
+    // Everything is untracked at first.
+    assert!(rig.settle_until(|rig| {
+        rig.cx.update(|_, cx| {
+            view.read(cx)
+                .status()
+                .is_some_and(|s| !s.entries.is_empty())
+        })
+    }));
+    assert!(rig
+        .cx
+        .update(|_, cx| view.read(cx).status().unwrap().staged().count() == 0));
+
+    // Stage all, commit with a message.
+    rig.cx
+        .update(|_, cx| view.update(cx, |view, cx| view.stage_all(cx)));
+    assert!(rig.settle_until(|rig| {
+        rig.cx.update(|_, cx| {
+            view.read(cx)
+                .status()
+                .is_some_and(|s| s.changes().count() == 0)
+        })
+    }));
+    rig.cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_message("first", window, cx);
+            view.commit(cx);
+        })
+    });
+    assert!(rig.settle_until(|rig| {
+        rig.cx.update(|_, cx| {
+            view.read(cx)
+                .status()
+                .is_some_and(|s| s.head.is_some() && s.entries.is_empty())
+        })
+    }));
+
+    // An empty message is refused with a visible reason.
+    rig.cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_message("", window, cx);
+            view.commit(cx);
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.cx.update(|_, cx| view.read(cx).error().is_some())));
+
+    // Discarding asks first, then rewrites the file and reloads the clean tab showing it.
+    std::fs::write(root.join("a.txt"), "changed").expect("edit on disk");
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "changed"));
+    rig.with(|wb, window, cx| wb.close_git(window, cx));
+    rig.run(CommandId::SourceControl);
+    let view = rig
+        .read(|wb, _| wb.git_view().cloned())
+        .expect("view reopens");
+    assert!(rig.settle_until(|rig| {
+        rig.cx.update(|_, cx| {
+            view.read(cx)
+                .status()
+                .is_some_and(|s| s.changes().count() == 1)
+        })
+    }));
+    let entries: Vec<_> = rig
+        .cx
+        .update(|_, cx| view.read(cx).status().unwrap().changes().cloned().collect());
+    rig.cx
+        .update(|_, cx| view.update(cx, |view, cx| view.ask_discard(entries, cx)));
+    assert!(rig.cx.update(|_, cx| view.read(cx).confirming()));
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.txt")).unwrap(),
+        "changed"
+    );
+    rig.cx
+        .update(|_, cx| view.update(cx, |view, cx| view.answer_discard(true, cx)));
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "one");
+}
+
+struct FixedTasks(Vec<rwk_core::runner::RunTask>);
+
+impl rwk_core::runner::TaskSource for FixedTasks {
+    fn load(&self, _project: &Path) -> Vec<rwk_core::runner::RunTask> {
+        self.0.clone()
+    }
+}
+
+fn task(name: &str, command: &[&str]) -> rwk_core::runner::RunTask {
+    rwk_core::runner::RunTask {
+        name: name.to_owned(),
+        command: command.iter().map(|part| (*part).to_owned()).collect(),
+    }
+}
+
+#[test]
+fn a_task_runs_in_its_own_terminal_that_is_not_saved_and_its_output_location_opens() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("c.txt"), "alpha\nbeta\ngamma").expect("c");
+    let tasks: Arc<dyn rwk_core::runner::TaskSource> = Arc::new(FixedTasks(vec![
+        task("argv", &["./.session.sh", "task-arg"]),
+        task(
+            "fail",
+            &["/bin/sh", "-c", "echo error in c.txt:2:1; sleep 100"],
+        ),
+    ]));
+    rig.with(|wb, _, _| wb.set_task_source(Some(tasks)));
+    rig.open_project();
+    let saved = rig.record_workspace_changes();
+
+    // Without tasks the command says so; with them it opens a picker of their names.
+    rig.run(CommandId::RunTask);
+    assert!(rig.read(|wb, _| wb.palette().is_some()));
+    rig.cx.simulate_input("argv");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert!(rig.settle_until(|rig| rig.script_calls().iter().any(|call| call == "task-arg")));
+    assert!(rig.read(|wb, _| wb.palette().is_none()));
+
+    // A task pane is never part of the saved workspace.
+    rig.settle_for(300);
+    assert!(saved
+        .lock()
+        .expect("lock")
+        .iter()
+        .all(|workspace| workspace.terminals.is_empty()));
+
+    // The second task prints a location; the command opens that file on that line.
+    rig.run(CommandId::RunTask);
+    rig.cx.simulate_input("fail");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    assert!(rig.settle_until(|rig| {
+        rig.read(|wb, cx| {
+            wb.terminal_view(1)
+                .is_some_and(|view| view.read(cx).screen_text().contains("c.txt:2:1"))
+        })
+    }));
+    rig.run(CommandId::OpenOutputLocation);
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("c.txt")));
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(2)
+    );
+}
+
+#[test]
+fn find_opens_and_replace_all_is_one_undoable_edit() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("c.txt"), "foo Foo bar foo").expect("c");
+    rig.open_project();
+    rig.open_file("c.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "foo Foo bar foo"));
+
+    rig.run(CommandId::FindInFile);
+    assert!(rig.read(|wb, cx| wb.editor().read(cx).find_open(cx)));
+    rig.run(CommandId::ReplaceInFile);
+
+    let count = rig.with(|wb, window, cx| {
+        wb.editor().clone().update(cx, |editor, cx| {
+            editor.replace_all("foo", "x", false, window, cx)
+        })
+    });
+    assert_eq!(count, 2, "the search is case sensitive");
+    assert_eq!(rig.editor_text(), "x Foo bar x");
+    let count = rig.with(|wb, window, cx| {
+        wb.editor().clone().update(cx, |editor, cx| {
+            editor.replace_all("foo", "y", true, window, cx)
+        })
+    });
+    assert_eq!(count, 1);
+    assert_eq!(rig.editor_text(), "x y bar x");
+}
+
+#[test]
+fn auto_save_writes_changed_files_when_the_window_loses_focus_and_only_when_it_is_on() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    let insert = |rig: &mut Rig, text: &str| {
+        let text = text.to_owned();
+        rig.with(|wb, window, cx| {
+            wb.editor()
+                .clone()
+                .update(cx, |editor, cx| editor.insert_text(&text, window, cx))
+        });
+    };
+
+    // Off by default: losing focus saves nothing.
+    insert(&mut rig, "A");
+    rig.cx.deactivate_window();
+    rig.settle_for(300);
+    assert_eq!(
+        std::fs::read_to_string(rig.dir.path().join("a.txt")).unwrap(),
+        "one"
+    );
+
+    rig.run(CommandId::ToggleAutoSave);
+    assert!(rig.read(|wb, _| wb.auto_save()));
+    rig.cx.update(|window, _| window.activate_window());
+    rig.cx.deactivate_window();
+    let saved = rig.settle_until(|rig| {
+        std::fs::read_to_string(rig.dir.path().join("a.txt")).unwrap() != "one"
+    });
+    assert!(saved, "the changed file is written on focus loss");
+    assert!(rig.settle_until(|rig| rig.editor_dirty_paths().is_empty()));
+}
+
+#[test]
+fn saving_formats_first_only_when_format_on_save_is_on() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+    let edit = |rig: &mut Rig| {
+        rig.with(|wb, window, cx| {
+            wb.editor()
+                .clone()
+                .update(cx, |editor, cx| editor.insert_text("// ", window, cx))
+        });
+    };
+
+    // Plain save: the text goes to disk as typed.
+    edit(&mut rig);
+    rig.run(CommandId::Save);
+    assert!(rig.settle_until(|rig| rig.editor_dirty_paths().is_empty()));
+    let plain = std::fs::read_to_string(rig.dir.path().join("a.rs")).unwrap();
+    assert!(plain.starts_with("// "), "{plain:?}");
+    assert!(!plain.starts_with("FN"), "{plain:?}");
+
+    // With format on save the server's edits are in the file that lands on disk.
+    rig.run(CommandId::ToggleFormatOnSave);
+    assert!(rig.read(|wb, _| wb.format_on_save()));
+    edit(&mut rig);
+    rig.run(CommandId::Save);
+    let done = rig.settle_until(|rig| rig.editor_dirty_paths().is_empty());
+    let status = rig.read(|wb, cx| wb.editor().read(cx).status());
+    assert!(done, "status: {status:?} text: {:?}", rig.editor_text());
+    let formatted = std::fs::read_to_string(rig.dir.path().join("a.rs")).unwrap();
+    assert!(formatted.starts_with("FN"), "{formatted:?}");
+    assert!(formatted.contains("let x;"), "{formatted:?}");
+}
+
+#[test]
+fn the_editor_splits_beside_another_file_and_activating_it_swaps_the_two() {
+    let mut rig = rig();
+    rig.open_project();
+    let split =
+        |rig: &mut Rig| rig.read(|wb, cx| wb.editor().read(cx).split_path().map(str::to_owned));
+
+    // One file cannot be split.
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("a.txt")));
+    rig.run(CommandId::SplitEditor);
+    assert_eq!(split(&mut rig), None);
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).status()).as_deref(),
+        Some("Bölmek için ikinci bir dosya açın")
+    );
+
+    // Two files: the other one shows beside the active one, and the frame still renders.
+    rig.open_file("b.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("b.txt")));
+    rig.run(CommandId::SplitEditor);
+    assert_eq!(split(&mut rig).as_deref(), Some("a.txt"));
+    rig.settle_for(100);
+
+    // Activating the file beside trades places; the editor text is that file's.
+    rig.activate_tab("a.txt");
+    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
+    assert_eq!(split(&mut rig).as_deref(), Some("b.txt"));
+    assert_eq!(rig.editor_text(), "one");
+
+    // Closing the file beside, or splitting again, leaves one pane.
+    rig.with(|wb, window, cx| wb.request_close_tab("b.txt".to_owned(), window, cx));
+    assert!(rig.settle_until(|rig| split(rig).is_none()));
+    rig.open_file("b.txt");
+    assert!(rig.settle_until(|rig| rig.editor_paths().len() == 2));
+    rig.run(CommandId::SplitEditor);
+    assert!(split(&mut rig).is_some());
+    rig.run(CommandId::SplitEditor);
+    assert_eq!(split(&mut rig), None);
+}
+
+#[test]
+fn a_click_beside_an_overlay_closes_it_and_escape_still_does() {
+    let mut rig = rig();
+    rig.open_project();
+
+    // Outside click: the palette sits at the top, the click lands in the lower left corner.
+    rig.run(CommandId::Commands);
+    assert!(rig.read(|wb, _| wb.overlay_open()));
+    rig.settle_for(50);
+    rig.cx.simulate_click(
+        gpui::point(gpui::px(4.0), gpui::px(700.0)),
+        gpui::Modifiers::none(),
+    );
+    rig.settle_for(50);
+    assert!(
+        !rig.read(|wb, _| wb.overlay_open()),
+        "an outside click closes the palette"
+    );
+
+    // A click inside the panel does not.
+    rig.run(CommandId::Memory);
+    rig.settle_for(50);
+    assert!(rig.read(|wb, _| wb.overlay_open()));
+    rig.cx.simulate_click(
+        gpui::point(gpui::px(500.0), gpui::px(300.0)),
+        gpui::Modifiers::none(),
+    );
+    rig.settle_for(50);
+    assert!(
+        rig.read(|wb, _| wb.overlay_open()),
+        "a click on the panel keeps it open"
+    );
+    rig.cx.simulate_keystrokes("escape");
+    assert!(!rig.read(|wb, _| wb.overlay_open()), "Esc closes it");
+
+    // Programmatic close takes the topmost one.
+    rig.run(CommandId::Search);
+    rig.run(CommandId::Problems);
+    rig.with(|wb, window, cx| wb.close_overlay(window, cx));
+    assert!(rig.read(
+        |wb, cx| wb.problems_view().is_none() && wb.search().is_some() && {
+            let _ = cx;
+            true
+        }
+    ));
+}
+
+#[test]
+fn the_footer_shows_the_workspace_and_takes_items_from_the_application() {
+    use rwk_core::workbench::{FooterItem, FooterLevel};
+    let mut rig = rig();
+    let ids = |rig: &mut Rig| -> Vec<String> {
+        rig.read(|wb, cx| wb.footer_items(cx).into_iter().map(|i| i.id).collect())
+    };
+    assert!(ids(&mut rig).is_empty(), "nothing to say without a project");
+
+    rig.open_project();
+    let shown = ids(&mut rig);
+    for id in ["problems", "terminals", "auto-save", "format-on-save"] {
+        assert!(shown.iter().any(|shown| shown == id), "{id} in {shown:?}");
+    }
+
+    // A click on a toggle is the command it names.
+    rig.run(CommandId::ToggleAutoSave);
+    let auto = rig.read(|wb, cx| {
+        wb.footer_items(cx)
+            .into_iter()
+            .find(|item| item.id == "auto-save")
+            .unwrap()
+    });
+    assert_eq!(auto.level, FooterLevel::Good);
+
+    // The application's own item shows up, is replaced by id, and can be removed.
+    rig.with(|wb, _, cx| wb.set_footer_item(FooterItem::info("mine", "bir", ""), cx));
+    rig.with(|wb, _, cx| wb.set_footer_item(FooterItem::info("mine", "iki", ""), cx));
+    let mine: Vec<String> = rig.read(|wb, cx| {
+        wb.footer_items(cx)
+            .into_iter()
+            .filter(|item| item.id == "mine")
+            .map(|item| item.text)
+            .collect()
+    });
+    assert_eq!(mine, ["iki"]);
+    rig.with(|wb, _, cx| wb.remove_footer_item("mine", cx));
+    assert!(!ids(&mut rig).iter().any(|id| id == "mine"));
 }

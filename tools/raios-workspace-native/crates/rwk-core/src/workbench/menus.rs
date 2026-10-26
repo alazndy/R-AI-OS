@@ -102,26 +102,59 @@ pub fn menu_entries(target: MenuTarget) -> &'static [MenuEntry] {
     }
 }
 
+/// The category a run of toolbar buttons belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolbarGroup {
+    /// Files, search, saving, git and problems.
+    Files,
+    /// Terminals and the tasks that run in them.
+    Terminal,
+    /// Agent tasks, handoffs and project memory.
+    Work,
+    /// Layouts and which panes show.
+    View,
+    /// The palette and settings.
+    Tools,
+}
+
+impl ToolbarGroup {
+    /// The label printed at the start of the group.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Files => "DOSYA",
+            Self::Terminal => "TERMİNAL",
+            Self::Work => "İŞ",
+            Self::View => "GÖRÜNÜM",
+            Self::Tools => "ARAÇ",
+        }
+    }
+}
+
 /// One element of the toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolbarItem {
     /// A button for a catalog command, with its short caption.
     Button(CommandId, &'static str),
-    /// A thin rule between groups.
-    Separator,
+    /// Starts a group: the buttons after it, up to the next group, belong to it.
+    Group(ToolbarGroup),
 }
 
-use ToolbarItem::{Button, Separator as Gap};
+use ToolbarGroup as G;
+use ToolbarItem::{Button, Group};
 
 const TOOLBAR: &[ToolbarItem] = &[
+    Group(G::Files),
     Button(C::Project, "Proje"),
     Button(C::Files, "Dosya ara"),
     Button(C::Search, "Metin ara"),
     Button(C::Save, "Kaydet"),
-    Gap,
+    Button(C::SourceControl, "Git"),
+    Button(C::Problems, "Sorunlar"),
+    Group(G::Terminal),
     Button(C::NewTerminal, "Terminal +"),
     Button(C::Ssh, "SSH"),
     Button(C::Agent, "Ajan"),
+    Button(C::RunTask, "Çalıştır"),
     Button(C::RenameTerminal, "Ad ver"),
     Button(C::SplitTerminalRight, "Böl →"),
     Button(C::SplitTerminalDown, "Böl ↓"),
@@ -129,20 +162,56 @@ const TOOLBAR: &[ToolbarItem] = &[
     Button(C::ShrinkTerminal, "Küçült"),
     Button(C::StopTerminal, "Durdur"),
     Button(C::CloseTerminal, "Kapat"),
-    Gap,
+    Group(G::Work),
     Button(C::NewTask, "Görev +"),
     Button(C::Handoff, "Devret"),
     Button(C::Memory, "Hafıza"),
-    Gap,
+    Group(G::View),
     Button(C::Balanced, "Dengeli"),
     Button(C::EditorLayout, "Editör"),
     Button(C::AgentsLayout, "Ajanlar"),
+    Button(C::SplitEditor, "Editörü böl"),
     Button(C::Inspector, "Denetçi"),
     Button(C::ToggleTerminal, "Dock"),
-    Gap,
+    Group(G::Tools),
     Button(C::Commands, "Komutlar"),
     Button(C::Settings, "Ayarlar"),
 ];
+
+/// The name of the icon drawn on a toolbar button (a file of the UI's bundled toolbar icons).
+pub fn toolbar_icon(id: CommandId) -> &'static str {
+    match id {
+        C::Project => "folder",
+        C::Files => "file-search",
+        C::Search => "text-search",
+        C::Save => "save",
+        C::SourceControl => "git",
+        C::Problems => "alert",
+        C::NewTerminal => "terminal-plus",
+        C::Ssh => "network",
+        C::Agent => "sparkle",
+        C::RunTask => "play",
+        C::RenameTerminal => "pencil",
+        C::SplitTerminalRight => "split-right",
+        C::SplitTerminalDown => "split-down",
+        C::GrowTerminal => "expand",
+        C::ShrinkTerminal => "shrink",
+        C::StopTerminal => "stop",
+        C::CloseTerminal => "close",
+        C::NewTask => "task-plus",
+        C::Handoff => "send",
+        C::Memory => "book",
+        C::Balanced => "layout-balanced",
+        C::EditorLayout => "layout-editor",
+        C::AgentsLayout => "layout-agents",
+        C::SplitEditor => "columns",
+        C::Inspector => "eye",
+        C::ToggleTerminal => "panel-bottom",
+        C::Commands => "command",
+        C::Settings => "gear",
+        _ => "dot",
+    }
+}
 
 /// The toolbar, left to right.
 pub fn toolbar() -> &'static [ToolbarItem] {
@@ -220,22 +289,42 @@ mod tests {
     #[test]
     fn the_toolbar_has_no_leading_trailing_or_doubled_rules_and_no_repeats() {
         let items = toolbar();
-        assert_ne!(items.first(), Some(&ToolbarItem::Separator));
-        assert_ne!(items.last(), Some(&ToolbarItem::Separator));
+        // Every group has at least one button, and the toolbar starts with a group.
+        assert!(matches!(items.first(), Some(ToolbarItem::Group(_))));
+        assert!(!matches!(items.last(), Some(ToolbarItem::Group(_))));
         assert!(items
             .windows(2)
-            .all(|pair| pair != [ToolbarItem::Separator, ToolbarItem::Separator]));
+            .all(|pair| !matches!(pair, [ToolbarItem::Group(_), ToolbarItem::Group(_)])));
         let mut ids: Vec<String> = items
             .iter()
             .filter_map(|item| match item {
                 ToolbarItem::Button(id, _) => Some(format!("{id:?}")),
-                ToolbarItem::Separator => None,
+                ToolbarItem::Group(_) => None,
             })
             .collect();
         let before = ids.len();
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), before);
+    }
+
+    #[test]
+    fn every_toolbar_button_has_its_own_icon() {
+        let mut icons: Vec<&str> = toolbar()
+            .iter()
+            .filter_map(|item| match item {
+                ToolbarItem::Button(id, _) => Some(toolbar_icon(*id)),
+                ToolbarItem::Group(_) => None,
+            })
+            .collect();
+        assert!(
+            !icons.contains(&"dot"),
+            "a button fell through to the default icon"
+        );
+        let before = icons.len();
+        icons.sort_unstable();
+        icons.dedup();
+        assert_eq!(icons.len(), before, "two buttons share an icon");
     }
 
     #[test]

@@ -213,6 +213,11 @@ impl Render for SshPicker {
         };
         div()
             .absolute()
+            .occlude()
+            .child(
+                crate::overlay::close_button(self.theme, "ssh-close")
+                    .on_click(cx.listener(|_, _, _window, cx| cx.emit(SshPickerEvent::Close))),
+            )
             .top_8()
             .left_0()
             .right_0()

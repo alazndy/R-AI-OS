@@ -31,6 +31,9 @@ impl SyntaxStyles {
             "function" => (0xdcdcaa, 0x795e26),
             "constant" => (0x4fc1ff, 0x0b5fa5),
             "punctuation" => (0x9a9a9a, 0x5a5a5a),
+            "property" => (0x9cdcfe, 0x0451a5),
+            "tag" => (0x569cd6, 0x800000),
+            "attribute" => (0xd7ba7d, 0x946b00),
             "diff_added" => (0x3fb950, 0x1a7f37),
             "diff_removed" => (0xf85149, 0xcf222e),
             "diff_hunk" => (0x58a6ff, 0x0969da),
@@ -91,7 +94,7 @@ pub fn editor_style(theme: Theme) -> InputEditorStyle {
 mod tests {
     use super::*;
 
-    const CLASSES: [&str; 12] = [
+    const CLASSES: [&str; 15] = [
         "keyword",
         "string",
         "comment",
@@ -100,6 +103,9 @@ mod tests {
         "function",
         "constant",
         "punctuation",
+        "property",
+        "tag",
+        "attribute",
         "diff_added",
         "diff_removed",
         "diff_hunk",

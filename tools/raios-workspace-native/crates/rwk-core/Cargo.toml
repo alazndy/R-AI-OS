@@ -19,6 +19,15 @@ alacritty_terminal = "=0.25.1"
 portable-pty = "0.9"
 libc = "0.2"
 tungstenite = "0.24"
+lsp-types = "0.97"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[test]]
+name = "lsp_client"
+harness = false
+
+[[test]]
+name = "lsp_manager"
+harness = false

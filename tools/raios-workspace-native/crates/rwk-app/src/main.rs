@@ -113,6 +113,11 @@ fn main() {
                     workbench.set_workspace_source(Some(source))
                 });
             }
+            if let Some(home) = config_home() {
+                let source: Arc<dyn rwk_core::runner::TaskSource> =
+                    Arc::new(persistence::FsTaskStore::new(&home));
+                workbench.update(cx, |workbench, _| workbench.set_task_source(Some(source)));
+            }
             let workspace_store_for_events = workspace_store.clone();
             cx.subscribe(
                 &workbench,
@@ -154,6 +159,7 @@ fn main() {
             // without the daemon; without the CLI on PATH the view says so when a search runs.
             workbench.update(cx, |workbench, _| {
                 workbench.set_search_source(Some(Arc::new(CliSearch::default())));
+                workbench.set_language_server_launcher(Some(rwk_core::lsp::default_launcher()));
             });
             // The quota signal: `raios usage --json` read on the background executor and
             // refreshed on a timer; the status bar stays quiet until a reading lands.

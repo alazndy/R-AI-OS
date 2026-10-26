@@ -15,6 +15,26 @@ pub enum CommandId {
     Files,
     /// Search the project's text through the RAIOS CLI's index.
     Search,
+    /// Show the problems the language servers found.
+    Problems,
+    /// Format the open file with its language server.
+    Format,
+    /// Show the next open file read-only beside the active one, or close that split.
+    SplitEditor,
+    /// Find text in the open file.
+    FindInFile,
+    /// Find and replace text in the open file.
+    ReplaceInFile,
+    /// Save changed files when the window loses focus (on or off).
+    ToggleAutoSave,
+    /// Format with the language server before saving (on or off).
+    ToggleFormatOnSave,
+    /// Run a task from the user's task file in a new terminal.
+    RunTask,
+    /// Open the file and line that the selected terminal's output points at.
+    OpenOutputLocation,
+    /// Show the repository's changes: stage, commit, switch branch.
+    SourceControl,
     /// Save the open file.
     Save,
     /// Close the active editor tab.
@@ -162,7 +182,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 50] = [
+const COMMANDS: [Command; 60] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -359,6 +379,36 @@ const COMMANDS: [Command; 50] = [
         &[bind_terminal("h", true, false)],
     ),
     cmd(CommandId::NewTask, "Yeni görev…", None, &[]),
+    cmd(CommandId::RunTask, "Görev çalıştır", None, &[]),
+    cmd(
+        CommandId::OpenOutputLocation,
+        "Çıktıdaki konumu aç",
+        None,
+        &[],
+    ),
+    cmd(CommandId::SourceControl, "Git değişiklikleri", None, &[]),
+    cmd(CommandId::SplitEditor, "Editörü böl / birleştir", None, &[]),
+    cmd(CommandId::FindInFile, "Dosyada bul", Some("Ctrl F"), &[]),
+    cmd(
+        CommandId::ReplaceInFile,
+        "Dosyada bul ve değiştir",
+        Some("Ctrl H"),
+        &[],
+    ),
+    cmd(
+        CommandId::ToggleAutoSave,
+        "Otomatik kaydetmeyi aç/kapat",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::ToggleFormatOnSave,
+        "Kaydederken biçimlendirmeyi aç/kapat",
+        None,
+        &[],
+    ),
+    cmd(CommandId::Format, "Dosyayı biçimlendir", None, &[]),
+    cmd(CommandId::Problems, "Sorunları göster", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
     cmd(
         CommandId::RegisterProject,
@@ -561,15 +611,17 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         }
     };
     match id {
-        Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
-        | AgentsLayout => allow(),
-        Files | Search | Refresh | FocusFiles | Memory | Inspector => needs_project(),
+        ToggleAutoSave | ToggleFormatOnSave | Commands | Project | Settings | Skin | Shortcuts
+        | Balanced | EditorLayout | AgentsLayout => allow(),
+        Files | Search | Problems | SourceControl | Refresh | RunTask | FocusFiles | Memory
+        | Inspector => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor | CloseTab => {
+        Diff | DiffSplit | FocusEditor | CloseTab | Format | FindInFile | ReplaceInFile
+        | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -601,9 +653,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             }
         }
         NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
-        | StopTerminal | CloseTerminal | KillTerminal | RenameTerminal | UngroupTerminal => {
-            needs_terminal()
-        }
+        | OpenOutputLocation | StopTerminal | CloseTerminal | KillTerminal | RenameTerminal
+        | UngroupTerminal => needs_terminal(),
         MoveTerminalPrevious | MoveTerminalNext | SplitTerminalRight | SplitTerminalDown
         | JoinTerminalPrevious | GrowTerminal | ShrinkTerminal => {
             if state.terminals >= 2 {
@@ -667,7 +718,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 50);
+        assert_eq!(catalog().len(), 60);
     }
 
     #[test]

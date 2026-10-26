@@ -44,6 +44,13 @@ pub enum EditorEvent {
     Closed(String),
     /// The active tab changed.
     Activated(String),
+    /// A definition lies in another project file; the workbench opens it.
+    OpenLocation {
+        /// Relative path of the file.
+        path: String,
+        /// 1-based line.
+        line: usize,
+    },
     /// The user right-clicked a tab; it is active now.
     TabContextMenu {
         /// Relative path of the tab.
@@ -115,12 +122,17 @@ impl Tab {
     }
 }
 
+/// How long saving waits for the formatter before saving the text as it is.
+const FORMAT_ON_SAVE_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+
 /// The editor: a strip of open files over one editor, plus the diff of the active file.
 pub struct EditorView {
     theme: Theme,
     tabs: Vec<Tab>,
     active: usize,
     diff_split: bool,
+    /// The file shown read-only beside the active one, when the editor is split.
+    split: Option<String>,
     /// The message under the editor (last action's outcome).
     status: Option<SharedString>,
     /// Bumped by every read request; a read that finishes for a superseded request is dropped.
@@ -130,6 +142,8 @@ pub struct EditorView {
     diff_generation: u64,
     /// Bumped by every restore; a restore that finishes after a project switch is dropped.
     restore_generation: u64,
+    /// How tabs reach the project's language servers; `None` means no language features.
+    requester: Option<rwk_core::lsp::Requester>,
 }
 
 impl EventEmitter<EditorEvent> for EditorView {}
@@ -159,6 +173,8 @@ impl EditorView {
             requests: HashMap::new(),
             diff_generation: 0,
             restore_generation: 0,
+            requester: None,
+            split: None,
         }
     }
 
@@ -262,6 +278,7 @@ impl EditorView {
     pub fn clear(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.tabs.clear();
         self.requests.clear();
+        self.split = None;
         self.active = 0;
         self.status = None;
         self.diff_generation += 1;
@@ -283,6 +300,7 @@ impl EditorView {
         if was_active {
             self.focus(window, cx);
         }
+        self.fix_split(cx);
         cx.emit(EditorEvent::Closed(path.to_owned()));
         cx.notify();
     }
@@ -292,7 +310,12 @@ impl EditorView {
         let Some(index) = self.position_of(path) else {
             return;
         };
+        // Activating the file on the right trades places with the one that was active.
+        if self.split.as_deref() == Some(path) {
+            self.split = self.path().map(str::to_owned);
+        }
         self.active = index;
+        self.fix_split(cx);
         self.focus(window, cx);
         cx.emit(EditorEvent::Activated(path.to_owned()));
         cx.notify();
@@ -382,6 +405,9 @@ impl EditorView {
                         },
                     ));
                 });
+                if let Some(requester) = &self.requester {
+                    self.attach_language_features(&state, &path, requester, cx);
+                }
                 let tab_path = path.clone();
                 let subscription =
                     cx.subscribe(&state, move |this, _state, event: &InputEvent, cx| {
@@ -429,6 +455,7 @@ impl EditorView {
             ))
         });
         self.active = index;
+        self.fix_split(cx);
         cx.emit(EditorEvent::Opened(path));
         cx.notify();
         // The editor lays a new text out during paint; without input nothing else would ask for
@@ -529,6 +556,267 @@ impl EditorView {
                 Some(SavedTab { path, line })
             })
             .collect()
+    }
+
+    /// Connects every tab (and the ones opened later) to the project's language servers, or
+    /// disconnects them with `None`.
+    pub fn set_language_requester(
+        &mut self,
+        requester: Option<rwk_core::lsp::Requester>,
+        cx: &mut Context<Self>,
+    ) {
+        self.requester = requester;
+        let tabs: Vec<(Entity<EditorState>, String)> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| Some((tab.state.clone(), tab.path()?.to_owned())))
+            .collect();
+        for (state, path) in tabs {
+            match self.requester.clone() {
+                Some(requester) => self.attach_language_features(&state, &path, &requester, cx),
+                None => state.update(cx, |state, _| super::lsp::detach(state)),
+            }
+        }
+    }
+
+    fn attach_language_features(
+        &self,
+        state: &Entity<EditorState>,
+        path: &str,
+        requester: &rwk_core::lsp::Requester,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.entity().downgrade();
+        let open: super::lsp::OpenLocation = Rc::new(move |path, line, cx| {
+            let _ = view.update(cx, |_, cx| {
+                cx.emit(EditorEvent::OpenLocation { path, line })
+            });
+        });
+        state.update(cx, |state, _| {
+            super::lsp::attach(state, path, requester, open)
+        });
+    }
+
+    /// Formats the active file with its language server. The answer is dropped, with a message,
+    /// when the text changed while the server worked: its positions would no longer fit.
+    pub fn format(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.format_active(None, window, cx);
+    }
+
+    /// Formats the active file, then saves it. A file without a language server, a slow or
+    /// failing server and edits made while it worked all end in a plain save: saving never
+    /// waits long and never fails because of the formatter.
+    pub fn save_formatted(
+        &mut self,
+        project: Arc<ProjectRoot>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.requester.is_none() {
+            self.save(project, cx);
+            return;
+        }
+        self.format_active(Some(project), window, cx);
+    }
+
+    fn format_active(
+        &mut self,
+        then_save: Option<Arc<ProjectRoot>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(requester), Some(path)) =
+            (self.requester.clone(), self.path().map(str::to_owned))
+        else {
+            self.set_status("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        let Some(before) = self.text_of(&path, cx) else {
+            return;
+        };
+        let timeout = if then_save.is_some() {
+            FORMAT_ON_SAVE_WAIT
+        } else {
+            std::time::Duration::from_secs(5)
+        };
+        let answer = super::lsp::format_request(&requester, &path, timeout);
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update_in(cx, |view, window, cx| {
+                let Some(index) = view.position_of(&path) else {
+                    return;
+                };
+                if view.text_of(&path, cx).as_deref() != Some(before.as_str()) {
+                    view.set_status("Metin değişti; biçimlendirme uygulanmadı", cx);
+                    if let Some(project) = then_save {
+                        view.save_soon(path.clone(), project, cx);
+                    }
+                    return;
+                }
+                let edits = match answer {
+                    Ok(Ok(value)) => super::lsp::formatting_edits(value),
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(AppError::new(
+                        ErrorCode::NotFound,
+                        "Dil sunucusu yanıt vermedi",
+                    )),
+                };
+                match edits {
+                    Ok(edits) if edits.is_empty() => view.set_status("Zaten biçimli", cx),
+                    Ok(edits) => {
+                        view.tabs[index]
+                            .state
+                            .update(cx, |state, cx| state.apply_lsp_edits(&edits, window, cx));
+                        view.set_status("Biçimlendirildi", cx);
+                    }
+                    Err(error) => view.set_status(error.message, cx),
+                }
+                if let Some(project) = then_save {
+                    view.save_soon(path.clone(), project, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Saves `path` once the edits just applied have been announced: the edit events arrive after
+    /// the update that made them, and a save that began before them would find its file dirty
+    /// again as soon as it finished.
+    fn save_soon(&self, path: String, project: Arc<ProjectRoot>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            this.update(cx, |view, cx| view.save_path(&path, project, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// The file shown beside the active one, when the editor is split.
+    pub fn split_path(&self) -> Option<&str> {
+        self.split.as_deref()
+    }
+
+    /// Splits the editor, showing the next open file read-only beside the active one; splits
+    /// back into one pane when it is split already.
+    pub fn toggle_split(&mut self, cx: &mut Context<Self>) {
+        if self.split.take().is_some() {
+            self.fix_split(cx);
+            cx.notify();
+            return;
+        }
+        if self.tabs.len() < 2 {
+            self.set_status("Bölmek için ikinci bir dosya açın", cx);
+            return;
+        }
+        let next = (self.active + 1) % self.tabs.len();
+        self.split = self.tabs[next].path().map(str::to_owned);
+        self.fix_split(cx);
+        cx.notify();
+    }
+
+    /// Trades the active file and the one beside it, so the right one can be edited.
+    pub fn swap_split(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = self.split.clone() {
+            self.activate_tab(&path, window, cx);
+        }
+    }
+
+    /// Keeps the split valid after tabs came, went or changed place: the file beside the active
+    /// one must be open and a different one, and only it is read-only.
+    fn fix_split(&mut self, cx: &mut Context<Self>) {
+        let active = self
+            .tabs
+            .get(self.active)
+            .and_then(Tab::path)
+            .map(str::to_owned);
+        if let Some(split) = &self.split {
+            if self.position_of(split).is_none() || active.as_deref() == Some(split.as_str()) {
+                self.split = None;
+            }
+        }
+        for tab in &self.tabs {
+            let beside = tab.path().is_some() && tab.path() == self.split.as_deref();
+            tab.state
+                .update(cx, |state, cx| state.set_disabled(beside, cx));
+        }
+    }
+
+    /// Opens the find box of the active file (with the replace field when `replace`).
+    pub fn open_find(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        tab.state.update(cx, |state, cx| {
+            state.open_search(replace, cx);
+        });
+        let _ = window;
+    }
+
+    /// Whether the active file's find box is open.
+    pub fn find_open(&self, cx: &gpui::App) -> bool {
+        self.tabs
+            .get(self.active)
+            .is_some_and(|tab| tab.state.read(cx).search_session().is_active())
+    }
+
+    /// Replaces every occurrence of `query` in the active file with `replacement` as one
+    /// undoable edit. Returns how many were replaced. The search is plain text.
+    pub fn replace_all(
+        &mut self,
+        query: &str,
+        replacement: &str,
+        case_insensitive: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return 0;
+        };
+        tab.state.update(cx, |state, cx| {
+            state.set_search_query(query, case_insensitive, cx);
+            let count = state.replace_all_search_matches(replacement, window, cx);
+            state.close_search(cx);
+            count
+        })
+    }
+
+    /// The text of the tab for `path`, if it is open.
+    pub fn text_of(&self, path: &str, cx: &gpui::App) -> Option<String> {
+        let index = self.position_of(path)?;
+        Some(self.tabs[index].state.read(cx).value().to_string())
+    }
+
+    /// Shows the language server's diagnostics for `path` under the text. A file that is not
+    /// open is ignored.
+    pub fn set_diagnostics(
+        &mut self,
+        path: &str,
+        diagnostics: &[rwk_core::lsp::lsp_types::Diagnostic],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.position_of(path) else {
+            return;
+        };
+        self.tabs[index].state.update(cx, |state, cx| {
+            if let Some(set) = state.diagnostics_mut() {
+                set.clear();
+                set.extend(diagnostics.iter().cloned());
+            }
+            cx.notify();
+        });
+    }
+
+    /// How many diagnostics the tab for `path` shows.
+    pub fn diagnostic_count(&self, path: &str, cx: &gpui::App) -> usize {
+        self.position_of(path)
+            .and_then(|index| {
+                self.tabs[index]
+                    .state
+                    .read(cx)
+                    .diagnostics()
+                    .map(|set| set.len())
+            })
+            .unwrap_or(0)
     }
 
     /// Index of the active tab (what the saved workspace stores).
@@ -949,6 +1237,12 @@ impl Render for EditorView {
                 .filter(|_| tab.diff_visible && self.diff_split)
         });
         let title = self.path().unwrap_or("").to_owned();
+        let beside = match (second, self.split.as_deref()) {
+            (None, Some(path)) => self
+                .position_of(path)
+                .map(|index| (path.to_owned(), self.tabs[index].state.clone())),
+            _ => None,
+        };
 
         div()
             .size_full()
@@ -963,6 +1257,53 @@ impl Render for EditorView {
                     .flex_row()
                     .font_family(crate::fonts::monospace_family(window))
                     .child(div().flex_1().min_w_0().child(Editor::new(shown)))
+                    .children(beside.map(|(path, state)| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .border_l_1()
+                            .border_color(gpui::rgb(theme.line))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_2()
+                                    .py_0p5()
+                                    .text_xs()
+                                    .bg(gpui::rgb(theme.panel))
+                                    .text_color(gpui::rgb(theme.muted))
+                                    .child(div().flex_1().min_w_0().child(path))
+                                    .child(
+                                        div()
+                                            .id("split-swap")
+                                            .px_1()
+                                            .rounded_sm()
+                                            .cursor_pointer()
+                                            .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+                                            .child("↔ düzenle")
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.swap_split(window, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("split-close")
+                                            .px_1()
+                                            .rounded_sm()
+                                            .cursor_pointer()
+                                            .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+                                            .child("×")
+                                            .on_click(cx.listener(|view, _, _window, cx| {
+                                                view.toggle_split(cx);
+                                            })),
+                                    ),
+                            )
+                            .child(div().flex_1().min_h_0().child(Editor::new(&state)))
+                    }))
                     .children(second.map(|right| {
                         div()
                             .flex_1()
