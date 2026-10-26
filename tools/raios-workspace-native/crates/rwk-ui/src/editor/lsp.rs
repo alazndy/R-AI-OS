@@ -245,8 +245,20 @@ fn edits_for_file(action: &CodeAction, path: &str, requester: &Requester) -> Res
 pub fn format_request(
     requester: &Requester,
     path: &str,
+    timeout: std::time::Duration,
 ) -> async_channel::Receiver<rwk_core::error::Result<Value>> {
     let (sender, receiver) = async_channel::bounded(1);
+    // Whichever of the answer and the timeout arrives first is the one that counts.
+    let late = sender.clone();
+    let _ = std::thread::Builder::new()
+        .name("lsp-format-timeout".into())
+        .spawn(move || {
+            std::thread::sleep(timeout);
+            let _ = late.try_send(Err(rwk_core::error::AppError::new(
+                rwk_core::error::ErrorCode::NotFound,
+                "Dil sunucusu zamanında yanıt vermedi",
+            )));
+        });
     requester.request_document(
         path,
         "textDocument/formatting",

@@ -19,6 +19,14 @@ pub enum CommandId {
     Problems,
     /// Format the open file with its language server.
     Format,
+    /// Find text in the open file.
+    FindInFile,
+    /// Find and replace text in the open file.
+    ReplaceInFile,
+    /// Save changed files when the window loses focus (on or off).
+    ToggleAutoSave,
+    /// Format with the language server before saving (on or off).
+    ToggleFormatOnSave,
     /// Run a task from the user's task file in a new terminal.
     RunTask,
     /// Open the file and line that the selected terminal's output points at.
@@ -172,7 +180,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 55] = [
+const COMMANDS: [Command; 59] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -377,6 +385,25 @@ const COMMANDS: [Command; 55] = [
         &[],
     ),
     cmd(CommandId::SourceControl, "Git değişiklikleri", None, &[]),
+    cmd(CommandId::FindInFile, "Dosyada bul", Some("Ctrl F"), &[]),
+    cmd(
+        CommandId::ReplaceInFile,
+        "Dosyada bul ve değiştir",
+        Some("Ctrl H"),
+        &[],
+    ),
+    cmd(
+        CommandId::ToggleAutoSave,
+        "Otomatik kaydetmeyi aç/kapat",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::ToggleFormatOnSave,
+        "Kaydederken biçimlendirmeyi aç/kapat",
+        None,
+        &[],
+    ),
     cmd(CommandId::Format, "Dosyayı biçimlendir", None, &[]),
     cmd(CommandId::Problems, "Sorunları göster", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
@@ -581,8 +608,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         }
     };
     match id {
-        Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
-        | AgentsLayout => allow(),
+        ToggleAutoSave | ToggleFormatOnSave | Commands | Project | Settings | Skin | Shortcuts
+        | Balanced | EditorLayout | AgentsLayout => allow(),
         Files | Search | Problems | SourceControl | Refresh | RunTask | FocusFiles | Memory
         | Inspector => needs_project(),
         Save => match (state.file_open, state.dirty) {
@@ -590,7 +617,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor | CloseTab | Format => {
+        Diff | DiffSplit | FocusEditor | CloseTab | Format | FindInFile | ReplaceInFile => {
             if state.file_open {
                 allow()
             } else {
@@ -687,7 +714,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 55);
+        assert_eq!(catalog().len(), 59);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 pub mod binding;
 pub mod control;
 pub mod dock;
+pub mod editing;
 pub mod entries;
 pub mod git;
 pub mod host;
@@ -257,6 +258,10 @@ pub struct Workbench {
     /// Bumped on every search and on every close; an answer for an older search is dropped.
     search_generation: u64,
     /// How language servers are started; `None` turns them off.
+    /// Save changed files when the window loses focus.
+    auto_save: bool,
+    /// Format with the language server before saving.
+    format_on_save: bool,
     task_source: Option<Arc<dyn rwk_core::runner::TaskSource>>,
     /// The open palette lists tasks, not files.
     palette_picks_tasks: bool,
@@ -492,6 +497,11 @@ impl Workbench {
                     this.on_editor_event(event, window, cx);
                 },
             ),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.auto_save_now(cx);
+                }
+            }),
         ];
         Self {
             files,
@@ -506,6 +516,8 @@ impl Workbench {
             search: None,
             search_subscription: None,
             search_generation: 0,
+            auto_save: false,
+            format_on_save: false,
             task_source: None,
             palette_picks_tasks: false,
             git_view: None,
@@ -766,7 +778,11 @@ impl Workbench {
         }
         match id {
             CommandId::Project => self.pick_project(window, cx),
-            CommandId::Save => self.save(cx),
+            CommandId::Save => self.save(window, cx),
+            CommandId::FindInFile => self.find(false, window, cx),
+            CommandId::ReplaceInFile => self.find(true, window, cx),
+            CommandId::ToggleAutoSave => self.toggle_auto_save(cx),
+            CommandId::ToggleFormatOnSave => self.toggle_format_on_save(cx),
             CommandId::CloseTab => {
                 if let Some(path) = self.editor.read(cx).path().map(str::to_owned) {
                     self.request_close_tab(path, window, cx);
@@ -975,13 +991,6 @@ impl Workbench {
             .ok();
         })
         .detach();
-    }
-
-    fn save(&mut self, cx: &mut Context<Self>) {
-        if let Some(project) = self.project.clone() {
-            self.editor
-                .update(cx, |editor, cx| editor.save(project, cx));
-        }
     }
 
     fn toggle_tone(&mut self, cx: &mut Context<Self>) {

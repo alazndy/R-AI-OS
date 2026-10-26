@@ -4424,3 +4424,118 @@ fn a_task_runs_in_its_own_terminal_that_is_not_saved_and_its_output_location_ope
         Some(2)
     );
 }
+
+#[test]
+fn find_opens_and_replace_all_is_one_undoable_edit() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("c.txt"), "foo Foo bar foo").expect("c");
+    rig.open_project();
+    rig.open_file("c.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "foo Foo bar foo"));
+
+    rig.run(CommandId::FindInFile);
+    assert!(rig.read(|wb, cx| wb.editor().read(cx).find_open(cx)));
+    rig.run(CommandId::ReplaceInFile);
+
+    let count = rig.with(|wb, window, cx| {
+        wb.editor().clone().update(cx, |editor, cx| {
+            editor.replace_all("foo", "x", false, window, cx)
+        })
+    });
+    assert_eq!(count, 2, "the search is case sensitive");
+    assert_eq!(rig.editor_text(), "x Foo bar x");
+    let count = rig.with(|wb, window, cx| {
+        wb.editor().clone().update(cx, |editor, cx| {
+            editor.replace_all("foo", "y", true, window, cx)
+        })
+    });
+    assert_eq!(count, 1);
+    assert_eq!(rig.editor_text(), "x y bar x");
+}
+
+#[test]
+fn auto_save_writes_changed_files_when_the_window_loses_focus_and_only_when_it_is_on() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    let insert = |rig: &mut Rig, text: &str| {
+        let text = text.to_owned();
+        rig.with(|wb, window, cx| {
+            wb.editor()
+                .clone()
+                .update(cx, |editor, cx| editor.insert_text(&text, window, cx))
+        });
+    };
+
+    // Off by default: losing focus saves nothing.
+    insert(&mut rig, "A");
+    rig.cx.deactivate_window();
+    rig.settle_for(300);
+    assert_eq!(
+        std::fs::read_to_string(rig.dir.path().join("a.txt")).unwrap(),
+        "one"
+    );
+
+    rig.run(CommandId::ToggleAutoSave);
+    assert!(rig.read(|wb, _| wb.auto_save()));
+    rig.cx.update(|window, _| window.activate_window());
+    rig.cx.deactivate_window();
+    let saved = rig.settle_until(|rig| {
+        std::fs::read_to_string(rig.dir.path().join("a.txt")).unwrap() != "one"
+    });
+    assert!(saved, "the changed file is written on focus loss");
+    assert!(rig.settle_until(|rig| rig.editor_dirty_paths().is_empty()));
+}
+
+#[test]
+fn saving_formats_first_only_when_format_on_save_is_on() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+    let edit = |rig: &mut Rig| {
+        rig.with(|wb, window, cx| {
+            wb.editor()
+                .clone()
+                .update(cx, |editor, cx| editor.insert_text("// ", window, cx))
+        });
+    };
+
+    // Plain save: the text goes to disk as typed.
+    edit(&mut rig);
+    rig.run(CommandId::Save);
+    assert!(rig.settle_until(|rig| rig.editor_dirty_paths().is_empty()));
+    let plain = std::fs::read_to_string(rig.dir.path().join("a.rs")).unwrap();
+    assert!(plain.starts_with("// "), "{plain:?}");
+    assert!(!plain.starts_with("FN"), "{plain:?}");
+
+    // With format on save the server's edits are in the file that lands on disk.
+    rig.run(CommandId::ToggleFormatOnSave);
+    assert!(rig.read(|wb, _| wb.format_on_save()));
+    edit(&mut rig);
+    rig.run(CommandId::Save);
+    let done = rig.settle_until(|rig| rig.editor_dirty_paths().is_empty());
+    let status = rig.read(|wb, cx| wb.editor().read(cx).status());
+    assert!(done, "status: {status:?} text: {:?}", rig.editor_text());
+    let formatted = std::fs::read_to_string(rig.dir.path().join("a.rs")).unwrap();
+    assert!(formatted.starts_with("FN"), "{formatted:?}");
+    assert!(formatted.contains("let x;"), "{formatted:?}");
+}

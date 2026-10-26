@@ -122,6 +122,9 @@ impl Tab {
     }
 }
 
+/// How long saving waits for the formatter before saving the text as it is.
+const FORMAT_ON_SAVE_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+
 /// The editor: a strip of open files over one editor, plus the diff of the active file.
 pub struct EditorView {
     theme: Theme,
@@ -586,6 +589,31 @@ impl EditorView {
     /// Formats the active file with its language server. The answer is dropped, with a message,
     /// when the text changed while the server worked: its positions would no longer fit.
     pub fn format(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.format_active(None, window, cx);
+    }
+
+    /// Formats the active file, then saves it. A file without a language server, a slow or
+    /// failing server and edits made while it worked all end in a plain save: saving never
+    /// waits long and never fails because of the formatter.
+    pub fn save_formatted(
+        &mut self,
+        project: Arc<ProjectRoot>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.requester.is_none() {
+            self.save(project, cx);
+            return;
+        }
+        self.format_active(Some(project), window, cx);
+    }
+
+    fn format_active(
+        &mut self,
+        then_save: Option<Arc<ProjectRoot>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(requester), Some(path)) =
             (self.requester.clone(), self.path().map(str::to_owned))
         else {
@@ -595,7 +623,12 @@ impl EditorView {
         let Some(before) = self.text_of(&path, cx) else {
             return;
         };
-        let answer = super::lsp::format_request(&requester, &path);
+        let timeout = if then_save.is_some() {
+            FORMAT_ON_SAVE_WAIT
+        } else {
+            std::time::Duration::from_secs(5)
+        };
+        let answer = super::lsp::format_request(&requester, &path, timeout);
         cx.spawn_in(window, async move |this, cx| {
             let answer = answer.recv().await;
             this.update_in(cx, |view, window, cx| {
@@ -604,6 +637,9 @@ impl EditorView {
                 };
                 if view.text_of(&path, cx).as_deref() != Some(before.as_str()) {
                     view.set_status("Metin değişti; biçimlendirme uygulanmadı", cx);
+                    if let Some(project) = then_save {
+                        view.save_soon(path.clone(), project, cx);
+                    }
                     return;
                 }
                 let edits = match answer {
@@ -624,10 +660,63 @@ impl EditorView {
                     }
                     Err(error) => view.set_status(error.message, cx),
                 }
+                if let Some(project) = then_save {
+                    view.save_soon(path.clone(), project, cx);
+                }
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Saves `path` once the edits just applied have been announced: the edit events arrive after
+    /// the update that made them, and a save that began before them would find its file dirty
+    /// again as soon as it finished.
+    fn save_soon(&self, path: String, project: Arc<ProjectRoot>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            this.update(cx, |view, cx| view.save_path(&path, project, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Opens the find box of the active file (with the replace field when `replace`).
+    pub fn open_find(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        tab.state.update(cx, |state, cx| {
+            state.open_search(replace, cx);
+        });
+        let _ = window;
+    }
+
+    /// Whether the active file's find box is open.
+    pub fn find_open(&self, cx: &gpui::App) -> bool {
+        self.tabs
+            .get(self.active)
+            .is_some_and(|tab| tab.state.read(cx).search_session().is_active())
+    }
+
+    /// Replaces every occurrence of `query` in the active file with `replacement` as one
+    /// undoable edit. Returns how many were replaced. The search is plain text.
+    pub fn replace_all(
+        &mut self,
+        query: &str,
+        replacement: &str,
+        case_insensitive: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return 0;
+        };
+        tab.state.update(cx, |state, cx| {
+            state.set_search_query(query, case_insensitive, cx);
+            let count = state.replace_all_search_matches(replacement, window, cx);
+            state.close_search(cx);
+            count
+        })
     }
 
     /// The text of the tab for `path`, if it is open.
