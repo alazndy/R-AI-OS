@@ -4258,3 +4258,103 @@ fn the_format_command_applies_the_servers_edits_last_first() {
     rig.run(CommandId::Format);
     assert!(rig.settle_until(|rig| rig.editor_text() == "FN a() {}\nlet x;\n"));
 }
+
+#[test]
+fn the_source_control_view_stages_commits_and_discards_in_a_real_repository() {
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "t@example.com"],
+        &["config", "user.name", "T"],
+        &["config", "commit.gpgsign", "false"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .expect("git")
+            .success());
+    }
+    rig.open_project();
+    rig.run(CommandId::SourceControl);
+    let view = rig
+        .read(|wb, _| wb.git_view().cloned())
+        .expect("view opens");
+
+    // Everything is untracked at first.
+    assert!(rig.settle_until(|rig| {
+        rig.cx.update(|_, cx| {
+            view.read(cx)
+                .status()
+                .is_some_and(|s| !s.entries.is_empty())
+        })
+    }));
+    assert!(rig
+        .cx
+        .update(|_, cx| view.read(cx).status().unwrap().staged().count() == 0));
+
+    // Stage all, commit with a message.
+    rig.cx
+        .update(|_, cx| view.update(cx, |view, cx| view.stage_all(cx)));
+    assert!(rig.settle_until(|rig| {
+        rig.cx.update(|_, cx| {
+            view.read(cx)
+                .status()
+                .is_some_and(|s| s.changes().count() == 0)
+        })
+    }));
+    rig.cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_message("first", window, cx);
+            view.commit(cx);
+        })
+    });
+    assert!(rig.settle_until(|rig| {
+        rig.cx.update(|_, cx| {
+            view.read(cx)
+                .status()
+                .is_some_and(|s| s.head.is_some() && s.entries.is_empty())
+        })
+    }));
+
+    // An empty message is refused with a visible reason.
+    rig.cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_message("", window, cx);
+            view.commit(cx);
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.cx.update(|_, cx| view.read(cx).error().is_some())));
+
+    // Discarding asks first, then rewrites the file and reloads the clean tab showing it.
+    std::fs::write(root.join("a.txt"), "changed").expect("edit on disk");
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "changed"));
+    rig.with(|wb, window, cx| wb.close_git(window, cx));
+    rig.run(CommandId::SourceControl);
+    let view = rig
+        .read(|wb, _| wb.git_view().cloned())
+        .expect("view reopens");
+    assert!(rig.settle_until(|rig| {
+        rig.cx.update(|_, cx| {
+            view.read(cx)
+                .status()
+                .is_some_and(|s| s.changes().count() == 1)
+        })
+    }));
+    let entries: Vec<_> = rig
+        .cx
+        .update(|_, cx| view.read(cx).status().unwrap().changes().cloned().collect());
+    rig.cx
+        .update(|_, cx| view.update(cx, |view, cx| view.ask_discard(entries, cx)));
+    assert!(rig.cx.update(|_, cx| view.read(cx).confirming()));
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.txt")).unwrap(),
+        "changed"
+    );
+    rig.cx
+        .update(|_, cx| view.update(cx, |view, cx| view.answer_discard(true, cx)));
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "one");
+}

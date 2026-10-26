@@ -6,6 +6,7 @@ pub mod context_menu;
 pub mod editor;
 pub mod file_tree;
 pub mod fonts;
+pub mod git;
 pub mod handoff;
 pub mod inspector;
 pub mod memory;

@@ -19,6 +19,8 @@ pub enum CommandId {
     Problems,
     /// Format the open file with its language server.
     Format,
+    /// Show the repository's changes: stage, commit, switch branch.
+    SourceControl,
     /// Save the open file.
     Save,
     /// Close the active editor tab.
@@ -166,7 +168,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 52] = [
+const COMMANDS: [Command; 53] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -363,6 +365,7 @@ const COMMANDS: [Command; 52] = [
         &[bind_terminal("h", true, false)],
     ),
     cmd(CommandId::NewTask, "Yeni görev…", None, &[]),
+    cmd(CommandId::SourceControl, "Git değişiklikleri", None, &[]),
     cmd(CommandId::Format, "Dosyayı biçimlendir", None, &[]),
     cmd(CommandId::Problems, "Sorunları göster", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
@@ -569,7 +572,9 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
     match id {
         Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
         | AgentsLayout => allow(),
-        Files | Search | Problems | Refresh | FocusFiles | Memory | Inspector => needs_project(),
+        Files | Search | Problems | SourceControl | Refresh | FocusFiles | Memory | Inspector => {
+            needs_project()
+        }
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
@@ -673,7 +678,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 52);
+        assert_eq!(catalog().len(), 53);
     }
 
     #[test]

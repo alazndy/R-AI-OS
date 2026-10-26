@@ -5,6 +5,7 @@ pub mod binding;
 pub mod control;
 pub mod dock;
 pub mod entries;
+pub mod git;
 pub mod host;
 pub mod layout;
 pub mod lsp;
@@ -253,6 +254,10 @@ pub struct Workbench {
     /// Bumped on every search and on every close; an answer for an older search is dropped.
     search_generation: u64,
     /// How language servers are started; `None` turns them off.
+    git_view: Option<Entity<crate::git::GitView>>,
+    git_subscription: Option<Subscription>,
+    /// Bumped by every git action and on close; an answer for an older one is dropped.
+    git_generation: u64,
     lsp_launcher: Option<rwk_core::lsp::Launcher>,
     servers: Option<rwk_core::lsp::LanguageServers>,
     problems: rwk_core::lsp::Problems,
@@ -495,6 +500,9 @@ impl Workbench {
             search: None,
             search_subscription: None,
             search_generation: 0,
+            git_view: None,
+            git_subscription: None,
+            git_generation: 0,
             lsp_launcher: None,
             servers: None,
             problems: rwk_core::lsp::Problems::default(),
@@ -834,6 +842,7 @@ impl Workbench {
             CommandId::RegisterProject => self.register_project(window, cx),
             CommandId::Memory => self.open_memory(window, cx),
             CommandId::Problems => self.open_problems(window, cx),
+            CommandId::SourceControl => self.open_git(window, cx),
             CommandId::Format => self
                 .editor
                 .update(cx, |editor, cx| editor.format(window, cx)),
@@ -1307,6 +1316,7 @@ impl Workbench {
                     self.close_palette(window, cx);
                     self.close_search(window, cx);
                     self.close_problems(window, cx);
+                    self.close_git(window, cx);
                     self.stop_terminals(false);
                     self.editor
                         .update(cx, |editor, cx| editor.clear(window, cx));
@@ -1826,6 +1836,7 @@ impl Render for Workbench {
             .children(self.memory.clone())
             .children(self.search.clone())
             .children(self.problems_view.clone())
+            .children(self.git_view.clone())
             .children(self.menu.as_ref().map(|open| open.view.clone()))
             .children(dialog)
     }
