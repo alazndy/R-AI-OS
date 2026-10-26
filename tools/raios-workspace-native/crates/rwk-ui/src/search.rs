@@ -439,6 +439,12 @@ impl Render for SearchView {
                         .on_click(cx.listener(|this, _, _window, cx| this.press_replace(cx))),
                     ),
             )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(gpui::rgb(theme.muted))
+                    .child("Desen düzenli ifadedir. Değiştirmede $1 yakalanan grubu, $$ düz $ işaretini verir."),
+            )
             .children(self.replace_note.clone().map(|note| {
                 div()
                     .text_xs()

@@ -5369,6 +5369,7 @@ dependencies = [
  "lsp-types",
  "portable-pty",
  "raios-contracts",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
