@@ -7,7 +7,7 @@ use gpui::{
     Subscription, Window,
 };
 use gpui_base::input::{Input, InputEvent, InputState};
-use rwk_core::git::{Entry, Status};
+use rwk_core::git::{Entry, FileDiff, Status};
 use rwk_core::workbench::{Appearance, Theme};
 
 /// What the view asks of the workbench.
@@ -27,11 +27,37 @@ pub enum GitEvent {
     Switch(String),
     /// Open this file in the editor.
     Open(String),
+    /// Read the hunks of this file (`staged`: those in the index) for the hunk panel.
+    Hunks {
+        /// Project-relative path.
+        path: String,
+        /// Show what is staged instead of what is not.
+        staged: bool,
+    },
+    /// Stage (or unstage) one hunk; `header` is the hunk as shown.
+    ApplyHunk {
+        /// Project-relative path.
+        path: String,
+        /// Position in the shown diff.
+        index: usize,
+        /// The `@@` line shown, to refuse a hunk that moved.
+        header: String,
+        /// Stage it (otherwise unstage).
+        stage: bool,
+    },
     /// Close the view.
     Close,
 }
 
 impl EventEmitter<GitEvent> for GitView {}
+
+/// The hunks of one file on screen.
+struct HunkPanel {
+    path: String,
+    staged: bool,
+    /// `None` until the diff arrives.
+    diff: Option<FileDiff>,
+}
 
 /// The source control view.
 pub struct GitView {
@@ -43,6 +69,7 @@ pub struct GitView {
     busy: bool,
     /// Files waiting for the answer to "really discard?".
     confirm: Option<Vec<Entry>>,
+    hunks: Option<HunkPanel>,
     message: Entity<InputState>,
     theme: Theme,
     _subscription: Subscription,
@@ -65,6 +92,7 @@ impl GitView {
             error: None,
             busy: true,
             confirm: None,
+            hunks: None,
             message,
             theme: Theme::of(Appearance::default()),
             _subscription: subscription,
@@ -83,7 +111,70 @@ impl GitView {
         self.branches = branches;
         self.busy = false;
         self.confirm = None;
+        // An open hunk panel shows what the action just changed.
+        if let Some(panel) = &self.hunks {
+            cx.emit(GitEvent::Hunks {
+                path: panel.path.clone(),
+                staged: panel.staged,
+            });
+        }
         cx.notify();
+    }
+
+    /// Shows the hunks of `path` (leaving the file list until [`Self::close_hunks`]).
+    pub fn set_hunks(&mut self, path: &str, staged: bool, diff: FileDiff, cx: &mut Context<Self>) {
+        self.hunks = Some(HunkPanel {
+            path: path.to_owned(),
+            staged,
+            diff: Some(diff),
+        });
+        cx.notify();
+    }
+
+    /// Opens the hunk panel for `path`; the diff arrives through [`Self::set_hunks`].
+    pub fn open_hunks(&mut self, path: &str, staged: bool, cx: &mut Context<Self>) {
+        self.hunks = Some(HunkPanel {
+            path: path.to_owned(),
+            staged,
+            diff: None,
+        });
+        cx.emit(GitEvent::Hunks {
+            path: path.to_owned(),
+            staged,
+        });
+        cx.notify();
+    }
+
+    /// Goes back from the hunk panel to the file list.
+    pub fn close_hunks(&mut self, cx: &mut Context<Self>) {
+        self.hunks = None;
+        cx.notify();
+    }
+
+    /// The hunks on screen: file, whether they are the staged ones, and the diff.
+    pub fn hunk_panel(&self) -> Option<(&str, bool, Option<&FileDiff>)> {
+        self.hunks
+            .as_ref()
+            .map(|panel| (panel.path.as_str(), panel.staged, panel.diff.as_ref()))
+    }
+
+    /// Stages or unstages hunk `index` of the open panel.
+    pub fn apply_hunk(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(panel) = &self.hunks else {
+            return;
+        };
+        let Some(hunk) = panel.diff.as_ref().and_then(|diff| diff.hunks.get(index)) else {
+            return;
+        };
+        if self.busy {
+            return;
+        }
+        cx.emit(GitEvent::ApplyHunk {
+            path: panel.path.clone(),
+            index,
+            header: hunk.header.clone(),
+            stage: !panel.staged,
+        });
     }
 
     /// Shows why the last action or status read failed.
@@ -230,15 +321,20 @@ impl Render for GitView {
             .map(|(ix, entry)| {
                 let letter = entry.staged.letter();
                 let path = entry.path.clone();
-                file_row(theme, ("staged", ix), letter, &entry, cx).child(
-                    button(theme, ("unstage", ix), "Çıkar").on_click(cx.listener(
-                        move |this, _, _window, cx| {
-                            if !this.busy {
-                                cx.emit(GitEvent::Unstage(vec![path.clone()]));
-                            }
-                        },
-                    )),
-                )
+                let parts = path.clone();
+                file_row(theme, ("staged", ix), letter, &entry, cx)
+                    .child(button(theme, ("staged-hunks", ix), "Parçalar").on_click(
+                        cx.listener(move |this, _, _window, cx| this.open_hunks(&parts, true, cx)),
+                    ))
+                    .child(
+                        button(theme, ("unstage", ix), "Çıkar").on_click(cx.listener(
+                            move |this, _, _window, cx| {
+                                if !this.busy {
+                                    cx.emit(GitEvent::Unstage(vec![path.clone()]));
+                                }
+                            },
+                        )),
+                    )
             })
             .collect();
         let change_rows: Vec<_> = changes
@@ -254,7 +350,14 @@ impl Render for GitView {
                     entry.unstaged.letter()
                 };
                 let (add, discard) = (entry.path.clone(), entry.clone());
+                let parts = entry.path.clone();
+                let splittable = !entry.untracked && !entry.conflicted;
                 file_row(theme, ("change", ix), letter, &entry, cx)
+                    .children(splittable.then(|| {
+                        button(theme, ("change-hunks", ix), "Parçalar").on_click(cx.listener(
+                            move |this, _, _window, cx| this.open_hunks(&parts, false, cx),
+                        ))
+                    }))
                     .child(button(theme, ("stage", ix), "Ekle").on_click(cx.listener(
                         move |this, _, _window, cx| {
                             if !this.busy {
@@ -315,6 +418,100 @@ impl Render for GitView {
             });
 
         let all_changes = changes.clone();
+        let hunk_panel = self.hunks.as_ref().map(|panel| {
+            let staged = panel.staged;
+            let hunks: Vec<_> = panel
+                .diff
+                .iter()
+                .flat_map(|diff| diff.hunks.iter().cloned().enumerate())
+                .map(|(ix, hunk)| {
+                    let lines = hunk.lines.into_iter().map(|line| {
+                        let colour = match line.chars().next() {
+                            Some('+') => 0x3fb950,
+                            Some('-') => 0xff7b72,
+                            _ => theme.muted,
+                        };
+                        div()
+                            .text_color(gpui::rgb(colour))
+                            .child(SharedString::from(line))
+                    });
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .mb_2()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_xs()
+                                        .text_color(gpui::rgb(theme.accent_ink))
+                                        .child(SharedString::from(hunk.header)),
+                                )
+                                .child(
+                                    button(
+                                        theme,
+                                        ("hunk", ix),
+                                        if staged {
+                                            "Parçayı çıkar"
+                                        } else {
+                                            "Parçayı ekle"
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _window, cx| this.apply_hunk(ix, cx),
+                                    )),
+                                ),
+                        )
+                        .children(lines)
+                })
+                .collect();
+            let empty = panel
+                .diff
+                .as_ref()
+                .is_some_and(|diff| diff.hunks.is_empty());
+            div()
+                .id("git-hunks")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .items_center()
+                        .mb_2()
+                        .child(
+                            button(theme, "hunks-back", "← Dosyalar")
+                                .on_click(cx.listener(|this, _, _window, cx| this.close_hunks(cx))),
+                        )
+                        .child(SharedString::from(format!(
+                            "{} · {}",
+                            panel.path,
+                            if staged {
+                                "hazır parçalar"
+                            } else {
+                                "parçalar"
+                            }
+                        ))),
+                )
+                .children(panel.diff.is_none().then(|| div().child("Okunuyor…")))
+                .children(empty.then(|| {
+                    div()
+                        .text_color(gpui::rgb(theme.muted))
+                        .child("Parça yok (ikili, yeni ya da değişmemiş dosya).")
+                }))
+                .children(hunks)
+        });
+        let showing_hunks = hunk_panel.is_some();
         div()
             .absolute()
             .occlude()
@@ -392,7 +589,8 @@ impl Render for GitView {
                             .on_click(cx.listener(|this, _, _window, cx| this.commit(cx))),
                     ),
             )
-            .child(
+            .children(hunk_panel)
+            .children((!showing_hunks).then(|| {
                 div()
                     .id("git-files")
                     .flex_1()
@@ -420,8 +618,8 @@ impl Render for GitView {
                     .children(
                         (self.status.as_ref().is_some_and(|s| s.entries.is_empty()))
                             .then(|| div().text_color(gpui::rgb(theme.muted)).child("Temiz.")),
-                    ),
-            )
+                    )
+            }))
     }
 }
 

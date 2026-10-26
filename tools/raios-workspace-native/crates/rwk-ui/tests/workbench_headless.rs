@@ -4400,6 +4400,63 @@ fn renaming_a_symbol_edits_open_tabs_and_writes_the_other_files() {
 }
 
 #[test]
+fn the_hunk_panel_stages_one_hunk_of_a_changed_file() {
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .expect("git")
+            .success());
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    let original: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+    std::fs::write(root.join("f.txt"), &original).unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "first"]);
+    std::fs::write(
+        root.join("f.txt"),
+        original
+            .replace("line 2\n", "line two\n")
+            .replace("line 28\n", "line 28!\n"),
+    )
+    .unwrap();
+
+    rig.open_project();
+    rig.run(CommandId::SourceControl);
+    let view = rig.read(|wb, _| wb.git_view().cloned()).expect("view");
+    assert!(rig.settle_until(|rig| rig.cx.update(|_, cx| view.read(cx).status().is_some())));
+
+    rig.with(|_wb, _w, cx| view.update(cx, |view, cx| view.open_hunks("f.txt", false, cx)));
+    let hunks = |rig: &mut Rig| {
+        rig.cx.update(|_, cx| {
+            view.read(cx)
+                .hunk_panel()
+                .and_then(|(_, _, diff)| diff.map(|diff| diff.hunks.len()))
+        })
+    };
+    assert!(rig.settle_until(|rig| hunks(rig) == Some(2)));
+
+    rig.with(|_wb, _w, cx| view.update(cx, |view, cx| view.apply_hunk(1, cx)));
+    // The panel reloads: one hunk is left to stage, and git has the other staged.
+    assert!(rig.settle_until(|rig| hunks(rig) == Some(1)));
+    let cached = std::process::Command::new("git")
+        .args(["diff", "--cached", "--numstat"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&cached.stdout).trim(),
+        "1\t1\tf.txt"
+    );
+}
+
+#[test]
 fn the_source_control_view_stages_commits_and_discards_in_a_real_repository() {
     let mut rig = rig();
     let root = rig.dir.path().to_path_buf();
