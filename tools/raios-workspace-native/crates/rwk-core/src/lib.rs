@@ -15,6 +15,7 @@ pub mod consent;
 pub mod control;
 pub mod documents;
 pub mod error;
+pub mod git;
 pub mod guarded;
 pub mod handoff_flow;
 pub mod handoff_input;
