@@ -138,6 +138,8 @@ impl Workbench {
         let root: PathBuf = project.info().root.clone();
         // A folder without `.git` is no repository: nothing to mark, and no process to start.
         if !root.join(".git").exists() {
+            self.editor
+                .update(cx, |editor, cx| editor.set_badges(Default::default(), cx));
             self.files
                 .update(cx, |files, cx| files.set_badges(Default::default(), cx));
             return;
@@ -154,6 +156,9 @@ impl Workbench {
                 let badges = status
                     .map(|status| git::badges(&status))
                     .unwrap_or_default();
+                workbench
+                    .editor
+                    .update(cx, |editor, cx| editor.set_badges(badges.clone(), cx));
                 workbench
                     .files
                     .update(cx, |files, cx| files.set_badges(badges, cx));

@@ -4450,6 +4450,11 @@ fn changed_files_and_their_folders_carry_git_marks_in_the_tree() {
     rig.type_text("!");
     rig.run(CommandId::Save);
     assert!(rig.settle_until(|rig| mark(rig, "src/a.rs") == Some('M')));
+    // The open tab carries the same mark.
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).badge("src/a.rs").map(|b| b.letter)),
+        Some('M')
+    );
 }
 
 #[test]

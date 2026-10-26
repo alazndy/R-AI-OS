@@ -329,7 +329,7 @@ impl FileTreeView {
 }
 
 /// The colour of a git mark: bright on a dark tone, deep on a light one.
-fn badge_color(kind: rwk_core::git::BadgeKind, dark: bool) -> u32 {
+pub(crate) fn badge_color(kind: rwk_core::git::BadgeKind, dark: bool) -> u32 {
     use rwk_core::git::BadgeKind;
     match (kind, dark) {
         (BadgeKind::Added, true) => 0x3fb950,
