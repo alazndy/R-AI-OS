@@ -1991,6 +1991,30 @@ fn a_clicked_path_in_terminal_output_opens_the_file_at_its_line() {
 }
 
 #[test]
+fn a_clicked_web_address_in_terminal_output_is_opened_not_treated_as_a_path() {
+    use rwk_ui::terminal::TerminalEvent;
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::NewTerminal);
+    let view = rig
+        .read(|wb, _| wb.terminal_view(0).cloned())
+        .expect("terminal");
+    rig.with(|_wb, _w, cx| {
+        view.update(cx, |_, cx| {
+            cx.emit(TerminalEvent::Open {
+                line: "docs: https://example.com/a:12.".to_owned(),
+                column: 12,
+            })
+        })
+    });
+    assert!(rig.settle_until(|rig| {
+        rig.read(|wb, _| wb.toast())
+            .is_some_and(|toast| toast == "Açılıyor: https://example.com/a:12")
+    }));
+    assert_eq!(rig.editor_path(), None, "no file was opened");
+}
+
+#[test]
 fn escape_closes_the_search_overlay() {
     let mut rig = rig();
     rig.open_project();
