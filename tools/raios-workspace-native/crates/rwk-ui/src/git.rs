@@ -7,7 +7,7 @@ use gpui::{
     Subscription, Window,
 };
 use gpui_base::input::{Input, InputEvent, InputState};
-use rwk_core::git::{Entry, FileDiff, Status};
+use rwk_core::git::{Entry, FileDiff, Stash, Status};
 use rwk_core::workbench::{Appearance, Theme};
 
 /// What the view asks of the workbench.
@@ -27,6 +27,18 @@ pub enum GitEvent {
     Switch(String),
     /// Open this file in the editor.
     Open(String),
+    /// Fast-forward from the upstream.
+    Pull,
+    /// Push the current branch (already confirmed in the view).
+    Push,
+    /// Stash the changes with this message.
+    StashPush(String),
+    /// Apply and drop this stash entry.
+    StashPop(usize),
+    /// Create a branch with this name and switch to it.
+    CreateBranch(String),
+    /// Delete this merged branch.
+    DeleteBranch(String),
     /// Read the hunks of this file (`staged`: those in the index) for the hunk panel.
     Hunks {
         /// Project-relative path.
@@ -70,6 +82,9 @@ pub struct GitView {
     /// Files waiting for the answer to "really discard?".
     confirm: Option<Vec<Entry>>,
     hunks: Option<HunkPanel>,
+    stashes: Vec<Stash>,
+    /// The push waits for a yes.
+    confirm_push: bool,
     message: Entity<InputState>,
     theme: Theme,
     _subscription: Subscription,
@@ -93,6 +108,8 @@ impl GitView {
             busy: true,
             confirm: None,
             hunks: None,
+            stashes: Vec::new(),
+            confirm_push: false,
             message,
             theme: Theme::of(Appearance::default()),
             _subscription: subscription,
@@ -252,6 +269,61 @@ impl GitView {
         cx.notify();
     }
 
+    /// Shows the stash entries.
+    pub fn set_stashes(&mut self, stashes: Vec<Stash>, cx: &mut Context<Self>) {
+        self.stashes = stashes;
+        cx.notify();
+    }
+
+    /// The stash entries on screen.
+    pub fn stashes(&self) -> &[Stash] {
+        &self.stashes
+    }
+
+    /// Asks whether to push; the answer arrives through [`Self::answer_push`].
+    pub fn ask_push(&mut self, cx: &mut Context<Self>) {
+        if !self.busy {
+            self.confirm_push = true;
+            cx.notify();
+        }
+    }
+
+    /// Whether the "really push?" question is showing.
+    pub fn confirming_push(&self) -> bool {
+        self.confirm_push
+    }
+
+    /// Answers the "really push?" question.
+    pub fn answer_push(&mut self, yes: bool, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.confirm_push) && yes {
+            cx.emit(GitEvent::Push);
+        }
+        cx.notify();
+    }
+
+    /// Stashes the changes under the message in the box (or a default one).
+    pub fn stash(&mut self, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let text = self.message.read(cx).value().to_string();
+        let text = if text.trim().is_empty() {
+            "RAIOS".to_owned()
+        } else {
+            text
+        };
+        cx.emit(GitEvent::StashPush(text));
+    }
+
+    /// Creates a branch named by the text in the box.
+    pub fn create_branch(&mut self, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let name = self.message.read(cx).value().trim().to_owned();
+        cx.emit(GitEvent::CreateBranch(name));
+    }
+
     /// Commits with the text in the message box.
     pub fn commit(&mut self, cx: &mut Context<Self>) {
         if self.busy {
@@ -263,7 +335,9 @@ impl GitView {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
-            if self.confirm.is_some() {
+            if self.confirm_push {
+                self.answer_push(false, cx);
+            } else if self.confirm.is_some() {
                 self.answer_discard(false, cx);
             } else {
                 cx.emit(GitEvent::Close);
@@ -383,17 +457,30 @@ impl Render for GitView {
                     && self.status.as_ref().and_then(|s| s.branch.as_deref())
                         == Some(name.as_str());
                 let target = name.clone();
+                let doomed = name.clone();
                 let base = button(theme, ("branch", ix), name);
                 let base = if current {
                     base.bg(gpui::rgb(theme.selected))
                 } else {
                     base
                 };
-                base.on_click(cx.listener(move |this, _, _window, cx| {
-                    if !current && !this.busy {
-                        cx.emit(GitEvent::Switch(target.clone()));
-                    }
-                }))
+                div()
+                    .flex()
+                    .flex_row()
+                    .child(base.on_click(cx.listener(move |this, _, _window, cx| {
+                        if !current && !this.busy {
+                            cx.emit(GitEvent::Switch(target.clone()));
+                        }
+                    })))
+                    .children((!current).then(|| {
+                        button(theme, ("branch-delete", ix), "×").on_click(cx.listener(
+                            move |this, _, _window, cx| {
+                                if !this.busy {
+                                    cx.emit(GitEvent::DeleteBranch(doomed.clone()));
+                                }
+                            },
+                        ))
+                    }))
             })
             .collect();
 
@@ -417,6 +504,56 @@ impl Render for GitView {
                     ))
             });
 
+        let push_question = self.confirm_push.then(|| {
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .items_center()
+                .text_color(gpui::rgb(theme.accent_ink))
+                .child(SharedString::from(format!(
+                    "{} dalı uzak depoya gönderilecek.",
+                    self.status
+                        .as_ref()
+                        .and_then(|status| status.branch.as_deref())
+                        .unwrap_or("Geçerli")
+                )))
+                .child(
+                    button(theme, "push-yes", "Evet, gönder")
+                        .on_click(cx.listener(|this, _, _w, cx| this.answer_push(true, cx))),
+                )
+                .child(
+                    button(theme, "push-no", "Vazgeç")
+                        .on_click(cx.listener(|this, _, _w, cx| this.answer_push(false, cx))),
+                )
+        });
+        let stash_rows: Vec<_> =
+            self.stashes
+                .iter()
+                .cloned()
+                .map(|stash| {
+                    let index = stash.index;
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .items_center()
+                        .px_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(SharedString::from(stash.message)),
+                        )
+                        .child(button(theme, ("stash-pop", index), "Geri getir").on_click(
+                            cx.listener(move |this, _, _w, cx| {
+                                if !this.busy {
+                                    cx.emit(GitEvent::StashPop(index));
+                                }
+                            }),
+                        ))
+                })
+                .collect();
         let all_changes = changes.clone();
         let hunk_panel = self.hunks.as_ref().map(|panel| {
             let staged = panel.staged;
@@ -545,6 +682,25 @@ impl Render for GitView {
                             .text_color(gpui::rgb(theme.muted))
                             .child(SharedString::from(format!("GIT · {heading}"))),
                     )
+                    .child(button(theme, "git-pull", "Çek").on_click(cx.listener(
+                        |this, _, _w, cx| {
+                            if !this.busy {
+                                cx.emit(GitEvent::Pull);
+                            }
+                        },
+                    )))
+                    .child(
+                        button(theme, "git-push", "Gönder")
+                            .on_click(cx.listener(|this, _, _w, cx| this.ask_push(cx))),
+                    )
+                    .child(
+                        button(theme, "git-stash", "Sakla")
+                            .on_click(cx.listener(|this, _, _w, cx| this.stash(cx))),
+                    )
+                    .child(
+                        button(theme, "git-new-branch", "Dal aç")
+                            .on_click(cx.listener(|this, _, _w, cx| this.create_branch(cx))),
+                    )
                     .child(
                         button(theme, "git-refresh", "Yenile")
                             .on_click(cx.listener(|_, _, _window, cx| cx.emit(GitEvent::Refresh))),
@@ -568,6 +724,7 @@ impl Render for GitView {
                     .child(SharedString::from(error))
             }))
             .children(question)
+            .children(push_question)
             .child(
                 div()
                     .flex()
@@ -615,6 +772,11 @@ impl Render for GitView {
                             )),
                     )
                     .children(change_rows)
+                    .children(
+                        (!stash_rows.is_empty())
+                            .then(|| section(theme, format!("SAKLANANLAR ({})", stash_rows.len()))),
+                    )
+                    .children(stash_rows)
                     .children(
                         (self.status.as_ref().is_some_and(|s| s.entries.is_empty()))
                             .then(|| div().text_color(gpui::rgb(theme.muted)).child("Temiz.")),

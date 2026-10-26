@@ -4458,6 +4458,81 @@ fn changed_files_and_their_folders_carry_git_marks_in_the_tree() {
 }
 
 #[test]
+fn the_source_control_view_creates_a_branch_stashes_and_pushes_after_a_yes() {
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    let remote = tempfile::tempdir().unwrap();
+    let run = |dir: &std::path::Path, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    run(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
+    run(&root, &["init", "-q", "-b", "main"]);
+    run(&root, &["config", "user.email", "t@example.com"]);
+    run(&root, &["config", "user.name", "T"]);
+    run(&root, &["config", "commit.gpgsign", "false"]);
+    run(
+        &root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    std::fs::write(root.join("a.txt"), "one\n").unwrap();
+    run(&root, &["add", "-A"]);
+    run(&root, &["commit", "-q", "-m", "first"]);
+
+    rig.open_project();
+    rig.run(CommandId::SourceControl);
+    let view = rig.read(|wb, _| wb.git_view().cloned()).expect("view");
+    assert!(rig.settle_until(|rig| rig.cx.update(|_, cx| view.read(cx).status().is_some())));
+    let branch = |rig: &mut Rig| {
+        rig.cx
+            .update(|_, cx| view.read(cx).status().and_then(|s| s.branch.clone()))
+    };
+
+    // The message box names the new branch.
+    rig.with(|_wb, window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_message("feature/y", window, cx);
+            view.create_branch(cx)
+        })
+    });
+    assert!(rig.settle_until(|rig| branch(rig).as_deref() == Some("feature/y")));
+
+    // Stash takes the change away; the entry shows up.
+    std::fs::write(root.join("a.txt"), "dirty\n").unwrap();
+    rig.with(|_wb, window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_message("wip", window, cx);
+            view.stash(cx)
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.cx.update(|_, cx| view.read(cx).stashes().len() == 1)));
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.txt")).unwrap(),
+        "one\n"
+    );
+
+    // Nothing is pushed until the question is answered yes.
+    rig.with(|_wb, _w, cx| view.update(cx, |view, cx| view.ask_push(cx)));
+    assert!(rig.cx.update(|_, cx| view.read(cx).confirming_push()));
+    rig.with(|_wb, _w, cx| view.update(cx, |view, cx| view.answer_push(false, cx)));
+    rig.settle_for(300);
+    assert!(run(remote.path(), &["branch", "--list"]).trim().is_empty());
+    rig.with(|_wb, _w, cx| {
+        view.update(cx, |view, cx| {
+            view.ask_push(cx);
+            view.answer_push(true, cx)
+        })
+    });
+    let heads = remote.path().to_path_buf();
+    assert!(rig.settle_until(|_| run(&heads, &["branch", "--list"]).contains("feature/y")));
+}
+
+#[test]
 fn the_hunk_panel_stages_one_hunk_of_a_changed_file() {
     let mut rig = rig();
     let root = rig.dir.path().to_path_buf();

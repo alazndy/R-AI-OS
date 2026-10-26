@@ -142,3 +142,76 @@ fn one_hunk_can_be_staged_and_unstaged_alone() {
     assert_eq!(git::file_diff(root, "f.txt", false).unwrap().hunks.len(), 2);
     assert_eq!(std::fs::read_to_string(root.join("f.txt")).unwrap(), edited);
 }
+
+#[test]
+fn branches_stash_pull_and_push_work_against_a_local_remote() {
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
+    let dir = repository();
+    let root = dir.path();
+    git(
+        root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    std::fs::write(root.join("a.txt"), "one\n").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "first"]);
+
+    // No upstream yet: push sets one on origin, and a second push just pushes.
+    assert_eq!(git::upstream(root), None);
+    git::push(root).unwrap();
+    assert_eq!(git::upstream(root).as_deref(), Some("origin/main"));
+    std::fs::write(root.join("a.txt"), "two\n").unwrap();
+    git(root, &["commit", "-q", "-am", "second"]);
+    git::push(root).unwrap();
+
+    // A second clone moves the remote ahead; pull fast-forwards, a diverged branch is refused.
+    let other = tempfile::tempdir().unwrap();
+    git(
+        other.path(),
+        &["clone", "-q", remote.path().to_str().unwrap(), "."],
+    );
+    git(other.path(), &["config", "user.email", "t@example.com"]);
+    git(other.path(), &["config", "user.name", "T"]);
+    git(other.path(), &["config", "commit.gpgsign", "false"]);
+    std::fs::write(other.path().join("b.txt"), "b\n").unwrap();
+    git(other.path(), &["add", "-A"]);
+    git(other.path(), &["commit", "-q", "-m", "remote work"]);
+    git(other.path(), &["push", "-q"]);
+    git::pull(root).unwrap();
+    assert!(root.join("b.txt").exists());
+    std::fs::write(root.join("c.txt"), "c\n").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "local work"]);
+    std::fs::write(other.path().join("d.txt"), "d\n").unwrap();
+    git(other.path(), &["add", "-A"]);
+    git(other.path(), &["commit", "-q", "-m", "more remote work"]);
+    git(other.path(), &["push", "-q"]);
+    assert!(git::pull(root).is_err(), "diverged branches are not merged");
+
+    // Stash takes untracked files too and pop brings them back; an empty stash is an error.
+    assert!(git::stash_push(root, "nothing").is_err());
+    std::fs::write(root.join("a.txt"), "dirty\n").unwrap();
+    std::fs::write(root.join("loose.txt"), "x").unwrap();
+    git::stash_push(root, "work in progress").unwrap();
+    assert!(!root.join("loose.txt").exists());
+    let stashes = git::stash_list(root).unwrap();
+    assert_eq!(stashes.len(), 1);
+    assert!(stashes[0].message.contains("work in progress"));
+    git::stash_pop(root, 0).unwrap();
+    assert!(root.join("loose.txt").exists());
+    assert!(git::stash_list(root).unwrap().is_empty());
+
+    // Branches: create switches to it, a bad name is refused, delete refuses the current one.
+    git::create_branch(root, "feature/x").unwrap();
+    assert_eq!(git::branches(root).unwrap()[0], "feature/x");
+    assert!(git::create_branch(root, "bad name").is_err());
+    assert!(git::create_branch(root, "-x").is_err());
+    assert!(git::delete_branch(root, "feature/x").is_err());
+    git::switch(root, "main").unwrap_or_else(|_| {
+        git(root, &["stash", "-q", "-u"]);
+        git::switch(root, "main").unwrap()
+    });
+    git::delete_branch(root, "feature/x").unwrap();
+    assert_eq!(git::branches(root).unwrap(), ["main"]);
+}
