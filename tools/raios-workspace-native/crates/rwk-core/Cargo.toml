@@ -27,3 +27,7 @@ tempfile = "3"
 [[test]]
 name = "lsp_client"
 harness = false
+
+[[test]]
+name = "lsp_manager"
+harness = false

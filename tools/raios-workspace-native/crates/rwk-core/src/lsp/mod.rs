@@ -4,8 +4,10 @@
 
 pub mod client;
 pub mod framing;
+pub mod manager;
 pub mod servers;
 pub mod uri;
 
 pub use client::{LspClient, ServerEvent};
+pub use manager::{default_launcher, LanguageServers, Launcher, ManagerEvent, ServerStatus};
 pub use servers::{find_program, spec_for_path, ServerSpec, SERVERS};
