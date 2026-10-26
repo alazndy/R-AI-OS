@@ -127,6 +127,42 @@ impl Workbench {
         }
     }
 
+    /// Reads the repository status in the background and marks changed files in the tree. A
+    /// folder that is not a repository clears the marks; an older read is dropped.
+    pub(super) fn refresh_git_badges(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        self.badge_generation += 1;
+        let generation = self.badge_generation;
+        let root: PathBuf = project.info().root.clone();
+        // A folder without `.git` is no repository: nothing to mark, and no process to start.
+        if !root.join(".git").exists() {
+            self.files
+                .update(cx, |files, cx| files.set_badges(Default::default(), cx));
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_executor()
+                .spawn(async move { git::status(&root) })
+                .await;
+            this.update(cx, |workbench, cx| {
+                if workbench.badge_generation != generation {
+                    return;
+                }
+                let badges = status
+                    .map(|status| git::badges(&status))
+                    .unwrap_or_default();
+                workbench
+                    .files
+                    .update(cx, |files, cx| files.set_badges(badges, cx));
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Reads one file's diff on the background executor for the hunk panel.
     fn load_hunks(
         &mut self,
@@ -201,6 +237,7 @@ impl Workbench {
                 };
                 let (aftermath, state) = outcome;
                 workbench.refresh_branch(cx);
+                workbench.refresh_git_badges(cx);
                 let mut failure = None;
                 match aftermath {
                     Ok(aftermath) => {
