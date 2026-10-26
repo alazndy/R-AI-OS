@@ -113,6 +113,11 @@ fn main() {
                     workbench.set_workspace_source(Some(source))
                 });
             }
+            if let Some(home) = config_home() {
+                let source: Arc<dyn rwk_core::runner::TaskSource> =
+                    Arc::new(persistence::FsTaskStore::new(&home));
+                workbench.update(cx, |workbench, _| workbench.set_task_source(Some(source)));
+            }
             let workspace_store_for_events = workspace_store.clone();
             cx.subscribe(
                 &workbench,

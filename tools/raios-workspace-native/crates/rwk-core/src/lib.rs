@@ -25,6 +25,7 @@ pub mod lsp;
 pub mod memory;
 pub mod memory_model;
 pub mod project;
+pub mod runner;
 pub mod search;
 pub mod sessions;
 pub mod ssh;

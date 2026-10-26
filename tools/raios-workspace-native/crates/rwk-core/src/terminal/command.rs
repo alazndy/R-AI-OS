@@ -85,6 +85,32 @@ pub fn build_command(
             command.args(target.args());
             command
         }
+        SessionLaunch::Task(task) => {
+            if kind != SessionKind::Shell {
+                return Err(AppError::new(
+                    ErrorCode::InvalidInput,
+                    "Only a shell session can run a task.",
+                ));
+            }
+            let Some((program, args)) = task.command.split_first() else {
+                return Err(AppError::new(
+                    ErrorCode::InvalidInput,
+                    "The task has no command.",
+                ));
+            };
+            // `./gradlew` means the project's own file, not one relative to the app.
+            let program = if program.contains('/') && !Path::new(program).is_absolute() {
+                root.join(program)
+            } else {
+                PathBuf::from(program)
+            };
+            let program = find_in_path(program.as_os_str()).ok_or_else(|| {
+                AppError::new(ErrorCode::NotFound, "The task's program was not found.")
+            })?;
+            let mut command = CommandBuilder::new(program);
+            command.args(args);
+            command
+        }
         SessionLaunch::Fresh { prompt, name } => {
             let prompt = validate_prompt(prompt.as_deref())?;
             if let Some(agent) = kind.agent() {

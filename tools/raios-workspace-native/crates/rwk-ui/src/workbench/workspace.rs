@@ -22,11 +22,12 @@ impl Workbench {
     /// The workspace state as it is right now, or `None` while no project is open.
     pub(super) fn workspace_snapshot(&self, cx: &gpui::App) -> Option<SavedWorkspace> {
         let project = self.project.as_ref()?;
-        // A remote shell is never saved: reopening a project must not connect anywhere.
+        // A remote shell is never saved: reopening a project must not connect anywhere. Nor is a
+        // task run: reopening a project must not run anything.
         let saved_panes: Vec<&super::TerminalPane> = self
             .terminals
             .iter()
-            .filter(|pane| pane.ssh.is_none())
+            .filter(|pane| pane.ssh.is_none() && !pane.run)
             .collect();
         let mut terminals: Vec<SavedTerminal> = saved_panes
             .iter()

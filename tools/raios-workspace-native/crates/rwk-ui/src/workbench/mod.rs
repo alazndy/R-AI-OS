@@ -14,6 +14,7 @@ pub mod menus;
 pub mod offers;
 pub mod palette;
 pub mod remote;
+pub mod runner;
 pub mod search;
 pub mod usage;
 pub mod workspace;
@@ -235,6 +236,8 @@ struct TerminalPane {
     ssh: Option<rwk_core::ssh::SshTarget>,
     /// The task given to this terminal's agent from the task list.
     task: Option<rwk_core::handoff_flow::TaskLink>,
+    /// A command from the user's task file runs here; the pane is not saved with the workspace.
+    run: bool,
     view: Entity<TerminalView>,
 }
 
@@ -254,6 +257,9 @@ pub struct Workbench {
     /// Bumped on every search and on every close; an answer for an older search is dropped.
     search_generation: u64,
     /// How language servers are started; `None` turns them off.
+    task_source: Option<Arc<dyn rwk_core::runner::TaskSource>>,
+    /// The open palette lists tasks, not files.
+    palette_picks_tasks: bool,
     git_view: Option<Entity<crate::git::GitView>>,
     git_subscription: Option<Subscription>,
     /// Bumped by every git action and on close; an answer for an older one is dropped.
@@ -500,6 +506,8 @@ impl Workbench {
             search: None,
             search_subscription: None,
             search_generation: 0,
+            task_source: None,
+            palette_picks_tasks: false,
             git_view: None,
             git_subscription: None,
             git_generation: 0,
@@ -843,6 +851,8 @@ impl Workbench {
             CommandId::Memory => self.open_memory(window, cx),
             CommandId::Problems => self.open_problems(window, cx),
             CommandId::SourceControl => self.open_git(window, cx),
+            CommandId::RunTask => self.open_task_palette(window, cx),
+            CommandId::OpenOutputLocation => self.open_output_location(window, cx),
             CommandId::Format => self
                 .editor
                 .update(cx, |editor, cx| editor.format(window, cx)),
@@ -873,8 +883,13 @@ impl Workbench {
             |this, _palette, event: &PaletteEvent, window, cx| match event.clone() {
                 PaletteEvent::Close => this.close_palette(window, cx),
                 PaletteEvent::OpenFile(path) => {
+                    let tasks = std::mem::take(&mut this.palette_picks_tasks);
                     this.close_palette(window, cx);
-                    this.request_open_file(path, window, cx);
+                    if tasks {
+                        this.run_named_task(&path, window, cx);
+                    } else {
+                        this.request_open_file(path, window, cx);
+                    }
                 }
                 PaletteEvent::Run(id) => {
                     this.close_palette(window, cx);
@@ -930,6 +945,7 @@ impl Workbench {
 
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.file_search_task = None;
+        self.palette_picks_tasks = false;
         self.palette = None;
         self.palette_subscription = None;
         window.focus(&self.focus, cx);
@@ -1447,6 +1463,7 @@ impl Workbench {
             SessionLaunch::Fresh { name, .. } => (None, name.clone()),
             // A remote shell is named after where it leads.
             SessionLaunch::Ssh(target) => (None, SessionName::parse(&target.display()).ok()),
+            SessionLaunch::Task(task) => (None, SessionName::parse(&task.name).ok()),
         };
         let ssh = match &launch {
             SessionLaunch::Ssh(target) => Some(target.clone()),
@@ -1460,6 +1477,7 @@ impl Workbench {
             resume,
             ssh,
             task: None,
+            run: matches!(launch, SessionLaunch::Task(_)),
             view,
         });
         self.dock_visible = true;

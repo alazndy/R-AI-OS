@@ -19,6 +19,10 @@ pub enum CommandId {
     Problems,
     /// Format the open file with its language server.
     Format,
+    /// Run a task from the user's task file in a new terminal.
+    RunTask,
+    /// Open the file and line that the selected terminal's output points at.
+    OpenOutputLocation,
     /// Show the repository's changes: stage, commit, switch branch.
     SourceControl,
     /// Save the open file.
@@ -168,7 +172,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 53] = [
+const COMMANDS: [Command; 55] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -365,6 +369,13 @@ const COMMANDS: [Command; 53] = [
         &[bind_terminal("h", true, false)],
     ),
     cmd(CommandId::NewTask, "Yeni görev…", None, &[]),
+    cmd(CommandId::RunTask, "Görev çalıştır", None, &[]),
+    cmd(
+        CommandId::OpenOutputLocation,
+        "Çıktıdaki konumu aç",
+        None,
+        &[],
+    ),
     cmd(CommandId::SourceControl, "Git değişiklikleri", None, &[]),
     cmd(CommandId::Format, "Dosyayı biçimlendir", None, &[]),
     cmd(CommandId::Problems, "Sorunları göster", None, &[]),
@@ -572,9 +583,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
     match id {
         Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
         | AgentsLayout => allow(),
-        Files | Search | Problems | SourceControl | Refresh | FocusFiles | Memory | Inspector => {
-            needs_project()
-        }
+        Files | Search | Problems | SourceControl | Refresh | RunTask | FocusFiles | Memory
+        | Inspector => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
@@ -612,9 +622,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             }
         }
         NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
-        | StopTerminal | CloseTerminal | KillTerminal | RenameTerminal | UngroupTerminal => {
-            needs_terminal()
-        }
+        | OpenOutputLocation | StopTerminal | CloseTerminal | KillTerminal | RenameTerminal
+        | UngroupTerminal => needs_terminal(),
         MoveTerminalPrevious | MoveTerminalNext | SplitTerminalRight | SplitTerminalDown
         | JoinTerminalPrevious | GrowTerminal | ShrinkTerminal => {
             if state.terminals >= 2 {
@@ -678,7 +687,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 53);
+        assert_eq!(catalog().len(), 55);
     }
 
     #[test]

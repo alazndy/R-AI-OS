@@ -4358,3 +4358,69 @@ fn the_source_control_view_stages_commits_and_discards_in_a_real_repository() {
     assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
     assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "one");
 }
+
+struct FixedTasks(Vec<rwk_core::runner::RunTask>);
+
+impl rwk_core::runner::TaskSource for FixedTasks {
+    fn load(&self, _project: &Path) -> Vec<rwk_core::runner::RunTask> {
+        self.0.clone()
+    }
+}
+
+fn task(name: &str, command: &[&str]) -> rwk_core::runner::RunTask {
+    rwk_core::runner::RunTask {
+        name: name.to_owned(),
+        command: command.iter().map(|part| (*part).to_owned()).collect(),
+    }
+}
+
+#[test]
+fn a_task_runs_in_its_own_terminal_that_is_not_saved_and_its_output_location_opens() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("c.txt"), "alpha\nbeta\ngamma").expect("c");
+    let tasks: Arc<dyn rwk_core::runner::TaskSource> = Arc::new(FixedTasks(vec![
+        task("argv", &["./.session.sh", "task-arg"]),
+        task(
+            "fail",
+            &["/bin/sh", "-c", "echo error in c.txt:2:1; sleep 100"],
+        ),
+    ]));
+    rig.with(|wb, _, _| wb.set_task_source(Some(tasks)));
+    rig.open_project();
+    let saved = rig.record_workspace_changes();
+
+    // Without tasks the command says so; with them it opens a picker of their names.
+    rig.run(CommandId::RunTask);
+    assert!(rig.read(|wb, _| wb.palette().is_some()));
+    rig.cx.simulate_input("argv");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    assert!(rig.settle_until(|rig| rig.script_calls().iter().any(|call| call == "task-arg")));
+    assert!(rig.read(|wb, _| wb.palette().is_none()));
+
+    // A task pane is never part of the saved workspace.
+    rig.settle_for(300);
+    assert!(saved
+        .lock()
+        .expect("lock")
+        .iter()
+        .all(|workspace| workspace.terminals.is_empty()));
+
+    // The second task prints a location; the command opens that file on that line.
+    rig.run(CommandId::RunTask);
+    rig.cx.simulate_input("fail");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 2));
+    assert!(rig.settle_until(|rig| {
+        rig.read(|wb, cx| {
+            wb.terminal_view(1)
+                .is_some_and(|view| view.read(cx).screen_text().contains("c.txt:2:1"))
+        })
+    }));
+    rig.run(CommandId::OpenOutputLocation);
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("c.txt")));
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(2)
+    );
+}
