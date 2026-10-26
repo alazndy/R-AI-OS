@@ -116,18 +116,27 @@ pub fn footer_items(info: &FooterInfo) -> Vec<FooterItem> {
         let (text, tip, level) = match status {
             ServerStatus::Starting => (
                 format!("{name} …"),
-                "Dil sunucusu başlıyor",
+                "Dil sunucusu başlıyor".to_owned(),
                 FooterLevel::Dim,
             ),
-            ServerStatus::Ready => (format!("{name} ✓"), "Dil sunucusu hazır", FooterLevel::Good),
-            ServerStatus::Unavailable(_) => (
-                format!("{name} yok"),
-                "Dil sunucusu kurulu değil; bu dilde tamamlama ve sorunlar çalışmaz",
-                FooterLevel::Warn,
+            ServerStatus::Ready => (
+                format!("{name} ✓"),
+                "Dil sunucusu hazır".to_owned(),
+                FooterLevel::Good,
             ),
+            ServerStatus::Unavailable(_) => {
+                let program = crate::lsp::spec_named(name).map_or("Sunucu", |spec| spec.program);
+                (
+                    format!("{name} yok"),
+                    format!(
+                        "{program} PATH'te bulunamadı; kurulunca bu dilde tamamlama ve sorunlar çalışır"
+                    ),
+                    FooterLevel::Warn,
+                )
+            }
             ServerStatus::Crashed => (
                 format!("{name} çöktü"),
-                "Dil sunucusu çöktü ve yeniden başlatılamadı",
+                "Dil sunucusu çöktü ve yeniden başlatılamadı".to_owned(),
                 FooterLevel::Bad,
             ),
         };
@@ -259,6 +268,11 @@ mod tests {
         assert_eq!(by("problems").text, "✖ 2  ▲ 1");
         assert_eq!(by("problems").level, FooterLevel::Bad);
         assert_eq!(by("lsp-rust").level, FooterLevel::Warn);
+        assert!(
+            by("lsp-rust").tip.contains("rust-analyzer"),
+            "{}",
+            by("lsp-rust").tip
+        );
         assert_eq!(by("lsp-rust").command, None);
         assert_eq!(by("dirty").text, "● 3 kaydedilmedi");
         assert_eq!(by("terminals").text, "⌨ 2/4");
