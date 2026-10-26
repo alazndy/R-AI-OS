@@ -41,6 +41,12 @@ fn serve() {
                                      "message": "boom"}]}}),
                 );
             }
+            (Some("textDocument/hover"), Some(id)) => {
+                // Echo the position so the test sees what the manager sent.
+                let line = message["params"]["position"]["line"].clone();
+                let uri = message["params"]["textDocument"]["uri"].clone();
+                say(json!({"jsonrpc": "2.0", "id": id, "result": {"line": line, "uri": uri}}));
+            }
             (Some("shutdown"), Some(id)) => {
                 say(json!({"jsonrpc": "2.0", "id": id, "result": null}));
             }
@@ -114,6 +120,41 @@ fn a_server_starts_for_the_first_file_and_its_diagnostics_use_project_paths() {
     servers.shutdown();
 }
 
+#[cfg(unix)]
+fn requests_reach_the_server_of_the_file_and_fail_quietly_without_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let launches = Arc::new(AtomicUsize::new(0));
+    let (servers, events) = LanguageServers::new(dir.path().to_owned(), launcher(0, launches));
+    let requester = servers.requester();
+    let ask = |path: &str| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        requester.request(
+            path,
+            "textDocument/hover",
+            7,
+            2,
+            Value::Null,
+            Box::new(move |answer| {
+                let _ = sender.send(answer);
+            }),
+        );
+        receiver.recv_timeout(Duration::from_secs(15)).unwrap()
+    };
+
+    // A file nobody opened has no server.
+    assert!(ask("src/main.rs").is_err());
+
+    servers.open("src/main.rs", "fn main() {}");
+    assert_eq!(next_status(&events), ServerStatus::Ready);
+    let answer = ask("src/main.rs").unwrap();
+    assert_eq!(answer["line"], 7);
+    let uri = answer["uri"].as_str().unwrap();
+    assert_eq!(requester.relative_path(uri).as_deref(), Some("src/main.rs"));
+    servers.shutdown();
+    // After shutdown the answer is an error, not a hang.
+    assert!(ask("src/main.rs").is_err());
+}
+
 fn a_missing_server_is_a_quiet_state_and_is_not_retried() {
     let dir = tempfile::tempdir().unwrap();
     let launches = Arc::new(AtomicUsize::new(0));
@@ -175,6 +216,10 @@ fn main() {
         tests.push((
             "a_server_starts_for_the_first_file_and_its_diagnostics_use_project_paths",
             a_server_starts_for_the_first_file_and_its_diagnostics_use_project_paths,
+        ));
+        tests.push((
+            "requests_reach_the_server_of_the_file_and_fail_quietly_without_one",
+            requests_reach_the_server_of_the_file_and_fail_quietly_without_one,
         ));
         tests.push((
             "a_crashed_server_is_restarted_once_and_then_given_up",

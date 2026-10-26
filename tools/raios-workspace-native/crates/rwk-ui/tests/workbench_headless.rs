@@ -4075,6 +4075,14 @@ while True:
         send({'jsonrpc': '2.0', 'method': 'textDocument/publishDiagnostics', 'params': {'uri': uri, 'diagnostics': [
             {'range': r(1), 'severity': 1, 'message': 'broken'},
             {'range': r(0), 'severity': 2, 'message': 'odd'}]}})
+    elif method == 'textDocument/hover':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'contents': 'fn a()'}})
+    elif method == 'textDocument/definition':
+        uri = m['params']['textDocument']['uri'].replace('a.rs', 'b.rs')
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'uri': uri,
+            'range': {'start': {'line': 4, 'character': 1}, 'end': {'line': 4, 'character': 3}}}})
+    elif method == 'textDocument/completion':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': [{'label': 'alpha'}]})
     elif method == 'shutdown':
         send({'jsonrpc': '2.0', 'id': m['id'], 'result': None})
     elif method == 'exit':
@@ -4132,4 +4140,90 @@ fn language_server_problems_reach_the_editor_the_status_line_and_the_problems_vi
     // Closing the tab forgets its problems.
     rig.with(|wb, window, cx| wb.request_close_tab("a.rs".to_owned(), window, cx));
     assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_none())));
+}
+
+#[test]
+fn language_server_answers_hover_definition_and_completion() {
+    use gpui_base::input::{CompletionProvider, DefinitionProvider, HoverProvider, Rope};
+    use rwk_ui::editor::lsp::ServerProvider;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+
+    let requester = rig
+        .read(|wb, _| wb.language_requester())
+        .expect("a project with servers");
+    let provider = ServerProvider::new("a.rs", &requester);
+    let rope = Rope::from("fn a() {}\nlet x\n");
+
+    let hover = Rc::new(RefCell::new(None));
+    let definitions = Rc::new(RefCell::new(None));
+    let completions = Rc::new(RefCell::new(None));
+    rig.cx.update(|window, cx| {
+        let task = provider.hover(&rope, 3, window, cx);
+        let slot = hover.clone();
+        cx.spawn(async move |_| *slot.borrow_mut() = Some(task.await))
+            .detach();
+        let task = provider.definitions(&rope, 3, window, cx);
+        let slot = definitions.clone();
+        cx.spawn(async move |_| *slot.borrow_mut() = Some(task.await))
+            .detach();
+        let context = rwk_core::lsp::lsp_types::CompletionContext {
+            trigger_kind: rwk_core::lsp::lsp_types::CompletionTriggerKind::INVOKED,
+            trigger_character: None,
+        };
+        let task = provider.completions(&rope, 3, context, window, cx);
+        let slot = completions.clone();
+        cx.spawn(async move |_| *slot.borrow_mut() = Some(task.await))
+            .detach();
+    });
+    assert!(rig.settle_until(|_| {
+        hover.borrow().is_some() && definitions.borrow().is_some() && completions.borrow().is_some()
+    }));
+
+    let hover = hover.borrow_mut().take().unwrap().expect("hover answers");
+    assert!(hover.is_some());
+    let definitions = definitions
+        .borrow_mut()
+        .take()
+        .unwrap()
+        .expect("definition answers");
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(
+        requester
+            .relative_path(&definitions[0].target_uri.to_string())
+            .as_deref(),
+        Some("b.rs")
+    );
+    assert_eq!(definitions[0].target_selection_range.start.line, 4);
+    let completions = completions
+        .borrow_mut()
+        .take()
+        .unwrap()
+        .expect("completion answers");
+    assert!(matches!(
+        completions,
+        rwk_core::lsp::lsp_types::CompletionResponse::Array(items) if items[0].label == "alpha"
+    ));
 }

@@ -5383,6 +5383,7 @@ dependencies = [
 name = "rwk-ui"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-channel",
  "gpui-base",
  "gpui-pre",
@@ -5390,6 +5391,7 @@ dependencies = [
  "gpui-pre-wgpu",
  "raios-contracts",
  "rwk-core",
+ "serde",
  "serde_json",
  "sha2",
  "streaming-iterator",

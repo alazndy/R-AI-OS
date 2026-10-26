@@ -1247,6 +1247,9 @@ impl Workbench {
                 self.note_workspace_change(cx);
             }
             EditorEvent::Activated(_) => self.note_workspace_change(cx),
+            EditorEvent::OpenLocation { path, line } => {
+                self.request_open_file_at(path.clone(), Some(*line), window, cx);
+            }
         }
     }
 

@@ -8,11 +8,13 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use super::client::{LspClient, ServerEvent};
 use super::servers::{find_program, spec_for_path, ServerSpec};
 use super::uri::{path_to_uri, uri_to_relative};
-use crate::error::Result;
+use crate::error::{AppError, ErrorCode, Result};
+use serde_json::{json, Value};
 
 /// Starts a server for a catalog entry in a project root.
 pub type Launcher =
@@ -62,7 +64,21 @@ pub enum ManagerEvent {
     },
 }
 
+/// How long a hover, definition or completion request may take before it is given up.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Called once with the server's answer (or why there is none), on a worker thread.
+pub type Reply = Box<dyn FnOnce(Result<Value>) + Send>;
+
 enum Message {
+    Request {
+        path: String,
+        method: &'static str,
+        line: u32,
+        character: u32,
+        extra: Value,
+        reply: Reply,
+    },
     Open {
         path: String,
         text: String,
@@ -90,7 +106,7 @@ struct Document {
 }
 
 struct Running {
-    client: LspClient,
+    client: Arc<LspClient>,
     generation: u64,
 }
 
@@ -102,9 +118,54 @@ struct ServerSlot {
     restarts: u32,
 }
 
+/// A cloneable way to ask the servers questions about open files.
+#[derive(Clone)]
+pub struct Requester {
+    sender: Sender<Message>,
+    root: PathBuf,
+}
+
+impl Requester {
+    /// Sends `method` for the document at `path` and the 0-based position `line`:`character`
+    /// (`extra` is merged into the parameters, e.g. a completion context). `reply` runs on a
+    /// worker thread; it gets an error when no server handles the file.
+    pub fn request(
+        &self,
+        path: &str,
+        method: &'static str,
+        line: u32,
+        character: u32,
+        extra: Value,
+        reply: Reply,
+    ) {
+        let message = Message::Request {
+            path: path.to_owned(),
+            method,
+            line,
+            character,
+            extra,
+            reply,
+        };
+        if let Err(mpsc::SendError(Message::Request { reply, .. })) = self.sender.send(message) {
+            reply(Err(unavailable()));
+        }
+    }
+
+    /// The project-relative path a `file://` URI of a server answer names, if it is inside the
+    /// project.
+    pub fn relative_path(&self, uri: &str) -> Option<String> {
+        uri_to_relative(&self.root, uri)
+    }
+}
+
+fn unavailable() -> AppError {
+    AppError::new(ErrorCode::NotFound, "No language server for this file.")
+}
+
 /// The window's handle on the manager thread.
 pub struct LanguageServers {
     sender: Sender<Message>,
+    root: PathBuf,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -114,6 +175,7 @@ impl LanguageServers {
         let (sender, inbox) = mpsc::channel();
         let (outbox, events) = mpsc::channel();
         let own = sender.clone();
+        let handle_root = root.clone();
         let thread = std::thread::Builder::new()
             .name("lsp-manager".into())
             .spawn(move || {
@@ -129,7 +191,22 @@ impl LanguageServers {
                 .run(&inbox);
             })
             .ok();
-        (Self { sender, thread }, events)
+        (
+            Self {
+                sender,
+                root: handle_root,
+                thread,
+            },
+            events,
+        )
+    }
+
+    /// A handle for hover, definition and completion requests.
+    pub fn requester(&self) -> Requester {
+        Requester {
+            sender: self.sender.clone(),
+            root: self.root.clone(),
+        }
     }
 
     /// A project file was opened with this text.
@@ -263,8 +340,49 @@ impl Manager {
                 generation,
                 event,
             } => self.on_server_event(server, generation, event),
+            Message::Request {
+                path,
+                method,
+                line,
+                character,
+                extra,
+                reply,
+            } => self.request(&path, method, line, character, extra, reply),
             Message::Shutdown => {}
         }
+    }
+
+    /// Hands the question to a short-lived thread, so a slow answer never holds up the manager.
+    fn request(
+        &self,
+        path: &str,
+        method: &'static str,
+        line: u32,
+        character: u32,
+        extra: Value,
+        reply: Reply,
+    ) {
+        let client = self
+            .documents
+            .get(path)
+            .and_then(|document| self.slots.get(document.server))
+            .and_then(|slot| slot.running.as_ref())
+            .map(|running| Arc::clone(&running.client));
+        let Some(client) = client else {
+            reply(Err(unavailable()));
+            return;
+        };
+        let mut params = json!({
+            "textDocument": {"uri": path_to_uri(&self.root, path)},
+            "position": {"line": line, "character": character},
+        });
+        if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+            params.extend(extra.clone());
+        }
+        // A thread that cannot be started drops `reply` unanswered; the caller's channel closes.
+        let _ = std::thread::Builder::new()
+            .name("lsp-request".into())
+            .spawn(move || reply(client.request(method, params, REQUEST_TIMEOUT)));
     }
 
     fn open(&mut self, path: String, text: String) {
@@ -339,8 +457,10 @@ impl Manager {
                         &document.text,
                     );
                 }
-                self.slots.entry(spec.name).or_default().running =
-                    Some(Running { client, generation });
+                self.slots.entry(spec.name).or_default().running = Some(Running {
+                    client: Arc::new(client),
+                    generation,
+                });
                 self.say(ManagerEvent::Status {
                     server: spec.name,
                     status: ServerStatus::Ready,

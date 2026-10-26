@@ -29,6 +29,11 @@ impl Workbench {
         summary(self.problems.counts())
     }
 
+    /// A handle for asking the open project's language servers questions.
+    pub fn language_requester(&self) -> Option<rwk_core::lsp::Requester> {
+        self.servers.as_ref().map(LanguageServers::requester)
+    }
+
     /// The open Problems view.
     pub fn problems_view(&self) -> Option<&gpui::Entity<ProblemsView>> {
         self.problems_view.as_ref()
@@ -43,6 +48,10 @@ impl Workbench {
             return;
         };
         let (servers, events) = LanguageServers::new(project.info().root.clone(), launcher);
+        let requester = servers.requester();
+        self.editor.update(cx, |editor, cx| {
+            editor.set_language_requester(Some(requester), cx)
+        });
         self.servers = Some(servers);
 
         // The manager's channel is blocking; a thread moves its events to an async one.
@@ -76,6 +85,8 @@ impl Workbench {
     pub(super) fn stop_language_servers(&mut self, cx: &mut Context<Self>) {
         self.lsp_task = None;
         self.lsp_sync_task = None;
+        self.editor
+            .update(cx, |editor, cx| editor.set_language_requester(None, cx));
         if let Some(servers) = self.servers.take() {
             cx.background_executor()
                 .spawn(async move { servers.shutdown() })

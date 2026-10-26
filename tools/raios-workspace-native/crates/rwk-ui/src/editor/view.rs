@@ -44,6 +44,13 @@ pub enum EditorEvent {
     Closed(String),
     /// The active tab changed.
     Activated(String),
+    /// A definition lies in another project file; the workbench opens it.
+    OpenLocation {
+        /// Relative path of the file.
+        path: String,
+        /// 1-based line.
+        line: usize,
+    },
     /// The user right-clicked a tab; it is active now.
     TabContextMenu {
         /// Relative path of the tab.
@@ -130,6 +137,8 @@ pub struct EditorView {
     diff_generation: u64,
     /// Bumped by every restore; a restore that finishes after a project switch is dropped.
     restore_generation: u64,
+    /// How tabs reach the project's language servers; `None` means no language features.
+    requester: Option<rwk_core::lsp::Requester>,
 }
 
 impl EventEmitter<EditorEvent> for EditorView {}
@@ -159,6 +168,7 @@ impl EditorView {
             requests: HashMap::new(),
             diff_generation: 0,
             restore_generation: 0,
+            requester: None,
         }
     }
 
@@ -382,6 +392,9 @@ impl EditorView {
                         },
                     ));
                 });
+                if let Some(requester) = &self.requester {
+                    self.attach_language_features(&state, &path, requester, cx);
+                }
                 let tab_path = path.clone();
                 let subscription =
                     cx.subscribe(&state, move |this, _state, event: &InputEvent, cx| {
@@ -529,6 +542,45 @@ impl EditorView {
                 Some(SavedTab { path, line })
             })
             .collect()
+    }
+
+    /// Connects every tab (and the ones opened later) to the project's language servers, or
+    /// disconnects them with `None`.
+    pub fn set_language_requester(
+        &mut self,
+        requester: Option<rwk_core::lsp::Requester>,
+        cx: &mut Context<Self>,
+    ) {
+        self.requester = requester;
+        let tabs: Vec<(Entity<EditorState>, String)> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| Some((tab.state.clone(), tab.path()?.to_owned())))
+            .collect();
+        for (state, path) in tabs {
+            match self.requester.clone() {
+                Some(requester) => self.attach_language_features(&state, &path, &requester, cx),
+                None => state.update(cx, |state, _| super::lsp::detach(state)),
+            }
+        }
+    }
+
+    fn attach_language_features(
+        &self,
+        state: &Entity<EditorState>,
+        path: &str,
+        requester: &rwk_core::lsp::Requester,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.entity().downgrade();
+        let open: super::lsp::OpenLocation = Rc::new(move |path, line, cx| {
+            let _ = view.update(cx, |_, cx| {
+                cx.emit(EditorEvent::OpenLocation { path, line })
+            });
+        });
+        state.update(cx, |state, _| {
+            super::lsp::attach(state, path, requester, open)
+        });
     }
 
     /// The text of the tab for `path`, if it is open.
