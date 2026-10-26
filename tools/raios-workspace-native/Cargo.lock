@@ -5366,6 +5366,7 @@ dependencies = [
  "alacritty_terminal",
  "cap-std",
  "libc",
+ "lsp-types",
  "portable-pty",
  "raios-contracts",
  "rusqlite",
