@@ -50,6 +50,8 @@ pub struct FileTreeView {
     /// Folders whose listing is in flight.
     pending: HashSet<String>,
     status: Option<SharedString>,
+    /// Git marks by project-relative path (files and the folders above changed files).
+    badges: HashMap<String, rwk_core::git::Badge>,
     focus: FocusHandle,
     theme: Theme,
     _subscription: Subscription,
@@ -75,6 +77,7 @@ impl FileTreeView {
             expanded: HashSet::new(),
             pending: HashSet::new(),
             status: None,
+            badges: HashMap::new(),
             focus: cx.focus_handle(),
             theme: Theme::of(Appearance::default()),
             _subscription: subscription,
@@ -91,6 +94,23 @@ impl FileTreeView {
         self.status = None;
         self.rebuild(cx);
         self.list(String::new(), cx);
+    }
+
+    /// Replaces the git marks shown next to files and folders.
+    pub fn set_badges(
+        &mut self,
+        badges: HashMap<String, rwk_core::git::Badge>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.badges != badges {
+            self.badges = badges;
+            cx.notify();
+        }
+    }
+
+    /// The git mark of `path`, when it has one.
+    pub fn badge(&self, path: &str) -> Option<rwk_core::git::Badge> {
+        self.badges.get(path).copied()
     }
 
     /// Lists the root and every expanded folder again, keeping expansion and selection.
@@ -308,6 +328,19 @@ impl FileTreeView {
     }
 }
 
+/// The colour of a git mark: bright on a dark tone, deep on a light one.
+fn badge_color(kind: rwk_core::git::BadgeKind, dark: bool) -> u32 {
+    use rwk_core::git::BadgeKind;
+    match (kind, dark) {
+        (BadgeKind::Added, true) => 0x3fb950,
+        (BadgeKind::Added, false) => 0x1a7f37,
+        (BadgeKind::Modified, true) => 0xffa657,
+        (BadgeKind::Modified, false) => 0xb35900,
+        (BadgeKind::Deleted | BadgeKind::Conflict, true) => 0xff7b72,
+        (BadgeKind::Deleted | BadgeKind::Conflict, false) => 0xc62828,
+    }
+}
+
 impl Render for FileTreeView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The rows are drawn here rather than by `gpui_base::Tree`'s virtual list, which painted
@@ -335,6 +368,7 @@ impl Render for FileTreeView {
             .enumerate()
             .map(|(ix, (id, label, depth, folder, open))| {
                 let look = presentation(&label, folder, open);
+                let badge = self.badges.get(&id).copied();
                 let menu_id = id.clone();
                 let is_selected = selected.as_deref() == Some(id.as_str());
                 let chevron = match (folder, open) {
@@ -378,7 +412,15 @@ impl Render for FileTreeView {
                             .flex_none()
                             .text_color(gpui::rgb(glyph_color)),
                     )
-                    .child(label)
+                    .child(div().flex_1().min_w_0().overflow_hidden().child(label))
+                    .children(badge.map(|badge| {
+                        div()
+                            .flex_none()
+                            .pr_2()
+                            .text_xs()
+                            .text_color(gpui::rgb(badge_color(badge.kind, theme.dark)))
+                            .child(SharedString::from(badge.letter.to_string()))
+                    }))
                     .on_mouse_down(
                         gpui::MouseButton::Right,
                         cx.listener(move |view, event: &gpui::MouseDownEvent, _window, cx| {

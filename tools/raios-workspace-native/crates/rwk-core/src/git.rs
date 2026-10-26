@@ -352,6 +352,85 @@ pub fn unstage(root: &Path, paths: &[String]) -> Result<()> {
     }
 }
 
+/// How a changed file is marked in the tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BadgeKind {
+    /// New or untracked.
+    Added,
+    /// Changed, renamed or retyped.
+    Modified,
+    /// Removed.
+    Deleted,
+    /// Unresolved merge conflict.
+    Conflict,
+}
+
+/// The mark next to a file or folder in the tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Badge {
+    /// The letter (`M`, `A`, `U`, `D`, `!`); a folder shows a dot.
+    pub letter: char,
+    /// What kind of change it is.
+    pub kind: BadgeKind,
+}
+
+/// The tree marks of a status: one per changed file and, for each folder above them, a dot of
+/// the most serious change inside (conflict, then deleted, modified, added).
+pub fn badges(status: &Status) -> std::collections::HashMap<String, Badge> {
+    let mut map = std::collections::HashMap::new();
+    for entry in &status.entries {
+        let badge = if entry.conflicted {
+            Badge {
+                letter: '!',
+                kind: BadgeKind::Conflict,
+            }
+        } else if entry.untracked {
+            Badge {
+                letter: 'U',
+                kind: BadgeKind::Added,
+            }
+        } else {
+            let change = if entry.unstaged == Change::Unchanged {
+                entry.staged
+            } else {
+                entry.unstaged
+            };
+            let kind = match change {
+                Change::Added => BadgeKind::Added,
+                Change::Deleted => BadgeKind::Deleted,
+                _ => BadgeKind::Modified,
+            };
+            Badge {
+                letter: change.letter(),
+                kind,
+            }
+        };
+        map.insert(entry.path.clone(), badge);
+        let mut folder = entry.path.as_str();
+        while let Some((parent, _)) = folder.rsplit_once('/') {
+            let dot = Badge {
+                letter: '•',
+                kind: badge.kind,
+            };
+            let worse = |known: &Badge| rank(known.kind) >= rank(dot.kind);
+            if !map.get(parent).is_some_and(worse) {
+                map.insert(parent.to_owned(), dot);
+            }
+            folder = parent;
+        }
+    }
+    map
+}
+
+fn rank(kind: BadgeKind) -> u8 {
+    match kind {
+        BadgeKind::Added => 0,
+        BadgeKind::Modified => 1,
+        BadgeKind::Deleted => 2,
+        BadgeKind::Conflict => 3,
+    }
+}
+
 /// One block of a file's diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hunk {
@@ -524,6 +603,29 @@ pub fn switch(root: &Path, branch: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn badges_mark_files_and_the_folders_above_with_the_worst_change() {
+        let status = parse_status(
+            "1 .M N... 100644 100644 100644 a b src/deep/a.rs\0\
+             1 .D N... 100644 100644 000000 a b src/gone.rs\0\
+             u UU N... 100644 100644 100644 100644 a b c lib/clash.rs\0\
+             ? lib/new.rs\0\
+             1 A. N... 000000 100644 100644 0 c top.rs\0",
+        );
+        let marks = badges(&status);
+        let at = |path: &str| marks.get(path).map(|b| (b.letter, b.kind));
+        assert_eq!(at("src/deep/a.rs"), Some(('M', BadgeKind::Modified)));
+        assert_eq!(at("src/gone.rs"), Some(('D', BadgeKind::Deleted)));
+        assert_eq!(at("lib/clash.rs"), Some(('!', BadgeKind::Conflict)));
+        assert_eq!(at("lib/new.rs"), Some(('U', BadgeKind::Added)));
+        assert_eq!(at("top.rs"), Some(('A', BadgeKind::Added)));
+        // A folder shows the worst change inside it, whatever order the files came in.
+        assert_eq!(at("src"), Some(('•', BadgeKind::Deleted)));
+        assert_eq!(at("src/deep"), Some(('•', BadgeKind::Modified)));
+        assert_eq!(at("lib"), Some(('•', BadgeKind::Conflict)));
+        assert_eq!(at("clean"), None);
+    }
 
     #[test]
     fn status_output_is_read_into_entries() {
