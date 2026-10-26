@@ -77,6 +77,13 @@ pub enum WorkbenchEvent {
     /// The open project's workspace changed (tabs, layout, sessions); the application writes
     /// it so the next start reopens the project as it was left.
     WorkspaceChanged(SavedWorkspace),
+    /// An editing switch (auto-save, format on save) changed; the application stores it.
+    PreferencesChanged {
+        /// Save changed files when the window loses focus.
+        auto_save: bool,
+        /// Format with the language server before saving.
+        format_on_save: bool,
+    },
 }
 
 impl gpui::EventEmitter<WorkbenchEvent> for Workbench {}

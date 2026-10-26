@@ -30,9 +30,23 @@ impl Workbench {
         });
     }
 
+    /// Sets the switches without announcing them (the application restores stored ones).
+    pub fn set_editing_preferences(&mut self, auto_save: bool, format_on_save: bool) {
+        self.auto_save = auto_save;
+        self.format_on_save = format_on_save;
+    }
+
+    fn preferences_changed(&mut self, cx: &mut Context<Self>) {
+        cx.emit(super::WorkbenchEvent::PreferencesChanged {
+            auto_save: self.auto_save,
+            format_on_save: self.format_on_save,
+        });
+    }
+
     pub(super) fn toggle_auto_save(&mut self, cx: &mut Context<Self>) {
         self.auto_save = !self.auto_save;
         let state = if self.auto_save { "açık" } else { "kapalı" };
+        self.preferences_changed(cx);
         self.say(format!("Otomatik kaydetme {state}"), cx);
     }
 
@@ -43,6 +57,7 @@ impl Workbench {
         } else {
             "kapalı"
         };
+        self.preferences_changed(cx);
         self.say(format!("Kaydederken biçimlendirme {state}"), cx);
     }
 

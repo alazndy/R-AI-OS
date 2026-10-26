@@ -136,6 +136,54 @@ pub fn save_appearance(path: &Path, appearance: &Appearance) -> std::io::Result<
     std::fs::rename(&temporary, path)
 }
 
+const PREFERENCES_FILE: &str = "preferences.json";
+
+/// The editing switches that survive a restart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Preferences {
+    /// Save changed files when the window loses focus.
+    pub auto_save: bool,
+    /// Format with the language server before saving.
+    pub format_on_save: bool,
+}
+
+/// The preferences file inside a config home.
+pub fn preferences_path(config_home: &Path) -> PathBuf {
+    config_home.join(APP_DIR).join(PREFERENCES_FILE)
+}
+
+/// The stored preferences; anything missing or invalid is off.
+pub fn load_preferences(path: &Path) -> Preferences {
+    let value: serde_json::Value = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let flag = |key: &str| value.get(key).and_then(serde_json::Value::as_bool) == Some(true);
+    Preferences {
+        auto_save: flag("auto_save"),
+        format_on_save: flag("format_on_save"),
+    }
+}
+
+/// Writes the preferences atomically, owner-only.
+pub fn save_preferences(path: &Path, preferences: Preferences) -> std::io::Result<()> {
+    let Some(directory) = path.parent() else {
+        return Err(std::io::Error::other(
+            "the preferences path has no directory",
+        ));
+    };
+    create_private_dir(directory)?;
+    let temporary = directory.join(format!(".{PREFERENCES_FILE}.tmp"));
+    let mut file = open_private(&temporary)?;
+    let text = serde_json::json!({
+        "auto_save": preferences.auto_save,
+        "format_on_save": preferences.format_on_save,
+    });
+    file.write_all(text.to_string().as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, path)
+}
+
 /// Directory under the app dir holding one state file per project.
 const WORKSPACES_DIR: &str = "workspaces";
 
@@ -229,6 +277,21 @@ fn open_private(path: &Path) -> std::io::Result<std::fs::File> {
 mod tests {
     use super::*;
     use rwk_core::workbench::{Skin, Tone};
+
+    #[test]
+    fn preferences_round_trip_and_default_to_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = preferences_path(dir.path());
+        assert_eq!(load_preferences(&path), Preferences::default());
+        let on = Preferences {
+            auto_save: true,
+            format_on_save: false,
+        };
+        save_preferences(&path, on).unwrap();
+        assert_eq!(load_preferences(&path), on);
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(load_preferences(&path), Preferences::default());
+    }
 
     #[test]
     fn the_appearance_file_lives_under_the_xdg_config_home() {
