@@ -4517,10 +4517,10 @@ fn the_source_control_view_creates_a_branch_stashes_and_pushes_after_a_yes() {
             .update(|_, cx| view.read(cx).status().and_then(|s| s.branch.clone()))
     };
 
-    // The message box names the new branch.
+    // The second box names the new branch.
     rig.with(|_wb, window, cx| {
         view.update(cx, |view, cx| {
-            view.set_message("feature/y", window, cx);
+            view.set_detail("feature/y", window, cx);
             view.create_branch(cx)
         })
     });
@@ -4530,7 +4530,7 @@ fn the_source_control_view_creates_a_branch_stashes_and_pushes_after_a_yes() {
     std::fs::write(root.join("a.txt"), "dirty\n").unwrap();
     rig.with(|_wb, window, cx| {
         view.update(cx, |view, cx| {
-            view.set_message("wip", window, cx);
+            view.set_detail("wip", window, cx);
             view.stash(cx)
         })
     });

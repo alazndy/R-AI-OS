@@ -86,6 +86,8 @@ pub struct GitView {
     /// The push waits for a yes.
     confirm_push: bool,
     message: Entity<InputState>,
+    /// The branch name or stash note, apart from the commit message.
+    detail: Entity<InputState>,
     theme: Theme,
     _subscription: Subscription,
 }
@@ -93,7 +95,12 @@ pub struct GitView {
 impl GitView {
     /// A view for `project_name`; the message box takes focus.
     pub fn new(project_name: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let message = cx.new(|cx| InputState::new(window, cx).submit_on_enter(true));
+        let message = cx.new(|cx| {
+            InputState::new(window, cx)
+                .submit_on_enter(true)
+                .placeholder("Commit mesajı")
+        });
+        let detail = cx.new(|cx| InputState::new(window, cx).placeholder("Dal adı / saklama notu"));
         message.update(cx, |input, cx| input.focus(window, cx));
         let subscription = cx.subscribe(&message, |this, _input, event: &InputEvent, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
@@ -111,6 +118,7 @@ impl GitView {
             stashes: Vec::new(),
             confirm_push: false,
             message,
+            detail,
             theme: Theme::of(Appearance::default()),
             _subscription: subscription,
         }
@@ -220,6 +228,12 @@ impl GitView {
             .update(cx, |input, cx| input.set_value(text, window, cx));
     }
 
+    /// Replaces the branch name / stash note text.
+    pub fn set_detail(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.detail
+            .update(cx, |input, cx| input.set_value(text, window, cx));
+    }
+
     /// The status on screen.
     pub fn status(&self) -> Option<&Status> {
         self.status.as_ref()
@@ -301,12 +315,12 @@ impl GitView {
         cx.notify();
     }
 
-    /// Stashes the changes under the message in the box (or a default one).
+    /// Stashes the changes under the note in the second box (or a default one).
     pub fn stash(&mut self, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
-        let text = self.message.read(cx).value().to_string();
+        let text = self.detail.read(cx).value().to_string();
         let text = if text.trim().is_empty() {
             "RAIOS".to_owned()
         } else {
@@ -315,12 +329,12 @@ impl GitView {
         cx.emit(GitEvent::StashPush(text));
     }
 
-    /// Creates a branch named by the text in the box.
+    /// Creates a branch named by the text in the second box.
     pub fn create_branch(&mut self, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
-        let name = self.message.read(cx).value().trim().to_owned();
+        let name = self.detail.read(cx).value().trim().to_owned();
         cx.emit(GitEvent::CreateBranch(name));
     }
 
@@ -745,6 +759,15 @@ impl Render for GitView {
                         button(theme, "git-commit", if busy { "…" } else { "Commit" })
                             .on_click(cx.listener(|this, _, _window, cx| this.commit(cx))),
                     ),
+            )
+            .child(
+                div()
+                    .h(px(32.0))
+                    .overflow_hidden()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(gpui::rgb(theme.line))
+                    .child(Input::new(&self.detail)),
             )
             .children(hunk_panel)
             .children((!showing_hunks).then(|| {
