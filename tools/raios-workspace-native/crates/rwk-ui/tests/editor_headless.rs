@@ -274,6 +274,9 @@ fn a_hit_line_moves_the_cursor_and_an_open_tab_is_activated() {
             .update(|_w, cx| view.read(cx).cursor_line(cx) == Some(3))
     }));
     assert_eq!(rig.paths(), vec!["a.txt"], "the reload keeps its tab");
+    let view = rig.view.clone();
+    let label = rig.cx.update(|_w, cx| view.read(cx).position_label(cx));
+    assert_eq!(label.as_deref(), Some("Sat 3, Süt 1 · düz metin"));
 }
 
 #[test]

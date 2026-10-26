@@ -113,6 +113,8 @@ struct Tab {
     diff_raw: String,
     diff_visible: bool,
     _subscription: Subscription,
+    /// Repaints the status bar when the cursor moves.
+    _cursor: Subscription,
 }
 
 impl Tab {
@@ -415,6 +417,7 @@ impl EditorView {
                             this.on_edited(&tab_path, cx);
                         }
                     });
+                let cursor = cx.observe(&state, |_, _, cx| cx.notify());
                 self.tabs.push(Tab {
                     state,
                     session: DocumentSession::new(),
@@ -424,6 +427,7 @@ impl EditorView {
                     diff_raw: String::new(),
                     diff_visible: false,
                     _subscription: subscription,
+                    _cursor: cursor,
                 });
                 self.tabs.len() - 1
             }
@@ -1228,7 +1232,7 @@ impl Render for EditorView {
                             .text_color(gpui::rgb(theme.muted))
                             .child("Dosya açmak için soldaki ağaçtan seçin"),
                     )
-                    .child(self.status_bar(None, theme));
+                    .child(self.status_bar(None, theme, cx));
             }
         };
         let second = self.tabs.get(self.active).and_then(|tab| {
@@ -1313,12 +1317,25 @@ impl Render for EditorView {
                             .child(Editor::new(right))
                     })),
             )
-            .child(self.status_bar(Some(title), theme))
+            .child(self.status_bar(Some(title), theme, cx))
     }
 }
 
 impl EditorView {
-    fn status_bar(&self, title: Option<String>, theme: Theme) -> impl IntoElement {
+    /// "Ln 3, Süt 14 · rust": where the cursor is and which language the file is read as.
+    pub fn position_label(&self, cx: &gpui::App) -> Option<String> {
+        let tab = self.tabs.get(self.active)?;
+        let path = tab.path()?;
+        let position = tab.state.read(cx).cursor_position();
+        let language = super::highlight::language_for_path(path).unwrap_or("düz metin");
+        Some(format!(
+            "Sat {}, Süt {} · {language}",
+            position.line.saturating_add(1),
+            position.character.saturating_add(1)
+        ))
+    }
+
+    fn status_bar(&self, title: Option<String>, theme: Theme, cx: &gpui::App) -> impl IntoElement {
         let title = title.unwrap_or_default();
         let marker = if self.is_dirty() { " ●" } else { "" };
         let status = self.status.clone().unwrap_or_default();
@@ -1335,6 +1352,10 @@ impl EditorView {
             .text_xs()
             .text_color(gpui::rgb(theme.muted))
             .child(format!("{title}{marker}"))
-            .child(status)
+            .child(div().flex_1().min_w_0().child(status))
+            .children(
+                self.position_label(cx)
+                    .map(|label| div().flex_none().child(label)),
+            )
     }
 }
