@@ -92,3 +92,53 @@ fn a_folder_that_is_not_a_repository_is_an_error() {
     std::env::set_var("GIT_CEILING_DIRECTORIES", dir.path().parent().unwrap());
     assert!(git::status(dir.path()).is_err());
 }
+
+#[test]
+fn one_hunk_can_be_staged_and_unstaged_alone() {
+    let dir = repository();
+    let root = dir.path();
+    let original: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+    std::fs::write(root.join("f.txt"), &original).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "first"]);
+
+    // Two changes far enough apart to be two hunks.
+    let edited = original
+        .replace("line 2\n", "line two\n")
+        .replace("line 28\n", "line twenty-eight\n");
+    std::fs::write(root.join("f.txt"), &edited).unwrap();
+
+    let diff = git::file_diff(root, "f.txt", false).unwrap();
+    assert_eq!(diff.hunks.len(), 2);
+    assert!(git::file_diff(root, "f.txt", true)
+        .unwrap()
+        .hunks
+        .is_empty());
+
+    // A stale header is refused and changes nothing.
+    assert!(git::apply_hunk(root, "f.txt", 0, "@@ -9,9 +9,9 @@", true).is_err());
+    assert!(git::file_diff(root, "f.txt", true)
+        .unwrap()
+        .hunks
+        .is_empty());
+
+    git::apply_hunk(root, "f.txt", 1, &diff.hunks[1].header, true).unwrap();
+    let staged = git::file_diff(root, "f.txt", true).unwrap();
+    assert_eq!(staged.hunks.len(), 1);
+    assert!(staged.hunks[0]
+        .lines
+        .iter()
+        .any(|line| line == "+line twenty-eight"));
+    // The other change is still only in the working tree.
+    let rest = git::file_diff(root, "f.txt", false).unwrap();
+    assert_eq!(rest.hunks.len(), 1);
+    assert!(rest.hunks[0].lines.iter().any(|line| line == "+line two"));
+
+    git::apply_hunk(root, "f.txt", 0, &staged.hunks[0].header, false).unwrap();
+    assert!(git::file_diff(root, "f.txt", true)
+        .unwrap()
+        .hunks
+        .is_empty());
+    assert_eq!(git::file_diff(root, "f.txt", false).unwrap().hunks.len(), 2);
+    assert_eq!(std::fs::read_to_string(root.join("f.txt")).unwrap(), edited);
+}

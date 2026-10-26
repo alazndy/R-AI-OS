@@ -352,6 +352,87 @@ pub fn unstage(root: &Path, paths: &[String]) -> Result<()> {
     }
 }
 
+/// One block of a file's diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hunk {
+    /// The `@@ -a,b +c,d @@ …` line.
+    pub header: String,
+    /// The lines after it, each with its leading space, `+` or `-` (and `\` markers).
+    pub lines: Vec<String>,
+}
+
+/// A file's diff split into hunks.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FileDiff {
+    /// Everything before the first hunk (`diff --git`, `index`, `---`, `+++`).
+    pub head: String,
+    /// The hunks, in file order.
+    pub hunks: Vec<Hunk>,
+}
+
+/// Splits `git diff` output for one file into its head and hunks.
+pub fn parse_diff(text: &str) -> FileDiff {
+    let mut diff = FileDiff::default();
+    for line in text.lines() {
+        if line.starts_with("@@") {
+            diff.hunks.push(Hunk {
+                header: line.to_owned(),
+                lines: Vec::new(),
+            });
+        } else if let Some(hunk) = diff.hunks.last_mut() {
+            hunk.lines.push(line.to_owned());
+        } else {
+            diff.head.push_str(line);
+            diff.head.push('\n');
+        }
+    }
+    diff
+}
+
+impl FileDiff {
+    /// A patch with only hunk `index`, that `git apply` accepts.
+    pub fn patch_for(&self, index: usize) -> Option<String> {
+        let hunk = self.hunks.get(index)?;
+        let mut patch = self.head.clone();
+        patch.push_str(&hunk.header);
+        patch.push('\n');
+        for line in &hunk.lines {
+            patch.push_str(line);
+            patch.push('\n');
+        }
+        Some(patch)
+    }
+}
+
+/// The diff of one tracked file: the working tree against the index, or (`staged`) the index
+/// against HEAD. Untracked, binary and unchanged files give no hunks.
+pub fn file_diff(root: &Path, path: &str, staged: bool) -> Result<FileDiff> {
+    validate_relative_path(path, false)?;
+    let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-renames", "-U3"];
+    if staged {
+        args.push("--cached");
+    }
+    args.extend(["--", path]);
+    Ok(parse_diff(&run(root, &args, None)?))
+}
+
+/// Stages (or, with `stage` false, unstages) hunk `index` of `path`. `header` is the hunk the
+/// user saw; when the file changed since and that hunk is no longer there, nothing happens.
+pub fn apply_hunk(root: &Path, path: &str, index: usize, header: &str, stage: bool) -> Result<()> {
+    let diff = file_diff(root, path, !stage)?;
+    let stale = || AppError::new(ErrorCode::Io, "The file changed; reload the changes.");
+    if diff.hunks.get(index).map(|hunk| hunk.header.as_str()) != Some(header) {
+        return Err(stale());
+    }
+    let patch = diff.patch_for(index).ok_or_else(stale)?;
+    let mut args = vec!["apply", "--cached", "--recount", "--whitespace=nowarn"];
+    if !stage {
+        args.push("--reverse");
+    }
+    args.push("-");
+    run(root, &args, Some(&patch)).map(drop)
+}
+
 /// Throws away the working-tree changes of the given files: tracked files go back to the
 /// index, untracked files are deleted. This cannot be undone; callers ask first.
 pub fn discard(root: &Path, entries: &[Entry]) -> Result<()> {

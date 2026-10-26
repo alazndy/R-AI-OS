@@ -9,19 +9,18 @@ use crate::error::{AppError, ErrorCode, Result};
 use crate::project::ProjectRoot;
 use crate::search::MAX_PATTERN_BYTES;
 
-/// What to replace.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What to replace: the same pattern the search used (`raios locate` reads it as a regular
+/// expression), so what the hits show is what gets replaced.
+#[derive(Debug, Clone)]
 pub struct Replacement {
-    /// The literal text to find (never empty).
-    pub find: String,
-    /// What takes its place.
-    pub with: String,
-    /// Fold ASCII letters when matching.
-    pub ignore_case: bool,
+    pattern: regex::Regex,
+    with: String,
 }
 
 impl Replacement {
-    /// A replacement, refused when `find` is empty or either side is too long.
+    /// A replacement, refused when `find` is empty, either side is too long, or `find` is not
+    /// a valid pattern. In `with`, `$1` or `${name}` insert a captured group and `$$` is a
+    /// literal dollar sign.
     pub fn new(find: &str, with: &str, ignore_case: bool) -> Result<Self> {
         if find.is_empty() {
             return Err(AppError::new(
@@ -32,37 +31,42 @@ impl Replacement {
         if find.len() > MAX_PATTERN_BYTES || with.len() > MAX_PATTERN_BYTES {
             return Err(AppError::new(ErrorCode::InvalidInput, "Metin çok uzun."));
         }
+        let pattern = regex::RegexBuilder::new(find)
+            .case_insensitive(ignore_case)
+            .size_limit(1 << 20)
+            .build()
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::InvalidInput,
+                    format!("Desen geçersiz: {error}")
+                        .lines()
+                        .next()
+                        .unwrap_or_default(),
+                )
+            })?;
         Ok(Self {
-            find: find.to_owned(),
+            pattern,
             with: with.to_owned(),
-            ignore_case,
         })
     }
 
-    /// `text` with every occurrence replaced, and how many there were. Matches do not overlap.
+    /// `text` with every match replaced, and how many there were. Empty matches are ignored,
+    /// so a pattern like `x*` never rewrites a whole file.
     pub fn apply(&self, text: &str) -> (String, usize) {
-        let (haystack, needle) = (text.as_bytes(), self.find.as_bytes());
-        let mut out = String::with_capacity(text.len());
-        let (mut copied, mut index, mut count) = (0, 0, 0);
-        while index + needle.len() <= haystack.len() {
-            let window = &haystack[index..index + needle.len()];
-            let hit = if self.ignore_case {
-                window.eq_ignore_ascii_case(needle)
-            } else {
-                window == needle
-            };
-            if hit {
-                out.push_str(&text[copied..index]);
-                out.push_str(&self.with);
-                index += needle.len();
-                copied = index;
+        let mut count = 0;
+        let replaced = self
+            .pattern
+            .replace_all(text, |captures: &regex::Captures| {
+                let whole = captures.get(0).map_or("", |m| m.as_str());
+                if whole.is_empty() {
+                    return String::new();
+                }
                 count += 1;
-            } else {
-                index += 1;
-            }
-        }
-        out.push_str(&text[copied..]);
-        (out, count)
+                let mut out = String::new();
+                captures.expand(&self.with, &mut out);
+                out
+            });
+        (replaced.into_owned(), count)
     }
 }
 
@@ -150,16 +154,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn replaces_every_literal_occurrence_without_overlap() {
+    fn replaces_every_match_and_expands_groups() {
         let r = Replacement::new("aa", "b", false).unwrap();
-        assert_eq!(r.apply("aaaaa aa"), ("bb".to_owned() + "a b", 3));
+        assert_eq!(r.apply("aaaaa aa"), ("bba b".to_owned(), 3));
         assert_eq!(r.apply("none"), ("none".to_owned(), 0));
-        let r = Replacement::new("é", "e", false).unwrap();
-        assert_eq!(r.apply("café é"), ("cafe e".to_owned(), 2));
+        let r = Replacement::new(r"fn (\w+)\(", "pub fn ${1}(", false).unwrap();
+        assert_eq!(
+            r.apply("fn a() fn bc()"),
+            ("pub fn a() pub fn bc()".to_owned(), 2)
+        );
+        let r = Replacement::new("cost", "$$5", false).unwrap();
+        assert_eq!(r.apply("cost").0, "$5");
     }
 
     #[test]
-    fn ascii_case_can_be_ignored() {
+    fn empty_matches_never_count_or_rewrite() {
+        let r = Replacement::new("x*", "-", false).unwrap();
+        assert_eq!(r.apply("abc"), ("abc".to_owned(), 0));
+        assert_eq!(r.apply("axxb"), ("a-b".to_owned(), 1));
+    }
+
+    #[test]
+    fn case_can_be_ignored() {
         let r = Replacement::new("foo", "bar", true).unwrap();
         assert_eq!(r.apply("Foo FOO foo"), ("bar bar bar".to_owned(), 3));
         let r = Replacement::new("foo", "bar", false).unwrap();
@@ -167,9 +183,15 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_or_huge_find_is_refused() {
+    fn an_empty_huge_or_invalid_find_is_refused() {
         assert!(Replacement::new("", "x", false).is_err());
         assert!(Replacement::new(&"a".repeat(MAX_PATTERN_BYTES + 1), "x", false).is_err());
+        let error = Replacement::new("(", "x", false).unwrap_err();
+        assert!(
+            error.message.starts_with("Desen geçersiz"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

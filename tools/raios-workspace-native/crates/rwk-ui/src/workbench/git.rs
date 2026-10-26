@@ -98,6 +98,20 @@ impl Workbench {
                 window,
                 cx,
             ),
+            GitEvent::Hunks { path, staged } => self.load_hunks(path, staged, window, cx),
+            GitEvent::ApplyHunk {
+                path,
+                index,
+                header,
+                stage,
+            } => self.git_job(
+                move |root| {
+                    git::apply_hunk(root, &path, index, &header, stage)
+                        .map(|()| Aftermath::default())
+                },
+                window,
+                cx,
+            ),
             GitEvent::Switch(branch) => self.git_job(
                 move |root| {
                     git::switch(root, &branch)?;
@@ -111,6 +125,43 @@ impl Workbench {
                 cx,
             ),
         }
+    }
+
+    /// Reads one file's diff on the background executor for the hunk panel.
+    fn load_hunks(
+        &mut self,
+        path: String,
+        staged: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(view), Some(project)) = (self.git_view.clone(), self.project.clone()) else {
+            return;
+        };
+        let root: PathBuf = project.info().root.clone();
+        let generation = self.git_generation;
+        cx.spawn_in(window, async move |this, cx| {
+            let read = {
+                let path = path.clone();
+                cx.background_executor()
+                    .spawn(async move { git::file_diff(&root, &path, staged) })
+                    .await
+            };
+            this.update(cx, |workbench, cx| {
+                if workbench.git_generation != generation {
+                    return;
+                }
+                view.update(cx, |view, cx| match read {
+                    Ok(diff) => view.set_hunks(&path, staged, diff, cx),
+                    Err(error) => {
+                        view.close_hunks(cx);
+                        view.set_error(error.message, cx);
+                    }
+                });
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Runs `action`, then reads the status and the branches, all on the background executor.
