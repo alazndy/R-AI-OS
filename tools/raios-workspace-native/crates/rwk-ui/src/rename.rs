@@ -23,6 +23,8 @@ pub enum PromptPurpose {
     NewFolder,
     /// Rename a file or folder of the project.
     RenameEntry,
+    /// Rename the symbol under the editor's cursor.
+    RenameSymbol,
 }
 
 /// What the prompt asks of the workbench.
@@ -140,6 +142,17 @@ impl RenameTerminalPrompt {
             cx.notify();
             return;
         }
+        if self.purpose == PromptPurpose::RenameSymbol {
+            let name = text.trim();
+            if name.is_empty() || name.contains(char::is_whitespace) {
+                self.problem = Some("Boşluksuz bir ad yazın".into());
+            } else {
+                self.problem = None;
+                cx.emit(RenamePromptEvent::EntryName(name.to_owned()));
+            }
+            cx.notify();
+            return;
+        }
         if matches!(
             self.purpose,
             PromptPurpose::NewFile | PromptPurpose::NewFolder | PromptPurpose::RenameEntry
@@ -187,8 +200,11 @@ impl Render for RenameTerminalPrompt {
             PromptPurpose::NewFile => "Yeni dosya",
             PromptPurpose::NewFolder => "Yeni klasör",
             PromptPurpose::RenameEntry => "Yeniden adlandır",
+            PromptPurpose::RenameSymbol => "Sembolü yeniden adlandır",
         };
-        let note = if matches!(
+        let note = if self.purpose == PromptPurpose::RenameSymbol {
+            "Ad, dil sunucusunun bulduğu her kullanımda değişir; açık sekmeler kaydedilmeden güncellenir. Enter uygular, Esc kapatır."
+        } else if matches!(
             self.purpose,
             PromptPurpose::NewFile | PromptPurpose::NewFolder | PromptPurpose::RenameEntry
         ) {

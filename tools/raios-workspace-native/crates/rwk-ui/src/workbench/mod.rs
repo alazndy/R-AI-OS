@@ -889,6 +889,7 @@ impl Workbench {
             CommandId::SourceControl => self.open_git(window, cx),
             CommandId::RunTask => self.open_task_palette(window, cx),
             CommandId::OpenOutputLocation => self.open_output_location(window, cx),
+            CommandId::RenameSymbol => self.open_symbol_prompt(window, cx),
             CommandId::Format => self
                 .editor
                 .update(cx, |editor, cx| editor.format(window, cx)),

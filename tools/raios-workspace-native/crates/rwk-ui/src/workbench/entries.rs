@@ -118,6 +118,41 @@ impl Workbench {
         }
     }
 
+    /// Asks for the new name of the symbol under the editor's cursor.
+    pub(super) fn open_symbol_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.rename_prompt.is_some() {
+            return;
+        }
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        let Some((_, _, _, word)) = self.editor.read(cx).symbol_at_cursor(cx) else {
+            self.say("İmleç bir sembolün üzerinde değil", cx);
+            return;
+        };
+        let theme = self.theme();
+        let prompt = cx
+            .new(|cx| RenameTerminalPrompt::entry(PromptPurpose::RenameSymbol, &word, window, cx));
+        prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        self.rename_subscription = Some(cx.subscribe_in(
+            &prompt,
+            window,
+            move |this, _prompt, event: &RenamePromptEvent, window, cx| match event {
+                RenamePromptEvent::EntryName(name) => {
+                    this.close_rename_prompt(window, cx);
+                    let (project, name) = (project.clone(), name.clone());
+                    this.editor.update(cx, |editor, cx| {
+                        editor.rename_symbol(project, name, window, cx)
+                    });
+                }
+                RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
+                RenamePromptEvent::NewTask(_) | RenamePromptEvent::Rename(_) => {}
+            },
+        ));
+        self.rename_prompt = Some(prompt);
+        cx.notify();
+    }
+
     /// Asks before deleting `path`.
     pub fn request_delete_entry(&mut self, path: String, folder: bool, cx: &mut Context<Self>) {
         if self.project.is_none() {

@@ -601,6 +601,113 @@ impl EditorView {
         });
     }
 
+    /// The symbol under the cursor: path, 0-based line and column, and its name.
+    pub fn symbol_at_cursor(&self, cx: &gpui::App) -> Option<(String, u32, u32, String)> {
+        let tab = self.tabs.get(self.active)?;
+        let path = tab.path()?.to_owned();
+        let state = tab.state.read(cx);
+        let position = state.cursor_position();
+        let text = state.value().to_string();
+        let line = text.lines().nth(usize::try_from(position.line).ok()?)?;
+        let word = rwk_core::lsp::edits::word_at(line, position.character)?;
+        Some((path, position.line, position.character, word))
+    }
+
+    /// Renames the symbol under the cursor to `new_name` in every file the language server
+    /// names. All files are prepared before any is written, so a refused or broken answer
+    /// changes nothing; open tabs take the edits as unsaved changes, other files are written.
+    pub fn rename_symbol(
+        &mut self,
+        project: Arc<ProjectRoot>,
+        new_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(requester), Some((path, line, character, _))) =
+            (self.requester.clone(), self.symbol_at_cursor(cx))
+        else {
+            self.set_status("İmleç bir sembolün üzerinde değil", cx);
+            return;
+        };
+        let Some(before) = self.text_of(&path, cx) else {
+            return;
+        };
+        self.set_status("Yeniden adlandırılıyor…", cx);
+        let answer = super::lsp::rename_request(
+            &requester,
+            &path,
+            line,
+            character,
+            &new_name,
+            std::time::Duration::from_secs(10),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update_in(cx, |view, window, cx| {
+                if view.text_of(&path, cx).as_deref() != Some(before.as_str()) {
+                    view.set_status("Metin değişti; yeniden adlandırma uygulanmadı", cx);
+                    return;
+                }
+                let outcome = match answer {
+                    Ok(Ok(value)) => {
+                        view.apply_workspace_edit(&project, &requester, value, window, cx)
+                    }
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(AppError::new(
+                        ErrorCode::NotFound,
+                        "Dil sunucusu yanıt vermedi",
+                    )),
+                };
+                match outcome {
+                    Ok((0, _)) => view.set_status("Sunucu bir değişiklik önermedi", cx),
+                    Ok((files, edits)) => {
+                        view.set_status(format!("{files} dosyada {edits} değişiklik"), cx)
+                    }
+                    Err(error) => view.set_status(error.message, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Applies a server's workspace edit; returns how many files and edits it touched.
+    fn apply_workspace_edit(
+        &mut self,
+        project: &ProjectRoot,
+        requester: &rwk_core::lsp::Requester,
+        answer: serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> rwk_core::error::Result<(usize, usize)> {
+        let files =
+            rwk_core::lsp::edits::workspace_edit(answer, |uri| requester.relative_path(uri))?;
+        // Prepare the files that are not open first: nothing is written unless all are fine.
+        let mut rewrites = Vec::new();
+        for file in &files {
+            if self.position_of(&file.path).is_none() {
+                let document = project.read_document(&file.path)?;
+                let content = rwk_core::lsp::edits::apply(&document.content, &file.edits)?;
+                rewrites.push(Document {
+                    content,
+                    ..document
+                });
+            }
+        }
+        let edits = files.iter().map(|file| file.edits.len()).sum();
+        for document in rewrites {
+            project.save_document(document)?;
+        }
+        for file in &files {
+            if let Some(index) = self.position_of(&file.path) {
+                self.tabs[index].state.update(cx, |state, cx| {
+                    state.apply_lsp_edits(&file.edits, window, cx)
+                });
+            }
+        }
+        Ok((files.len(), edits))
+    }
+
     /// Formats the active file with its language server. The answer is dropped, with a message,
     /// when the text changed while the server worked: its positions would no longer fit.
     pub fn format(&mut self, window: &mut Window, cx: &mut Context<Self>) {
