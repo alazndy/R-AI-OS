@@ -10,6 +10,7 @@ pub mod git;
 pub mod handoff;
 pub mod inspector;
 pub mod memory;
+pub mod overlay;
 pub mod problems;
 pub mod rename;
 pub mod search;

@@ -960,6 +960,42 @@ impl Workbench {
         }));
     }
 
+    /// Whether a panel (palette, picker, prompt or view) floats over the workbench.
+    pub fn overlay_open(&self) -> bool {
+        self.palette.is_some()
+            || self.ssh_picker.is_some()
+            || self.composer.is_some()
+            || self.reject_prompt.is_some()
+            || self.rename_prompt.is_some()
+            || self.memory.is_some()
+            || self.search.is_some()
+            || self.problems_view.is_some()
+            || self.git_view.is_some()
+    }
+
+    /// Closes the panel on top (the one opened last).
+    pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.git_view.is_some() {
+            self.close_git(window, cx);
+        } else if self.problems_view.is_some() {
+            self.close_problems(window, cx);
+        } else if self.search.is_some() {
+            self.close_search(window, cx);
+        } else if self.memory.is_some() {
+            self.close_memory(window, cx);
+        } else if self.rename_prompt.is_some() {
+            self.close_rename_prompt(window, cx);
+        } else if self.reject_prompt.is_some() {
+            self.close_reject_prompt(window, cx);
+        } else if self.composer.is_some() {
+            self.close_composer(window, cx);
+        } else if self.ssh_picker.is_some() {
+            self.close_ssh_picker(window, cx);
+        } else if self.palette.is_some() {
+            self.close_palette(window, cx);
+        }
+    }
+
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.file_search_task = None;
         self.palette_picks_tasks = false;
@@ -1856,6 +1892,21 @@ impl Render for Workbench {
                             ),
                     ),
             )
+            .children(self.overlay_open().then(|| {
+                // A click beside an overlay closes it, and never also presses what is below.
+                div()
+                    .id("overlay-backdrop")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .occlude()
+                    .bg(gpui::rgba(0x00000055))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, window, cx| this.close_overlay(window, cx)),
+                    )
+            }))
             .children(self.palette.clone())
             .children(self.ssh_picker.clone())
             .children(self.composer.clone())

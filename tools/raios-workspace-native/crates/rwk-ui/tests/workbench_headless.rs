@@ -4582,3 +4582,50 @@ fn the_editor_splits_beside_another_file_and_activating_it_swaps_the_two() {
     rig.run(CommandId::SplitEditor);
     assert_eq!(split(&mut rig), None);
 }
+
+#[test]
+fn a_click_beside_an_overlay_closes_it_and_escape_still_does() {
+    let mut rig = rig();
+    rig.open_project();
+
+    // Outside click: the palette sits at the top, the click lands in the lower left corner.
+    rig.run(CommandId::Commands);
+    assert!(rig.read(|wb, _| wb.overlay_open()));
+    rig.settle_for(50);
+    rig.cx.simulate_click(
+        gpui::point(gpui::px(4.0), gpui::px(700.0)),
+        gpui::Modifiers::none(),
+    );
+    rig.settle_for(50);
+    assert!(
+        !rig.read(|wb, _| wb.overlay_open()),
+        "an outside click closes the palette"
+    );
+
+    // A click inside the panel does not.
+    rig.run(CommandId::Memory);
+    rig.settle_for(50);
+    assert!(rig.read(|wb, _| wb.overlay_open()));
+    rig.cx.simulate_click(
+        gpui::point(gpui::px(500.0), gpui::px(300.0)),
+        gpui::Modifiers::none(),
+    );
+    rig.settle_for(50);
+    assert!(
+        rig.read(|wb, _| wb.overlay_open()),
+        "a click on the panel keeps it open"
+    );
+    rig.cx.simulate_keystrokes("escape");
+    assert!(!rig.read(|wb, _| wb.overlay_open()), "Esc closes it");
+
+    // Programmatic close takes the topmost one.
+    rig.run(CommandId::Search);
+    rig.run(CommandId::Problems);
+    rig.with(|wb, window, cx| wb.close_overlay(window, cx));
+    assert!(rig.read(
+        |wb, cx| wb.problems_view().is_none() && wb.search().is_some() && {
+            let _ = cx;
+            true
+        }
+    ));
+}

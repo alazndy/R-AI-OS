@@ -175,6 +175,8 @@ impl Render for HandoffComposer {
             .collect();
         div()
             .absolute()
+            .occlude()
+            .child(crate::overlay::close_button(self.theme, "composer-close").on_click(cx.listener(|_, _, _window, cx| cx.emit(ComposerEvent::Close))))
             .top_16()
             .left_0()
             .right_0()
@@ -342,6 +344,8 @@ impl Render for RejectHandoffPrompt {
         div()
             .id("reject-handoff-prompt")
             .absolute()
+            .occlude()
+            .child(crate::overlay::close_button(self.theme, "reject-close").on_click(cx.listener(|_, _, _window, cx| cx.emit(RejectPromptEvent::Close))))
             .top_16()
             .left_0()
             .right_0()

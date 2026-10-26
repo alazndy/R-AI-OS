@@ -317,6 +317,7 @@ impl Render for GitView {
         let all_changes = changes.clone();
         div()
             .absolute()
+            .occlude()
             .top_8()
             .bottom_8()
             .left_0()

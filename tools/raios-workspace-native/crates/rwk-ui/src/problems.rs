@@ -162,6 +162,7 @@ impl Render for ProblemsView {
             });
         div()
             .absolute()
+            .occlude()
             .top_8()
             .bottom_8()
             .left_0()
