@@ -52,6 +52,8 @@ Skin (standard or GT-LCARS) and tone (dark or light) are independent and persist
 
 The palette's "Diff: yan yana / birleşik" switches the Git diff between one unified column and two aligned columns (old and new); the terminal shows IME pre-edit text at the cursor until it is committed.
 
+File tree rows have a right-click menu to create a file or folder, rename and delete. Every operation goes through the project capability, never replaces an existing entry, refuses names with separators or control characters, deletes folders only when empty, and refuses to rename or delete anything open in an editor tab.
+
 Known limits: approvals cannot be approved or rejected here (read-only until the contract carries an expected revision).
 
 ## Terminal view

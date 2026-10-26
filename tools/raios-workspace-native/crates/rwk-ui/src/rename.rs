@@ -17,6 +17,12 @@ pub enum PromptPurpose {
     RenameTerminal,
     /// Title a new operator task.
     NewTask,
+    /// Name a new file of the project.
+    NewFile,
+    /// Name a new folder of the project.
+    NewFolder,
+    /// Rename a file or folder of the project.
+    RenameEntry,
 }
 
 /// What the prompt asks of the workbench.
@@ -24,6 +30,8 @@ pub enum PromptPurpose {
 pub enum RenamePromptEvent {
     /// The user committed a task title that passed validation.
     NewTask(String),
+    /// The user committed a file or folder name that passed validation.
+    EntryName(String),
     /// The user committed a name, or an empty text, which removes the name.
     Rename(Option<SessionName>),
     /// The user closed the prompt.
@@ -80,6 +88,21 @@ impl RenameTerminalPrompt {
         prompt
     }
 
+    /// A prompt for the name of a file or folder, starting with `initial`.
+    pub fn entry(
+        purpose: PromptPurpose,
+        initial: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut prompt = Self::new(None, false, window, cx);
+        prompt.purpose = purpose;
+        if !initial.is_empty() {
+            prompt.set_text(initial, window, cx);
+        }
+        prompt
+    }
+
     /// Repaints the prompt with another skin or tone.
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.theme = theme;
@@ -117,6 +140,21 @@ impl RenameTerminalPrompt {
             cx.notify();
             return;
         }
+        if matches!(
+            self.purpose,
+            PromptPurpose::NewFile | PromptPurpose::NewFolder | PromptPurpose::RenameEntry
+        ) {
+            let name = text.trim();
+            match rwk_core::project::validate_entry_name(name) {
+                Ok(()) => {
+                    self.problem = None;
+                    cx.emit(RenamePromptEvent::EntryName(name.to_owned()));
+                }
+                Err(error) => self.problem = Some(error.message.into()),
+            }
+            cx.notify();
+            return;
+        }
         if text.trim().is_empty() {
             self.problem = None;
             cx.emit(RenamePromptEvent::Rename(None));
@@ -146,8 +184,16 @@ impl Render for RenameTerminalPrompt {
         let heading = match self.purpose {
             PromptPurpose::RenameTerminal => "Terminali yeniden adlandır",
             PromptPurpose::NewTask => "Yeni görev",
+            PromptPurpose::NewFile => "Yeni dosya",
+            PromptPurpose::NewFolder => "Yeni klasör",
+            PromptPurpose::RenameEntry => "Yeniden adlandır",
         };
-        let note = if self.purpose == PromptPurpose::NewTask {
+        let note = if matches!(
+            self.purpose,
+            PromptPurpose::NewFile | PromptPurpose::NewFolder | PromptPurpose::RenameEntry
+        ) {
+            "Tek bir ad yazın ('/' olmadan); var olan bir kayıt değiştirilmez. Enter kaydeder, Esc kapatır."
+        } else if self.purpose == PromptPurpose::NewTask {
             "Görev açık projeye eklenir; başlık denetim kaydına geçer, parola ve anahtar yazmayın. Enter ekler, Esc kapatır."
         } else if self.running_agent {
             "Çalışan ajanın daemon kaydındaki adı başlatıldığı adla kalır; bu ad yalnızca burada görünür."

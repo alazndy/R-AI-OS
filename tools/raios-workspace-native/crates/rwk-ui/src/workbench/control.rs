@@ -331,7 +331,7 @@ impl Workbench {
                     this.create_task(title.clone(), window, cx);
                 }
                 RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
-                RenamePromptEvent::Rename(_) => {}
+                RenamePromptEvent::Rename(_) | RenamePromptEvent::EntryName(_) => {}
             },
         ));
         self.rename_prompt = Some(prompt);

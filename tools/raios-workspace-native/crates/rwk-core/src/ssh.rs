@@ -149,7 +149,7 @@ impl SshHost {
 
 /// Reads the `Host` blocks of an ssh config. Wildcard and negated patterns are skipped, every
 /// other pattern of a `Host` line is a host, and `HostName`, `User` and `Port` of the block
-/// become its detail. `Match` blocks and `Include` lines are not followed.
+/// become its detail. `Match` blocks are skipped (their options never attach to a host); `Include` is expanded before parsing.
 pub fn parse_ssh_config(text: &str) -> Vec<SshHost> {
     struct Block {
         aliases: Vec<String>,

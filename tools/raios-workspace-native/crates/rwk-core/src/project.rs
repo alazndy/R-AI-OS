@@ -218,6 +218,87 @@ impl ProjectRoot {
         })
     }
 
+    /// Creates an empty file `name` inside folder `parent` (empty for the project root) and
+    /// returns its project-relative path. An existing entry is never replaced.
+    pub fn create_file(&self, parent: &str, name: &str) -> Result<String> {
+        let (dir, path) = self.entry_in(parent, name)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        dir.open_with(name, &options).map_err(entry_error)?;
+        Ok(path)
+    }
+
+    /// Creates folder `name` inside folder `parent` and returns its project-relative path.
+    pub fn create_folder(&self, parent: &str, name: &str) -> Result<String> {
+        let (dir, path) = self.entry_in(parent, name)?;
+        dir.create_dir(name).map_err(entry_error)?;
+        Ok(path)
+    }
+
+    /// Gives the file or folder at `path` the name `new_name` in the same folder and returns
+    /// its new path. An existing entry is never replaced.
+    pub fn rename_entry(&self, path: &str, new_name: &str) -> Result<String> {
+        validate_relative_path(path, false)?;
+        let (parent, old_name) = split_path(path);
+        let (dir, new_path) = self.entry_in(parent, new_name)?;
+        if old_name == new_name {
+            return Ok(new_path);
+        }
+        dir.symlink_metadata(old_name).map_err(path_error)?;
+        // The check and the rename are two steps; a file created in between is the one risk, and
+        // this is a single-user tool that holds the only handle on the project.
+        if dir.symlink_metadata(new_name).is_ok() {
+            return Err(exists());
+        }
+        dir.rename(old_name, &dir, new_name).map_err(entry_error)?;
+        Ok(new_path)
+    }
+
+    /// Deletes the file (or symbolic link) at `path`, or the folder when it is empty. A folder
+    /// with anything in it is refused: nothing is ever removed recursively.
+    pub fn delete_entry(&self, path: &str) -> Result<()> {
+        validate_relative_path(path, false)?;
+        let (parent, name) = split_path(path);
+        let dir = self.open_parent(parent)?;
+        let metadata = dir.symlink_metadata(name).map_err(path_error)?;
+        if metadata.is_dir() {
+            dir.remove_dir(name).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    path_error(error)
+                } else {
+                    AppError::new(
+                        ErrorCode::InvalidInput,
+                        "Klasör boş değil; içindekileri tek tek silin.",
+                    )
+                }
+            })
+        } else {
+            dir.remove_file(name).map_err(path_error)
+        }
+    }
+
+    fn open_parent(&self, parent: &str) -> Result<Dir> {
+        validate_relative_path(parent, true)?;
+        if parent.is_empty() {
+            Ok(self.dir.try_clone()?)
+        } else {
+            self.dir.open_dir(parent).map_err(path_error)
+        }
+    }
+
+    /// The folder `parent` and the project-relative path of `name` inside it, after checking
+    /// that `name` is a single acceptable name.
+    fn entry_in(&self, parent: &str, name: &str) -> Result<(Dir, String)> {
+        validate_entry_name(name)?;
+        let dir = self.open_parent(parent)?;
+        let path = if parent.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{parent}/{name}")
+        };
+        Ok((dir, path))
+    }
+
     /// Unstaged `git diff` of one file.
     pub fn git_diff(&self, relative: &str) -> Result<String> {
         validate_relative_path(relative, false)?;
@@ -325,6 +406,53 @@ pub fn validate_relative_path(relative: &str, allow_empty: bool) -> Result<()> {
     }
 }
 
+/// Longest file or folder name, in bytes (the limit of common filesystems).
+const MAX_ENTRY_NAME_BYTES: usize = 255;
+
+/// Validates the name of one new or renamed entry: a single component, not empty, not `.` or
+/// `..`, no separators, NUL or control characters, at most 255 bytes, not the temporary-file
+/// prefix the saver uses, and not a folder the tree hides (it would vanish from view).
+pub fn validate_entry_name(name: &str) -> Result<()> {
+    let refuse = |message: &str| Err(AppError::new(ErrorCode::InvalidInput, message));
+    if name.is_empty() || name.trim() != name {
+        return refuse("Ad boş olamaz ve başında ya da sonunda boşluk bulunamaz.");
+    }
+    if name == "." || name == ".." || name.contains(['/', '\\']) {
+        return refuse("Ad tek bir parça olmalı: '/', '\\', '.' ve '..' kullanılamaz.");
+    }
+    if name.chars().any(char::is_control) {
+        return refuse("Ad denetim karakteri içeremez.");
+    }
+    if name.len() > MAX_ENTRY_NAME_BYTES {
+        return refuse("Ad en fazla 255 bayt olabilir.");
+    }
+    if name.starts_with(".raios-save-") || SKIPPED_DIRECTORIES.contains(&name) {
+        return refuse("Bu ad ayrılmış; dosya ağacında görünmezdi.");
+    }
+    Ok(())
+}
+
+/// Splits a validated relative path into its folder (empty for the root) and its last name.
+fn split_path(path: &str) -> (&str, &str) {
+    match path.rsplit_once('/') {
+        Some((parent, name)) => (parent, name),
+        None => ("", path),
+    }
+}
+
+fn exists() -> AppError {
+    AppError::new(ErrorCode::Conflict, "Bu adla bir kayıt zaten var.")
+}
+
+/// Like [`path_error`], with an existing entry reported as a conflict.
+fn entry_error(error: std::io::Error) -> AppError {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        exists()
+    } else {
+        path_error(error)
+    }
+}
+
 fn invalid_path() -> AppError {
     AppError::new(
         ErrorCode::InvalidInput,
@@ -365,6 +493,104 @@ fn read_bounded(reader: &mut impl Read) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn project() -> (tempfile::TempDir, ProjectRoot) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = ProjectRoot::open(dir.path().to_path_buf()).unwrap();
+        (dir, root)
+    }
+
+    #[test]
+    fn entry_names_are_single_plain_components() {
+        for good in ["a.txt", ".env", "ünï.rs", "with space.md", "a-b_c"] {
+            assert!(validate_entry_name(good).is_ok(), "{good}");
+        }
+        let long = "x".repeat(256);
+        for bad in [
+            "",
+            " a",
+            "a ",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "nul\0x",
+            "tab\tx",
+            "line\nbreak",
+            ".raios-save-1",
+            "target",
+            ".git",
+            long.as_str(),
+        ] {
+            assert!(validate_entry_name(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn files_and_folders_are_created_renamed_and_deleted_inside_the_project() {
+        let (dir, root) = project();
+        assert_eq!(root.create_folder("", "src").unwrap(), "src");
+        assert_eq!(root.create_file("src", "main.rs").unwrap(), "src/main.rs");
+        assert!(dir.path().join("src/main.rs").is_file());
+        // An existing name is a conflict and the file is untouched.
+        std::fs::write(dir.path().join("src/main.rs"), "keep").unwrap();
+        assert_eq!(
+            root.create_file("src", "main.rs").unwrap_err().code,
+            ErrorCode::Conflict
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("src/main.rs")).unwrap(),
+            "keep"
+        );
+
+        assert_eq!(
+            root.rename_entry("src/main.rs", "lib.rs").unwrap(),
+            "src/lib.rs"
+        );
+        assert!(!dir.path().join("src/main.rs").exists());
+        assert!(dir.path().join("src/lib.rs").is_file());
+        // A rename never replaces another entry.
+        root.create_file("src", "other.rs").unwrap();
+        assert_eq!(
+            root.rename_entry("src/other.rs", "lib.rs")
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
+        );
+        assert!(root.rename_entry("src/missing.rs", "x.rs").is_err());
+
+        // A folder with content is refused, an emptied one goes.
+        assert!(root.delete_entry("src").is_err());
+        assert!(dir.path().join("src/lib.rs").exists());
+        root.delete_entry("src/lib.rs").unwrap();
+        root.delete_entry("src/other.rs").unwrap();
+        root.delete_entry("src").unwrap();
+        assert!(!dir.path().join("src").exists());
+    }
+
+    #[test]
+    fn file_operations_cannot_leave_the_project_or_touch_the_root() {
+        let (dir, root) = project();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("victim.txt"), "x").unwrap();
+        for parent in ["..", "../x", "/etc", "a/../b"] {
+            assert!(root.create_file(parent, "f").is_err(), "{parent}");
+        }
+        for path in ["", "..", "../victim.txt", "/etc/passwd"] {
+            assert!(root.delete_entry(path).is_err(), "{path:?}");
+            assert!(root.rename_entry(path, "n").is_err(), "{path:?}");
+        }
+        // A symbolic link out of the project is removed as a link; its target stays.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
+            assert!(root.create_file("out", "planted").is_err());
+            root.delete_entry("out").unwrap();
+            assert!(!dir.path().join("out").exists());
+            assert!(outside.path().join("victim.txt").exists());
+            assert!(!outside.path().join("planted").exists());
+        }
+    }
 
     #[test]
     fn project_ids_compare_by_value_and_expose_their_text() {

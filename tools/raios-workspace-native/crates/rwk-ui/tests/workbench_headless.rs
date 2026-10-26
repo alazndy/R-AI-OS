@@ -3897,3 +3897,99 @@ fn a_secret_is_not_pasted_into_a_terminal_either() {
         .expect("view");
     assert!(!rig.read(|_, cx| view.read(cx).has_pending_paste()));
 }
+
+fn answer_entry_prompt(rig: &mut Rig, text: &str) {
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("a name prompt");
+    rig.with(|_, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text(text, window, cx);
+            prompt.submit(cx);
+        })
+    });
+    rig.cx.run_until_parked();
+}
+
+#[test]
+fn a_new_file_is_created_in_the_project_and_opened() {
+    use rwk_ui::workbench::entries::EntryOp;
+
+    let mut rig = rig();
+    rig.open_project();
+    rig.with(|wb, window, cx| wb.open_entry_prompt(EntryOp::NewFile(String::new()), window, cx));
+    // A name with a separator is refused in the prompt and nothing is created.
+    answer_entry_prompt(&mut rig, "../escape.txt");
+    assert!(rig.read(|wb, cx| wb
+        .rename_prompt()
+        .is_some_and(|p| p.read(cx).problem().is_some())));
+    assert!(!rig.dir.path().join("../escape.txt").exists());
+
+    answer_entry_prompt(&mut rig, "fresh.txt");
+    assert!(rig.dir.path().join("fresh.txt").is_file());
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("fresh.txt")));
+}
+
+#[test]
+fn renaming_or_deleting_an_open_file_is_refused_and_a_closed_one_goes_after_a_question() {
+    use rwk_ui::workbench::entries::EntryOp;
+
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+
+    rig.with(|wb, window, cx| wb.open_entry_prompt(EntryOp::Rename("a.txt".into()), window, cx));
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+    rig.with(|wb, _, cx| wb.request_delete_entry("a.txt".into(), false, cx));
+    assert!(rig.read(|wb, _| wb.pending().is_none()));
+    assert!(rig.dir.path().join("a.txt").exists());
+
+    // b.txt is not open: rename works, delete asks first.
+    rig.with(|wb, window, cx| wb.open_entry_prompt(EntryOp::Rename("b.txt".into()), window, cx));
+    answer_entry_prompt(&mut rig, "c.txt");
+    assert!(rig.dir.path().join("c.txt").exists());
+    assert!(!rig.dir.path().join("b.txt").exists());
+
+    rig.with(|wb, _, cx| wb.request_delete_entry("c.txt".into(), false, cx));
+    assert!(
+        rig.dir.path().join("c.txt").exists(),
+        "nothing before the answer"
+    );
+    assert!(matches!(
+        rig.read(|wb, _| wb.pending().cloned()),
+        Some(PendingAction::DeleteEntry { .. })
+    ));
+    rig.with(|wb, window, cx| wb.resolve(Decision::Cancel, window, cx));
+    assert!(rig.dir.path().join("c.txt").exists());
+
+    rig.with(|wb, _, cx| wb.request_delete_entry("c.txt".into(), false, cx));
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert!(!rig.dir.path().join("c.txt").exists());
+}
+
+#[test]
+fn a_bound_terminal_whose_process_ended_marks_its_task() {
+    let mut rig = rig();
+    let fake = connected(&mut rig, PolicyAction::Allow);
+    fake.push_assignment(Ok("2026-10-26T09:00:00Z".to_owned()));
+    fake.push_launch(Ok(()));
+    rig.with(|wb, window, cx| wb.launch_agent(SessionKind::Codex, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_count()) == 1));
+    rig.with(|wb, window, cx| {
+        wb.assign_task_to_terminal("t-9".into(), "rev".into(), 0, window, cx)
+    });
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_task(0).is_some())));
+    let inspector = rig.read(|wb, _| wb.inspector().clone());
+    assert!(!rig.read(|_, cx| inspector.read(cx).task_terminal_closed("t-9")));
+
+    rig.run(CommandId::StopTerminal);
+    rig.with(|wb, window, cx| wb.resolve(Decision::Confirm, window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.terminal_task_ended(0))));
+    rig.with(|_, window, _| window.refresh());
+    assert!(
+        rig.settle_until(|rig| rig.read(|_, cx| inspector.read(cx).task_terminal_closed("t-9")))
+    );
+    // The pane is still there and still carries the task.
+    assert_eq!(rig.read(|wb, _| wb.terminal_count()), 1);
+}

@@ -542,7 +542,15 @@ impl Workbench {
                 div()
                     .flex_none()
                     .text_color(gpui::rgb(theme.accent_ink))
-                    .child(SharedString::from(format!("◆ {}", task.title)))
+                    .child(SharedString::from(format!(
+                        "◆ {}{}",
+                        task.title,
+                        if self.terminal_task_ended(index) {
+                            " (bitti)"
+                        } else {
+                            ""
+                        }
+                    )))
             }))
             .child(
                 div()

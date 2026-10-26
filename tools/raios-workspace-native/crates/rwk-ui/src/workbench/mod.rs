@@ -4,6 +4,7 @@
 pub mod binding;
 pub mod control;
 pub mod dock;
+pub mod entries;
 pub mod host;
 pub mod layout;
 pub mod memory;
@@ -104,6 +105,13 @@ pub enum PendingAction {
         /// End it at once.
         force: bool,
     },
+    /// Delete this file, or this folder when it is empty (project-relative path).
+    DeleteEntry {
+        /// Project-relative path.
+        path: String,
+        /// The entry is a folder.
+        folder: bool,
+    },
     /// Choose which agent to start.
     ChooseAgent,
     /// A command whose policy is `confirm` waits for an explicit yes; the text is derived from
@@ -171,6 +179,18 @@ impl PendingAction {
                 title: "Terminali zorla öldür",
                 message: "Terminaldeki tüm işlemler hemen SIGKILL ile öldürülecek. Bir ajan oturumu temiz kapanamaz ve RAIOS'ta açık bir çalıştırma kaydı kalabilir.".to_owned(),
                 buttons: vec![(Decision::Confirm, "Öldür"), (Decision::Cancel, "Vazgeç")],
+            },
+            PendingAction::DeleteEntry { path, folder } => Dialog {
+                title: if *folder { "Klasörü sil" } else { "Dosyayı sil" },
+                message: format!(
+                    "{path} kalıcı olarak silinecek; geri alınamaz.{}",
+                    if *folder {
+                        " Yalnızca boş klasörler silinir."
+                    } else {
+                        ""
+                    }
+                ),
+                buttons: vec![(Decision::Confirm, "Sil"), (Decision::Cancel, "Vazgeç")],
             },
             PendingAction::OpenProjectStoppingSessions(_) => Dialog {
                 title: "Projeyi değiştir",
@@ -1123,6 +1143,7 @@ impl Workbench {
                 Decision::Save | Decision::Discard,
                 PendingAction::StopTerminal(_)
                 | PendingAction::CloseTerminal { .. }
+                | PendingAction::DeleteEntry { .. }
                 | PendingAction::OpenProjectStoppingSessions(_)
                 | PendingAction::ChooseAgent
                 | PendingAction::Consent(..),
@@ -1148,6 +1169,7 @@ impl Workbench {
                 Decision::Confirm,
                 PendingAction::StopTerminal(_)
                 | PendingAction::CloseTerminal { .. }
+                | PendingAction::DeleteEntry { .. }
                 | PendingAction::OpenProjectStoppingSessions(_),
             ) => self.perform(action, window, cx),
             (Decision::Confirm, _) => {}
@@ -1280,6 +1302,7 @@ impl Workbench {
             PendingAction::CloseTerminal { id, force } => {
                 self.remove_terminal(&id, force, window, cx);
             }
+            PendingAction::DeleteEntry { path, .. } => self.delete_entry(&path, cx),
             PendingAction::StopTerminal(id) => {
                 if let Err(error) = self.sessions.stop(&id) {
                     self.say(error.message, cx);
@@ -1483,7 +1506,7 @@ impl Workbench {
                     this.close_rename_prompt(window, cx);
                 }
                 RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
-                RenamePromptEvent::NewTask(_) => {}
+                RenamePromptEvent::NewTask(_) | RenamePromptEvent::EntryName(_) => {}
             },
         ));
         self.rename_prompt = Some(prompt);
@@ -1624,6 +1647,9 @@ fn terminal_appearance(theme: Theme) -> TerminalAppearance {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frames += 1;
+        // A process that ended on its own is noticed here; the task list only repaints when the
+        // set of marked tasks changed.
+        self.sync_task_marks(cx);
         let theme = self.theme();
         let dock = div()
             .id("dock-panel")

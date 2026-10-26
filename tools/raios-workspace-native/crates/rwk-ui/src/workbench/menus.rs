@@ -52,6 +52,19 @@ pub enum MenuAction {
         /// Revision the row was displayed at.
         updated_at: String,
     },
+    /// Ask for the name of a new file in this folder.
+    NewFile(String),
+    /// Ask for the name of a new folder in this folder.
+    NewFolder(String),
+    /// Ask for a new name for this entry.
+    RenameEntry(String),
+    /// Ask before deleting this entry.
+    DeleteEntry {
+        /// Project-relative path.
+        path: String,
+        /// The entry is a folder.
+        folder: bool,
+    },
     /// An edit of the open file's text.
     Edit(TextEdit),
     /// Approve a pending handoff.
@@ -195,7 +208,25 @@ impl Workbench {
         }
         lines.push((
             Line::item("Yolu kopyala", None),
-            Some(MenuAction::CopyPath(path)),
+            Some(MenuAction::CopyPath(path.clone())),
+        ));
+        lines.push((Line::Rule, None));
+        let parent = Self::parent_for_new(&path, folder);
+        lines.push((
+            Line::item("Yeni dosya…", None),
+            Some(MenuAction::NewFile(parent.clone())),
+        ));
+        lines.push((
+            Line::item("Yeni klasör…", None),
+            Some(MenuAction::NewFolder(parent)),
+        ));
+        lines.push((
+            Line::item("Yeniden adlandır…", None),
+            Some(MenuAction::RenameEntry(path.clone())),
+        ));
+        lines.push((
+            Line::item("Sil…", None),
+            Some(MenuAction::DeleteEntry { path, folder }),
         ));
         lines.push((Line::Rule, None));
         lines.extend(self.command_lines(
@@ -479,6 +510,16 @@ impl Workbench {
                 task_id,
                 updated_at,
             } => self.assign_task(task_id, updated_at, None, window, cx),
+            MenuAction::NewFile(parent) => {
+                self.open_entry_prompt(super::entries::EntryOp::NewFile(parent), window, cx)
+            }
+            MenuAction::NewFolder(parent) => {
+                self.open_entry_prompt(super::entries::EntryOp::NewFolder(parent), window, cx)
+            }
+            MenuAction::RenameEntry(path) => {
+                self.open_entry_prompt(super::entries::EntryOp::Rename(path), window, cx)
+            }
+            MenuAction::DeleteEntry { path, folder } => self.request_delete_entry(path, folder, cx),
             MenuAction::Edit(edit) => {
                 self.editor
                     .update(cx, |editor, cx| editor.edit(edit, window, cx));

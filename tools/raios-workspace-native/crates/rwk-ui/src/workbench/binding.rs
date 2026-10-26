@@ -77,9 +77,22 @@ impl Workbench {
         }
     }
 
-    /// Pushes the tasks whose terminal closed to the task list.
+    /// True when terminal `index` carries a task and its process has ended.
+    pub fn terminal_task_ended(&self, index: usize) -> bool {
+        self.terminals
+            .get(index)
+            .is_some_and(|pane| pane.task.is_some() && !self.session_running(&pane.id))
+    }
+
+    /// Pushes the tasks whose terminal closed or whose process ended to the task list.
     pub(super) fn sync_task_marks(&mut self, cx: &mut Context<Self>) {
-        let closed = self.closed_tasks.clone();
+        let mut closed = self.closed_tasks.clone();
+        closed.extend(
+            self.terminals
+                .iter()
+                .filter(|pane| !self.session_running(&pane.id))
+                .filter_map(|pane| pane.task.as_ref().map(|task| task.task_id.clone())),
+        );
         self.inspector
             .update(cx, |inspector, cx| inspector.set_closed_tasks(closed, cx));
     }
