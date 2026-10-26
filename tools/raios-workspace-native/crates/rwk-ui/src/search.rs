@@ -16,6 +16,18 @@ pub enum SearchEvent {
     Run(String, bool),
     /// The user chose `path` at `line` (1-based); the workbench opens it through its guard.
     Open(String, usize),
+    /// The user asked to replace `find` with `with` in the files of the hits on screen;
+    /// `apply` false only asks what would change.
+    Replace {
+        /// The query that produced the hits on screen.
+        find: String,
+        /// The replacement text.
+        with: String,
+        /// The case toggle's state.
+        ignore_case: bool,
+        /// Write the files.
+        apply: bool,
+    },
     /// The user closed the view.
     Close,
 }
@@ -46,8 +58,14 @@ pub struct SearchView {
     /// `Change` events (it re-emits one on Enter), which a dirty flag would not.
     last_run: String,
     query: Entity<InputState>,
+    replace: Entity<InputState>,
+    /// What the last replace preview or run said.
+    replace_note: Option<String>,
+    /// A preview is on screen, so the next press of the button writes.
+    armed: bool,
     theme: Theme,
     _subscription: gpui::Subscription,
+    _replace_subscription: gpui::Subscription,
 }
 
 impl SearchView {
@@ -55,10 +73,18 @@ impl SearchView {
     pub fn new(project_name: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| InputState::new(window, cx).submit_on_enter(true));
         query.update(cx, |input, cx| input.focus(window, cx));
+        let replace = cx.new(|cx| InputState::new(window, cx));
+        let disarm = cx.subscribe(&replace, |this, _input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.armed = false;
+                cx.notify();
+            }
+        });
         let subscription =
             cx.subscribe(&query, |this, _input, event: &InputEvent, cx| match event {
                 InputEvent::Change => {
                     this.selected = 0;
+                    this.armed = false;
                     cx.notify();
                 }
                 InputEvent::PressEnter { .. } => this.submit(cx),
@@ -71,8 +97,12 @@ impl SearchView {
             ignore_case: false,
             last_run: String::new(),
             query,
+            replace,
+            replace_note: None,
+            armed: false,
             theme: Theme::of(Appearance::default()),
             _subscription: subscription,
+            _replace_subscription: disarm,
         }
     }
 
@@ -136,6 +166,49 @@ impl SearchView {
         cx.notify();
     }
 
+    /// Replaces the replacement text (as typing would).
+    pub fn set_replacement(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.replace
+            .update(cx, |input, cx| input.set_value(text, window, cx));
+    }
+
+    /// What the last replace preview or run said.
+    pub fn replace_note(&self) -> Option<&str> {
+        self.replace_note.as_deref()
+    }
+
+    /// Shows what a replace would do (`armed`: pressing again writes) or did.
+    pub fn set_replace_note(&mut self, note: String, armed: bool, cx: &mut Context<Self>) {
+        self.replace_note = Some(note);
+        self.armed = armed;
+        cx.notify();
+    }
+
+    /// The button: the first press previews, the second writes. Only the hits on screen, from
+    /// a complete (not truncated) search of the query that is still in the box, are replaced.
+    pub fn press_replace(&mut self, cx: &mut Context<Self>) {
+        let now = self.query.read(cx).value().to_string();
+        let complete = match &self.state {
+            SearchState::Ready(result) => !result.hits.is_empty() && !result.truncated,
+            _ => false,
+        };
+        if !complete || now != self.last_run {
+            self.armed = false;
+            self.replace_note = Some(
+                "Önce eksiksiz bir arama yapın (sonuçlar kısaltıldıysa deseni daraltın)."
+                    .to_owned(),
+            );
+            cx.notify();
+            return;
+        }
+        cx.emit(SearchEvent::Replace {
+            find: self.last_run.clone(),
+            with: self.replace.read(cx).value().to_string(),
+            ignore_case: self.ignore_case,
+            apply: self.armed,
+        });
+    }
+
     /// Chooses the highlighted hit, when there is one.
     pub fn choose_selected(&mut self, cx: &mut Context<Self>) {
         if let SearchState::Ready(result) = &self.state {
@@ -148,6 +221,7 @@ impl SearchView {
     /// Flips the case toggle; a query that already ran is sent again with the new flag.
     pub fn toggle_case(&mut self, cx: &mut Context<Self>) {
         self.ignore_case = !self.ignore_case;
+        self.armed = false;
         if !matches!(self.state, SearchState::Idle) {
             self.submit(cx);
         }
@@ -158,6 +232,7 @@ impl SearchView {
     fn submit(&mut self, cx: &mut Context<Self>) {
         let pattern = self.query.read(cx).value().to_string();
         self.last_run = pattern.clone();
+        self.armed = false;
         cx.emit(SearchEvent::Run(pattern, self.ignore_case));
     }
 
@@ -334,6 +409,42 @@ impl Render for SearchView {
                     .border_color(gpui::rgb(theme.line))
                     .child(Input::new(&self.query)),
             )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .h(px(28.0))
+                            .flex_1()
+                            .overflow_hidden()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(gpui::rgb(theme.line))
+                            .child(Input::new(&self.replace)),
+                    )
+                    .child(
+                        button(
+                            theme,
+                            "search-replace",
+                            if self.armed {
+                                "Onayla: değiştir"
+                            } else {
+                                "Tümünü değiştir"
+                            },
+                            self.armed,
+                        )
+                        .on_click(cx.listener(|this, _, _window, cx| this.press_replace(cx))),
+                    ),
+            )
+            .children(self.replace_note.clone().map(|note| {
+                div()
+                    .text_xs()
+                    .text_color(gpui::rgb(theme.accent_ink))
+                    .child(SharedString::from(note))
+            }))
             .child(
                 div()
                     .text_xs()

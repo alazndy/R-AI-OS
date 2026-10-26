@@ -1905,6 +1905,66 @@ fn a_search_runs_on_enter_and_a_hit_opens_the_file_at_its_line() {
 }
 
 #[test]
+fn replace_all_previews_first_then_writes_and_leaves_unsaved_files_alone() {
+    let mut rig = rig();
+    rig.open_project();
+    std::fs::write(rig.dir.path().join("c.txt"), "beta one\nbeta two").expect("c");
+    std::fs::write(rig.dir.path().join("d.txt"), "beta").expect("d");
+    rig.script_search(vec![
+        (
+            Duration::ZERO,
+            hits(&[
+                ("c.txt", 1, "beta one"),
+                ("c.txt", 2, "beta two"),
+                ("d.txt", 1, "beta"),
+            ]),
+        ),
+        (Duration::ZERO, Vec::new()),
+    ]);
+    // d.txt is open with an unsaved edit, so it must not be rewritten underneath it.
+    rig.open_file("d.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "beta"));
+    rig.type_text("!");
+    rig.run(CommandId::Search);
+    rig.search_query("beta");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.settle_until(|rig| rig.search_hits().len() == 3));
+
+    let view = rig.read(|wb, _| wb.search().cloned()).expect("view");
+    rig.with(|_wb, window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_replacement("gamma", window, cx);
+            view.press_replace(cx);
+        })
+    });
+    let note = |rig: &mut Rig| {
+        rig.cx
+            .update(|_, cx| view.read(cx).replace_note().map(str::to_owned))
+    };
+    assert!(rig.settle_until(|rig| note(rig).is_some_and(|n| n.contains("onaylamak"))));
+    let note_text = note(&mut rig).unwrap();
+    assert!(
+        note_text.contains("1 dosyada 2 yer") && note_text.contains("d.txt"),
+        "{note_text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(rig.dir.path().join("c.txt")).unwrap(),
+        "beta one\nbeta two",
+        "a preview writes nothing"
+    );
+
+    rig.with(|_wb, _window, cx| view.update(cx, |view, cx| view.press_replace(cx)));
+    let c = rig.dir.path().join("c.txt");
+    assert!(rig.settle_until(|_| {
+        std::fs::read_to_string(&c).is_ok_and(|text| text == "gamma one\ngamma two")
+    }));
+    assert_eq!(
+        std::fs::read_to_string(rig.dir.path().join("d.txt")).unwrap(),
+        "beta"
+    );
+}
+
+#[test]
 fn escape_closes_the_search_overlay() {
     let mut rig = rig();
     rig.open_project();
