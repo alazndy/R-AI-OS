@@ -180,6 +180,29 @@ fn entry(xy: &str, path: &str, from: Option<String>) -> Entry {
     }
 }
 
+/// The checked-out branch, read from `.git/HEAD` without starting git (cheap enough to ask on
+/// every focus change). `None` for a detached HEAD or a folder that is not a repository. A
+/// worktree's `.git` file is followed once.
+pub fn head_branch(root: &Path) -> Option<String> {
+    let dot_git = root.join(".git");
+    let git_dir = if dot_git.is_file() {
+        let text = std::fs::read_to_string(&dot_git).ok()?;
+        let target = text.strip_prefix("gitdir:")?.trim();
+        let target = Path::new(target);
+        if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            root.join(target)
+        }
+    } else {
+        dot_git
+    };
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    head.trim()
+        .strip_prefix("ref: refs/heads/")
+        .map(str::to_owned)
+}
+
 fn git_error(error: std::io::Error) -> AppError {
     match error.kind() {
         std::io::ErrorKind::NotFound => AppError::new(ErrorCode::Io, "Git is not installed."),
@@ -460,6 +483,31 @@ mod tests {
         let changes: Vec<_> = status.changes().map(|e| e.path.as_str()).collect();
         assert_eq!(staged, ["new file.rs", "both.rs", "moved.rs"]);
         assert_eq!(changes, ["src/a.rs", "both.rs", "clash.rs", "loose.txt"]);
+    }
+
+    #[test]
+    fn the_branch_is_read_from_head_without_git() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(head_branch(dir.path()), None);
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/feat/x\n").unwrap();
+        assert_eq!(head_branch(dir.path()).as_deref(), Some("feat/x"));
+        std::fs::write(dir.path().join(".git/HEAD"), "0123456789abcdef\n").unwrap();
+        assert_eq!(
+            head_branch(dir.path()),
+            None,
+            "a detached HEAD has no branch"
+        );
+
+        // A worktree has a `.git` file that points at the real directory.
+        let tree = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tree.path().join(".git"),
+            format!("gitdir: {}\n", dir.path().join(".git").display()),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert_eq!(head_branch(tree.path()).as_deref(), Some("main"));
     }
 
     #[test]

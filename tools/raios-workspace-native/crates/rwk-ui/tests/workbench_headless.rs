@@ -4629,3 +4629,43 @@ fn a_click_beside_an_overlay_closes_it_and_escape_still_does() {
         }
     ));
 }
+
+#[test]
+fn the_footer_shows_the_workspace_and_takes_items_from_the_application() {
+    use rwk_core::workbench::{FooterItem, FooterLevel};
+    let mut rig = rig();
+    let ids = |rig: &mut Rig| -> Vec<String> {
+        rig.read(|wb, cx| wb.footer_items(cx).into_iter().map(|i| i.id).collect())
+    };
+    assert!(ids(&mut rig).is_empty(), "nothing to say without a project");
+
+    rig.open_project();
+    let shown = ids(&mut rig);
+    for id in ["problems", "terminals", "auto-save", "format-on-save"] {
+        assert!(shown.iter().any(|shown| shown == id), "{id} in {shown:?}");
+    }
+
+    // A click on a toggle is the command it names.
+    rig.run(CommandId::ToggleAutoSave);
+    let auto = rig.read(|wb, cx| {
+        wb.footer_items(cx)
+            .into_iter()
+            .find(|item| item.id == "auto-save")
+            .unwrap()
+    });
+    assert_eq!(auto.level, FooterLevel::Good);
+
+    // The application's own item shows up, is replaced by id, and can be removed.
+    rig.with(|wb, _, cx| wb.set_footer_item(FooterItem::info("mine", "bir", ""), cx));
+    rig.with(|wb, _, cx| wb.set_footer_item(FooterItem::info("mine", "iki", ""), cx));
+    let mine: Vec<String> = rig.read(|wb, cx| {
+        wb.footer_items(cx)
+            .into_iter()
+            .filter(|item| item.id == "mine")
+            .map(|item| item.text)
+            .collect()
+    });
+    assert_eq!(mine, ["iki"]);
+    rig.with(|wb, _, cx| wb.remove_footer_item("mine", cx));
+    assert!(!ids(&mut rig).iter().any(|id| id == "mine"));
+}

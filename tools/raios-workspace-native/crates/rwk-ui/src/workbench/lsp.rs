@@ -108,8 +108,11 @@ impl Workbench {
                 cx.notify();
             }
             // A server that is missing or gave up only means no language features for its
-            // files; nothing to interrupt the user with.
-            ManagerEvent::Status { .. } => {}
+            // files; the footer says so, nothing interrupts the user.
+            ManagerEvent::Status { server, status } => {
+                self.note_server_status(server, status);
+                cx.notify();
+            }
         }
     }
 

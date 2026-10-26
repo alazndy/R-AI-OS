@@ -6,6 +6,7 @@ pub mod control;
 pub mod dock;
 pub mod editing;
 pub mod entries;
+pub mod footer;
 pub mod git;
 pub mod host;
 pub mod layout;
@@ -262,6 +263,12 @@ pub struct Workbench {
     auto_save: bool,
     /// Format with the language server before saving.
     format_on_save: bool,
+    /// The checked-out git branch of the project.
+    branch: Option<String>,
+    /// The state of each language server that was started.
+    server_status: Vec<(String, rwk_core::lsp::ServerStatus)>,
+    /// Footer items the application added.
+    extra_footer: Vec<rwk_core::workbench::FooterItem>,
     task_source: Option<Arc<dyn rwk_core::runner::TaskSource>>,
     /// The open palette lists tasks, not files.
     palette_picks_tasks: bool,
@@ -500,6 +507,8 @@ impl Workbench {
             cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
                     this.auto_save_now(cx);
+                } else {
+                    this.refresh_branch(cx);
                 }
             }),
         ];
@@ -518,6 +527,9 @@ impl Workbench {
             search_generation: 0,
             auto_save: false,
             format_on_save: false,
+            branch: None,
+            server_status: Vec::new(),
+            extra_footer: Vec::new(),
             task_source: None,
             palette_picks_tasks: false,
             git_view: None,
@@ -1387,6 +1399,8 @@ impl Workbench {
                         .update(cx, |files, cx| files.set_project(Arc::clone(&project), cx));
                     let root = project.info().root.clone();
                     self.project = Some(project);
+                    self.server_status.clear();
+                    self.refresh_branch(cx);
                     self.restart_language_servers(cx);
                     self.inspector
                         .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));
@@ -1797,7 +1811,6 @@ impl Render for Workbench {
                     .visible(self.dock_visible)
                     .child(dock),
             );
-        let toast = self.toast.clone().unwrap_or_default();
         let dialog = self.dialog().map(|dialog| {
             let buttons = dialog.buttons.iter().map(|(decision, label)| {
                 let decision = *decision;
@@ -1874,23 +1887,7 @@ impl Render for Workbench {
                             .lcars
                             .then(|| div().h(px(3.0)).mb_1().bg(gpui::rgb(theme.blue))),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_3()
-                            .child(div().flex_1().min_w_0().child(toast))
-                            .children(
-                                self.problem_summary()
-                                    .map(|summary| div().flex_none().child(summary)),
-                            )
-                            .children(
-                                self.quota
-                                    .clone()
-                                    .map(|quota| div().flex_none().child(quota)),
-                            ),
-                    ),
+                    .child(self.footer_bar(cx)),
             )
             .children(self.overlay_open().then(|| {
                 // A click beside an overlay closes it, and never also presses what is below.

@@ -149,6 +149,7 @@ impl Workbench {
                     return;
                 };
                 let (aftermath, state) = outcome;
+                workbench.refresh_branch(cx);
                 let mut failure = None;
                 match aftermath {
                     Ok(aftermath) => {
