@@ -580,7 +580,7 @@ fn an_unavailable_command_stays_in_the_palette_instead_of_running() {
         .read(|wb, _| wb.palette().cloned())
         .expect("palette is open");
     rig.with(|_wb, window, cx| {
-        palette.update(cx, |palette, cx| palette.set_query("kaydet", window, cx))
+        palette.update(cx, |palette, cx| palette.set_query("dosyayı kaydet", window, cx))
     });
     rig.cx
         .update(|_w, cx| palette.update(cx, |palette, cx| palette.confirm(cx)));
