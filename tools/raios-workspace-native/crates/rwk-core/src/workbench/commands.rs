@@ -25,6 +25,8 @@ pub enum CommandId {
     FindReferences,
     /// List the symbols of the open file.
     Outline,
+    /// Start the language servers again, also the ones that gave up.
+    RestartServers,
     /// Show the next open file read-only beside the active one, or close that split.
     SplitEditor,
     /// Find text in the open file.
@@ -188,7 +190,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 63] = [
+const COMMANDS: [Command; 64] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -427,6 +429,12 @@ const COMMANDS: [Command; 63] = [
         &[],
     ),
     cmd(CommandId::Outline, "Dosyadaki sembolleri göster", None, &[]),
+    cmd(
+        CommandId::RestartServers,
+        "Dil sunucularını yeniden başlat",
+        None,
+        &[],
+    ),
     cmd(CommandId::Problems, "Sorunları göster", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
     cmd(
@@ -633,7 +641,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         ToggleAutoSave | ToggleFormatOnSave | Commands | Project | Settings | Skin | Shortcuts
         | Balanced | EditorLayout | AgentsLayout => allow(),
         Files | Search | Problems | SourceControl | Refresh | RunTask | FocusFiles | Memory
-        | Inspector => needs_project(),
+        | Inspector | RestartServers => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
@@ -737,7 +745,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 63);
+        assert_eq!(catalog().len(), 64);
     }
 
     #[test]

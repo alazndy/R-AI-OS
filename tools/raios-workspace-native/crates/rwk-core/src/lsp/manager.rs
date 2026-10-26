@@ -94,6 +94,7 @@ enum Message {
         generation: u64,
         event: ServerEvent,
     },
+    Restart,
     Shutdown,
 }
 
@@ -247,6 +248,11 @@ impl LanguageServers {
         });
     }
 
+    /// Stops every server and starts again those with open files, also the ones that gave up.
+    pub fn restart(&self) {
+        let _ = self.sender.send(Message::Restart);
+    }
+
     /// Stops every server and waits for the manager thread. Slow: call it off the UI thread.
     pub fn shutdown(mut self) {
         let _ = self.sender.send(Message::Shutdown);
@@ -362,7 +368,19 @@ impl Manager {
                 extra,
                 reply,
             } => self.request(&path, method, position, extra, reply),
+            Message::Restart => self.restart(),
             Message::Shutdown => {}
+        }
+    }
+
+    fn restart(&mut self) {
+        self.stop_all();
+        self.slots.clear();
+        let mut wanted: Vec<&'static str> = self.documents.values().map(|d| d.server).collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        for spec in wanted.into_iter().filter_map(super::servers::spec_named) {
+            self.start(spec);
         }
     }
 
