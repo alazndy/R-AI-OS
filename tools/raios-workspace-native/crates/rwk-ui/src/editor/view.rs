@@ -583,6 +583,53 @@ impl EditorView {
         });
     }
 
+    /// Formats the active file with its language server. The answer is dropped, with a message,
+    /// when the text changed while the server worked: its positions would no longer fit.
+    pub fn format(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(requester), Some(path)) =
+            (self.requester.clone(), self.path().map(str::to_owned))
+        else {
+            self.set_status("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        let Some(before) = self.text_of(&path, cx) else {
+            return;
+        };
+        let answer = super::lsp::format_request(&requester, &path);
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update_in(cx, |view, window, cx| {
+                let Some(index) = view.position_of(&path) else {
+                    return;
+                };
+                if view.text_of(&path, cx).as_deref() != Some(before.as_str()) {
+                    view.set_status("Metin değişti; biçimlendirme uygulanmadı", cx);
+                    return;
+                }
+                let edits = match answer {
+                    Ok(Ok(value)) => super::lsp::formatting_edits(value),
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(AppError::new(
+                        ErrorCode::NotFound,
+                        "Dil sunucusu yanıt vermedi",
+                    )),
+                };
+                match edits {
+                    Ok(edits) if edits.is_empty() => view.set_status("Zaten biçimli", cx),
+                    Ok(edits) => {
+                        view.tabs[index]
+                            .state
+                            .update(cx, |state, cx| state.apply_lsp_edits(&edits, window, cx));
+                        view.set_status("Biçimlendirildi", cx);
+                    }
+                    Err(error) => view.set_status(error.message, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// The text of the tab for `path`, if it is open.
     pub fn text_of(&self, path: &str, cx: &gpui::App) -> Option<String> {
         let index = self.position_of(path)?;

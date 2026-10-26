@@ -17,6 +17,8 @@ pub enum CommandId {
     Search,
     /// Show the problems the language servers found.
     Problems,
+    /// Format the open file with its language server.
+    Format,
     /// Save the open file.
     Save,
     /// Close the active editor tab.
@@ -164,7 +166,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 51] = [
+const COMMANDS: [Command; 52] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -361,6 +363,7 @@ const COMMANDS: [Command; 51] = [
         &[bind_terminal("h", true, false)],
     ),
     cmd(CommandId::NewTask, "Yeni görev…", None, &[]),
+    cmd(CommandId::Format, "Dosyayı biçimlendir", None, &[]),
     cmd(CommandId::Problems, "Sorunları göster", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
     cmd(
@@ -572,7 +575,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor | CloseTab => {
+        Diff | DiffSplit | FocusEditor | CloseTab | Format => {
             if state.file_open {
                 allow()
             } else {
@@ -670,7 +673,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 51);
+        assert_eq!(catalog().len(), 52);
     }
 
     #[test]

@@ -74,8 +74,7 @@ enum Message {
     Request {
         path: String,
         method: &'static str,
-        line: u32,
-        character: u32,
+        position: Option<(u32, u32)>,
         extra: Value,
         reply: Reply,
     },
@@ -138,11 +137,27 @@ impl Requester {
         extra: Value,
         reply: Reply,
     ) {
+        self.send(path, method, Some((line, character)), extra, reply);
+    }
+
+    /// Like [`Self::request`] for a question about the whole document (formatting, code
+    /// actions): `extra` carries everything but the document itself.
+    pub fn request_document(&self, path: &str, method: &'static str, extra: Value, reply: Reply) {
+        self.send(path, method, None, extra, reply);
+    }
+
+    fn send(
+        &self,
+        path: &str,
+        method: &'static str,
+        position: Option<(u32, u32)>,
+        extra: Value,
+        reply: Reply,
+    ) {
         let message = Message::Request {
             path: path.to_owned(),
             method,
-            line,
-            character,
+            position,
             extra,
             reply,
         };
@@ -343,11 +358,10 @@ impl Manager {
             Message::Request {
                 path,
                 method,
-                line,
-                character,
+                position,
                 extra,
                 reply,
-            } => self.request(&path, method, line, character, extra, reply),
+            } => self.request(&path, method, position, extra, reply),
             Message::Shutdown => {}
         }
     }
@@ -357,8 +371,7 @@ impl Manager {
         &self,
         path: &str,
         method: &'static str,
-        line: u32,
-        character: u32,
+        position: Option<(u32, u32)>,
         extra: Value,
         reply: Reply,
     ) {
@@ -372,10 +385,13 @@ impl Manager {
             reply(Err(unavailable()));
             return;
         };
-        let mut params = json!({
-            "textDocument": {"uri": path_to_uri(&self.root, path)},
-            "position": {"line": line, "character": character},
-        });
+        let mut params = json!({"textDocument": {"uri": path_to_uri(&self.root, path)}});
+        if let (Some((line, character)), Some(params)) = (position, params.as_object_mut()) {
+            params.insert(
+                "position".into(),
+                json!({"line": line, "character": character}),
+            );
+        }
         if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
             params.extend(extra.clone());
         }

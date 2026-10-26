@@ -834,6 +834,9 @@ impl Workbench {
             CommandId::RegisterProject => self.register_project(window, cx),
             CommandId::Memory => self.open_memory(window, cx),
             CommandId::Problems => self.open_problems(window, cx),
+            CommandId::Format => self
+                .editor
+                .update(cx, |editor, cx| editor.format(window, cx)),
         }
     }
 

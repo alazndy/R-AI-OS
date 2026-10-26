@@ -1,15 +1,17 @@
-//! Hover, go to definition and completion for one editor tab, answered by the project's
+//! Hover, go to definition, completion, code actions and formatting for one editor tab, answered by the project's
 //! language server. The providers only translate: positions go out, protocol values come back.
 
 use std::rc::Rc;
 
 use anyhow::{anyhow, Result};
-use gpui::{App, Task, Window};
+use gpui::{App, Entity, Task, Window};
 use gpui_base::input::{
-    CompletionProvider, DefinitionProvider, EditorState, HoverProvider, Rope, RopeExt,
+    CodeActionProvider, CompletionProvider, DefinitionProvider, EditorState, HoverProvider, Rope,
+    RopeExt,
 };
 use rwk_core::lsp::lsp_types::{
-    CompletionContext, CompletionResponse, GotoDefinitionResponse, Hover, Location, LocationLink,
+    CodeAction, CodeActionOrCommand, CompletionContext, CompletionResponse, DocumentChanges,
+    GotoDefinitionResponse, Hover, Location, LocationLink, OneOf, Range, TextEdit,
 };
 use rwk_core::lsp::Requester;
 use serde::de::DeserializeOwned;
@@ -131,6 +133,142 @@ impl CompletionProvider for ServerProvider {
     }
 }
 
+impl CodeActionProvider for ServerProvider {
+    fn id(&self) -> gpui::SharedString {
+        "language-server".into()
+    }
+
+    fn code_actions(
+        &self,
+        state: Entity<EditorState>,
+        range: std::ops::Range<usize>,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Vec<CodeAction>>> {
+        let text = state.read(cx).text().clone();
+        let range = Range::new(
+            text.offset_to_position(range.start),
+            text.offset_to_position(range.end),
+        );
+        let (sender, receiver) = async_channel::bounded(1);
+        self.requester.request_document(
+            &self.path,
+            "textDocument/codeAction",
+            serde_json::json!({"range": range, "context": {"diagnostics": []}}),
+            Box::new(move |answer| {
+                let _ = sender.send_blocking(answer);
+            }),
+        );
+        cx.background_executor().spawn(async move {
+            let answer = receiver
+                .recv()
+                .await
+                .map_err(|_| anyhow!("The language server did not answer."))?
+                .map_err(|error| anyhow!(error.message))?;
+            let items: Option<Vec<CodeActionOrCommand>> = serde_json::from_value(answer)?;
+            // A bare command would need the server to run it; only edits are offered.
+            Ok(items
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|item| match item {
+                    CodeActionOrCommand::CodeAction(action) if action.edit.is_some() => {
+                        Some(action)
+                    }
+                    _ => None,
+                })
+                .collect())
+        })
+    }
+
+    fn perform_code_action(
+        &self,
+        state: Entity<EditorState>,
+        action: CodeAction,
+        _push_to_history: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<()>> {
+        let result = edits_for_file(&action, &self.path, &self.requester).map(|edits| {
+            state.update(cx, |state, cx| state.apply_lsp_edits(&edits, window, cx));
+        });
+        Task::ready(result)
+    }
+}
+
+/// The edits of a code action that fall in the file at `path`. An action that also changes
+/// other files is refused whole: applying half of a refactoring would leave the project broken.
+fn edits_for_file(action: &CodeAction, path: &str, requester: &Requester) -> Result<Vec<TextEdit>> {
+    let Some(edit) = &action.edit else {
+        return Err(anyhow!("This action has no edits."));
+    };
+    let mut mine = Vec::new();
+    let mut take = |uri: &str, edits: Vec<TextEdit>| -> Result<()> {
+        if requester.relative_path(uri).as_deref() == Some(path) {
+            mine.extend(edits);
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "This action changes other files, which is not supported yet."
+            ))
+        }
+    };
+    if let Some(changes) = &edit.changes {
+        for (uri, edits) in changes {
+            take(&uri.to_string(), edits.clone())?;
+        }
+    }
+    match &edit.document_changes {
+        Some(DocumentChanges::Edits(documents)) => {
+            for document in documents {
+                let edits = document
+                    .edits
+                    .iter()
+                    .map(|edit| match edit {
+                        OneOf::Left(edit) => edit.clone(),
+                        OneOf::Right(annotated) => annotated.text_edit.clone(),
+                    })
+                    .collect();
+                take(&document.text_document.uri.to_string(), edits)?;
+            }
+        }
+        Some(DocumentChanges::Operations(_)) => {
+            return Err(anyhow!(
+                "This action creates or renames files, which is not supported yet."
+            ))
+        }
+        None => {}
+    }
+    rwk_core::lsp::edits::in_apply_order(mine).map_err(|error| anyhow!(error.message))
+}
+
+/// Asks the server to format the whole file; the answer is the edits, last first.
+pub fn format_request(
+    requester: &Requester,
+    path: &str,
+) -> async_channel::Receiver<rwk_core::error::Result<Value>> {
+    let (sender, receiver) = async_channel::bounded(1);
+    requester.request_document(
+        path,
+        "textDocument/formatting",
+        serde_json::json!({"options": {"tabSize": 4, "insertSpaces": true}}),
+        Box::new(move |answer| {
+            let _ = sender.send_blocking(answer);
+        }),
+    );
+    receiver
+}
+
+/// Reads a formatting answer into edits ready to apply.
+pub fn formatting_edits(answer: Value) -> rwk_core::error::Result<Vec<TextEdit>> {
+    let edits: Option<Vec<TextEdit>> = serde_json::from_value(answer).map_err(|_| {
+        rwk_core::error::AppError::new(
+            rwk_core::error::ErrorCode::InvalidInput,
+            "The language server's formatting answer is not understood.",
+        )
+    })?;
+    rwk_core::lsp::edits::in_apply_order(edits.unwrap_or_default())
+}
+
 /// Every shape a definition answer can take, as links.
 fn links(response: GotoDefinitionResponse) -> Vec<LocationLink> {
     let from_location = |location: Location| LocationLink {
@@ -156,6 +294,7 @@ pub fn attach(state: &mut EditorState, path: &str, requester: &Requester, open: 
     let lsp = state.lsp_mut();
     lsp.hover_provider = Some(provider.clone());
     lsp.definition_provider = Some(provider.clone());
+    lsp.code_action_providers = vec![provider.clone()];
     lsp.completion_provider = Some(provider);
     let (own, requester) = (path.to_owned(), requester.clone());
     lsp.show_document = Some(Rc::new(move |params, _window, cx| {
@@ -179,5 +318,59 @@ pub fn detach(state: &mut EditorState) {
     lsp.hover_provider = None;
     lsp.definition_provider = None;
     lsp.completion_provider = None;
+    lsp.code_action_providers.clear();
     lsp.show_document = None;
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use rwk_core::lsp::lsp_types::{Position, WorkspaceEdit};
+    use rwk_core::lsp::uri::path_to_uri;
+    use rwk_core::lsp::{default_launcher, LanguageServers};
+    use std::collections::HashMap;
+
+    fn edit(text: &str) -> TextEdit {
+        TextEdit {
+            range: Range::new(Position::new(0, 0), Position::new(0, 1)),
+            new_text: text.to_owned(),
+        }
+    }
+
+    #[allow(clippy::mutable_key_type)]
+    fn action(files: &[(&str, &str)], root: &std::path::Path) -> CodeAction {
+        let changes: HashMap<_, _> = files
+            .iter()
+            .map(|(path, text)| {
+                (
+                    path_to_uri(root, path).parse().expect("uri"),
+                    vec![edit(text)],
+                )
+            })
+            .collect();
+        CodeAction {
+            title: "fix".into(),
+            edit: Some(WorkspaceEdit {
+                changes: Some(changes),
+                ..WorkspaceEdit::default()
+            }),
+            ..CodeAction::default()
+        }
+    }
+
+    #[test]
+    fn a_code_action_is_applied_only_when_every_edit_is_in_this_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (servers, _events) = LanguageServers::new(dir.path().to_owned(), default_launcher());
+        let requester = servers.requester();
+
+        let own = edits_for_file(&action(&[("a.rs", "x")], dir.path()), "a.rs", &requester);
+        assert_eq!(own.unwrap()[0].new_text, "x");
+
+        let both = action(&[("a.rs", "x"), ("b.rs", "y")], dir.path());
+        assert!(edits_for_file(&both, "a.rs", &requester).is_err());
+
+        let no_edit = CodeAction::default();
+        assert!(edits_for_file(&no_edit, "a.rs", &requester).is_err());
+    }
 }

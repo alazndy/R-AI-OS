@@ -3,6 +3,7 @@
 //! diagnostics, hovers and completions.
 
 pub mod client;
+pub mod edits;
 pub mod framing;
 pub mod manager;
 pub mod problems;

@@ -4081,6 +4081,9 @@ while True:
         uri = m['params']['textDocument']['uri'].replace('a.rs', 'b.rs')
         send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'uri': uri,
             'range': {'start': {'line': 4, 'character': 1}, 'end': {'line': 4, 'character': 3}}}})
+    elif method == 'textDocument/formatting':
+        e = lambda l, c0, c1, t: {'range': {'start': {'line': l, 'character': c0}, 'end': {'line': l, 'character': c1}}, 'newText': t}
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': [e(0, 0, 2, 'FN'), e(1, 5, 5, ';')]})
     elif method == 'textDocument/completion':
         send({'jsonrpc': '2.0', 'id': m['id'], 'result': [{'label': 'alpha'}]})
     elif method == 'shutdown':
@@ -4226,4 +4229,32 @@ fn language_server_answers_hover_definition_and_completion() {
         completions,
         rwk_core::lsp::lsp_types::CompletionResponse::Array(items) if items[0].label == "alpha"
     ));
+}
+
+#[test]
+fn the_format_command_applies_the_servers_edits_last_first() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+
+    rig.run(CommandId::Format);
+    assert!(rig.settle_until(|rig| rig.editor_text() == "FN a() {}\nlet x;\n"));
 }
