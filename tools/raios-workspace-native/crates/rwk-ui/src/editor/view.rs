@@ -621,6 +621,21 @@ impl EditorView {
         });
     }
 
+    /// Puts the cursor of the active file at the 0-based `line` and `character`.
+    pub fn set_cursor(
+        &mut self,
+        line: u32,
+        character: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.state.update(cx, |state, cx| {
+                state.set_cursor_position(Position::new(line, character), window, cx)
+            });
+        }
+    }
+
     /// The symbol under the cursor: path, 0-based line and column, and its name.
     pub fn symbol_at_cursor(&self, cx: &gpui::App) -> Option<(String, u32, u32, String)> {
         let tab = self.tabs.get(self.active)?;
