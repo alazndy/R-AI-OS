@@ -3993,3 +3993,55 @@ fn a_bound_terminal_whose_process_ended_marks_its_task() {
     // The pane is still there and still carries the task.
     assert_eq!(rig.read(|wb, _| wb.terminal_count()), 1);
 }
+
+#[test]
+fn the_empty_part_of_the_file_tree_offers_new_entries_at_the_project_root() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.with(|wb, window, cx| {
+        wb.open_file_menu(String::new(), true, point(px(60.0), px(400.0)), window, cx)
+    });
+    let labels = enabled_labels(&mut rig);
+    assert!(labels.contains(&"Yeni dosya…".to_owned()), "{labels:?}");
+    assert!(labels.contains(&"Yeni klasör…".to_owned()));
+    assert!(
+        !labels.contains(&"Sil…".to_owned()),
+        "the root cannot be deleted"
+    );
+    assert!(!labels.contains(&"Yeniden adlandır…".to_owned()));
+    line_index(&mut rig, &MenuAction::NewFile(String::new()));
+}
+
+#[test]
+fn right_clicking_below_the_tree_rows_opens_the_root_menu() {
+    use gpui::{Modifiers, MouseButton};
+
+    let mut rig = rig();
+    rig.open_project();
+    rig.settle_for(100);
+    let size = rig.cx.update(|window, _| window.viewport_size());
+    // The tree is the left column; sweep its lower part, below the few rows of the test project.
+    let mut found = false;
+    'scan: for row in 0..10 {
+        for column in 0..4 {
+            let at = point(
+                px(30.0 + 40.0 * column as f32),
+                size.height * (0.5 + 0.04 * row as f32),
+            );
+            rig.cx
+                .simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+            rig.settle_for(30);
+            if rig.read(|wb, _| wb.context_menu().is_some()) {
+                if enabled_labels(&mut rig).contains(&"Yeni dosya…".to_owned())
+                    && !enabled_labels(&mut rig).contains(&"Sil…".to_owned())
+                {
+                    found = true;
+                    break 'scan;
+                }
+                rig.cx.simulate_keystrokes("escape");
+                rig.settle_for(30);
+            }
+        }
+    }
+    assert!(found, "no point below the rows opened the root menu");
+}

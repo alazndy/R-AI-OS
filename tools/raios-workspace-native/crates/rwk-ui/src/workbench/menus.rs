@@ -200,6 +200,28 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         let mut lines = Vec::new();
+        if path.is_empty() {
+            // The empty part of the tree: the project root itself.
+            lines.push((
+                Line::item("Yeni dosya…", None),
+                Some(MenuAction::NewFile(String::new())),
+            ));
+            lines.push((
+                Line::item("Yeni klasör…", None),
+                Some(MenuAction::NewFolder(String::new())),
+            ));
+            lines.push((Line::Rule, None));
+            lines.extend(self.command_lines(
+                &[
+                    MenuEntry::Command(CommandId::Files),
+                    MenuEntry::Command(CommandId::Search),
+                    MenuEntry::Command(CommandId::Refresh),
+                ],
+                cx,
+            ));
+            self.open_menu(lines, at, window, cx);
+            return;
+        }
         if !folder {
             lines.push((
                 Line::item("Aç", None),

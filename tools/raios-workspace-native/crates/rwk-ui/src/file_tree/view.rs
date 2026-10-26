@@ -457,6 +457,19 @@ impl Render for FileTreeView {
                     .min_h_0()
                     .py_1()
                     .overflow_y_scroll()
+                    // The empty part below the rows (rows stop their own right clicks): the
+                    // project root, so a file can be created at the top level.
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(|_, event: &gpui::MouseDownEvent, _window, cx| {
+                            cx.emit(FileTreeEvent::ContextMenu {
+                                path: String::new(),
+                                folder: true,
+                                position: event.position,
+                            });
+                            cx.stop_propagation();
+                        }),
+                    )
                     .children(rows),
             )
             .child(
