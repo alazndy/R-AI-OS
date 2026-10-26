@@ -15,6 +15,8 @@ pub enum CommandId {
     Files,
     /// Search the project's text through the RAIOS CLI's index.
     Search,
+    /// Show the problems the language servers found.
+    Problems,
     /// Save the open file.
     Save,
     /// Close the active editor tab.
@@ -162,7 +164,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 50] = [
+const COMMANDS: [Command; 51] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -359,6 +361,7 @@ const COMMANDS: [Command; 50] = [
         &[bind_terminal("h", true, false)],
     ),
     cmd(CommandId::NewTask, "Yeni görev…", None, &[]),
+    cmd(CommandId::Problems, "Sorunları göster", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
     cmd(
         CommandId::RegisterProject,
@@ -563,7 +566,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
     match id {
         Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
         | AgentsLayout => allow(),
-        Files | Search | Refresh | FocusFiles | Memory | Inspector => needs_project(),
+        Files | Search | Problems | Refresh | FocusFiles | Memory | Inspector => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
@@ -667,7 +670,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 50);
+        assert_eq!(catalog().len(), 51);
     }
 
     #[test]

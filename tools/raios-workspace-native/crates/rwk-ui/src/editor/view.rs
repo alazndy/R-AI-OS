@@ -531,6 +531,45 @@ impl EditorView {
             .collect()
     }
 
+    /// The text of the tab for `path`, if it is open.
+    pub fn text_of(&self, path: &str, cx: &gpui::App) -> Option<String> {
+        let index = self.position_of(path)?;
+        Some(self.tabs[index].state.read(cx).value().to_string())
+    }
+
+    /// Shows the language server's diagnostics for `path` under the text. A file that is not
+    /// open is ignored.
+    pub fn set_diagnostics(
+        &mut self,
+        path: &str,
+        diagnostics: &[rwk_core::lsp::lsp_types::Diagnostic],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.position_of(path) else {
+            return;
+        };
+        self.tabs[index].state.update(cx, |state, cx| {
+            if let Some(set) = state.diagnostics_mut() {
+                set.clear();
+                set.extend(diagnostics.iter().cloned());
+            }
+            cx.notify();
+        });
+    }
+
+    /// How many diagnostics the tab for `path` shows.
+    pub fn diagnostic_count(&self, path: &str, cx: &gpui::App) -> usize {
+        self.position_of(path)
+            .and_then(|index| {
+                self.tabs[index]
+                    .state
+                    .read(cx)
+                    .diagnostics()
+                    .map(|set| set.len())
+            })
+            .unwrap_or(0)
+    }
+
     /// Index of the active tab (what the saved workspace stores).
     pub fn active_index(&self) -> usize {
         self.active

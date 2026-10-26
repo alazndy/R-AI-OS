@@ -4045,3 +4045,91 @@ fn right_clicking_below_the_tree_rows_opens_the_root_menu() {
     }
     assert!(found, "no point below the rows opened the root menu");
 }
+
+/// A language server stand-in: answers `initialize` and reports one error on line 2 and one
+/// warning on line 1 of every file it is sent. Needs `python3`.
+const FAKE_LSP: &str = r#"
+import json, sys
+def read():
+    length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: return None
+        line = line.strip()
+        if not line: break
+        if line.lower().startswith(b'content-length:'): length = int(line.split(b':')[1])
+    return json.loads(sys.stdin.buffer.read(length))
+def send(value):
+    body = json.dumps(value).encode()
+    sys.stdout.buffer.write(b'Content-Length: %d\r\n\r\n' % len(body) + body)
+    sys.stdout.buffer.flush()
+while True:
+    m = read()
+    if m is None: break
+    method = m.get('method')
+    if method == 'initialize':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'capabilities': {}}})
+    elif method == 'textDocument/didOpen':
+        uri = m['params']['textDocument']['uri']
+        r = lambda l: {'start': {'line': l, 'character': 0}, 'end': {'line': l, 'character': 2}}
+        send({'jsonrpc': '2.0', 'method': 'textDocument/publishDiagnostics', 'params': {'uri': uri, 'diagnostics': [
+            {'range': r(1), 'severity': 1, 'message': 'broken'},
+            {'range': r(0), 'severity': 2, 'message': 'odd'}]}})
+    elif method == 'shutdown':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': None})
+    elif method == 'exit':
+        break
+"#;
+
+#[test]
+fn language_server_problems_reach_the_editor_the_status_line_and_the_problems_view() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+    assert_eq!(
+        rig.read(|wb, _| wb.problem_summary()),
+        Some("1 hata · 1 uyarı".to_owned())
+    );
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).diagnostic_count("a.rs", cx)),
+        2
+    );
+
+    // The Problems view lists the error first; choosing it opens the file on that line.
+    rig.run(CommandId::Problems);
+    let first = rig.read(|wb, cx| {
+        wb.problems_view()
+            .map(|view| view.read(cx).problems().first().cloned())
+    });
+    let first = first.flatten().expect("the view lists problems");
+    assert_eq!((first.path.as_str(), first.line), ("a.rs", 2));
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.problems_view().is_none()));
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(2)
+    );
+
+    // Closing the tab forgets its problems.
+    rig.with(|wb, window, cx| wb.request_close_tab("a.rs".to_owned(), window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_none())));
+}

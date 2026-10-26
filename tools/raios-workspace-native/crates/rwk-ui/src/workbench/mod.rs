@@ -7,6 +7,7 @@ pub mod dock;
 pub mod entries;
 pub mod host;
 pub mod layout;
+pub mod lsp;
 pub mod memory;
 pub mod menus;
 pub mod offers;
@@ -251,6 +252,14 @@ pub struct Workbench {
     search_subscription: Option<Subscription>,
     /// Bumped on every search and on every close; an answer for an older search is dropped.
     search_generation: u64,
+    /// How language servers are started; `None` turns them off.
+    lsp_launcher: Option<rwk_core::lsp::Launcher>,
+    servers: Option<rwk_core::lsp::LanguageServers>,
+    problems: rwk_core::lsp::Problems,
+    problems_view: Option<Entity<crate::problems::ProblemsView>>,
+    problems_subscription: Option<Subscription>,
+    lsp_task: Option<Task<()>>,
+    lsp_sync_task: Option<Task<()>>,
     /// Where the quota signal is read from (the application sets it).
     usage_source: Option<Arc<dyn rwk_core::usage::UsageSource>>,
     /// The last quota reading, shown at the right of the status bar.
@@ -486,6 +495,13 @@ impl Workbench {
             search: None,
             search_subscription: None,
             search_generation: 0,
+            lsp_launcher: None,
+            servers: None,
+            problems: rwk_core::lsp::Problems::default(),
+            problems_view: None,
+            problems_subscription: None,
+            lsp_task: None,
+            lsp_sync_task: None,
             usage_source: None,
             quota: None,
             usage_task: None,
@@ -817,6 +833,7 @@ impl Workbench {
             CommandId::Handoff => self.open_composer(None, window, cx),
             CommandId::RegisterProject => self.register_project(window, cx),
             CommandId::Memory => self.open_memory(window, cx),
+            CommandId::Problems => self.open_problems(window, cx),
         }
     }
 
@@ -1217,10 +1234,19 @@ impl Workbench {
                 selection,
                 editable,
             } => self.open_text_menu(*selection, *editable, *position, window, cx),
-            EditorEvent::Edited
-            | EditorEvent::Opened(_)
-            | EditorEvent::Closed(_)
-            | EditorEvent::Activated(_) => self.note_workspace_change(cx),
+            EditorEvent::Opened(path) => {
+                self.lsp_opened(path, cx);
+                self.note_workspace_change(cx);
+            }
+            EditorEvent::Closed(path) => {
+                self.lsp_closed(path, cx);
+                self.note_workspace_change(cx);
+            }
+            EditorEvent::Edited => {
+                self.lsp_edited(cx);
+                self.note_workspace_change(cx);
+            }
+            EditorEvent::Activated(_) => self.note_workspace_change(cx),
         }
     }
 
@@ -1274,6 +1300,7 @@ impl Workbench {
                     self.flush_workspace(cx);
                     self.close_palette(window, cx);
                     self.close_search(window, cx);
+                    self.close_problems(window, cx);
                     self.stop_terminals(false);
                     self.editor
                         .update(cx, |editor, cx| editor.clear(window, cx));
@@ -1282,6 +1309,7 @@ impl Workbench {
                         .update(cx, |files, cx| files.set_project(Arc::clone(&project), cx));
                     let root = project.info().root.clone();
                     self.project = Some(project);
+                    self.restart_language_servers(cx);
                     self.inspector
                         .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));
                     self.register_if_unknown(window, cx);
@@ -1774,6 +1802,10 @@ impl Render for Workbench {
                             .gap_3()
                             .child(div().flex_1().min_w_0().child(toast))
                             .children(
+                                self.problem_summary()
+                                    .map(|summary| div().flex_none().child(summary)),
+                            )
+                            .children(
                                 self.quota
                                     .clone()
                                     .map(|quota| div().flex_none().child(quota)),
@@ -1787,6 +1819,7 @@ impl Render for Workbench {
             .children(self.rename_prompt.clone())
             .children(self.memory.clone())
             .children(self.search.clone())
+            .children(self.problems_view.clone())
             .children(self.menu.as_ref().map(|open| open.view.clone()))
             .children(dialog)
     }
