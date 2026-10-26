@@ -114,6 +114,9 @@ fn main() {
                 });
             }
             if let Some(home) = config_home() {
+                rwk_core::lsp::set_user_servers(persistence::load_user_servers(
+                    &persistence::servers_path(&home),
+                ));
                 let source: Arc<dyn rwk_core::runner::TaskSource> =
                     Arc::new(persistence::FsTaskStore::new(&home));
                 workbench.update(cx, |workbench, _| workbench.set_task_source(Some(source)));

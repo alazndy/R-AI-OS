@@ -526,7 +526,7 @@ impl Manager {
                 let slot = self.slots.entry(server).or_default();
                 slot.running = None;
                 slot.restarts += 1;
-                let spec = super::servers::SERVERS.iter().find(|s| s.name == server);
+                let spec = super::servers::spec_named(server);
                 match spec {
                     Some(spec) if slot.restarts <= 1 => self.start(spec),
                     _ => {
