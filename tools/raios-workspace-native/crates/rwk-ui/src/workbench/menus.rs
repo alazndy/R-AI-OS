@@ -14,8 +14,8 @@ use gpui::{AppContext, Entity};
 use rwk_core::handoff_flow::TaskLink;
 use rwk_core::tasks::TaskStatus;
 use rwk_core::workbench::{
-    available, catalog, menu_entries, toolbar, toolbar_pressed, CommandId, MenuEntry, MenuTarget,
-    Theme, ToolbarItem,
+    available, catalog, menu_entries, toolbar, toolbar_icon, toolbar_pressed, CommandId, MenuEntry,
+    MenuTarget, Theme, ToolbarGroup, ToolbarItem,
 };
 
 use super::Workbench;
@@ -118,7 +118,7 @@ pub(super) struct OpenMenu {
 }
 
 /// A tooltip: one line of text.
-struct Tip(SharedString);
+pub(super) struct Tip(pub(super) SharedString);
 
 impl Render for Tip {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -566,10 +566,14 @@ impl Workbench {
     /// What each toolbar button shows right now, left to right (rules are not listed).
     pub fn toolbar_buttons(&self, cx: &gpui::App) -> Vec<ToolbarButton> {
         let state = self.state(cx);
+        let mut group = ToolbarGroup::Files;
         toolbar()
             .iter()
             .filter_map(|item| match item {
-                ToolbarItem::Separator => None,
+                ToolbarItem::Group(next) => {
+                    group = *next;
+                    None
+                }
                 ToolbarItem::Button(id, caption) => {
                     let verdict = available(*id, &state);
                     let command = catalog().iter().find(|command| command.id == *id);
@@ -587,40 +591,71 @@ impl Workbench {
                         enabled: verdict.enabled,
                         pressed: toolbar_pressed(*id, self.dock_visible, self.inspector_visible),
                         tip,
+                        icon: toolbar_icon(*id),
+                        group,
                     })
                 }
             })
             .collect()
     }
 
-    /// The row of buttons above the panes.
+    /// The row of buttons above the panes: the RAIOS mark, then the buttons by category, each
+    /// category in its own colour with its label in front.
     pub(super) fn toolbar_row(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
         let mut buttons = self.toolbar_buttons(cx).into_iter();
+        let mark = div()
+            .id("toolbar-brand")
+            .flex_none()
+            .mr_1()
+            .child(
+                gpui::svg()
+                    .path(crate::assets::BRAND_PATH)
+                    .size(px(20.0))
+                    .text_color(gpui::rgb(theme.accent_ink)),
+            )
+            .tooltip(|_window, cx| cx.new(|_| Tip("RAIOS Workspace".into())).into())
+            .into_any_element();
+        let mut group = ToolbarGroup::Files;
         let items = toolbar()
             .iter()
             .enumerate()
             .map(|(index, item)| match item {
-                ToolbarItem::Separator => div()
-                    .id(SharedString::from(format!("toolbar-rule-{index}")))
-                    .flex_none()
-                    .mx_1()
-                    .h(px(16.0))
-                    .w(px(1.0))
-                    .bg(gpui::rgb(theme.line))
-                    .into_any_element(),
+                ToolbarItem::Group(next) => {
+                    group = *next;
+                    let color = group_color(group, theme.dark);
+                    div()
+                        .id(SharedString::from(format!("toolbar-group-{index}")))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .ml_2()
+                        .mr_0p5()
+                        .pl_1()
+                        .h(px(18.0))
+                        .border_l_2()
+                        .border_color(gpui::rgb(color))
+                        .text_color(gpui::rgb(color))
+                        .text_size(px(9.0))
+                        .whitespace_nowrap()
+                        .child(group.label())
+                        .into_any_element()
+                }
                 ToolbarItem::Button(..) => {
                     let Some(shown) = buttons.next() else {
                         return div().into_any_element();
                     };
                     let id = shown.id;
                     let tip = shown.tip.clone();
+                    let color = group_color(shown.group, theme.dark);
                     div()
                         .id(SharedString::from(format!("toolbar-{id:?}")))
                         .flex_none()
                         .px_2()
-                        .h(px(22.0))
+                        .h(px(24.0))
                         .flex()
                         .items_center()
+                        .gap_1()
                         .rounded_sm()
                         .text_xs()
                         .whitespace_nowrap()
@@ -632,6 +667,17 @@ impl Workbench {
                         }))
                         .when_pressed(shown.pressed, theme)
                         .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+                        .child(
+                            gpui::svg()
+                                .path(crate::assets::toolbar_icon_path(shown.icon))
+                                .size(px(14.0))
+                                .flex_none()
+                                .text_color(gpui::rgb(if shown.enabled {
+                                    color
+                                } else {
+                                    theme.muted
+                                })),
+                        )
                         .child(shown.caption)
                         .tooltip(move |_window, cx| {
                             let text = SharedString::from(tip.clone());
@@ -645,7 +691,7 @@ impl Workbench {
         div()
             .id("toolbar")
             .flex_none()
-            .h(px(28.0))
+            .h(px(32.0))
             .px_2()
             .flex()
             .flex_row()
@@ -655,6 +701,7 @@ impl Workbench {
             .bg(gpui::rgb(theme.panel))
             .border_b_1()
             .border_color(gpui::rgb(theme.line))
+            .child(mark)
             .children(items)
             .into_any_element()
     }
@@ -673,6 +720,26 @@ pub struct ToolbarButton {
     pub pressed: bool,
     /// The tooltip: label and shortcut, or label and the reason it cannot run.
     pub tip: String,
+    /// The icon drawn before the caption.
+    pub icon: &'static str,
+    /// The category the button sits in.
+    pub group: ToolbarGroup,
+}
+
+/// The colour of a toolbar category: bright on a dark tone, deep on a light one.
+pub fn group_color(group: ToolbarGroup, dark: bool) -> u32 {
+    let (bright, deep) = match group {
+        ToolbarGroup::Files => (0x4ea1ff, 0x0b5fa5),
+        ToolbarGroup::Terminal => (0x3fb950, 0x1a7f37),
+        ToolbarGroup::Work => (0xffa657, 0xb35900),
+        ToolbarGroup::View => (0xc586c0, 0x8f3f9f),
+        ToolbarGroup::Tools => (0x9aa4b2, 0x5a6472),
+    };
+    if dark {
+        bright
+    } else {
+        deep
+    }
 }
 
 /// Styling of a pressed (toggled on) button.
