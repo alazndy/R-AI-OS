@@ -190,3 +190,169 @@ impl Workbench {
         cx.notify();
     }
 }
+
+impl Workbench {
+    /// Shows a list of places under `title`; choosing one opens it.
+    fn show_locations(
+        &mut self,
+        title: String,
+        places: Vec<rwk_core::lsp::symbols::Place>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let list = places
+            .into_iter()
+            .map(|place| rwk_core::lsp::Problem {
+                path: place.path,
+                line: place.line,
+                column: place.column,
+                severity: rwk_core::lsp::Severity::Info,
+                message: place.label,
+                source: None,
+            })
+            .collect();
+        let theme = self.theme();
+        let view = cx.new(|cx| ProblemsView::titled(title, list, window, cx));
+        view.update(cx, |view, cx| view.set_theme(theme, cx));
+        self.locations_subscription = Some(cx.subscribe_in(
+            &view,
+            window,
+            |this, _view, event: &ProblemsEvent, window, cx| match event {
+                ProblemsEvent::Open(path, line) => {
+                    this.close_locations(window, cx);
+                    this.request_open_file_at(path.clone(), Some(*line), window, cx);
+                }
+                ProblemsEvent::Close => this.close_locations(window, cx),
+            },
+        ));
+        self.locations_view = Some(view);
+        cx.notify();
+    }
+
+    /// Closes the places list and returns focus to the workbench.
+    pub fn close_locations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.locations_view = None;
+        self.locations_subscription = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// The places list on screen.
+    pub fn locations_view(&self) -> Option<&gpui::Entity<ProblemsView>> {
+        self.locations_view.as_ref()
+    }
+
+    /// Lists where the symbol under the cursor is used.
+    pub(super) fn find_references(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(requester), Some(project)) = (self.language_requester(), self.project.clone())
+        else {
+            self.say("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        let Some((path, line, character, word)) = self.editor.read(cx).symbol_at_cursor(cx) else {
+            self.say("İmleç bir sembolün üzerinde değil", cx);
+            return;
+        };
+        self.say("Kullanılan yerler aranıyor…", cx);
+        let answer = crate::editor::lsp::ask_with_timeout(
+            &requester,
+            &path,
+            "textDocument/references",
+            Some((line, character)),
+            serde_json::json!({"context": {"includeDeclaration": true}}),
+            Duration::from_secs(10),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            let places = match answer {
+                Ok(Ok(value)) => {
+                    rwk_core::lsp::symbols::references(value, |uri| requester.relative_path(uri))
+                }
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(rwk_core::error::AppError::new(
+                    rwk_core::error::ErrorCode::NotFound,
+                    "Dil sunucusu yanıt vermedi",
+                )),
+            };
+            // The lines are read on the background executor, each file once.
+            let filled = match places {
+                Ok(places) => Ok(cx
+                    .background_executor()
+                    .spawn(async move {
+                        let mut files: std::collections::HashMap<String, Vec<String>> =
+                            std::collections::HashMap::new();
+                        places
+                            .into_iter()
+                            .map(|mut place| {
+                                let lines = files.entry(place.path.clone()).or_insert_with(|| {
+                                    project
+                                        .read_document(&place.path)
+                                        .map(|document| {
+                                            document.content.lines().map(str::to_owned).collect()
+                                        })
+                                        .unwrap_or_default()
+                                });
+                                place.label = lines
+                                    .get(place.line - 1)
+                                    .map(|text| text.trim().to_owned())
+                                    .unwrap_or_default();
+                                place
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .await),
+                Err(error) => Err(error),
+            };
+            this.update_in(cx, |workbench, window, cx| match filled {
+                Ok(places) if places.is_empty() => workbench.say("Kullanıldığı yer bulunamadı", cx),
+                Ok(places) => {
+                    workbench.show_locations(format!("KULLANIMLAR · {word}"), places, window, cx)
+                }
+                Err(error) => workbench.say(error.message, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Lists the symbols of the open file.
+    pub(super) fn show_outline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(requester), Some(path)) = (
+            self.language_requester(),
+            self.editor.read(cx).path().map(str::to_owned),
+        ) else {
+            self.say("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        let answer = crate::editor::lsp::ask_with_timeout(
+            &requester,
+            &path,
+            "textDocument/documentSymbol",
+            None,
+            serde_json::json!({}),
+            Duration::from_secs(10),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update_in(cx, |workbench, window, cx| {
+                let places = match answer {
+                    Ok(Ok(value)) => rwk_core::lsp::symbols::outline(value, &path),
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(rwk_core::error::AppError::new(
+                        rwk_core::error::ErrorCode::NotFound,
+                        "Dil sunucusu yanıt vermedi",
+                    )),
+                };
+                match places {
+                    Ok(places) if places.is_empty() => workbench.say("Dosyada sembol yok", cx),
+                    Ok(places) => {
+                        workbench.show_locations(format!("SEMBOLLER · {path}"), places, window, cx)
+                    }
+                    Err(error) => workbench.say(error.message, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+}

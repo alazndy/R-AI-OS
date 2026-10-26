@@ -270,6 +270,37 @@ pub fn format_request(
     receiver
 }
 
+/// Asks the server `method` about the document, at `position` (0-based line and column) when
+/// the question is about a symbol. A slow server ends in an error after `timeout`.
+pub fn ask_with_timeout(
+    requester: &Requester,
+    path: &str,
+    method: &'static str,
+    position: Option<(u32, u32)>,
+    extra: Value,
+    timeout: std::time::Duration,
+) -> async_channel::Receiver<rwk_core::error::Result<Value>> {
+    let (sender, receiver) = async_channel::bounded(1);
+    let late = sender.clone();
+    let _ = std::thread::Builder::new()
+        .name("lsp-ask-timeout".into())
+        .spawn(move || {
+            std::thread::sleep(timeout);
+            let _ = late.try_send(Err(rwk_core::error::AppError::new(
+                rwk_core::error::ErrorCode::NotFound,
+                "Dil sunucusu zamanında yanıt vermedi",
+            )));
+        });
+    let reply = Box::new(move |answer| {
+        let _ = sender.send_blocking(answer);
+    });
+    match position {
+        Some((line, character)) => requester.request(path, method, line, character, extra, reply),
+        None => requester.request_document(path, method, extra, reply),
+    }
+    receiver
+}
+
 /// Asks the server to rename the symbol at `line`:`character`; the answer is a workspace edit.
 pub fn rename_request(
     requester: &Requester,

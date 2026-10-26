@@ -21,6 +21,7 @@ impl EventEmitter<ProblemsEvent> for ProblemsView {}
 
 /// The Problems view.
 pub struct ProblemsView {
+    title: SharedString,
     /// The servers' list, errors first.
     raw: Vec<Problem>,
     /// What is on screen, in order: `raw`, or by file when `grouped`.
@@ -34,9 +35,21 @@ pub struct ProblemsView {
 impl ProblemsView {
     /// A view of `problems`; it takes focus so the arrow keys and Esc work.
     pub fn new(problems: Vec<Problem>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::titled("SORUNLAR", problems, window, cx)
+    }
+
+    /// A list under another heading (usages, a file's symbols); it shows what it was given
+    /// and is not touched by the language servers' later diagnostics.
+    pub fn titled(
+        title: impl Into<SharedString>,
+        problems: Vec<Problem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         Self {
+            title: title.into(),
             raw: problems.clone(),
             problems,
             grouped: false,
@@ -133,9 +146,9 @@ impl Render for ProblemsView {
         let theme = self.theme;
         let selected = self.selected;
         let status = if self.problems.is_empty() {
-            "Sorun yok.".to_owned()
+            "Sonuç yok.".to_owned()
         } else {
-            format!("{} sorun", self.problems.len())
+            format!("{} satır", self.problems.len())
         };
         let grouped = self.grouped;
         let counts: std::collections::HashMap<String, (usize, usize)> =
@@ -250,7 +263,7 @@ impl Render for ProblemsView {
                         div()
                             .flex_1()
                             .text_color(gpui::rgb(theme.muted))
-                            .child("SORUNLAR"),
+                            .child(self.title.clone()),
                     )
                     .child(
                         div()

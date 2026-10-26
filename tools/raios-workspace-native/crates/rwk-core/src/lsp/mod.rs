@@ -8,6 +8,7 @@ pub mod framing;
 pub mod manager;
 pub mod problems;
 pub mod servers;
+pub mod symbols;
 pub mod uri;
 
 pub use client::{LspClient, ServerEvent};

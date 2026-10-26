@@ -292,6 +292,9 @@ pub struct Workbench {
     problems: rwk_core::lsp::Problems,
     problems_view: Option<Entity<crate::problems::ProblemsView>>,
     problems_subscription: Option<Subscription>,
+    /// A list of places (usages, a file's symbols), shown like the Problems view.
+    locations_view: Option<Entity<crate::problems::ProblemsView>>,
+    locations_subscription: Option<Subscription>,
     lsp_task: Option<Task<()>>,
     lsp_sync_task: Option<Task<()>>,
     /// Where the quota signal is read from (the application sets it).
@@ -553,6 +556,8 @@ impl Workbench {
             problems: rwk_core::lsp::Problems::default(),
             problems_view: None,
             problems_subscription: None,
+            locations_view: None,
+            locations_subscription: None,
             lsp_task: None,
             lsp_sync_task: None,
             usage_source: None,
@@ -896,6 +901,8 @@ impl Workbench {
             CommandId::RunTask => self.open_task_palette(window, cx),
             CommandId::OpenOutputLocation => self.open_output_location(window, cx),
             CommandId::RenameSymbol => self.open_symbol_prompt(window, cx),
+            CommandId::FindReferences => self.find_references(window, cx),
+            CommandId::Outline => self.show_outline(window, cx),
             CommandId::Format => self
                 .editor
                 .update(cx, |editor, cx| editor.format(window, cx)),
@@ -996,6 +1003,7 @@ impl Workbench {
             || self.memory.is_some()
             || self.search.is_some()
             || self.problems_view.is_some()
+            || self.locations_view.is_some()
             || self.git_view.is_some()
     }
 
@@ -1003,6 +1011,8 @@ impl Workbench {
     pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.git_view.is_some() {
             self.close_git(window, cx);
+        } else if self.locations_view.is_some() {
+            self.close_locations(window, cx);
         } else if self.problems_view.is_some() {
             self.close_problems(window, cx);
         } else if self.search.is_some() {
@@ -1937,6 +1947,7 @@ impl Render for Workbench {
             .children(self.memory.clone())
             .children(self.search.clone())
             .children(self.problems_view.clone())
+            .children(self.locations_view.clone())
             .children(self.git_view.clone())
             .children(self.menu.as_ref().map(|open| open.view.clone()))
             .children(dialog)
