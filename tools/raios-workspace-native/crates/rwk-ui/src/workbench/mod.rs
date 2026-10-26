@@ -779,6 +779,7 @@ impl Workbench {
         match id {
             CommandId::Project => self.pick_project(window, cx),
             CommandId::Save => self.save(window, cx),
+            CommandId::SplitEditor => self.editor.update(cx, |editor, cx| editor.toggle_split(cx)),
             CommandId::FindInFile => self.find(false, window, cx),
             CommandId::ReplaceInFile => self.find(true, window, cx),
             CommandId::ToggleAutoSave => self.toggle_auto_save(cx),

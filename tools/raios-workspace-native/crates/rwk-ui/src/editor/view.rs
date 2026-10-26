@@ -131,6 +131,8 @@ pub struct EditorView {
     tabs: Vec<Tab>,
     active: usize,
     diff_split: bool,
+    /// The file shown read-only beside the active one, when the editor is split.
+    split: Option<String>,
     /// The message under the editor (last action's outcome).
     status: Option<SharedString>,
     /// Bumped by every read request; a read that finishes for a superseded request is dropped.
@@ -172,6 +174,7 @@ impl EditorView {
             diff_generation: 0,
             restore_generation: 0,
             requester: None,
+            split: None,
         }
     }
 
@@ -275,6 +278,7 @@ impl EditorView {
     pub fn clear(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.tabs.clear();
         self.requests.clear();
+        self.split = None;
         self.active = 0;
         self.status = None;
         self.diff_generation += 1;
@@ -296,6 +300,7 @@ impl EditorView {
         if was_active {
             self.focus(window, cx);
         }
+        self.fix_split(cx);
         cx.emit(EditorEvent::Closed(path.to_owned()));
         cx.notify();
     }
@@ -305,7 +310,12 @@ impl EditorView {
         let Some(index) = self.position_of(path) else {
             return;
         };
+        // Activating the file on the right trades places with the one that was active.
+        if self.split.as_deref() == Some(path) {
+            self.split = self.path().map(str::to_owned);
+        }
         self.active = index;
+        self.fix_split(cx);
         self.focus(window, cx);
         cx.emit(EditorEvent::Activated(path.to_owned()));
         cx.notify();
@@ -445,6 +455,7 @@ impl EditorView {
             ))
         });
         self.active = index;
+        self.fix_split(cx);
         cx.emit(EditorEvent::Opened(path));
         cx.notify();
         // The editor lays a new text out during paint; without input nothing else would ask for
@@ -678,6 +689,56 @@ impl EditorView {
                 .ok();
         })
         .detach();
+    }
+
+    /// The file shown beside the active one, when the editor is split.
+    pub fn split_path(&self) -> Option<&str> {
+        self.split.as_deref()
+    }
+
+    /// Splits the editor, showing the next open file read-only beside the active one; splits
+    /// back into one pane when it is split already.
+    pub fn toggle_split(&mut self, cx: &mut Context<Self>) {
+        if self.split.take().is_some() {
+            self.fix_split(cx);
+            cx.notify();
+            return;
+        }
+        if self.tabs.len() < 2 {
+            self.set_status("Bölmek için ikinci bir dosya açın", cx);
+            return;
+        }
+        let next = (self.active + 1) % self.tabs.len();
+        self.split = self.tabs[next].path().map(str::to_owned);
+        self.fix_split(cx);
+        cx.notify();
+    }
+
+    /// Trades the active file and the one beside it, so the right one can be edited.
+    pub fn swap_split(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = self.split.clone() {
+            self.activate_tab(&path, window, cx);
+        }
+    }
+
+    /// Keeps the split valid after tabs came, went or changed place: the file beside the active
+    /// one must be open and a different one, and only it is read-only.
+    fn fix_split(&mut self, cx: &mut Context<Self>) {
+        let active = self
+            .tabs
+            .get(self.active)
+            .and_then(Tab::path)
+            .map(str::to_owned);
+        if let Some(split) = &self.split {
+            if self.position_of(split).is_none() || active.as_deref() == Some(split.as_str()) {
+                self.split = None;
+            }
+        }
+        for tab in &self.tabs {
+            let beside = tab.path().is_some() && tab.path() == self.split.as_deref();
+            tab.state
+                .update(cx, |state, cx| state.set_disabled(beside, cx));
+        }
     }
 
     /// Opens the find box of the active file (with the replace field when `replace`).
@@ -1176,6 +1237,12 @@ impl Render for EditorView {
                 .filter(|_| tab.diff_visible && self.diff_split)
         });
         let title = self.path().unwrap_or("").to_owned();
+        let beside = match (second, self.split.as_deref()) {
+            (None, Some(path)) => self
+                .position_of(path)
+                .map(|index| (path.to_owned(), self.tabs[index].state.clone())),
+            _ => None,
+        };
 
         div()
             .size_full()
@@ -1190,6 +1257,53 @@ impl Render for EditorView {
                     .flex_row()
                     .font_family(crate::fonts::monospace_family(window))
                     .child(div().flex_1().min_w_0().child(Editor::new(shown)))
+                    .children(beside.map(|(path, state)| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .border_l_1()
+                            .border_color(gpui::rgb(theme.line))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_2()
+                                    .py_0p5()
+                                    .text_xs()
+                                    .bg(gpui::rgb(theme.panel))
+                                    .text_color(gpui::rgb(theme.muted))
+                                    .child(div().flex_1().min_w_0().child(path))
+                                    .child(
+                                        div()
+                                            .id("split-swap")
+                                            .px_1()
+                                            .rounded_sm()
+                                            .cursor_pointer()
+                                            .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+                                            .child("↔ düzenle")
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.swap_split(window, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("split-close")
+                                            .px_1()
+                                            .rounded_sm()
+                                            .cursor_pointer()
+                                            .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+                                            .child("×")
+                                            .on_click(cx.listener(|view, _, _window, cx| {
+                                                view.toggle_split(cx);
+                                            })),
+                                    ),
+                            )
+                            .child(div().flex_1().min_h_0().child(Editor::new(&state)))
+                    }))
                     .children(second.map(|right| {
                         div()
                             .flex_1()

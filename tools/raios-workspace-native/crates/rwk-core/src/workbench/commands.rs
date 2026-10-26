@@ -19,6 +19,8 @@ pub enum CommandId {
     Problems,
     /// Format the open file with its language server.
     Format,
+    /// Show the next open file read-only beside the active one, or close that split.
+    SplitEditor,
     /// Find text in the open file.
     FindInFile,
     /// Find and replace text in the open file.
@@ -180,7 +182,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 59] = [
+const COMMANDS: [Command; 60] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -385,6 +387,7 @@ const COMMANDS: [Command; 59] = [
         &[],
     ),
     cmd(CommandId::SourceControl, "Git değişiklikleri", None, &[]),
+    cmd(CommandId::SplitEditor, "Editörü böl / birleştir", None, &[]),
     cmd(CommandId::FindInFile, "Dosyada bul", Some("Ctrl F"), &[]),
     cmd(
         CommandId::ReplaceInFile,
@@ -617,7 +620,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor | CloseTab | Format | FindInFile | ReplaceInFile => {
+        Diff | DiffSplit | FocusEditor | CloseTab | Format | FindInFile | ReplaceInFile
+        | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -714,7 +718,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 59);
+        assert_eq!(catalog().len(), 60);
     }
 
     #[test]

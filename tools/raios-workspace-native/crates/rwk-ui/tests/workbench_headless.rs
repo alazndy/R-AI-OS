@@ -580,7 +580,9 @@ fn an_unavailable_command_stays_in_the_palette_instead_of_running() {
         .read(|wb, _| wb.palette().cloned())
         .expect("palette is open");
     rig.with(|_wb, window, cx| {
-        palette.update(cx, |palette, cx| palette.set_query("dosyayı kaydet", window, cx))
+        palette.update(cx, |palette, cx| {
+            palette.set_query("dosyayı kaydet", window, cx)
+        })
     });
     rig.cx
         .update(|_w, cx| palette.update(cx, |palette, cx| palette.confirm(cx)));
@@ -4538,4 +4540,45 @@ fn saving_formats_first_only_when_format_on_save_is_on() {
     let formatted = std::fs::read_to_string(rig.dir.path().join("a.rs")).unwrap();
     assert!(formatted.starts_with("FN"), "{formatted:?}");
     assert!(formatted.contains("let x;"), "{formatted:?}");
+}
+
+#[test]
+fn the_editor_splits_beside_another_file_and_activating_it_swaps_the_two() {
+    let mut rig = rig();
+    rig.open_project();
+    let split =
+        |rig: &mut Rig| rig.read(|wb, cx| wb.editor().read(cx).split_path().map(str::to_owned));
+
+    // One file cannot be split.
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("a.txt")));
+    rig.run(CommandId::SplitEditor);
+    assert_eq!(split(&mut rig), None);
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).status()).as_deref(),
+        Some("Bölmek için ikinci bir dosya açın")
+    );
+
+    // Two files: the other one shows beside the active one, and the frame still renders.
+    rig.open_file("b.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("b.txt")));
+    rig.run(CommandId::SplitEditor);
+    assert_eq!(split(&mut rig).as_deref(), Some("a.txt"));
+    rig.settle_for(100);
+
+    // Activating the file beside trades places; the editor text is that file's.
+    rig.activate_tab("a.txt");
+    assert_eq!(rig.editor_path().as_deref(), Some("a.txt"));
+    assert_eq!(split(&mut rig).as_deref(), Some("b.txt"));
+    assert_eq!(rig.editor_text(), "one");
+
+    // Closing the file beside, or splitting again, leaves one pane.
+    rig.with(|wb, window, cx| wb.request_close_tab("b.txt".to_owned(), window, cx));
+    assert!(rig.settle_until(|rig| split(rig).is_none()));
+    rig.open_file("b.txt");
+    assert!(rig.settle_until(|rig| rig.editor_paths().len() == 2));
+    rig.run(CommandId::SplitEditor);
+    assert!(split(&mut rig).is_some());
+    rig.run(CommandId::SplitEditor);
+    assert_eq!(split(&mut rig), None);
 }
