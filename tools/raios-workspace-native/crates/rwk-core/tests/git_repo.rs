@@ -215,3 +215,18 @@ fn branches_stash_pull_and_push_work_against_a_local_remote() {
     git::delete_branch(root, "feature/x").unwrap();
     assert_eq!(git::branches(root).unwrap(), ["main"]);
 }
+
+#[test]
+fn blame_names_the_author_and_summary_of_a_committed_line() {
+    let dir = repository();
+    let root = dir.path();
+    std::fs::write(root.join("a.txt"), "one\ntwo\n").unwrap();
+    git(root, &["add", "a.txt"]);
+    git(root, &["commit", "-q", "-m", "first"]);
+    std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+
+    let old = git::blame_line(root, "a.txt", 1).unwrap();
+    assert!(old.committed);
+    assert_eq!((old.author.as_str(), old.summary.as_str()), ("T", "first"));
+    assert!(!git::blame_line(root, "a.txt", 3).unwrap().committed);
+}

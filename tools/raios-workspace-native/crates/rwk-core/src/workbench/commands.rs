@@ -39,6 +39,8 @@ pub enum CommandId {
     ReplaceInFile,
     /// Replace in the open file by regular expression (`$1` inserts a group).
     ReplaceRegexInFile,
+    /// Say who last changed the cursor line and in which commit.
+    BlameLine,
     /// Ask for a line number and put the cursor there.
     GoToLine,
     /// Comment or uncomment the selected lines.
@@ -212,7 +214,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 79] = [
+const COMMANDS: [Command; 80] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -470,6 +472,12 @@ const COMMANDS: [Command; 79] = [
     cmd(
         CommandId::ReplaceRegexInFile,
         "Dosyada regex ile değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::BlameLine,
+        "Satırı en son kim değiştirdi (git blame)",
         None,
         &[],
     ),
@@ -770,7 +778,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         },
         Diff | DiffSplit | FocusEditor | CloseTab | Format | RenameSymbol | FindReferences
         | Outline | WorkspaceSymbols | FindInFile | ReplaceInFile | ReplaceRegexInFile
-        | GoToLine | ToggleComment | SplitEditor => {
+        | GoToLine | ToggleComment | BlameLine | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -874,7 +882,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 79);
+        assert_eq!(catalog().len(), 80);
     }
 
     #[test]

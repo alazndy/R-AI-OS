@@ -989,6 +989,7 @@ impl Workbench {
             CommandId::FindInTerminal => self.open_terminal_search(window, cx),
             CommandId::RecentProjects => self.show_recent_projects(window, cx),
             CommandId::RestartServers => self.restart_servers(cx),
+            CommandId::BlameLine => self.blame_line(cx),
             CommandId::Format => self
                 .editor
                 .update(cx, |editor, cx| editor.format(window, cx)),
