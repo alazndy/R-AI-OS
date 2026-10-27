@@ -63,6 +63,17 @@ impl Workbench {
             GitEvent::Close => self.close_git(window, cx),
             GitEvent::Refresh => self.git_job(|_| Ok(Aftermath::default()), window, cx),
             GitEvent::Open(path) => {
+                let conflicted = self
+                    .git_view
+                    .as_ref()
+                    .and_then(|view| view.read(cx).status())
+                    .is_some_and(|status| {
+                        status
+                            .entries
+                            .iter()
+                            .any(|entry| entry.conflicted && entry.path == path)
+                    });
+                self.jump_to_conflict = conflicted.then(|| path.clone());
                 self.close_git(window, cx);
                 self.request_open_file(path, window, cx);
             }

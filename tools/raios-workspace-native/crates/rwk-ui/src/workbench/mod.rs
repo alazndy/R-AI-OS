@@ -298,6 +298,9 @@ pub struct Workbench {
     palette_picks_tasks: bool,
     /// The open palette lists snippets, not files.
     palette_picks_snippets: bool,
+    /// A conflicted file opened from the git view: the cursor goes to its first conflict once
+    /// it has loaded.
+    jump_to_conflict: Option<String>,
     snippet_source: Option<SnippetSource>,
     git_view: Option<Entity<crate::git::GitView>>,
     git_subscription: Option<Subscription>,
@@ -584,6 +587,7 @@ impl Workbench {
             task_source: None,
             palette_picks_tasks: false,
             palette_picks_snippets: false,
+            jump_to_conflict: None,
             snippet_source: None,
             git_view: None,
             git_subscription: None,
@@ -1536,6 +1540,15 @@ impl Workbench {
                 editable,
             } => self.open_text_menu(*selection, *editable, *position, window, cx),
             EditorEvent::Opened(path) => {
+                if self.jump_to_conflict.as_deref() == Some(path.as_str()) {
+                    self.jump_to_conflict = None;
+                    let count = self
+                        .editor
+                        .update(cx, |editor, cx| editor.next_conflict(window, cx));
+                    if count > 0 {
+                        self.say(format!("{count} çakışma · Ctrl Alt N sonraki"), cx);
+                    }
+                }
                 self.lsp_opened(path, cx);
                 self.note_workspace_change(cx);
             }
