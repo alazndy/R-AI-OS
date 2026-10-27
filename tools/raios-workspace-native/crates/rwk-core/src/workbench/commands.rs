@@ -85,6 +85,8 @@ pub enum CommandId {
     ToolbarTab(u8),
     /// Clear the selected terminal's screen.
     ClearTerminal,
+    /// Search the selected terminal's output, scrollback included.
+    FindInTerminal,
     /// Copy the terminal selection.
     CopyTerminal,
     /// Paste into the selected terminal.
@@ -208,7 +210,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 77] = [
+const COMMANDS: [Command; 78] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -344,6 +346,12 @@ const COMMANDS: [Command; 77] = [
         "Araç çubuğu: Araç sekmesi",
         Some("Ctrl Shift 5"),
         &[bind_terminal("5", true, false)],
+    ),
+    cmd(
+        CommandId::FindInTerminal,
+        "Terminal çıktısında ara",
+        Some("Ctrl Alt F"),
+        &[bind_terminal("f", false, true)],
     ),
     cmd(
         CommandId::ClearTerminal,
@@ -785,9 +793,9 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("Dock gizli")
             }
         }
-        NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
-        | OpenOutputLocation | StopTerminal | CloseTerminal | KillTerminal | RenameTerminal
-        | UngroupTerminal => needs_terminal(),
+        NextTerminal | PreviousTerminal | ClearTerminal | FindInTerminal | CopyTerminal
+        | PasteTerminal | OpenOutputLocation | StopTerminal | CloseTerminal | KillTerminal
+        | RenameTerminal | UngroupTerminal => needs_terminal(),
         MoveTerminalPrevious | MoveTerminalNext | SplitTerminalRight | SplitTerminalDown
         | JoinTerminalPrevious | GrowTerminal | ShrinkTerminal => {
             if state.terminals >= 2 {
@@ -858,7 +866,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 77);
+        assert_eq!(catalog().len(), 78);
     }
 
     #[test]

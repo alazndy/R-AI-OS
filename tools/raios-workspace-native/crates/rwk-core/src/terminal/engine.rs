@@ -474,6 +474,55 @@ impl TerminalEngine {
         self.shared.signal();
     }
 
+    /// The lines (history included) that contain `query`, oldest first, as `(line, text)`.
+    /// `line` is the grid line: 0 and up is the screen, negative is history. At most `limit`
+    /// are returned.
+    pub fn find_lines(&self, query: &str, ignore_case: bool, limit: usize) -> Vec<(i32, String)> {
+        use alacritty_terminal::index::Line as GridLine;
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let needle = if ignore_case {
+            query.to_lowercase()
+        } else {
+            query.to_owned()
+        };
+        let term = self.shared.term.lock();
+        let grid = term.grid();
+        let columns = grid.columns();
+        let mut found = Vec::new();
+        for line in grid.topmost_line().0..=grid.bottommost_line().0 {
+            let row = &grid[GridLine(line)];
+            let text: String = (0..columns)
+                .filter(|column| !row[Column(*column)].flags.contains(Flags::WIDE_CHAR_SPACER))
+                .map(|column| row[Column(column)].c)
+                .collect();
+            let text = text.trim_end().to_owned();
+            let hit = if ignore_case {
+                text.to_lowercase().contains(&needle)
+            } else {
+                text.contains(&needle)
+            };
+            if hit {
+                found.push((line, text));
+                if found.len() >= limit {
+                    break;
+                }
+            }
+        }
+        found
+    }
+
+    /// Scrolls so that grid `line` (see [`find_lines`](Self::find_lines)) is in view, in the
+    /// middle of the screen where there is room.
+    pub fn scroll_to_line(&self, line: i32) {
+        let mut term = self.shared.term.lock();
+        let rows = term.screen_lines() as i32;
+        let wanted = (rows / 2 - line).max(0);
+        let current = term.grid().display_offset() as i32;
+        term.scroll_display(Scroll::Delta(wanted - current));
+    }
+
     /// The selected text, if there is a selection.
     pub fn selection_text(&self) -> Option<String> {
         self.shared.term.lock().selection_to_string()

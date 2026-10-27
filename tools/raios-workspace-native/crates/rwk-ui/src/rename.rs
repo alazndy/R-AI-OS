@@ -29,6 +29,8 @@ pub enum PromptPurpose {
     GoToLine,
     /// Ask for text to search the project's symbols for.
     SearchSymbols,
+    /// Ask for text to search the selected terminal's output for.
+    SearchTerminal,
 }
 
 /// What the prompt asks of the workbench.
@@ -146,7 +148,10 @@ impl RenameTerminalPrompt {
             cx.notify();
             return;
         }
-        if self.purpose == PromptPurpose::SearchSymbols {
+        if matches!(
+            self.purpose,
+            PromptPurpose::SearchSymbols | PromptPurpose::SearchTerminal
+        ) {
             let query = text.trim();
             if query.is_empty() {
                 self.problem = Some("Aranacak adı yazın".into());
@@ -229,8 +234,11 @@ impl Render for RenameTerminalPrompt {
             PromptPurpose::RenameSymbol => "Sembolü yeniden adlandır",
             PromptPurpose::GoToLine => "Satıra git",
             PromptPurpose::SearchSymbols => "Projede sembol ara",
+            PromptPurpose::SearchTerminal => "Terminal çıktısında ara",
         };
-        let note = if self.purpose == PromptPurpose::SearchSymbols {
+        let note = if self.purpose == PromptPurpose::SearchTerminal {
+            "Seçili terminalin çıktısında, kaydırma geçmişi dahil aranır; büyük/küçük harf önemsiz. Enter arar, Esc kapatır."
+        } else if self.purpose == PromptPurpose::SearchSymbols {
             "Fonksiyon, tür ya da değişken adının bir parçasını yazın. Enter arar, Esc kapatır."
         } else if self.purpose == PromptPurpose::GoToLine {
             "Satır numarası, ya da satır:sütun. Enter gider, Esc kapatır."

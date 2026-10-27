@@ -5649,3 +5649,28 @@ fn changes_made_elsewhere_reload_clean_tabs_and_refresh_the_tree() {
     rig.settle_for(100);
     assert_ne!(rig.editor_text(), "theirs\n");
 }
+
+#[test]
+fn terminal_search_needs_a_terminal_and_says_when_nothing_matches() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::FindInTerminal);
+    assert!(
+        rig.read(|wb, _| wb.rename_prompt().is_none()),
+        "no terminal yet"
+    );
+
+    rig.run(CommandId::NewTerminal);
+    rig.run(CommandId::FindInTerminal);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("prompt");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("zzz-never-printed", window, cx);
+            prompt.submit(cx)
+        })
+    });
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+    assert!(rig.read(|wb, _| wb.locations_view().is_none()));
+}

@@ -323,6 +323,8 @@ pub struct Workbench {
     /// Checks open files and folders for changes made elsewhere.
     watch_task: Option<Task<()>>,
     watch_stamps: watch::Stamps,
+    /// The grid lines behind the open terminal search results, in list order.
+    terminal_hits: Option<Vec<i32>>,
     consent: Arc<ConsentRegistry>,
     consent_wait: Option<std::sync::mpsc::Receiver<rwk_core::consent::ConsentDecision>>,
     composer: Option<Entity<crate::handoff::HandoffComposer>>,
@@ -592,6 +594,7 @@ impl Workbench {
             usage_task: None,
             watch_task: None,
             watch_stamps: std::collections::HashMap::new(),
+            terminal_hits: None,
             consent: Arc::new(ConsentRegistry::new()),
             consent_wait: None,
             composer: None,
@@ -975,6 +978,7 @@ impl Workbench {
             CommandId::FindReferences => self.find_references(window, cx),
             CommandId::Outline => self.show_outline(window, cx),
             CommandId::WorkspaceSymbols => self.open_symbol_search(window, cx),
+            CommandId::FindInTerminal => self.open_terminal_search(window, cx),
             CommandId::RestartServers => self.restart_servers(cx),
             CommandId::Format => self
                 .editor
@@ -1824,7 +1828,7 @@ impl Workbench {
         self.select_terminal(next, window, cx);
     }
 
-    fn with_selected_terminal(
+    pub(super) fn with_selected_terminal(
         &mut self,
         cx: &mut Context<Self>,
         action: impl FnOnce(&mut TerminalView, &mut Context<TerminalView>),

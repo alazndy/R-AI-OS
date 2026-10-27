@@ -229,6 +229,17 @@ impl Workbench {
             window,
             |this, _view, event: &ProblemsEvent, window, cx| match event {
                 ProblemsEvent::Open(path, line) => {
+                    // Terminal hits have no file: the line is the place in the result list.
+                    if let Some(hits) = this.terminal_hits.take() {
+                        this.close_locations(window, cx);
+                        if let Some(grid_line) = hits.get(line.saturating_sub(1)) {
+                            let grid_line = *grid_line;
+                            this.with_selected_terminal(cx, |view, cx| {
+                                view.scroll_to_line(grid_line, cx)
+                            });
+                        }
+                        return;
+                    }
                     this.close_locations(window, cx);
                     this.request_open_file_at(path.clone(), Some(*line), window, cx);
                 }
@@ -241,6 +252,7 @@ impl Workbench {
 
     /// Closes the places list and returns focus to the workbench.
     pub fn close_locations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.terminal_hits = None;
         self.locations_view = None;
         self.locations_subscription = None;
         window.focus(&self.focus, cx);
@@ -439,5 +451,55 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    /// Asks for text and lists the lines of the selected terminal's output that contain it.
+    pub(super) fn open_terminal_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::rename::{PromptPurpose, RenamePromptEvent, RenameTerminalPrompt};
+        if self.rename_prompt.is_some() || self.terminals.get(self.selected).is_none() {
+            return;
+        }
+        let theme = self.theme();
+        let prompt =
+            cx.new(|cx| RenameTerminalPrompt::entry(PromptPurpose::SearchTerminal, "", window, cx));
+        prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        self.rename_subscription = Some(cx.subscribe_in(
+            &prompt,
+            window,
+            |this, _prompt, event: &RenamePromptEvent, window, cx| match event {
+                RenamePromptEvent::EntryName(query) => {
+                    this.close_rename_prompt(window, cx);
+                    this.search_terminal(query, window, cx);
+                }
+                RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
+                RenamePromptEvent::NewTask(_) | RenamePromptEvent::Rename(_) => {}
+            },
+        ));
+        self.rename_prompt = Some(prompt);
+        cx.notify();
+    }
+
+    fn search_terminal(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pane) = self.terminals.get(self.selected) else {
+            return;
+        };
+        let found = pane.view.read(cx).find_lines(query, 500);
+        if found.is_empty() {
+            self.say("Terminal çıktısında bulunamadı", cx);
+            return;
+        }
+        let places = found
+            .iter()
+            .enumerate()
+            .map(|(index, (_, text))| rwk_core::lsp::symbols::Place {
+                path: String::new(),
+                line: index + 1,
+                column: 1,
+                label: text.trim().to_owned(),
+            })
+            .collect();
+        self.show_locations(format!("TERMİNAL · {query}"), places, window, cx);
+        // Set after the list opens: opening a list resets any earlier terminal results.
+        self.terminal_hits = Some(found.into_iter().map(|(line, _)| line).collect());
     }
 }

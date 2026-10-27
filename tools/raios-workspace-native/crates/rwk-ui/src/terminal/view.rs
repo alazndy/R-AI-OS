@@ -217,6 +217,17 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// The lines of the output (history included) containing `query`, with their grid lines.
+    pub fn find_lines(&self, query: &str, limit: usize) -> Vec<(i32, String)> {
+        self.shared.engine.find_lines(query, true, limit)
+    }
+
+    /// Scrolls so that grid `line` is in view.
+    pub fn scroll_to_line(&mut self, line: i32, cx: &mut Context<Self>) {
+        self.shared.engine.scroll_to_line(line);
+        cx.notify();
+    }
+
     /// Sets the text size in pixels; the grid is refitted at the next paint.
     pub fn set_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
         if (self.shared.font_size.get() - size).abs() > f32::EPSILON {
