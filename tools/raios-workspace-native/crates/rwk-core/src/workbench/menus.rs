@@ -118,6 +118,15 @@ pub enum ToolbarGroup {
 }
 
 impl ToolbarGroup {
+    /// The categories in toolbar order; `ToolbarTab(n)` shows `ALL[n - 1]`.
+    pub const ALL: [Self; 5] = [
+        Self::Files,
+        Self::Terminal,
+        Self::Work,
+        Self::View,
+        Self::Tools,
+    ];
+
     /// The label printed at the start of the group.
     pub fn label(self) -> &'static str {
         match self {

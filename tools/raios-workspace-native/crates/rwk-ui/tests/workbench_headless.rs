@@ -3831,11 +3831,13 @@ fn clicking_along_the_toolbar_presses_real_buttons() {
 
     let mut rig = rig();
     rig.open_project();
+    rig.run(CommandId::ToolbarTab(2));
     rig.settle_for(100);
     let size = rig.cx.update(|window, _| window.viewport_size());
     // The toolbar is the row under the title area; sweep it from the left until a click
-    // opens a terminal (the "Terminal +" button) or the row is exhausted.
-    let mut x = px(4.0);
+    // opens a terminal (the "Terminal +" button) or the row is exhausted. The sweep starts
+    // after the category tabs, which would switch the buttons under the pointer.
+    let mut x = px(380.0);
     while x < size.width && rig.read(|wb, _| wb.terminal_count()) == 0 {
         for y in [px(14.0), px(30.0), px(44.0)] {
             let at = point(x, y);
@@ -5423,4 +5425,16 @@ fn the_regex_replace_bar_counts_matches_and_replaces_them_with_groups() {
     assert!(rig.read(|wb, _| wb.file_replace().is_none()));
     let text = rig.read(|wb, cx| wb.editor().read(cx).text_of("a.txt", cx));
     assert_eq!(text.as_deref(), Some("def one()\ndef two()\nlet x\n"));
+}
+
+#[test]
+fn toolbar_tabs_show_one_category_and_follow_their_shortcuts() {
+    let mut rig = rig();
+    rig.open_project();
+    let shown = |rig: &mut Rig| rig.read(|wb, _| wb.toolbar_tab());
+    assert_eq!(shown(&mut rig), rwk_core::workbench::ToolbarGroup::Files);
+    rig.cx.simulate_keystrokes("ctrl-shift-2");
+    assert_eq!(shown(&mut rig), rwk_core::workbench::ToolbarGroup::Terminal);
+    rig.run(CommandId::ToolbarTab(5));
+    assert_eq!(shown(&mut rig), rwk_core::workbench::ToolbarGroup::Tools);
 }

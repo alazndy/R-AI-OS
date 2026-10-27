@@ -67,6 +67,8 @@ pub enum CommandId {
     PreviousTerminal,
     /// Focus terminal 1 to 4.
     FocusTerminal(u8),
+    /// Show the buttons of toolbar category 1 to 5.
+    ToolbarTab(u8),
     /// Clear the selected terminal's screen.
     ClearTerminal,
     /// Copy the terminal selection.
@@ -192,7 +194,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 65] = [
+const COMMANDS: [Command; 70] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -298,6 +300,36 @@ const COMMANDS: [Command; 65] = [
         "4. terminale odaklan",
         Some("Ctrl Alt 4"),
         &[bind_terminal("4", false, true)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(1),
+        "Araç çubuğu: Dosya sekmesi",
+        Some("Ctrl Shift 1"),
+        &[bind_terminal("1", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(2),
+        "Araç çubuğu: Terminal sekmesi",
+        Some("Ctrl Shift 2"),
+        &[bind_terminal("2", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(3),
+        "Araç çubuğu: İş sekmesi",
+        Some("Ctrl Shift 3"),
+        &[bind_terminal("3", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(4),
+        "Araç çubuğu: Görünüm sekmesi",
+        Some("Ctrl Shift 4"),
+        &[bind_terminal("4", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(5),
+        "Araç çubuğu: Araç sekmesi",
+        Some("Ctrl Shift 5"),
+        &[bind_terminal("5", true, false)],
     ),
     cmd(
         CommandId::ClearTerminal,
@@ -698,6 +730,13 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("En az iki terminal gerekir")
             }
         }
+        ToolbarTab(number) => {
+            if (1..=5).contains(&number) {
+                allow()
+            } else {
+                deny("Böyle bir sekme yok")
+            }
+        }
         FocusTerminal(index) => {
             if index >= 1 && index <= state.terminals {
                 allow()
@@ -753,7 +792,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 65);
+        assert_eq!(catalog().len(), 70);
     }
 
     #[test]

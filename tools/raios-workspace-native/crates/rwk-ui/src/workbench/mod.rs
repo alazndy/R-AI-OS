@@ -296,6 +296,8 @@ pub struct Workbench {
     problems_subscription: Option<Subscription>,
     /// A list of places (usages, a file's symbols), shown like the Problems view.
     locations_view: Option<Entity<crate::problems::ProblemsView>>,
+    /// The toolbar category whose buttons show.
+    toolbar_tab: rwk_core::workbench::ToolbarGroup,
     settings_view: Option<Entity<crate::settings::SettingsView>>,
     file_replace: Option<Entity<crate::file_replace::FileReplaceView>>,
     file_replace_subscription: Option<Subscription>,
@@ -562,6 +564,7 @@ impl Workbench {
             problems: rwk_core::lsp::Problems::default(),
             problems_view: None,
             problems_subscription: None,
+            toolbar_tab: rwk_core::workbench::ToolbarGroup::Files,
             settings_view: None,
             file_replace: None,
             file_replace_subscription: None,
@@ -859,6 +862,14 @@ impl Workbench {
             CommandId::FocusFiles => self.files.update(cx, |files, cx| files.focus(window, cx)),
             CommandId::NextTerminal => self.select_terminal_offset(1, window, cx),
             CommandId::PreviousTerminal => self.select_terminal_offset(-1, window, cx),
+            CommandId::ToolbarTab(number) => {
+                if let Some(group) = rwk_core::workbench::ToolbarGroup::ALL
+                    .get(usize::from(number).saturating_sub(1))
+                {
+                    self.toolbar_tab = *group;
+                    cx.notify();
+                }
+            }
             CommandId::FocusTerminal(number) => {
                 self.select_terminal(usize::from(number).saturating_sub(1), window, cx);
             }
