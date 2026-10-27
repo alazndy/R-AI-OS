@@ -70,6 +70,51 @@ impl Replacement {
     }
 }
 
+/// One replacement inside a text, positioned the way editors and language servers count:
+/// zero-based lines and UTF-16 columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Change {
+    /// Line and column where the match starts.
+    pub start: (u32, u32),
+    /// Line and column where it ends.
+    pub end: (u32, u32),
+    /// What takes its place.
+    pub text: String,
+}
+
+impl Replacement {
+    /// The changes `apply` would make, last match first, so each can be applied without
+    /// moving the ones before it.
+    pub fn changes(&self, text: &str) -> Vec<Change> {
+        let mut line_starts = vec![0usize];
+        line_starts.extend(text.match_indices('\n').map(|(at, _)| at + 1));
+        let position = |offset: usize| {
+            let line = line_starts.partition_point(|&start| start <= offset) - 1;
+            let column = text[line_starts[line]..offset].encode_utf16().count();
+            (line as u32, column as u32)
+        };
+        let mut changes: Vec<Change> = self
+            .pattern
+            .captures_iter(text)
+            .filter_map(|captures| {
+                let whole = captures.get(0)?;
+                if whole.as_str().is_empty() {
+                    return None;
+                }
+                let mut out = String::new();
+                captures.expand(&self.with, &mut out);
+                Some(Change {
+                    start: position(whole.start()),
+                    end: position(whole.end()),
+                    text: out,
+                })
+            })
+            .collect();
+        changes.reverse();
+        changes
+    }
+}
+
 /// What a replacement did, or would do.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReplaceReport {
@@ -159,6 +204,11 @@ mod tests {
         assert_eq!(r.apply("aaaaa aa"), ("bba b".to_owned(), 3));
         assert_eq!(r.apply("none"), ("none".to_owned(), 0));
         let r = Replacement::new(r"fn (\w+)\(", "pub fn ${1}(", false).unwrap();
+        let changes = r.changes("x\nfn a() fn é()");
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].start, (1, 7));
+        assert_eq!(changes[0].text, "pub fn é(");
+        assert_eq!(changes[1].start, (1, 0));
         assert_eq!(
             r.apply("fn a() fn bc()"),
             ("pub fn a() pub fn bc()".to_owned(), 2)

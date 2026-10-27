@@ -4,6 +4,7 @@
 pub mod assets;
 pub mod context_menu;
 pub mod editor;
+pub mod file_replace;
 pub mod file_tree;
 pub mod fonts;
 pub mod git;

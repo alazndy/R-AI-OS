@@ -6,6 +6,7 @@ pub mod control;
 pub mod dock;
 pub mod editing;
 pub mod entries;
+pub mod file_replace;
 pub mod footer;
 pub mod git;
 pub mod host;
@@ -296,6 +297,8 @@ pub struct Workbench {
     /// A list of places (usages, a file's symbols), shown like the Problems view.
     locations_view: Option<Entity<crate::problems::ProblemsView>>,
     settings_view: Option<Entity<crate::settings::SettingsView>>,
+    file_replace: Option<Entity<crate::file_replace::FileReplaceView>>,
+    file_replace_subscription: Option<Subscription>,
     settings_subscription: Option<Subscription>,
     locations_subscription: Option<Subscription>,
     lsp_task: Option<Task<()>>,
@@ -560,6 +563,8 @@ impl Workbench {
             problems_view: None,
             problems_subscription: None,
             settings_view: None,
+            file_replace: None,
+            file_replace_subscription: None,
             settings_subscription: None,
             locations_view: None,
             locations_subscription: None,
@@ -817,6 +822,7 @@ impl Workbench {
             CommandId::SplitEditor => self.editor.update(cx, |editor, cx| editor.toggle_split(cx)),
             CommandId::FindInFile => self.find(false, window, cx),
             CommandId::ReplaceInFile => self.find(true, window, cx),
+            CommandId::ReplaceRegexInFile => self.open_file_replace(window, cx),
             CommandId::ToggleAutoSave => self.toggle_auto_save(cx),
             CommandId::ToggleFormatOnSave => self.toggle_format_on_save(cx),
             CommandId::CloseTab => {
@@ -1011,12 +1017,15 @@ impl Workbench {
             || self.problems_view.is_some()
             || self.locations_view.is_some()
             || self.settings_view.is_some()
+            || self.file_replace.is_some()
             || self.git_view.is_some()
     }
 
     /// Closes the panel on top (the one opened last).
     pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_view.is_some() {
+        if self.file_replace.is_some() {
+            self.close_file_replace(window, cx);
+        } else if self.settings_view.is_some() {
             self.close_settings(window, cx);
         } else if self.git_view.is_some() {
             self.close_git(window, cx);
@@ -1959,6 +1968,7 @@ impl Render for Workbench {
             .children(self.locations_view.clone())
             .children(self.git_view.clone())
             .children(self.settings_view.clone())
+            .children(self.file_replace.clone())
             .children(self.menu.as_ref().map(|open| open.view.clone()))
             .children(dialog)
     }
