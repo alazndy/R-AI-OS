@@ -5393,7 +5393,10 @@ fn the_settings_view_flips_switches_and_shows_the_new_values() {
         rig.read(|wb, _| wb.appearance().tone),
         rwk_core::workbench::Tone::Light
     );
-    rig.cx.simulate_keystrokes("down enter");
+    // The editor rows: the right arrow on the text size picks the next size.
+    rig.cx.simulate_keystrokes("down right");
+    assert_eq!(rig.read(|wb, _| wb.editor_prefs().font_size), 16);
+    rig.cx.simulate_keystrokes("down down down enter");
     assert!(rig.read(|wb, _| wb.auto_save()));
     let view = rig.read(|wb, _| wb.settings_view().cloned()).unwrap();
     let value = rig.cx.update(|_, cx| {
