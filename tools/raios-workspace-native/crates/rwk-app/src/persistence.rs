@@ -171,6 +171,8 @@ pub struct Preferences {
     pub format_on_save: bool,
     /// What the toolbar shows; a missing or invalid entry is the default layout.
     pub toolbar: rwk_core::workbench::ToolbarLayout,
+    /// Text size, tab width and wrapping.
+    pub editor: rwk_core::workbench::EditorPrefs,
 }
 
 /// The preferences file inside a config home.
@@ -192,6 +194,13 @@ pub fn load_preferences(path: &Path) -> Preferences {
             .get("toolbar")
             .and_then(|toolbar| serde_json::from_value(toolbar.clone()).ok())
             .unwrap_or_default(),
+        editor: value
+            .get("editor")
+            .and_then(|editor| {
+                serde_json::from_value::<rwk_core::workbench::EditorPrefs>(editor.clone()).ok()
+            })
+            .unwrap_or_default()
+            .clamped(),
     }
 }
 
@@ -209,6 +218,7 @@ pub fn save_preferences(path: &Path, preferences: Preferences) -> std::io::Resul
         "auto_save": preferences.auto_save,
         "format_on_save": preferences.format_on_save,
         "toolbar": preferences.toolbar,
+        "editor": preferences.editor,
     });
     file.write_all(text.to_string().as_bytes())?;
     file.sync_all()?;
@@ -320,6 +330,11 @@ mod tests {
             toolbar: rwk_core::workbench::ToolbarLayout::preset(
                 rwk_core::workbench::ToolbarPreset::Minimal,
             ),
+            editor: rwk_core::workbench::EditorPrefs {
+                font_size: 18,
+                tab_size: 2,
+                soft_wrap: true,
+            },
         };
         save_preferences(&path, on).unwrap();
         assert_eq!(load_preferences(&path), on);

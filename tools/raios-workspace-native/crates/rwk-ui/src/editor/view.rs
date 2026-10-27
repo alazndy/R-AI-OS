@@ -101,6 +101,25 @@ fn new_editor_state(
     state
 }
 
+/// Gives one editor state the tab width and wrapping of `prefs`.
+fn apply_prefs(
+    state: &Entity<EditorState>,
+    prefs: rwk_core::workbench::EditorPrefs,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
+    state.update(cx, |state, cx| {
+        state.set_tab_size(
+            gpui_base::input::TabSize {
+                tab_size: usize::from(prefs.tab_size),
+                hard_tabs: false,
+            },
+            cx,
+        );
+        state.set_soft_wrap(prefs.soft_wrap, window, cx);
+    });
+}
+
 /// One open file: its editor state, its guard and its optional Git diff.
 struct Tab {
     state: Entity<EditorState>,
@@ -148,6 +167,8 @@ pub struct EditorView {
     restore_generation: u64,
     /// How tabs reach the project's language servers; `None` means no language features.
     requester: Option<rwk_core::lsp::Requester>,
+    /// Text size, tab width and wrapping.
+    prefs: rwk_core::workbench::EditorPrefs,
 }
 
 impl EventEmitter<EditorEvent> for EditorView {}
@@ -179,6 +200,7 @@ impl EditorView {
             diff_generation: 0,
             restore_generation: 0,
             requester: None,
+            prefs: rwk_core::workbench::EditorPrefs::default(),
             split: None,
         }
     }
@@ -413,6 +435,7 @@ impl EditorView {
             Some(index) => index,
             None => {
                 let state = cx.new(|cx| new_editor_state(self.theme, window, cx));
+                apply_prefs(&state, self.prefs, window, cx);
                 let view = cx.entity().downgrade();
                 state.update(cx, |state, _| {
                     state.on_context_menu(std::rc::Rc::new(
@@ -950,23 +973,114 @@ impl EditorView {
     ) -> rwk_core::error::Result<usize> {
         let replacement = rwk_core::replace::Replacement::new(find, with, ignore_case)?;
         let text = self.active_text(cx).unwrap_or_default();
-        let changes = replacement.changes(&text);
-        let Some(tab) = self.tabs.get(self.active) else {
-            return Ok(0);
+        let count = replacement.changes(&text).len();
+        let (new, _) = replacement.apply(&text);
+        self.apply_new_text(&text, &new, window, cx);
+        Ok(count)
+    }
+
+    /// Turns the active file's `old` text into `new` as one edit, so one undo takes it back.
+    fn apply_new_text(
+        &mut self,
+        old: &str,
+        new: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(tab), Some(change)) = (
+            self.tabs.get(self.active),
+            rwk_core::replace::single_change(old, new),
+        ) else {
+            return;
         };
-        let edits: Vec<_> = changes
-            .iter()
-            .map(|change| rwk_core::lsp::lsp_types::TextEdit {
-                range: rwk_core::lsp::lsp_types::Range {
-                    start: rwk_core::lsp::lsp_types::Position::new(change.start.0, change.start.1),
-                    end: rwk_core::lsp::lsp_types::Position::new(change.end.0, change.end.1),
-                },
-                new_text: change.text.clone(),
-            })
-            .collect();
-        tab.state
-            .update(cx, |state, cx| state.apply_lsp_edits(&edits, window, cx));
-        Ok(edits.len())
+        let edit = rwk_core::lsp::lsp_types::TextEdit {
+            range: rwk_core::lsp::lsp_types::Range {
+                start: rwk_core::lsp::lsp_types::Position::new(change.start.0, change.start.1),
+                end: rwk_core::lsp::lsp_types::Position::new(change.end.0, change.end.1),
+            },
+            new_text: change.text,
+        };
+        tab.state.update(cx, |state, cx| {
+            state.apply_lsp_edits(&vec![edit], window, cx)
+        });
+    }
+
+    /// Comments or uncomments the lines of the selection (the cursor's line without one).
+    pub fn toggle_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return false;
+        };
+        let Some(prefix) = tab
+            .path()
+            .and_then(rwk_core::workbench::line_comment_prefix)
+        else {
+            return false;
+        };
+        let (text, first, last) = {
+            let state = tab.state.read(cx);
+            let text = state.value().to_string();
+            let range = state.selected_range();
+            let line_of = |offset: usize| text[..offset.min(text.len())].matches('\n').count();
+            let first = line_of(range.start);
+            // A selection that ends at the start of a line does not include that line.
+            let end =
+                if range.end > range.start && text[..range.end.min(text.len())].ends_with('\n') {
+                    range.end - 1
+                } else {
+                    range.end
+                };
+            (text.clone(), first, line_of(end))
+        };
+        let new = rwk_core::workbench::toggle_line_comments(&text, first, last, prefix);
+        self.apply_new_text(&text, &new, window, cx);
+        true
+    }
+
+    /// Puts the cursor on 1-based `line` (and `column`, default the start of the line).
+    pub fn go_to_line(
+        &mut self,
+        line: u32,
+        column: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let lines = tab
+            .state
+            .read(cx)
+            .value()
+            .to_string()
+            .lines()
+            .count()
+            .max(1) as u32;
+        let line = line.clamp(1, lines) - 1;
+        self.set_cursor(line, column.saturating_sub(1), window, cx);
+    }
+
+    /// Sets the text size, tab width and wrapping of every tab, now and for later ones.
+    pub fn set_prefs(
+        &mut self,
+        prefs: rwk_core::workbench::EditorPrefs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.prefs = prefs;
+        for tab in &self.tabs {
+            apply_prefs(&tab.state, prefs, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Stores the settings for tabs opened later (none exist yet when the application starts).
+    pub fn init_prefs(&mut self, prefs: rwk_core::workbench::EditorPrefs) {
+        self.prefs = prefs;
+    }
+
+    /// The current text size, tab width and wrapping.
+    pub fn prefs(&self) -> rwk_core::workbench::EditorPrefs {
+        self.prefs
     }
 
     fn active_text(&self, cx: &gpui::App) -> Option<String> {
@@ -1464,6 +1578,7 @@ impl Render for EditorView {
                     .flex()
                     .flex_row()
                     .font_family(crate::fonts::monospace_family(window))
+                    .text_size(gpui::px(f32::from(self.prefs.font_size)))
                     .child(div().flex_1().min_w_0().child(Editor::new(shown)))
                     .children(beside.map(|(path, state)| {
                         div()

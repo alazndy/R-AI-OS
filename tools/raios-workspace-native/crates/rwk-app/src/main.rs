@@ -124,9 +124,10 @@ fn main() {
             let preferences_file = config_home().map(|home| persistence::preferences_path(&home));
             if let Some(file) = &preferences_file {
                 let stored = persistence::load_preferences(file);
-                workbench.update(cx, |workbench, _| {
+                workbench.update(cx, |workbench, cx| {
                     workbench.set_editing_preferences(stored.auto_save, stored.format_on_save);
                     workbench.set_toolbar_layout(stored.toolbar);
+                    workbench.set_editor_prefs(stored.editor, cx);
                 });
             }
             let workspace_store_for_events = workspace_store.clone();
@@ -151,12 +152,14 @@ fn main() {
                         auto_save,
                         format_on_save,
                         toolbar,
+                        editor,
                     } => {
                         if let Some(file) = &preferences_file {
                             let preferences = persistence::Preferences {
                                 auto_save: *auto_save,
                                 format_on_save: *format_on_save,
                                 toolbar: *toolbar,
+                                editor: *editor,
                             };
                             if let Err(error) = persistence::save_preferences(file, preferences) {
                                 eprintln!("rwk-app: could not save the preferences: {error}");

@@ -3,8 +3,10 @@
 
 pub mod appearance;
 pub mod commands;
+pub mod comments;
 pub mod dock;
 pub mod documents;
+pub mod editor_prefs;
 pub mod file_types;
 pub mod footer;
 pub mod layout;
@@ -21,10 +23,12 @@ pub use commands::{
     available, catalog, resolve_shortcut, Binding, Command, CommandId, CommandState,
     KeyboardContext, Keystroke, WorkbenchState,
 };
+pub use comments::{line_comment_prefix, parse_line_target, toggle_line_comments};
 pub use dock::{
     zone_at, Axis, DockError, DockLayout, DropZone, Edge, Node, EDGE_BAND, MAX_DEPTH, MIN_SHARE,
 };
 pub use documents::{DocumentSession, SaveBlocked, SaveTicket, SwitchDecision};
+pub use editor_prefs::{EditorPrefs, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE};
 pub use file_types::{presentation, FileIcon, FilePresentation, FileTone};
 pub use footer::{footer_items, upsert as upsert_footer_item, FooterInfo, FooterItem, FooterLevel};
 pub use layout::{LayoutPreset, MIN_EDITOR_PX, MIN_SIDE_PANE_PX};

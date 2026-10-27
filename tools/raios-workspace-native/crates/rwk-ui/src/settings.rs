@@ -19,6 +19,12 @@ pub enum Setting {
     Tone,
     /// The skin: standard, GT-LCARS or Aperture.
     Skin,
+    /// Editor and terminal text size.
+    FontSize,
+    /// Spaces per tab stop.
+    TabSize,
+    /// Wrap long lines.
+    SoftWrap,
     /// A ready-made toolbar layout.
     ToolbarPreset,
     /// Toolbar categories as tabs, or all buttons in one row.

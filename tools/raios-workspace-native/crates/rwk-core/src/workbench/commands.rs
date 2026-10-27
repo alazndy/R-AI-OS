@@ -35,6 +35,18 @@ pub enum CommandId {
     ReplaceInFile,
     /// Replace in the open file by regular expression (`$1` inserts a group).
     ReplaceRegexInFile,
+    /// Ask for a line number and put the cursor there.
+    GoToLine,
+    /// Comment or uncomment the selected lines.
+    ToggleComment,
+    /// Wrap long lines at the window edge, or stop wrapping.
+    ToggleWordWrap,
+    /// Make the editor and terminal text bigger.
+    ZoomIn,
+    /// Make the editor and terminal text smaller.
+    ZoomOut,
+    /// Back to the default text size.
+    ZoomReset,
     /// Save changed files when the window loses focus (on or off).
     ToggleAutoSave,
     /// Format with the language server before saving (on or off).
@@ -194,7 +206,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 70] = [
+const COMMANDS: [Command; 76] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -444,6 +456,45 @@ const COMMANDS: [Command; 70] = [
         &[],
     ),
     cmd(
+        CommandId::GoToLine,
+        "Satıra git",
+        Some("Ctrl G"),
+        &[bind("g")],
+    ),
+    cmd(
+        CommandId::ToggleComment,
+        "Satırı yorumla / yorumu kaldır",
+        Some("Ctrl /"),
+        &[bind("/")],
+    ),
+    cmd(
+        CommandId::ToggleWordWrap,
+        "Satır kaydırmayı aç/kapat",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::ZoomIn,
+        "Yazıyı büyüt",
+        Some("Ctrl +"),
+        &[
+            bind_terminal("=", false, false),
+            bind_terminal("=", true, false),
+        ],
+    ),
+    cmd(
+        CommandId::ZoomOut,
+        "Yazıyı küçült",
+        Some("Ctrl -"),
+        &[bind_terminal("-", false, false)],
+    ),
+    cmd(
+        CommandId::ZoomReset,
+        "Yazı boyutunu sıfırla",
+        Some("Ctrl 0"),
+        &[bind_terminal("0", false, false)],
+    ),
+    cmd(
         CommandId::ToggleAutoSave,
         "Otomatik kaydetmeyi aç/kapat",
         None,
@@ -683,8 +734,9 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         }
     };
     match id {
-        ToggleAutoSave | ToggleFormatOnSave | Commands | Project | Settings | Skin | Shortcuts
-        | Balanced | EditorLayout | AgentsLayout => allow(),
+        ToggleAutoSave | ToggleFormatOnSave | ToggleWordWrap | ZoomIn | ZoomOut | ZoomReset
+        | Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
+        | AgentsLayout => allow(),
         Files | Search | Problems | SourceControl | Refresh | RunTask | FocusFiles | Memory
         | Inspector | RestartServers => needs_project(),
         Save => match (state.file_open, state.dirty) {
@@ -693,7 +745,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, true) => allow(),
         },
         Diff | DiffSplit | FocusEditor | CloseTab | Format | RenameSymbol | FindReferences
-        | Outline | FindInFile | ReplaceInFile | ReplaceRegexInFile | SplitEditor => {
+        | Outline | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment
+        | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -797,7 +850,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 70);
+        assert_eq!(catalog().len(), 76);
     }
 
     #[test]

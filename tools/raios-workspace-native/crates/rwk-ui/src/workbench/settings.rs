@@ -2,7 +2,8 @@
 
 use gpui::{AppContext, Context, Window};
 use rwk_core::workbench::{
-    Appearance, Skin, Theme, Tone, ToolbarGroup, ToolbarLayout, ToolbarMode, ToolbarPreset,
+    Appearance, EditorPrefs, Skin, Theme, Tone, ToolbarGroup, ToolbarLayout, ToolbarMode,
+    ToolbarPreset,
 };
 
 use super::Workbench;
@@ -15,6 +16,8 @@ const SKINS: [(Skin, &str); 3] = [
     (Skin::Lcars, "GT-LCARS"),
     (Skin::Aperture, "Aperture"),
 ];
+const FONT_SIZES: [u8; 7] = [11, 12, 13, 14, 16, 18, 20];
+const TAB_SIZES: [u8; 3] = [2, 4, 8];
 const TONES: [(Tone, &str); 2] = [(Tone::Dark, "Koyu"), (Tone::Light, "Açık")];
 
 impl Workbench {
@@ -81,6 +84,51 @@ impl Workbench {
                         .position(|(tone, _)| *tone == self.appearance.tone)
                         .unwrap_or(0),
                 },
+            },
+            SettingRow {
+                setting: Setting::FontSize,
+                section: "EDİTÖR",
+                label: "Yazı boyutu".to_owned(),
+                hint: "Editör ve terminal; Ctrl + / Ctrl - ile de değişir".to_owned(),
+                value: SettingValue::Choice {
+                    options: FONT_SIZES
+                        .iter()
+                        .map(|size| ChoiceOption {
+                            label: size.to_string(),
+                            swatch: None,
+                        })
+                        .collect(),
+                    selected: FONT_SIZES
+                        .iter()
+                        .position(|size| *size == self.editor_prefs.font_size)
+                        .unwrap_or(FONT_SIZES.len()),
+                },
+            },
+            SettingRow {
+                setting: Setting::TabSize,
+                section: "EDİTÖR",
+                label: "Sekme genişliği".to_owned(),
+                hint: "Tab tuşunun ve girintinin boşluk sayısı".to_owned(),
+                value: SettingValue::Choice {
+                    options: TAB_SIZES
+                        .iter()
+                        .map(|size| ChoiceOption {
+                            label: size.to_string(),
+                            swatch: None,
+                        })
+                        .collect(),
+                    selected: TAB_SIZES
+                        .iter()
+                        .position(|size| *size == self.editor_prefs.tab_size)
+                        .unwrap_or(TAB_SIZES.len()),
+                },
+            },
+            SettingRow {
+                setting: Setting::SoftWrap,
+                section: "EDİTÖR",
+                label: "Uzun satırları kaydır".to_owned(),
+                hint: "Kapalıysa uzun satırlar yana kayar".to_owned(),
+                value: SettingValue::Switch(self.editor_prefs.soft_wrap),
             },
             SettingRow {
                 setting: Setting::AutoSave,
@@ -157,6 +205,17 @@ impl Workbench {
         }
     }
 
+    fn change_editor_setting(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut EditorPrefs),
+    ) {
+        let mut prefs = self.editor_prefs;
+        edit(&mut prefs);
+        self.change_editor_prefs(prefs, window, cx);
+    }
+
     fn toggle_toolbar_setting(&mut self, setting: Setting, cx: &mut Context<Self>) {
         match setting {
             Setting::ToolbarPreset => {
@@ -208,6 +267,37 @@ impl Workbench {
             window,
             |this, view, event: &SettingsEvent, window, cx| {
                 match event {
+                    SettingsEvent::Toggle(Setting::SoftWrap) => {
+                        this.change_editor_setting(window, cx, |prefs| {
+                            prefs.soft_wrap = !prefs.soft_wrap
+                        });
+                    }
+                    SettingsEvent::Toggle(Setting::FontSize) => {
+                        let next = FONT_SIZES
+                            .iter()
+                            .find(|size| **size > this.editor_prefs.font_size)
+                            .copied()
+                            .unwrap_or(FONT_SIZES[0]);
+                        this.change_editor_setting(window, cx, |prefs| prefs.font_size = next);
+                    }
+                    SettingsEvent::Toggle(Setting::TabSize) => {
+                        let next = TAB_SIZES
+                            .iter()
+                            .find(|size| **size > this.editor_prefs.tab_size)
+                            .copied()
+                            .unwrap_or(TAB_SIZES[0]);
+                        this.change_editor_setting(window, cx, |prefs| prefs.tab_size = next);
+                    }
+                    SettingsEvent::Choose(Setting::FontSize, index) => {
+                        if let Some(size) = FONT_SIZES.get(*index) {
+                            this.change_editor_setting(window, cx, |prefs| prefs.font_size = *size);
+                        }
+                    }
+                    SettingsEvent::Choose(Setting::TabSize, index) => {
+                        if let Some(size) = TAB_SIZES.get(*index) {
+                            this.change_editor_setting(window, cx, |prefs| prefs.tab_size = *size);
+                        }
+                    }
                     SettingsEvent::Toggle(setting) => match setting {
                         Setting::AutoSave => this.toggle_auto_save(cx),
                         Setting::FormatOnSave => this.toggle_format_on_save(cx),

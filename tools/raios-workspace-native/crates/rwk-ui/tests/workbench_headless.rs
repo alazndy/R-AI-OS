@@ -5509,3 +5509,79 @@ fn the_toolbar_follows_its_presets_and_refuses_to_hide_every_category() {
     assert_eq!(layout.groups.iter().filter(|shown| **shown).count(), 1);
     assert!(layout.groups[4], "the last category is the one left");
 }
+
+#[test]
+fn go_to_line_comment_toggle_and_zoom_work_on_the_open_file() {
+    let mut rig = rig();
+    std::fs::write(
+        rig.dir.path().join("m.rs"),
+        "fn a() {\n    let x = 1;\n    let y = 2;\n}\n",
+    )
+    .expect("m.rs");
+    rig.open_project();
+    rig.open_file("m.rs");
+    assert!(rig.settle_until(|rig| rig.editor_path().is_some()));
+
+    // Go to line: the prompt takes a line, or line:column, and refuses nonsense.
+    rig.run(CommandId::GoToLine);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("prompt");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("zzz", window, cx);
+            prompt.submit(cx)
+        })
+    });
+    assert!(rig.cx.update(|_, cx| prompt.read(cx).problem()).is_some());
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("3", window, cx);
+            prompt.submit(cx)
+        })
+    });
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(3)
+    );
+
+    // Comment the cursor's line, then take it back.
+    rig.run(CommandId::ToggleComment);
+    assert_eq!(
+        rig.editor_text(),
+        "fn a() {\n    let x = 1;\n    // let y = 2;\n}\n"
+    );
+    rig.run(CommandId::ToggleComment);
+    assert_eq!(
+        rig.editor_text(),
+        "fn a() {\n    let x = 1;\n    let y = 2;\n}\n"
+    );
+
+    // The shortcuts reach the same commands.
+    rig.cx.simulate_keystrokes("ctrl-g");
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_some()));
+    rig.cx.simulate_keystrokes("escape");
+    rig.cx.simulate_keystrokes("ctrl-/");
+    assert!(rig.editor_text().contains("// let y"));
+    rig.cx.simulate_keystrokes("ctrl-/");
+
+    // Zoom stays inside its limits and resets.
+    let size = |rig: &mut Rig| rig.read(|wb, _| wb.editor_prefs().font_size);
+    assert_eq!(size(&mut rig), rwk_core::workbench::DEFAULT_FONT_SIZE);
+    rig.run(CommandId::ZoomIn);
+    assert_eq!(size(&mut rig), rwk_core::workbench::DEFAULT_FONT_SIZE + 1);
+    rig.cx.simulate_keystrokes("ctrl-shift-=");
+    assert_eq!(size(&mut rig), rwk_core::workbench::DEFAULT_FONT_SIZE + 2);
+    rig.cx.simulate_keystrokes("ctrl--");
+    assert_eq!(size(&mut rig), rwk_core::workbench::DEFAULT_FONT_SIZE + 1);
+    rig.run(CommandId::ZoomReset);
+    assert_eq!(size(&mut rig), rwk_core::workbench::DEFAULT_FONT_SIZE);
+    for _ in 0..40 {
+        rig.run(CommandId::ZoomOut);
+    }
+    assert_eq!(size(&mut rig), rwk_core::workbench::MIN_FONT_SIZE);
+
+    rig.run(CommandId::ToggleWordWrap);
+    assert!(rig.read(|wb, _| wb.editor_prefs().soft_wrap));
+}

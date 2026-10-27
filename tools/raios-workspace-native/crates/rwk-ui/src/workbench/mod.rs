@@ -87,6 +87,8 @@ pub enum WorkbenchEvent {
         format_on_save: bool,
         /// What the toolbar shows.
         toolbar: rwk_core::workbench::ToolbarLayout,
+        /// Text size, tab width and wrapping.
+        editor: rwk_core::workbench::EditorPrefs,
     },
 }
 
@@ -302,6 +304,8 @@ pub struct Workbench {
     toolbar_tab: rwk_core::workbench::ToolbarGroup,
     /// What the toolbar shows and how.
     toolbar_layout: rwk_core::workbench::ToolbarLayout,
+    /// Text size, tab width and wrapping.
+    editor_prefs: rwk_core::workbench::EditorPrefs,
     settings_view: Option<Entity<crate::settings::SettingsView>>,
     file_replace: Option<Entity<crate::file_replace::FileReplaceView>>,
     file_replace_subscription: Option<Subscription>,
@@ -570,6 +574,7 @@ impl Workbench {
             problems_subscription: None,
             toolbar_tab: rwk_core::workbench::ToolbarGroup::Files,
             toolbar_layout: rwk_core::workbench::ToolbarLayout::default(),
+            editor_prefs: rwk_core::workbench::EditorPrefs::default(),
             settings_view: None,
             file_replace: None,
             file_replace_subscription: None,
@@ -831,6 +836,39 @@ impl Workbench {
             CommandId::FindInFile => self.find(false, window, cx),
             CommandId::ReplaceInFile => self.find(true, window, cx),
             CommandId::ReplaceRegexInFile => self.open_file_replace(window, cx),
+            CommandId::GoToLine => self.open_go_to_line(window, cx),
+            CommandId::ToggleComment => {
+                let done = self
+                    .editor
+                    .update(cx, |editor, cx| editor.toggle_comment(window, cx));
+                if !done {
+                    self.say("Bu dosya türünde satır yorumu yok", cx);
+                }
+            }
+            CommandId::ToggleWordWrap => {
+                let prefs = self.editor_prefs;
+                self.change_editor_prefs(
+                    rwk_core::workbench::EditorPrefs {
+                        soft_wrap: !prefs.soft_wrap,
+                        ..prefs
+                    },
+                    window,
+                    cx,
+                );
+            }
+            CommandId::ZoomIn => self.zoom(1, window, cx),
+            CommandId::ZoomOut => self.zoom(-1, window, cx),
+            CommandId::ZoomReset => {
+                let prefs = self.editor_prefs;
+                self.change_editor_prefs(
+                    rwk_core::workbench::EditorPrefs {
+                        font_size: rwk_core::workbench::DEFAULT_FONT_SIZE,
+                        ..prefs
+                    },
+                    window,
+                    cx,
+                );
+            }
             CommandId::ToggleAutoSave => self.toggle_auto_save(cx),
             CommandId::ToggleFormatOnSave => self.toggle_format_on_save(cx),
             CommandId::CloseTab => {
@@ -1593,6 +1631,8 @@ impl Workbench {
         let appearance = terminal_appearance(self.theme());
         let id = info.id.clone();
         let view = cx.new(|cx| TerminalView::new(engine, host, id, appearance, gate, receiver, cx));
+        let font_size = f32::from(self.editor_prefs.font_size);
+        view.update(cx, |view, cx| view.set_font_size(font_size, cx));
         let (resume, name) = match &launch {
             SessionLaunch::Resume(key) => (Some(key.clone()), None),
             SessionLaunch::Fresh { name, .. } => (None, name.clone()),

@@ -82,6 +82,47 @@ pub struct Change {
     pub text: String,
 }
 
+/// Line and UTF-16 column of byte `offset` in `text`, zero-based.
+pub fn position_in(text: &str, offset: usize) -> (u32, u32) {
+    let before = &text[..offset];
+    let line = before.matches('\n').count();
+    let start = before.rfind('\n').map_or(0, |at| at + 1);
+    (line as u32, before[start..].encode_utf16().count() as u32)
+}
+
+/// The one change that turns `old` into `new`: the differing middle between their common start
+/// and common end. `None` when they are equal. One change is one step in an undo history.
+pub fn single_change(old: &str, new: &str) -> Option<Change> {
+    if old == new {
+        return None;
+    }
+    let mut start = old
+        .bytes()
+        .zip(new.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !old.is_char_boundary(start) || !new.is_char_boundary(start) {
+        start -= 1;
+    }
+    let max_tail = old.len().min(new.len()) - start;
+    let mut tail = old
+        .bytes()
+        .rev()
+        .zip(new.bytes().rev())
+        .take(max_tail)
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !old.is_char_boundary(old.len() - tail) || !new.is_char_boundary(new.len() - tail) {
+        tail -= 1;
+    }
+    let (old_end, new_end) = (old.len() - tail, new.len() - tail);
+    Some(Change {
+        start: position_in(old, start),
+        end: position_in(old, old_end),
+        text: new[start..new_end].to_owned(),
+    })
+}
+
 impl Replacement {
     /// The changes `apply` would make, last match first, so each can be applied without
     /// moving the ones before it.
@@ -197,6 +238,22 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_change_covers_everything_that_differs() {
+        assert_eq!(single_change("same", "same"), None);
+        let change = single_change("a\nfn one()\nfn two()\nz", "a\nfn uno()\nfn dos()\nz").unwrap();
+        assert_eq!(change.start, (1, 3));
+        assert_eq!(change.end, (2, 6));
+        assert_eq!(change.text, "uno()\nfn dos");
+        // Multi-byte text never splits a character.
+        let change = single_change("é1", "è1").unwrap();
+        assert_eq!((change.start, change.end), ((0, 0), (0, 1)));
+        assert_eq!(change.text, "è");
+        let change = single_change("abc", "abcdef").unwrap();
+        assert_eq!(change.start, (0, 3));
+        assert_eq!(change.text, "def");
+    }
 
     #[test]
     fn replaces_every_match_and_expands_groups() {
