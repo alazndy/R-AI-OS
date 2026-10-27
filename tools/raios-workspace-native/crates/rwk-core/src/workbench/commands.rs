@@ -121,7 +121,7 @@ pub enum CommandId {
     Settings,
     /// Keyboard shortcut list.
     Shortcuts,
-    /// Switch between the standard and the GT-LCARS skin.
+    /// Switch to the next skin (standard, GT-LCARS, Aperture).
     Skin,
     /// Widen the dock (the divider moves left).
     GrowDock,
@@ -501,7 +501,12 @@ const COMMANDS: [Command; 70] = [
         Some("Ctrl ,"),
         &[bind(",")],
     ),
-    cmd(CommandId::Skin, "GT-LCARS görünümünü aç / kapat", None, &[]),
+    cmd(
+        CommandId::Skin,
+        "Görünümü değiştir (standart / GT-LCARS / Aperture)",
+        None,
+        &[],
+    ),
     cmd(
         CommandId::GrowDock,
         "Dock'u genişlet",

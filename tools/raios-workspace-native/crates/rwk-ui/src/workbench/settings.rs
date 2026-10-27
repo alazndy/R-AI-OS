@@ -39,6 +39,7 @@ impl Workbench {
                 match self.appearance.skin {
                     Skin::Standard => "standart",
                     Skin::Lcars => "GT-LCARS",
+                    Skin::Aperture => "Aperture",
                 },
             ),
         ]

@@ -44,6 +44,8 @@ pub enum Appearance {
         background: u32,
         /// Selection colour, 0xRRGGBB.
         selection: u32,
+        /// The dark Aperture ANSI colours instead of the standard dark ones.
+        aperture: bool,
     },
 }
 
@@ -68,6 +70,7 @@ impl Appearance {
                 foreground,
                 background,
                 selection,
+                aperture,
             } => {
                 let surface = Surface {
                     foreground: Rgb::from_hex(foreground),
@@ -75,7 +78,9 @@ impl Appearance {
                     cursor: Rgb::from_hex(foreground),
                     selection: Rgb::from_hex(selection),
                 };
-                if dark {
+                if dark && aperture {
+                    Palette::aperture(surface)
+                } else if dark {
                     Palette::dark(surface)
                 } else {
                     Palette::light(surface)

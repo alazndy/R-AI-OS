@@ -1106,7 +1106,8 @@ impl Workbench {
     fn toggle_skin(&mut self, cx: &mut Context<Self>) {
         self.appearance.skin = match self.appearance.skin {
             Skin::Standard => Skin::Lcars,
-            Skin::Lcars => Skin::Standard,
+            Skin::Lcars => Skin::Aperture,
+            Skin::Aperture => Skin::Standard,
         };
         self.apply_appearance(cx);
     }
@@ -1827,6 +1828,7 @@ fn terminal_appearance(theme: Theme) -> TerminalAppearance {
         foreground: theme.text,
         background: theme.editor,
         selection: theme.selected,
+        aperture: theme.skin == Skin::Aperture,
     }
 }
 

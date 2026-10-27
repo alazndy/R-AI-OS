@@ -68,7 +68,7 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
 
 ## Appearance
 
-Skin (standard or GT-LCARS) and tone (dark or light) are independent and persisted; switching repaints every pane, the editor and the terminal surface without recreating sessions. The 28 KDE Breeze file icons are bundled unmodified (checksums in `crates/rwk-ui/assets/file-icons/provenance.json`, licenses in `crates/rwk-ui/assets/licenses`) and tinted by file type; Antonio (OFL) is the LCARS display font.
+Skin (standard, GT-LCARS or Aperture, the black and orange KDE theme: its editor syntax colours and Konsole terminal colours included) and tone (dark or light) are independent and persisted; switching repaints every pane, the editor and the terminal surface without recreating sessions. The 28 KDE Breeze file icons are bundled unmodified (checksums in `crates/rwk-ui/assets/file-icons/provenance.json`, licenses in `crates/rwk-ui/assets/licenses`) and tinted by file type; Antonio (OFL) is the LCARS display font.
 
 The palette's "Diff: yan yana / birleşik" switches the Git diff between one unified column and two aligned columns (old and new); the terminal shows IME pre-edit text at the cursor until it is committed.
 
