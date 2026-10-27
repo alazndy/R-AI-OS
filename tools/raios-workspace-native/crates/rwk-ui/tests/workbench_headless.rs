@@ -2209,9 +2209,10 @@ fn a_saved_agent_session_is_offered_and_resuming_runs_raios_resume() {
         fake.calls()
     );
     assert!(
-        rig.script_calls()
+        rig.settle_until(|rig| rig
+            .script_calls()
             .iter()
-            .any(|call| call == &format!("resume {KEY}")),
+            .any(|call| call == &format!("resume {KEY}"))),
         "{:?}",
         rig.script_calls()
     );
