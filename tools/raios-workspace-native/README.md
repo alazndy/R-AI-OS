@@ -61,7 +61,19 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
   and on tabs.
 - **Project search and replace** use `raios locate`; the pattern is a regular expression and
   replacing shows a preview before it writes. Files with unsaved edits are skipped.
-- **Settings** (`Ctrl ,`): auto-save, format on save, tone and skin in one list.
+- **Settings** (`Ctrl ,`): sections for appearance (skin, tone), editor (font size, tab width, word
+  wrap), editing (auto-save, format on save) and the toolbar (four presets: tabbed, compact, flat,
+  minimal; captions, shortcuts, per-category switches). Everything is remembered between runs.
+- **Editor commands**: go to line (`Ctrl G`, `line` or `line:column`), comment or uncomment the
+  selected lines (`Ctrl /`), zoom editor and terminal text (`Ctrl +`, `Ctrl -`, `Ctrl 0`), word wrap
+  toggle, "who last changed this line" (palette: git blame), close other / all tabs (tab menu).
+  Multi-cursor (`Ctrl Alt Up/Down`), code actions (`Ctrl .`) and gutter folding come from the
+  editor widget.
+- **Project symbols** (`Ctrl T`) searches symbols of the whole project through the language server
+  of the open file. **Recent projects** (`Ctrl Alt O`) lists the folders opened before.
+- **Changes on disk**: open files and the file tree notice edits made elsewhere (checked every
+  two seconds). A clean file reloads; one with unsaved edits is flagged instead of overwritten.
+- **Terminal search** (`Ctrl Alt F`) searches a terminal's output, scrollback included.
 - **Regex replace in the open file** (palette: "Dosyada regex ile değiştir"): live match count,
   `$1` inserts a group, one undoable edit. `Ctrl F` / `Ctrl H` stay plain text.
 - `Ctrl`-click a `path:line` or a web address in terminal output to open it.
