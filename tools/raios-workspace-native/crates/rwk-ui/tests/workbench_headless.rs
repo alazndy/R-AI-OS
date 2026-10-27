@@ -702,6 +702,12 @@ fn changing_the_tone_announces_the_new_appearance_and_keeps_the_terminals() {
         .detach();
     });
     rig.run(CommandId::Settings);
+    let settings = rig.read(|wb, _| wb.settings_view().cloned()).expect("view");
+    rig.with(|_wb, _w, cx| {
+        settings.update(cx, |view, cx| {
+            view.toggle(rwk_ui::settings::Setting::Tone, cx)
+        })
+    });
     let seen = events.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
     let WorkbenchEvent::AppearanceChanged(appearance) = seen[0].clone() else {
@@ -5360,4 +5366,26 @@ fn restarting_language_servers_recovers_one_that_gave_up() {
     let item = server_item(&mut rig).unwrap();
     assert!(item.text.ends_with('✓'), "{}", item.text);
     assert_eq!(item.command, None);
+}
+
+#[test]
+fn the_settings_view_flips_switches_and_shows_the_new_values() {
+    let mut rig = rig();
+    rig.run(CommandId::Settings);
+    assert!(rig.read(|wb, _| wb.settings_view().is_some()));
+    assert!(rig.read(|wb, _| wb.overlay_open()));
+
+    // Enter on the first row flips auto-save and the list shows it.
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.auto_save()));
+    let view = rig.read(|wb, _| wb.settings_view().cloned()).unwrap();
+    let value = rig.cx.update(|_, cx| view.read(cx).rows()[0].value.clone());
+    assert_eq!(value, "açık");
+
+    // Down, Enter: format on save.
+    rig.cx.simulate_keystrokes("down enter");
+    assert!(rig.read(|wb, _| wb.format_on_save()));
+
+    rig.cx.simulate_keystrokes("escape");
+    assert!(rig.read(|wb, _| wb.settings_view().is_none()));
 }

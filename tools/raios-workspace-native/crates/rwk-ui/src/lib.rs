@@ -14,6 +14,7 @@ pub mod overlay;
 pub mod problems;
 pub mod rename;
 pub mod search;
+pub mod settings;
 pub mod ssh_picker;
 pub mod terminal;
 pub mod workbench;
