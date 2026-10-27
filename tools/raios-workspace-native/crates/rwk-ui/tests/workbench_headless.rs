@@ -5389,3 +5389,38 @@ fn the_settings_view_flips_switches_and_shows_the_new_values() {
     rig.cx.simulate_keystrokes("escape");
     assert!(rig.read(|wb, _| wb.settings_view().is_none()));
 }
+
+#[test]
+fn the_regex_replace_bar_counts_matches_and_replaces_them_with_groups() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("a.txt"), "fn one()\nfn two()\nlet x\n").expect("a.txt");
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().is_some()));
+    rig.run(CommandId::ReplaceRegexInFile);
+    let bar = rig.read(|wb, _| wb.file_replace().cloned()).expect("bar");
+
+    // The count follows the pattern; a bad pattern says why.
+    rig.with(|_wb, window, cx| bar.update(cx, |bar, cx| bar.set_find(r"fn (\w+)", window, cx)));
+    assert_eq!(
+        rig.cx.update(|_, cx| bar.read(cx).note().to_owned()),
+        "2 eşleşme"
+    );
+    rig.with(|_wb, window, cx| bar.update(cx, |bar, cx| bar.set_find("(", window, cx)));
+    assert!(rig
+        .cx
+        .update(|_, cx| bar.read(cx).note().to_owned())
+        .starts_with("Desen geçersiz"));
+
+    // Replacing expands the group and closes the bar.
+    rig.with(|_wb, window, cx| {
+        bar.update(cx, |bar, cx| {
+            bar.set_find(r"fn (\w+)", window, cx);
+            bar.set_with("def $1", window, cx);
+            bar.apply(cx)
+        })
+    });
+    assert!(rig.read(|wb, _| wb.file_replace().is_none()));
+    let text = rig.read(|wb, cx| wb.editor().read(cx).text_of("a.txt", cx));
+    assert_eq!(text.as_deref(), Some("def one()\ndef two()\nlet x\n"));
+}

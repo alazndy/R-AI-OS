@@ -61,6 +61,9 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
   and on tabs.
 - **Project search and replace** use `raios locate`; the pattern is a regular expression and
   replacing shows a preview before it writes. Files with unsaved edits are skipped.
+- **Settings** (`Ctrl ,`): auto-save, format on save, tone and skin in one list.
+- **Regex replace in the open file** (palette: "Dosyada regex ile değiştir"): live match count,
+  `$1` inserts a group, one undoable edit. `Ctrl F` / `Ctrl H` stay plain text.
 - `Ctrl`-click a `path:line` or a web address in terminal output to open it.
 
 ## Appearance

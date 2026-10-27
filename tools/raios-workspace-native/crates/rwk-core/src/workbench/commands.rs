@@ -33,6 +33,8 @@ pub enum CommandId {
     FindInFile,
     /// Find and replace text in the open file.
     ReplaceInFile,
+    /// Replace in the open file by regular expression (`$1` inserts a group).
+    ReplaceRegexInFile,
     /// Save changed files when the window loses focus (on or off).
     ToggleAutoSave,
     /// Format with the language server before saving (on or off).
@@ -190,7 +192,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 64] = [
+const COMMANDS: [Command; 65] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -401,6 +403,12 @@ const COMMANDS: [Command; 64] = [
         CommandId::ReplaceInFile,
         "Dosyada bul ve değiştir",
         Some("Ctrl H"),
+        &[],
+    ),
+    cmd(
+        CommandId::ReplaceRegexInFile,
+        "Dosyada regex ile değiştir",
+        None,
         &[],
     ),
     cmd(
@@ -648,7 +656,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, true) => allow(),
         },
         Diff | DiffSplit | FocusEditor | CloseTab | Format | RenameSymbol | FindReferences
-        | Outline | FindInFile | ReplaceInFile | SplitEditor => {
+        | Outline | FindInFile | ReplaceInFile | ReplaceRegexInFile | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -745,7 +753,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 64);
+        assert_eq!(catalog().len(), 65);
     }
 
     #[test]

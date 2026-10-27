@@ -926,6 +926,60 @@ impl EditorView {
         })
     }
 
+    /// How many matches of the regular expression `find` the active file has.
+    pub fn count_matches(
+        &self,
+        find: &str,
+        ignore_case: bool,
+        cx: &gpui::App,
+    ) -> rwk_core::error::Result<usize> {
+        let replacement = rwk_core::replace::Replacement::new(find, "", ignore_case)?;
+        let text = self.active_text(cx).unwrap_or_default();
+        Ok(replacement.changes(&text).len())
+    }
+
+    /// Replaces every match of the regular expression `find` in the active file (`$1` inserts
+    /// a group), as edits the undo history can take back. Returns how many were replaced.
+    pub fn replace_matches(
+        &mut self,
+        find: &str,
+        with: &str,
+        ignore_case: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> rwk_core::error::Result<usize> {
+        let replacement = rwk_core::replace::Replacement::new(find, with, ignore_case)?;
+        let text = self.active_text(cx).unwrap_or_default();
+        let changes = replacement.changes(&text);
+        let Some(tab) = self.tabs.get(self.active) else {
+            return Ok(0);
+        };
+        let edits: Vec<_> = changes
+            .iter()
+            .map(|change| rwk_core::lsp::lsp_types::TextEdit {
+                range: rwk_core::lsp::lsp_types::Range {
+                    start: rwk_core::lsp::lsp_types::Position::new(change.start.0, change.start.1),
+                    end: rwk_core::lsp::lsp_types::Position::new(change.end.0, change.end.1),
+                },
+                new_text: change.text.clone(),
+            })
+            .collect();
+        tab.state
+            .update(cx, |state, cx| state.apply_lsp_edits(&edits, window, cx));
+        Ok(edits.len())
+    }
+
+    fn active_text(&self, cx: &gpui::App) -> Option<String> {
+        Some(
+            self.tabs
+                .get(self.active)?
+                .state
+                .read(cx)
+                .value()
+                .to_string(),
+        )
+    }
+
     /// The text of the tab for `path`, if it is open.
     pub fn text_of(&self, path: &str, cx: &gpui::App) -> Option<String> {
         let index = self.position_of(path)?;
