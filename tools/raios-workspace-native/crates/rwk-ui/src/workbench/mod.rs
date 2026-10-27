@@ -18,6 +18,7 @@ pub mod palette;
 pub mod remote;
 pub mod runner;
 pub mod search;
+pub mod settings;
 pub mod usage;
 pub mod workspace;
 
@@ -294,6 +295,8 @@ pub struct Workbench {
     problems_subscription: Option<Subscription>,
     /// A list of places (usages, a file's symbols), shown like the Problems view.
     locations_view: Option<Entity<crate::problems::ProblemsView>>,
+    settings_view: Option<Entity<crate::settings::SettingsView>>,
+    settings_subscription: Option<Subscription>,
     locations_subscription: Option<Subscription>,
     lsp_task: Option<Task<()>>,
     lsp_sync_task: Option<Task<()>>,
@@ -556,6 +559,8 @@ impl Workbench {
             problems: rwk_core::lsp::Problems::default(),
             problems_view: None,
             problems_subscription: None,
+            settings_view: None,
+            settings_subscription: None,
             locations_view: None,
             locations_subscription: None,
             lsp_task: None,
@@ -882,7 +887,7 @@ impl Workbench {
             | CommandId::GrowTerminal
             | CommandId::ShrinkTerminal => self.arrange(id, window, cx),
             CommandId::Refresh => self.files.update(cx, |files, cx| files.refresh(cx)),
-            CommandId::Settings => self.toggle_tone(cx),
+            CommandId::Settings => self.open_settings(window, cx),
             CommandId::Skin => self.toggle_skin(cx),
             CommandId::GrowDock => self.nudge_dock(DOCK_STEP_PX, window, cx),
             CommandId::ShrinkDock => self.nudge_dock(-DOCK_STEP_PX, window, cx),
@@ -1005,12 +1010,15 @@ impl Workbench {
             || self.search.is_some()
             || self.problems_view.is_some()
             || self.locations_view.is_some()
+            || self.settings_view.is_some()
             || self.git_view.is_some()
     }
 
     /// Closes the panel on top (the one opened last).
     pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.git_view.is_some() {
+        if self.settings_view.is_some() {
+            self.close_settings(window, cx);
+        } else if self.git_view.is_some() {
             self.close_git(window, cx);
         } else if self.locations_view.is_some() {
             self.close_locations(window, cx);
@@ -1950,6 +1958,7 @@ impl Render for Workbench {
             .children(self.problems_view.clone())
             .children(self.locations_view.clone())
             .children(self.git_view.clone())
+            .children(self.settings_view.clone())
             .children(self.menu.as_ref().map(|open| open.view.clone()))
             .children(dialog)
     }
