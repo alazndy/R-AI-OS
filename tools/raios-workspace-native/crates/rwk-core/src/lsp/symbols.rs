@@ -113,6 +113,36 @@ pub fn outline(answer: Value, path: &str) -> Result<Vec<Place>> {
     Ok(out)
 }
 
+/// The symbols of a `workspace/symbol` answer, best matches first as the server sent them,
+/// labelled `kind name · container`. Symbols outside the project are dropped.
+pub fn workspace_symbols(
+    answer: Value,
+    relative: impl Fn(&str) -> Option<String>,
+) -> Result<Vec<Place>> {
+    // The answer is a flat list; the newer shape wraps the location in an object without a
+    // range, which has no line to go to and is skipped.
+    let symbols: Option<Vec<lsp_types::SymbolInformation>> =
+        serde_json::from_value(answer).map_err(|_| invalid())?;
+    Ok(symbols
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|symbol| {
+            let container = symbol
+                .container_name
+                .filter(|name| !name.is_empty())
+                .map(|name| format!(" · {name}"))
+                .unwrap_or_default();
+            Some(Place {
+                path: relative(symbol.location.uri.as_str())?,
+                line: symbol.location.range.start.line as usize + 1,
+                column: symbol.location.range.start.character as usize + 1,
+                label: format!("{} {}{container}", kind_word(symbol.kind), symbol.name),
+            })
+        })
+        .take(MAX_LINES)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +196,26 @@ mod tests {
             "location": {"uri": "file:///p/a.rs", "range": range(3, 0)}}]);
         assert_eq!(outline(flat, "a.rs").unwrap()[0].label, "fn go");
         assert!(outline(Value::Null, "a.rs").unwrap().is_empty());
+    }
+
+    #[test]
+    fn workspace_symbols_keep_the_server_order_and_name_their_container() {
+        let rel = |uri: &str| uri.strip_prefix("file:///p/").map(str::to_owned);
+        let answer = json!([
+            {"name": "helper", "kind": 12, "location": {"uri": "file:///p/a.rs", "range": range(3, 4)}, "containerName": "util"},
+            {"name": "Shape", "kind": 23, "location": {"uri": "file:///p/b.rs", "range": range(0, 0)}},
+            {"name": "x", "kind": 13, "location": {"uri": "file:///other/c.rs", "range": range(0, 0)}},
+        ]);
+        let places = workspace_symbols(answer, rel).unwrap();
+        let seen: Vec<_> = places
+            .iter()
+            .map(|p| (p.path.as_str(), p.line, p.label.as_str()))
+            .collect();
+        assert_eq!(
+            seen,
+            [("a.rs", 4, "fn helper · util"), ("b.rs", 1, "struct Shape")]
+        );
+        assert!(workspace_symbols(json!(null), |_| None).unwrap().is_empty());
+        assert!(workspace_symbols(json!("junk"), |_| None).is_err());
     }
 }

@@ -5313,6 +5313,27 @@ fn rust_analyzer_lists_usages_and_the_outline_of_a_file() {
         .collect();
     assert!(outline.contains(&"struct Shape".to_owned()), "{outline:?}");
     assert!(outline.contains(&"fn main".to_owned()), "{outline:?}");
+
+    // The whole project's symbols: `helper` lives in util.rs.
+    rig.with(|wb, window, cx| wb.close_overlay(window, cx));
+    rig.run(CommandId::WorkspaceSymbols);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("prompt");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("helper", window, cx);
+            prompt.submit(cx)
+        })
+    });
+    assert!(rig.settle_until(|rig| list(rig).is_some()));
+    let symbols = list(&mut rig).unwrap();
+    assert!(
+        symbols
+            .iter()
+            .any(|(path, _, label)| path == "src/util.rs" && label.contains("helper")),
+        "{symbols:?}"
+    );
 }
 
 /// A server that was missing shows in the footer; once it can start, clicking its item

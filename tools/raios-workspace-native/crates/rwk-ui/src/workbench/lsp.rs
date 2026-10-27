@@ -365,4 +365,79 @@ impl Workbench {
         })
         .detach();
     }
+
+    /// Asks for text and lists the project's symbols that match it.
+    pub(super) fn open_symbol_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::rename::{PromptPurpose, RenamePromptEvent, RenameTerminalPrompt};
+        if self.rename_prompt.is_some() {
+            return;
+        }
+        if self.language_requester().is_none() {
+            self.say("Bu dosya için dil sunucusu yok", cx);
+            return;
+        }
+        let theme = self.theme();
+        let prompt =
+            cx.new(|cx| RenameTerminalPrompt::entry(PromptPurpose::SearchSymbols, "", window, cx));
+        prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        self.rename_subscription = Some(cx.subscribe_in(
+            &prompt,
+            window,
+            |this, _prompt, event: &RenamePromptEvent, window, cx| match event {
+                RenamePromptEvent::EntryName(query) => {
+                    this.close_rename_prompt(window, cx);
+                    this.search_symbols(query.clone(), window, cx);
+                }
+                RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
+                RenamePromptEvent::NewTask(_) | RenamePromptEvent::Rename(_) => {}
+            },
+        ));
+        self.rename_prompt = Some(prompt);
+        cx.notify();
+    }
+
+    /// Asks the open file's language server for the symbols named like `query`.
+    fn search_symbols(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(requester), Some(path)) = (
+            self.language_requester(),
+            self.editor.read(cx).path().map(str::to_owned),
+        ) else {
+            self.say("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        self.say("Semboller aranıyor…", cx);
+        // The server is the one of the open file; the question itself is about the project.
+        let answer = crate::editor::lsp::ask_with_timeout(
+            &requester,
+            &path,
+            "workspace/symbol",
+            None,
+            serde_json::json!({"query": query}),
+            Duration::from_secs(10),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update_in(cx, |workbench, window, cx| {
+                let places = match answer {
+                    Ok(Ok(value)) => rwk_core::lsp::symbols::workspace_symbols(value, |uri| {
+                        requester.relative_path(uri)
+                    }),
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(rwk_core::error::AppError::new(
+                        rwk_core::error::ErrorCode::NotFound,
+                        "Dil sunucusu yanıt vermedi",
+                    )),
+                };
+                match places {
+                    Ok(places) if places.is_empty() => workbench.say("Eşleşen sembol yok", cx),
+                    Ok(places) => {
+                        workbench.show_locations(format!("SEMBOL · {query}"), places, window, cx)
+                    }
+                    Err(error) => workbench.say(error.message, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
 }

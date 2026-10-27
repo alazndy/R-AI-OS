@@ -25,6 +25,8 @@ pub enum CommandId {
     FindReferences,
     /// List the symbols of the open file.
     Outline,
+    /// Search the symbols of the whole project through the language server.
+    WorkspaceSymbols,
     /// Start the language servers again, also the ones that gave up.
     RestartServers,
     /// Show the next open file read-only beside the active one, or close that split.
@@ -206,7 +208,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 76] = [
+const COMMANDS: [Command; 77] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -521,6 +523,12 @@ const COMMANDS: [Command; 76] = [
     ),
     cmd(CommandId::Outline, "Dosyadaki sembolleri göster", None, &[]),
     cmd(
+        CommandId::WorkspaceSymbols,
+        "Projede sembol ara",
+        Some("Ctrl T"),
+        &[bind("t")],
+    ),
+    cmd(
         CommandId::RestartServers,
         "Dil sunucularını yeniden başlat",
         None,
@@ -745,8 +753,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, true) => allow(),
         },
         Diff | DiffSplit | FocusEditor | CloseTab | Format | RenameSymbol | FindReferences
-        | Outline | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment
-        | SplitEditor => {
+        | Outline | WorkspaceSymbols | FindInFile | ReplaceInFile | ReplaceRegexInFile
+        | GoToLine | ToggleComment | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -850,7 +858,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 76);
+        assert_eq!(catalog().len(), 77);
     }
 
     #[test]

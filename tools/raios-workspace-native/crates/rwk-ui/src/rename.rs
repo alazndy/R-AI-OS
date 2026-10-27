@@ -27,6 +27,8 @@ pub enum PromptPurpose {
     RenameSymbol,
     /// Ask for a line (and column) to go to.
     GoToLine,
+    /// Ask for text to search the project's symbols for.
+    SearchSymbols,
 }
 
 /// What the prompt asks of the workbench.
@@ -144,6 +146,17 @@ impl RenameTerminalPrompt {
             cx.notify();
             return;
         }
+        if self.purpose == PromptPurpose::SearchSymbols {
+            let query = text.trim();
+            if query.is_empty() {
+                self.problem = Some("Aranacak adı yazın".into());
+            } else {
+                self.problem = None;
+                cx.emit(RenamePromptEvent::EntryName(query.to_owned()));
+            }
+            cx.notify();
+            return;
+        }
         if self.purpose == PromptPurpose::GoToLine {
             let target = text.trim();
             if rwk_core::workbench::parse_line_target(target).is_some() {
@@ -215,8 +228,11 @@ impl Render for RenameTerminalPrompt {
             PromptPurpose::RenameEntry => "Yeniden adlandır",
             PromptPurpose::RenameSymbol => "Sembolü yeniden adlandır",
             PromptPurpose::GoToLine => "Satıra git",
+            PromptPurpose::SearchSymbols => "Projede sembol ara",
         };
-        let note = if self.purpose == PromptPurpose::GoToLine {
+        let note = if self.purpose == PromptPurpose::SearchSymbols {
+            "Fonksiyon, tür ya da değişken adının bir parçasını yazın. Enter arar, Esc kapatır."
+        } else if self.purpose == PromptPurpose::GoToLine {
             "Satır numarası, ya da satır:sütun. Enter gider, Esc kapatır."
         } else if self.purpose == PromptPurpose::RenameSymbol {
             "Ad, dil sunucusunun bulduğu her kullanımda değişir; açık sekmeler kaydedilmeden güncellenir. Enter uygular, Esc kapatır."

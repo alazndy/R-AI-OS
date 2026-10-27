@@ -974,6 +974,7 @@ impl Workbench {
             CommandId::RenameSymbol => self.open_symbol_prompt(window, cx),
             CommandId::FindReferences => self.find_references(window, cx),
             CommandId::Outline => self.show_outline(window, cx),
+            CommandId::WorkspaceSymbols => self.open_symbol_search(window, cx),
             CommandId::RestartServers => self.restart_servers(cx),
             CommandId::Format => self
                 .editor
