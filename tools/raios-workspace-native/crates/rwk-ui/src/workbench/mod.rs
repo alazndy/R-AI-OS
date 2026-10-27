@@ -893,6 +893,8 @@ impl Workbench {
                     self.request_close_tab(path, window, cx);
                 }
             }
+            CommandId::CloseOtherTabs => self.close_tabs(true, window, cx),
+            CommandId::CloseAllTabs => self.close_tabs(false, window, cx),
             CommandId::Diff => {
                 if let Some(project) = self.project.clone() {
                     self.editor
@@ -1332,6 +1334,33 @@ impl Workbench {
             return;
         }
         self.perform(PendingAction::OpenFile { path, line }, window, cx);
+    }
+
+    /// Closes every tab (all but the active one when `keep_active`). A tab with unsaved edits
+    /// stays open rather than starting a chain of questions.
+    fn close_tabs(&mut self, keep_active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (paths, dirty, active) = {
+            let editor = self.editor.read(cx);
+            (
+                editor.paths(),
+                editor.dirty_paths(),
+                editor.path().map(str::to_owned),
+            )
+        };
+        let mut kept = 0;
+        for path in paths {
+            if keep_active && active.as_deref() == Some(path.as_str()) {
+                continue;
+            }
+            if dirty.contains(&path) {
+                kept += 1;
+                continue;
+            }
+            self.perform(PendingAction::CloseTab(path), window, cx);
+        }
+        if kept > 0 {
+            self.say(format!("{kept} değiştirilmiş sekme açık bırakıldı"), cx);
+        }
     }
 
     /// Closes an editor tab; a tab with unsaved edits is asked about first.

@@ -398,6 +398,33 @@ fn discarding_a_dirty_tab_closes_it_and_keeps_the_disk_content() {
 }
 
 #[test]
+fn close_other_and_close_all_tabs_leave_the_unsaved_ones_open() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    rig.open_file("b.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two"));
+    assert_eq!(rig.editor_paths().len(), 2);
+
+    rig.run(CommandId::CloseOtherTabs);
+    assert_eq!(rig.editor_paths(), vec!["b.txt".to_owned()]);
+
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    rig.type_text("x");
+    rig.run(CommandId::CloseAllTabs);
+    assert_eq!(
+        rig.editor_paths(),
+        vec!["a.txt".to_owned()],
+        "the edited tab stays"
+    );
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("açık bırakıldı")));
+}
+
+#[test]
 fn the_close_tab_command_and_its_shortcut_close_the_active_tab() {
     let mut rig = rig();
     rig.open_project();

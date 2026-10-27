@@ -92,6 +92,8 @@ const EDITOR_TAB: &[MenuEntry] = &[
     Command(C::DiffSplit),
     Separator,
     Command(C::CloseTab),
+    Command(C::CloseOtherTabs),
+    Command(C::CloseAllTabs),
 ];
 
 /// The entries of the menu opened on `target`, top to bottom.

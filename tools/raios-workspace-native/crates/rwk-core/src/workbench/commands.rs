@@ -67,6 +67,10 @@ pub enum CommandId {
     Save,
     /// Close the active editor tab.
     CloseTab,
+    /// Close every tab but the active one; tabs with unsaved edits stay open.
+    CloseOtherTabs,
+    /// Close every tab; tabs with unsaved edits stay open.
+    CloseAllTabs,
     /// Git diff of the open file.
     Diff,
     /// Switch the diff between unified and side-by-side.
@@ -214,7 +218,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 80] = [
+const COMMANDS: [Command; 82] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -257,6 +261,13 @@ const COMMANDS: [Command; 80] = [
         Some("Ctrl W"),
         &[bind("w")],
     ),
+    cmd(
+        CommandId::CloseOtherTabs,
+        "Diğer sekmeleri kapat",
+        None,
+        &[],
+    ),
+    cmd(CommandId::CloseAllTabs, "Tüm sekmeleri kapat", None, &[]),
     cmd(
         CommandId::Diff,
         "Açık dosyanın Git diff görünümü",
@@ -776,9 +787,10 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor | CloseTab | Format | RenameSymbol | FindReferences
-        | Outline | WorkspaceSymbols | FindInFile | ReplaceInFile | ReplaceRegexInFile
-        | GoToLine | ToggleComment | BlameLine | SplitEditor => {
+        Diff | DiffSplit | FocusEditor | CloseTab | CloseOtherTabs | CloseAllTabs | Format
+        | RenameSymbol | FindReferences | Outline | WorkspaceSymbols | FindInFile
+        | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment | BlameLine
+        | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -882,7 +894,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 80);
+        assert_eq!(catalog().len(), 82);
     }
 
     #[test]
