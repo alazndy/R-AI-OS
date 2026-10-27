@@ -4239,6 +4239,10 @@ while True:
             uri: [e(name)], uri.replace('a.rs', 'b.rs'): [e(name)]}}})
     elif method == 'textDocument/completion':
         send({'jsonrpc': '2.0', 'id': m['id'], 'result': [{'label': 'alpha'}]})
+    elif method == 'textDocument/signatureHelp':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'signatures': [
+            {'label': 'fn a(x: i32, y: u8)', 'parameters': [{'label': 'x: i32'}, {'label': 'y: u8'}]}],
+            'activeParameter': 1}})
     elif method == 'shutdown':
         send({'jsonrpc': '2.0', 'id': m['id'], 'result': None})
     elif method == 'exit':
@@ -5742,4 +5746,34 @@ fn recent_projects_are_remembered_newest_first_and_can_be_reopened() {
     assert_eq!(rig.cx.update(|_, cx| list.read(cx).problems().len()), 1);
     rig.with(|_wb, _w, cx| list.update(cx, |list, cx| list.choose_selected(cx)));
     assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.recent_projects().first() == Some(&first))));
+}
+
+#[test]
+fn signature_help_shows_the_active_parameter_in_the_toast() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+
+    rig.run(CommandId::SignatureHelp);
+    assert!(rig.settle_until(|rig| rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("«y: u8»"))));
 }

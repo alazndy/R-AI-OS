@@ -659,6 +659,13 @@ impl EditorView {
         }
     }
 
+    /// The cursor of the active file: path, 0-based line and column.
+    pub fn cursor_at(&self, cx: &gpui::App) -> Option<(String, u32, u32)> {
+        let tab = self.tabs.get(self.active)?;
+        let position = tab.state.read(cx).cursor_position();
+        Some((tab.path()?.to_owned(), position.line, position.character))
+    }
+
     /// The symbol under the cursor: path, 0-based line and column, and its name.
     pub fn symbol_at_cursor(&self, cx: &gpui::App) -> Option<(String, u32, u32, String)> {
         let tab = self.tabs.get(self.active)?;

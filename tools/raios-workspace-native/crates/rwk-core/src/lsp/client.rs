@@ -139,7 +139,11 @@ impl LspClient {
                         "publishDiagnostics": {"relatedInformation": false},
                         "hover": {"contentFormat": ["plaintext", "markdown"]},
                         "completion": {"completionItem": {"snippetSupport": false}},
-                        "definition": {"linkSupport": true}
+                        "definition": {"linkSupport": true},
+                        "signatureHelp": {"signatureInformation": {
+                            "parameterInformation": {"labelOffsetSupport": true},
+                            "activeParameterSupport": true
+                        }}
                     }
                 }
             }),

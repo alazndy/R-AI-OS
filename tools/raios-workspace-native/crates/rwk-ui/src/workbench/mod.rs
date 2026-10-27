@@ -990,6 +990,7 @@ impl Workbench {
             CommandId::WorkspaceSymbols => self.open_symbol_search(window, cx),
             CommandId::FindInTerminal => self.open_terminal_search(window, cx),
             CommandId::RecentProjects => self.show_recent_projects(window, cx),
+            CommandId::SignatureHelp => self.signature_help(window, cx),
             CommandId::RestartServers => self.restart_servers(cx),
             CommandId::BlameLine => self.blame_line(cx),
             CommandId::Format => self

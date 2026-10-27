@@ -81,6 +81,37 @@ impl Workbench {
         }));
     }
 
+    /// Says in the toast which parameter the call under the cursor expects next.
+    pub(super) fn signature_help(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(requester) = self.language_requester() else {
+            self.say("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        let Some((path, line, character)) = self.editor.read(cx).cursor_at(cx) else {
+            return;
+        };
+        let answer = crate::editor::lsp::ask_with_timeout(
+            &requester,
+            &path,
+            "textDocument/signatureHelp",
+            Some((line, character)),
+            serde_json::Value::Null,
+            Duration::from_secs(5),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update(cx, |workbench, cx| match answer {
+                Ok(Ok(value)) => match rwk_core::lsp::signature::signature_line(&value) {
+                    Some(line) => workbench.say(line, cx),
+                    None => workbench.say("Burada parametre ipucu yok", cx),
+                },
+                _ => workbench.say("Dil sunucusu yanıt vermedi", cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Starts the servers again, those that gave up included.
     pub(super) fn restart_servers(&mut self, cx: &mut Context<Self>) {
         let Some(servers) = &self.servers else {

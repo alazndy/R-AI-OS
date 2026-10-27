@@ -69,6 +69,8 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
   toggle, "who last changed this line" (palette: git blame), close other / all tabs (tab menu).
   Multi-cursor (`Ctrl Alt Up/Down`), code actions (`Ctrl .`) and gutter folding come from the
   editor widget.
+- **Parameter hint** (`Ctrl Shift Space`) shows the signature of the call under the cursor with the
+  current parameter between « », in the footer.
 - **Project symbols** (`Ctrl T`) searches symbols of the whole project through the language server
   of the open file. **Recent projects** (`Ctrl Alt O`) lists the folders opened before.
 - **Changes on disk**: open files and the file tree notice edits made elsewhere (checked every

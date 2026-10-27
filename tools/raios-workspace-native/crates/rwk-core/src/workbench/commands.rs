@@ -29,6 +29,8 @@ pub enum CommandId {
     Outline,
     /// Search the symbols of the whole project through the language server.
     WorkspaceSymbols,
+    /// Show the parameters of the call the cursor is inside.
+    SignatureHelp,
     /// Start the language servers again, also the ones that gave up.
     RestartServers,
     /// Show the next open file read-only beside the active one, or close that split.
@@ -218,7 +220,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 82] = [
+const COMMANDS: [Command; 83] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -564,6 +566,17 @@ const COMMANDS: [Command; 82] = [
         &[bind("t")],
     ),
     cmd(
+        CommandId::SignatureHelp,
+        "Parametre ipucu",
+        Some("Ctrl Shift Space"),
+        &[Binding {
+            key: "space",
+            shift: true,
+            alt: false,
+            terminal: false,
+        }],
+    ),
+    cmd(
         CommandId::RestartServers,
         "Dil sunucularını yeniden başlat",
         None,
@@ -788,9 +801,9 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, true) => allow(),
         },
         Diff | DiffSplit | FocusEditor | CloseTab | CloseOtherTabs | CloseAllTabs | Format
-        | RenameSymbol | FindReferences | Outline | WorkspaceSymbols | FindInFile
-        | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment | BlameLine
-        | SplitEditor => {
+        | RenameSymbol | FindReferences | Outline | WorkspaceSymbols | SignatureHelp
+        | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment
+        | BlameLine | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -894,7 +907,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 82);
+        assert_eq!(catalog().len(), 83);
     }
 
     #[test]
