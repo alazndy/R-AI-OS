@@ -90,6 +90,7 @@ const EDITOR_TAB: &[MenuEntry] = &[
     Command(C::Save),
     Command(C::Diff),
     Command(C::DiffSplit),
+    Command(C::PinTab),
     Separator,
     Command(C::CloseTab),
     Command(C::CloseOtherTabs),

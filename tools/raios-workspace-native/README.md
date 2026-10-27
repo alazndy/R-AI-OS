@@ -69,6 +69,9 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
   toggle, "who last changed this line" (palette: git blame), close other / all tabs (tab menu).
   Multi-cursor (`Ctrl Alt Up/Down`), code actions (`Ctrl .`) and gutter folding come from the
   editor widget.
+- **Tabs**: drag a tab along the strip to reorder it, or use `Ctrl Shift PageUp/PageDown`. "Sekmeyi
+  sabitle" (tab menu) pins it to the front with a ◆; pinned tabs stay when you close other / all tabs
+  and are remembered between runs. Tabs only move inside their group (pinned / unpinned).
 - **Parameter hint** (`Ctrl Shift Space`) shows the signature of the call under the cursor with the
   current parameter between « », in the footer.
 - **Snippets** (`Ctrl J`) lists the snippets of the open file's type and inserts one at the cursor,

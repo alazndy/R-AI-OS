@@ -28,6 +28,9 @@ pub struct SavedTab {
     /// 1-based cursor line; older files without one land on the first line.
     #[serde(default = "first_line")]
     pub line: usize,
+    /// Pinned tabs sit first in the strip and are kept by "close other tabs".
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 fn first_line() -> usize {
@@ -151,6 +154,12 @@ impl SavedWorkspace {
         self.tabs
             .retain(|tab| valid_tab_path(&tab.path) && seen.insert(tab.path.clone()));
         self.tabs.truncate(MAX_SAVED_TABS);
+        // Pinned tabs lead the strip: a pin after an unpinned tab is not honoured.
+        let mut leading = true;
+        for tab in &mut self.tabs {
+            leading &= tab.pinned;
+            tab.pinned = leading;
+        }
         self.terminals.truncate(MAX_SESSIONS);
         self.task_links.truncate(self.terminals.len());
         self.task_links = self
@@ -213,10 +222,12 @@ mod tests {
                 SavedTab {
                     path: "src/main.rs".into(),
                     line: 12,
+                    pinned: false,
                 },
                 SavedTab {
                     path: "README.md".into(),
                     line: 1,
+                    pinned: false,
                 },
             ],
             active: 1,
@@ -267,6 +278,20 @@ mod tests {
     }
 
     #[test]
+    fn only_the_leading_run_of_pinned_tabs_is_kept() {
+        let parsed = parse_workspace(
+            r#"{"project":"/work/app","tabs":[
+                {"path":"a.rs","pinned":true},
+                {"path":"b.rs"},
+                {"path":"c.rs","pinned":true}
+            ]}"#,
+        )
+        .expect("parse");
+        let pins: Vec<bool> = parsed.tabs.iter().map(|tab| tab.pinned).collect();
+        assert_eq!(pins, [true, false, false]);
+    }
+
+    #[test]
     fn junk_or_relative_projects_are_refused() {
         assert!(parse_workspace("not json").is_none());
         assert!(parse_workspace("[]").is_none());
@@ -292,7 +317,8 @@ mod tests {
             parsed.tabs,
             vec![SavedTab {
                 path: "src/lib.rs".into(),
-                line: 1
+                line: 1,
+                pinned: false,
             }]
         );
         assert_eq!(parsed.active, 0, "clamped to the surviving tabs");
@@ -304,6 +330,7 @@ mod tests {
             .map(|index| SavedTab {
                 path: format!("file-{index}.rs"),
                 line: 1,
+                pinned: false,
             })
             .collect();
         let more_terminals: Vec<SavedTerminal> = (0..MAX_SESSIONS + 4)
