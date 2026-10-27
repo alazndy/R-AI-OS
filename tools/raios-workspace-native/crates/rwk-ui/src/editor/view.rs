@@ -131,9 +131,30 @@ struct Tab {
     diff_right: Option<Entity<EditorState>>,
     diff_raw: String,
     diff_visible: bool,
+    /// Pinned tabs sit first in the strip.
+    pinned: bool,
     _subscription: Subscription,
     /// Repaints the status bar when the cursor moves.
     _cursor: Subscription,
+}
+
+/// A tab being dragged along the strip.
+struct DraggedTab(String);
+
+/// The small label that follows the pointer while a tab is dragged.
+struct TabPreview(SharedString);
+
+impl Render for TabPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_0p5()
+            .text_xs()
+            .rounded_sm()
+            .bg(gpui::rgba(0x000000cc))
+            .text_color(gpui::rgb(0xffffff))
+            .child(self.0.clone())
+    }
 }
 
 impl Tab {
@@ -298,6 +319,72 @@ impl EditorView {
         } else {
             SwitchDecision::NeedsDecision
         }
+    }
+
+    /// True when the tab of `path` is pinned.
+    pub fn is_pinned(&self, path: &str) -> bool {
+        self.position_of(path)
+            .is_some_and(|index| self.tabs[index].pinned)
+    }
+
+    /// Pins the active tab (it moves to the end of the pinned group) or unpins it (it moves to
+    /// the start of the others).
+    pub fn toggle_pin(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        tab.pinned = !tab.pinned;
+        let pinned = tab.pinned;
+        let group = self.tabs.iter().filter(|tab| tab.pinned).count();
+        // Pinning made the group one larger: the tab goes to its last place; unpinning leaves
+        // the group one smaller: the tab goes right after it.
+        let target = if pinned { group - 1 } else { group };
+        self.relocate(self.active, target, cx);
+    }
+
+    /// Moves the active tab `delta` places along the strip, never out of its pinned or
+    /// unpinned group.
+    pub fn move_tab(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let target = self.active.saturating_add_signed(delta);
+        self.relocate(self.active, target, cx);
+    }
+
+    /// Moves the tab of `path` to where the tab at `target` is, inside its own group.
+    pub fn move_tab_to(&mut self, path: &str, target: usize, cx: &mut Context<Self>) {
+        if let Some(from) = self.position_of(path) {
+            self.relocate(from, target, cx);
+        }
+    }
+
+    /// Moves tab `from` to `to`, clamped to the tab's group (pinned tabs come first), and
+    /// keeps the same tab active.
+    fn relocate(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from >= self.tabs.len() {
+            return;
+        }
+        let group = self.tabs.iter().filter(|tab| tab.pinned).count();
+        let (low, high) = if self.tabs[from].pinned {
+            (0, group.saturating_sub(1))
+        } else {
+            (group, self.tabs.len() - 1)
+        };
+        let to = to.clamp(low, high.max(low));
+        let active_path = self.path().map(str::to_owned);
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to.min(self.tabs.len()), tab);
+        if let Some(path) = active_path {
+            self.active = self.position_of(&path).unwrap_or(self.active);
+        }
+        cx.notify();
+    }
+
+    /// Paths of the pinned tabs.
+    pub fn pinned_paths(&self) -> Vec<String> {
+        self.tabs
+            .iter()
+            .filter(|tab| tab.pinned)
+            .filter_map(|tab| tab.path().map(str::to_owned))
+            .collect()
     }
 
     fn position_of(&self, path: &str) -> Option<usize> {
@@ -505,6 +592,7 @@ impl EditorView {
                     diff_right: None,
                     diff_raw: String::new(),
                     diff_visible: false,
+                    pinned: false,
                     _subscription: subscription,
                     _cursor: cursor,
                 });
@@ -636,7 +724,11 @@ impl EditorView {
                 let path = tab.path()?.to_owned();
                 let position = tab.state.read(cx).cursor_position();
                 let line = usize::try_from(position.line).unwrap_or(usize::MAX) + 1;
-                Some(SavedTab { path, line })
+                Some(SavedTab {
+                    path,
+                    line,
+                    pinned: tab.pinned,
+                })
             })
             .collect()
     }
@@ -1263,6 +1355,11 @@ impl EditorView {
                     if let Ok(document) = document {
                         let path = document.path.clone();
                         view.install_document(document, Some(tab.line), window, cx);
+                        if tab.pinned {
+                            if let Some(index) = view.position_of(&path) {
+                                view.tabs[index].pinned = true;
+                            }
+                        }
                         installed.push(path);
                     }
                 }
@@ -1538,16 +1635,27 @@ impl Render for EditorView {
                 .border_color(gpui::rgb(theme.line))
                 .children(self.tabs.iter().enumerate().map(|(index, tab)| {
                     let path = tab.path().unwrap_or_default().to_owned();
-                    let title = match tab.session.is_dirty() {
-                        true => format!("{path} ●"),
-                        false => path.clone(),
+                    let title = match (tab.pinned, tab.session.is_dirty()) {
+                        (true, true) => format!("◆ {path} ●"),
+                        (true, false) => format!("◆ {path}"),
+                        (false, true) => format!("{path} ●"),
+                        (false, false) => path.clone(),
                     };
                     let badge = self.badges.get(&path).copied();
                     let active = index == self.active;
                     let activate = path.clone();
                     let close = path.clone();
                     let menu_path = path.clone();
+                    let dragged = path.clone();
+                    let preview = SharedString::from(path.clone());
                     div()
+                        .id(SharedString::from(format!("tab-box-{path}")))
+                        .on_drag(DraggedTab(dragged), move |_, _, _, cx| {
+                            cx.new(|_| TabPreview(preview.clone()))
+                        })
+                        .on_drop(cx.listener(move |view, dropped: &DraggedTab, _window, cx| {
+                            view.move_tab_to(&dropped.0, index, cx);
+                        }))
                         .on_mouse_down(
                             gpui::MouseButton::Right,
                             cx.listener(move |view, event: &gpui::MouseDownEvent, window, cx| {

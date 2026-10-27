@@ -2121,10 +2121,12 @@ fn a_project_reopens_with_its_saved_tabs_layout_and_shells() {
             SavedTab {
                 path: "a.txt".into(),
                 line: 1,
+                pinned: false,
             },
             SavedTab {
                 path: "b.txt".into(),
                 line: 1,
+                pinned: false,
             },
         ],
         active: 1,
@@ -2207,9 +2209,10 @@ fn a_saved_agent_session_is_offered_and_resuming_runs_raios_resume() {
         fake.calls()
     );
     assert!(
-        rig.script_calls()
+        rig.settle_until(|rig| rig
+            .script_calls()
             .iter()
-            .any(|call| call == &format!("resume {KEY}")),
+            .any(|call| call == &format!("resume {KEY}"))),
         "{:?}",
         rig.script_calls()
     );
@@ -2340,6 +2343,7 @@ fn a_saved_workspace_of_another_project_is_not_restored() {
         tabs: vec![SavedTab {
             path: "a.txt".into(),
             line: 1,
+            pinned: false,
         }],
         active: 0,
         layout: LayoutPreset::Agents,
@@ -5899,4 +5903,74 @@ fn a_conflicted_file_opened_from_source_control_lands_on_its_first_conflict() {
     assert!(rig
         .read(|wb, _| wb.toast())
         .is_some_and(|toast| toast.contains("1 çakışma")));
+}
+
+#[test]
+fn pinned_tabs_lead_the_strip_and_tabs_move_only_inside_their_group() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("c.txt"), "three").expect("c");
+    rig.open_project();
+    for (file, text) in [("a.txt", "one"), ("b.txt", "two"), ("c.txt", "three")] {
+        rig.open_file(file);
+        assert!(rig.settle_until(|rig| rig.editor_text() == text));
+    }
+    let order = |rig: &mut Rig| rig.editor_paths();
+    assert_eq!(order(&mut rig), ["a.txt", "b.txt", "c.txt"]);
+
+    // Pinning the active c.txt moves it to the front; it stays active.
+    rig.run(CommandId::PinTab);
+    assert_eq!(order(&mut rig), ["c.txt", "a.txt", "b.txt"]);
+    assert_eq!(rig.editor_path().as_deref(), Some("c.txt"));
+    assert!(rig.read(|wb, cx| wb.editor().read(cx).is_pinned("c.txt")));
+
+    // A pinned tab cannot be moved among the unpinned ones, an unpinned one not before it.
+    rig.run(CommandId::MoveTabRight);
+    assert_eq!(order(&mut rig), ["c.txt", "a.txt", "b.txt"]);
+    rig.with(|wb, window, cx| {
+        wb.editor()
+            .clone()
+            .update(cx, |editor, cx| editor.activate_tab("b.txt", window, cx))
+    });
+    rig.run(CommandId::MoveTabLeft);
+    assert_eq!(order(&mut rig), ["c.txt", "b.txt", "a.txt"]);
+    rig.run(CommandId::MoveTabLeft);
+    assert_eq!(
+        order(&mut rig),
+        ["c.txt", "b.txt", "a.txt"],
+        "stays behind the pin"
+    );
+    rig.with(|wb, _, cx| {
+        wb.editor()
+            .clone()
+            .update(cx, |editor, cx| editor.move_tab_to("a.txt", 1, cx))
+    });
+    assert_eq!(
+        order(&mut rig),
+        ["c.txt", "a.txt", "b.txt"],
+        "a drop works the same"
+    );
+
+    // The pin is saved and survives "close other tabs" and "close all tabs".
+    let saved = rig.read(|wb, cx| wb.editor().read(cx).tabs_snapshot(cx));
+    assert_eq!(
+        saved.iter().map(|tab| tab.pinned).collect::<Vec<_>>(),
+        [true, false, false]
+    );
+    rig.run(CommandId::CloseOtherTabs);
+    assert_eq!(
+        order(&mut rig),
+        ["c.txt", "b.txt"],
+        "the pin and the active tab stay"
+    );
+    rig.run(CommandId::CloseAllTabs);
+    assert_eq!(order(&mut rig), ["c.txt"]);
+
+    // Unpinning puts it back among the others.
+    rig.with(|wb, window, cx| {
+        wb.editor()
+            .clone()
+            .update(cx, |editor, cx| editor.activate_tab("c.txt", window, cx))
+    });
+    rig.run(CommandId::PinTab);
+    assert!(!rig.read(|wb, cx| wb.editor().read(cx).is_pinned("c.txt")));
 }

@@ -545,6 +545,7 @@ mod tests {
             tabs: vec![SavedTab {
                 path: "src/main.rs".into(),
                 line: 7,
+                pinned: false,
             }],
             active: 0,
             layout: LayoutPreset::Editor,

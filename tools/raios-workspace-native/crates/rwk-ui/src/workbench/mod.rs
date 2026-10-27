@@ -919,6 +919,9 @@ impl Workbench {
                     self.say(format!("{count} çakışma"), cx);
                 }
             }
+            CommandId::PinTab => self.editor.update(cx, |editor, cx| editor.toggle_pin(cx)),
+            CommandId::MoveTabLeft => self.editor.update(cx, |editor, cx| editor.move_tab(-1, cx)),
+            CommandId::MoveTabRight => self.editor.update(cx, |editor, cx| editor.move_tab(1, cx)),
             CommandId::CloseOtherTabs => self.close_tabs(true, window, cx),
             CommandId::CloseAllTabs => self.close_tabs(false, window, cx),
             CommandId::Diff => {
@@ -1396,17 +1399,21 @@ impl Workbench {
     /// Closes every tab (all but the active one when `keep_active`). A tab with unsaved edits
     /// stays open rather than starting a chain of questions.
     fn close_tabs(&mut self, keep_active: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let (paths, dirty, active) = {
+        let (paths, dirty, active, pinned) = {
             let editor = self.editor.read(cx);
             (
                 editor.paths(),
                 editor.dirty_paths(),
                 editor.path().map(str::to_owned),
+                editor.pinned_paths(),
             )
         };
         let mut kept = 0;
         for path in paths {
             if keep_active && active.as_deref() == Some(path.as_str()) {
+                continue;
+            }
+            if pinned.contains(&path) {
                 continue;
             }
             if dirty.contains(&path) {
