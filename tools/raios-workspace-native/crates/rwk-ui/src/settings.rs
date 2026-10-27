@@ -19,6 +19,18 @@ pub enum Setting {
     Tone,
     /// The skin: standard, GT-LCARS or Aperture.
     Skin,
+    /// A ready-made toolbar layout.
+    ToolbarPreset,
+    /// Toolbar categories as tabs, or all buttons in one row.
+    ToolbarTabs,
+    /// Button names on the toolbar.
+    ToolbarCaptions,
+    /// Shortcut hints on the toolbar.
+    ToolbarShortcuts,
+    /// Only the essential toolbar buttons.
+    ToolbarEssentials,
+    /// One toolbar category (index into the categories) shows or hides.
+    ToolbarGroup(u8),
 }
 
 /// One option of a choice.
@@ -76,6 +88,9 @@ impl EventEmitter<SettingsEvent> for SettingsView {}
 pub struct SettingsView {
     rows: Vec<SettingRow>,
     selected: usize,
+    /// Where each row sits among the list's children (section headings take places too).
+    positions: Vec<usize>,
+    scroll: gpui::ScrollHandle,
     theme: Theme,
     focus: FocusHandle,
 }
@@ -88,6 +103,8 @@ impl SettingsView {
         Self {
             rows,
             selected: 0,
+            positions: Vec::new(),
+            scroll: gpui::ScrollHandle::new(),
             theme: Theme::of(Appearance::default()),
             focus,
         }
@@ -152,6 +169,9 @@ impl SettingsView {
             "right" => self.step_choice(1, cx),
             "enter" | "space" => self.toggle_selected(cx),
             _ => return,
+        }
+        if let Some(position) = self.positions.get(self.selected) {
+            self.scroll.scroll_to_item(*position);
         }
         cx.stop_propagation();
         cx.notify();
@@ -243,11 +263,22 @@ impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.selected;
-        let mut body = div().flex().flex_col().gap_1();
+        let mut body = div()
+            .id("settings-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .flex()
+            .flex_col()
+            .gap_1();
         let mut section = "";
+        let mut positions = Vec::new();
+        let mut children = 0;
         for (ix, row) in self.rows.clone().into_iter().enumerate() {
             if row.section != section {
                 section = row.section;
+                children += 1;
                 body = body.child(
                     div()
                         .mt_3()
@@ -258,6 +289,8 @@ impl Render for SettingsView {
                         .child(SharedString::from(row.section)),
                 );
             }
+            positions.push(children);
+            children += 1;
             let control = self.control(ix, &row, cx);
             let line = div()
                 .px_3()
@@ -292,10 +325,12 @@ impl Render for SettingsView {
                 .child(control);
             body = body.child(line);
         }
+        self.positions = positions;
         div()
             .absolute()
             .occlude()
             .top_8()
+            .bottom_8()
             .left_0()
             .right_0()
             .mx_auto()

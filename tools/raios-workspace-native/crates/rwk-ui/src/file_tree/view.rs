@@ -387,6 +387,8 @@ impl Render for FileTreeView {
                     .id(ix)
                     .w_full()
                     .h(gpui::px(ROW_HEIGHT))
+                    .min_w_0()
+                    .overflow_hidden()
                     .pl(gpui::px(6.0 + INDENT * depth as f32))
                     .flex()
                     .flex_row()
@@ -396,6 +398,7 @@ impl Render for FileTreeView {
                     .hover(move |style| style.bg(gpui::rgb(theme.raised)))
                     .child(
                         div()
+                            .flex_none()
                             .w(gpui::px(10.0))
                             .text_xs()
                             .text_color(gpui::rgb(if on_fill {
@@ -412,7 +415,15 @@ impl Render for FileTreeView {
                             .flex_none()
                             .text_color(gpui::rgb(glyph_color)),
                     )
-                    .child(div().flex_1().min_w_0().overflow_hidden().child(label))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(label),
+                    )
                     .children(badge.map(|badge| {
                         div()
                             .flex_none()
@@ -463,6 +474,8 @@ impl Render for FileTreeView {
         let status = self.status.clone().unwrap_or_default();
         let element: AnyElement = div()
             .size_full()
+            .min_w_0()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .track_focus(&self.focus)
@@ -476,6 +489,9 @@ impl Render for FileTreeView {
                     .items_center()
                     .bg(gpui::rgb(theme.blue))
                     .rounded_tl(gpui::px(16.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_color(gpui::rgb(theme.on_fill))
                     .font_family(crate::fonts::display_family(window))
                     .text_size(gpui::px(16.0))
@@ -489,6 +505,9 @@ impl Render for FileTreeView {
                     .border_b_1()
                     .border_color(gpui::rgb(theme.line))
                     .text_xs()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_color(gpui::rgb(theme.muted))
                     .child(title)
             })
@@ -518,6 +537,9 @@ impl Render for FileTreeView {
                 div()
                     .px_2()
                     .text_xs()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_color(gpui::rgb(theme.bad))
                     .child(status),
             )

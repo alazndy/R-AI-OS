@@ -5456,3 +5456,56 @@ fn toolbar_tabs_show_one_category_and_follow_their_shortcuts() {
     rig.run(CommandId::ToolbarTab(5));
     assert_eq!(shown(&mut rig), rwk_core::workbench::ToolbarGroup::Tools);
 }
+
+#[test]
+fn the_toolbar_follows_its_presets_and_refuses_to_hide_every_category() {
+    use rwk_core::workbench::{ToolbarLayout, ToolbarPreset};
+    use rwk_ui::settings::Setting;
+
+    let mut rig = rig();
+    let events: Arc<Mutex<Vec<WorkbenchEvent>>> = Arc::default();
+    let sink = Arc::clone(&events);
+    let view = rig.view.clone();
+    rig.cx.update(|_w, app| {
+        app.subscribe(&view, move |_wb, event: &WorkbenchEvent, _app| {
+            sink.lock().unwrap().push(event.clone());
+        })
+        .detach();
+    });
+    rig.run(CommandId::Settings);
+    let settings = rig.read(|wb, _| wb.settings_view().cloned()).expect("view");
+    assert_eq!(
+        rig.read(|wb, _| wb.toolbar_layout().preset_of()),
+        Some(ToolbarPreset::Tabbed)
+    );
+
+    // Picking a preset changes the layout and tells the application to store it.
+    rig.with(|_wb, _w, cx| {
+        settings.update(cx, |view, cx| view.choose(Setting::ToolbarPreset, 3, cx))
+    });
+    assert_eq!(
+        rig.read(|wb, _| wb.toolbar_layout()),
+        ToolbarLayout::preset(ToolbarPreset::Minimal)
+    );
+    assert!(events.lock().unwrap().iter().any(|event| matches!(
+        event,
+        WorkbenchEvent::PreferencesChanged { toolbar, .. }
+            if *toolbar == ToolbarLayout::preset(ToolbarPreset::Minimal)
+    )));
+
+    // Editing one switch makes the layout custom: no preset matches any more.
+    rig.with(|_wb, _w, cx| {
+        settings.update(cx, |view, cx| view.toggle(Setting::ToolbarCaptions, cx))
+    });
+    assert_eq!(rig.read(|wb, _| wb.toolbar_layout().preset_of()), None);
+
+    // Hiding categories works until one is left; the last one stays.
+    for index in 0..5u8 {
+        rig.with(|_wb, _w, cx| {
+            settings.update(cx, |view, cx| view.toggle(Setting::ToolbarGroup(index), cx))
+        });
+    }
+    let layout = rig.read(|wb, _| wb.toolbar_layout());
+    assert_eq!(layout.groups.iter().filter(|shown| **shown).count(), 1);
+    assert!(layout.groups[4], "the last category is the one left");
+}

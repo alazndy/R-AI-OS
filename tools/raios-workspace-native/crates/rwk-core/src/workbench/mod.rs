@@ -33,8 +33,8 @@ pub use layout_state::{
     SavedWorkspace, WorkspaceStateSource, MAX_SAVED_TABS,
 };
 pub use menus::{
-    menu_entries, toolbar, toolbar_icon, toolbar_pressed, MenuEntry, MenuTarget, ToolbarGroup,
-    ToolbarItem,
+    is_essential, menu_entries, toolbar, toolbar_icon, toolbar_pressed, MenuEntry, MenuTarget,
+    ToolbarGroup, ToolbarItem, ToolbarLayout, ToolbarMode, ToolbarPreset,
 };
 pub use offers::{
     parse_catalog, plan_offers, MatchedSession, SavedSessionRow, SessionCatalog, SessionOffer,

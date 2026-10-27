@@ -169,6 +169,8 @@ pub struct Preferences {
     pub auto_save: bool,
     /// Format with the language server before saving.
     pub format_on_save: bool,
+    /// What the toolbar shows; a missing or invalid entry is the default layout.
+    pub toolbar: rwk_core::workbench::ToolbarLayout,
 }
 
 /// The preferences file inside a config home.
@@ -186,6 +188,10 @@ pub fn load_preferences(path: &Path) -> Preferences {
     Preferences {
         auto_save: flag("auto_save"),
         format_on_save: flag("format_on_save"),
+        toolbar: value
+            .get("toolbar")
+            .and_then(|toolbar| serde_json::from_value(toolbar.clone()).ok())
+            .unwrap_or_default(),
     }
 }
 
@@ -202,6 +208,7 @@ pub fn save_preferences(path: &Path, preferences: Preferences) -> std::io::Resul
     let text = serde_json::json!({
         "auto_save": preferences.auto_save,
         "format_on_save": preferences.format_on_save,
+        "toolbar": preferences.toolbar,
     });
     file.write_all(text.to_string().as_bytes())?;
     file.sync_all()?;
@@ -310,6 +317,9 @@ mod tests {
         let on = Preferences {
             auto_save: true,
             format_on_save: false,
+            toolbar: rwk_core::workbench::ToolbarLayout::preset(
+                rwk_core::workbench::ToolbarPreset::Minimal,
+            ),
         };
         save_preferences(&path, on).unwrap();
         assert_eq!(load_preferences(&path), on);

@@ -15,7 +15,7 @@ use rwk_core::handoff_flow::TaskLink;
 use rwk_core::tasks::TaskStatus;
 use rwk_core::workbench::{
     available, catalog, menu_entries, toolbar, toolbar_icon, toolbar_pressed, CommandId, MenuEntry,
-    MenuTarget, Theme, ToolbarGroup, ToolbarItem,
+    MenuTarget, Theme, ToolbarGroup, ToolbarItem, ToolbarMode,
 };
 
 use super::Workbench;
@@ -605,9 +605,10 @@ impl Workbench {
             .collect()
     }
 
-    /// The row above the panes: the RAIOS mark, the category tabs (`Ctrl Shift 1` to `5`), then
-    /// the buttons of the open category, each with its shortcut.
+    /// The row above the panes: the RAIOS mark, then the buttons as the toolbar layout says,
+    /// either one category at a time under tabs (`Ctrl Shift 1` to `5`) or all in one row.
     pub(super) fn toolbar_row(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
+        let layout = self.toolbar_layout;
         let mark = div()
             .id("toolbar-brand")
             .flex_none()
@@ -620,51 +621,82 @@ impl Workbench {
             )
             .tooltip(|_window, cx| cx.new(|_| Tip("RAIOS Workspace".into())).into())
             .into_any_element();
-        let open = self.toolbar_tab;
-        let tabs = ToolbarGroup::ALL.iter().enumerate().map(|(index, group)| {
-            let group = *group;
-            let color = group_color(group, theme.dark);
-            let active = group == open;
-            let number = index as u8 + 1;
-            div()
-                .id(SharedString::from(format!("toolbar-tab-{number}")))
-                .flex_none()
-                .h(px(28.0))
-                .px_2p5()
-                .flex()
-                .items_center()
-                .text_size(px(11.0))
-                .whitespace_nowrap()
-                .cursor_pointer()
-                .border_b_2()
-                .border_color(gpui::rgb(if active { color } else { theme.panel }))
-                .text_color(gpui::rgb(if active { color } else { theme.muted }))
-                .hover(move |style| style.text_color(gpui::rgb(color)))
-                .child(group.label())
-                .tooltip(move |_window, cx| {
-                    let text = SharedString::from(format!(
-                        "{} sekmesi (Ctrl Shift {number})",
-                        group.label()
-                    ));
-                    cx.new(|_| Tip(text)).into()
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.run(CommandId::ToolbarTab(number), window, cx)
-                }))
-                .into_any_element()
-        });
-        let buttons = self
-            .toolbar_buttons(cx)
-            .into_iter()
-            .filter(|shown| shown.group == open)
-            .map(|shown| {
-                let id = shown.id;
-                let tip = shown.tip.clone();
+        let tabbed = layout.mode == ToolbarMode::Tabs;
+        let open = if layout.group_shown(self.toolbar_tab) {
+            self.toolbar_tab
+        } else {
+            layout.first_group()
+        };
+        let tabs = ToolbarGroup::ALL
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| tabbed && layout.group_shown(**group))
+            .map(|(index, group)| {
+                let group = *group;
+                let color = group_color(group, theme.dark);
+                let active = group == open;
+                let number = index as u8 + 1;
+                div()
+                    .id(SharedString::from(format!("toolbar-tab-{number}")))
+                    .flex_none()
+                    .h(px(28.0))
+                    .px_2p5()
+                    .flex()
+                    .items_center()
+                    .text_size(px(11.0))
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .border_b_2()
+                    .border_color(gpui::rgb(if active { color } else { theme.panel }))
+                    .text_color(gpui::rgb(if active { color } else { theme.muted }))
+                    .hover(move |style| style.text_color(gpui::rgb(color)))
+                    .child(group.label())
+                    .tooltip(move |_window, cx| {
+                        let text = SharedString::from(format!(
+                            "{} sekmesi (Ctrl Shift {number})",
+                            group.label()
+                        ));
+                        cx.new(|_| Tip(text)).into()
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.run(CommandId::ToolbarTab(number), window, cx)
+                    }))
+                    .into_any_element()
+            });
+        let mut previous_group: Option<ToolbarGroup> = None;
+        let mut buttons = Vec::new();
+        for shown in self.toolbar_buttons(cx) {
+            if !layout.shows(shown.id, shown.group) || (tabbed && shown.group != open) {
+                continue;
+            }
+            // In the flat row a coloured rule starts each category.
+            if !tabbed && previous_group != Some(shown.group) {
                 let color = group_color(shown.group, theme.dark);
+                buttons.push(
+                    div()
+                        .flex_none()
+                        .mx_1p5()
+                        .w(px(2.0))
+                        .h(px(16.0))
+                        .rounded_full()
+                        .bg(gpui::rgb(color))
+                        .into_any_element(),
+                );
+            }
+            previous_group = Some(shown.group);
+            let id = shown.id;
+            let tip = shown.tip.clone();
+            let color = group_color(shown.group, theme.dark);
+            let captions = layout.captions;
+            let shortcut = shown
+                .shortcut
+                .clone()
+                .filter(|_| layout.shortcuts && captions);
+            buttons.push(
                 div()
                     .id(SharedString::from(format!("toolbar-{id:?}")))
                     .flex_none()
-                    .px_2()
+                    .px(px(if captions { 8.0 } else { 7.0 }))
                     .h(px(26.0))
                     .flex()
                     .items_center()
@@ -683,12 +715,12 @@ impl Workbench {
                     .child(
                         gpui::svg()
                             .path(crate::assets::toolbar_icon_path(shown.icon))
-                            .size(px(14.0))
+                            .size(px(if captions { 14.0 } else { 16.0 }))
                             .flex_none()
                             .text_color(gpui::rgb(if shown.enabled { color } else { theme.muted })),
                     )
-                    .child(shown.caption)
-                    .children(shown.shortcut.map(|keys| {
+                    .children(captions.then_some(shown.caption))
+                    .children(shortcut.map(|keys| {
                         div()
                             .text_size(px(9.0))
                             .text_color(gpui::rgb(theme.muted))
@@ -700,8 +732,9 @@ impl Workbench {
                     })
                     // A disabled button still answers: the command says why it cannot run.
                     .on_click(cx.listener(move |this, _, window, cx| this.run(id, window, cx)))
-                    .into_any_element()
-            });
+                    .into_any_element(),
+            );
+        }
         div()
             .id("toolbar")
             .flex_none()
@@ -717,14 +750,14 @@ impl Workbench {
             .border_color(gpui::rgb(theme.line))
             .child(mark)
             .children(tabs)
-            .child(
+            .children(tabbed.then(|| {
                 div()
                     .flex_none()
                     .mx_2()
                     .w(px(1.0))
                     .h(px(16.0))
-                    .bg(gpui::rgb(theme.line)),
-            )
+                    .bg(gpui::rgb(theme.line))
+            }))
             .children(buttons)
             .into_any_element()
     }

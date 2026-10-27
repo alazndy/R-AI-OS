@@ -5,6 +5,8 @@
 //! A right click selects what it hit before the menu opens (as editors do), so every command
 //! here acts on "the selected terminal / the open file" and needs no target argument.
 
+use serde::{Deserialize, Serialize};
+
 use super::commands::CommandId;
 
 /// Where a context menu was opened.
@@ -187,6 +189,147 @@ const TOOLBAR: &[ToolbarItem] = &[
     Button(C::Settings, "Ayarlar"),
 ];
 
+/// How the toolbar arranges its categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolbarMode {
+    /// One tab per category; only the open category's buttons show.
+    Tabs,
+    /// Every shown category in one row, told apart by a coloured rule.
+    Flat,
+}
+
+/// A ready-made toolbar layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolbarPreset {
+    /// Category tabs, button names and shortcut hints.
+    Tabbed,
+    /// Category tabs with icons only.
+    Compact,
+    /// All categories in one row, icons only.
+    Flat,
+    /// Only the essential buttons, icons only.
+    Minimal,
+}
+
+impl ToolbarPreset {
+    /// The presets in the order the settings list them.
+    pub const ALL: [Self; 4] = [Self::Tabbed, Self::Compact, Self::Flat, Self::Minimal];
+
+    /// The name shown to the user.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tabbed => "Sekmeli",
+            Self::Compact => "Kompakt",
+            Self::Flat => "Düz",
+            Self::Minimal => "Minimal",
+        }
+    }
+}
+
+/// What the toolbar shows and how; stored with the preferences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolbarLayout {
+    /// Tabs or one flat row.
+    pub mode: ToolbarMode,
+    /// Print each button's name next to its icon.
+    pub captions: bool,
+    /// Print the shortcut next to the name (needs `captions`).
+    pub shortcuts: bool,
+    /// Keep only the essential buttons.
+    pub essentials: bool,
+    /// Which categories show, in `ToolbarGroup::ALL` order.
+    pub groups: [bool; 5],
+}
+
+impl Default for ToolbarLayout {
+    fn default() -> Self {
+        Self::preset(ToolbarPreset::Tabbed)
+    }
+}
+
+impl ToolbarLayout {
+    /// The layout of a preset.
+    pub const fn preset(preset: ToolbarPreset) -> Self {
+        let all = [true; 5];
+        match preset {
+            ToolbarPreset::Tabbed => Self {
+                mode: ToolbarMode::Tabs,
+                captions: true,
+                shortcuts: true,
+                essentials: false,
+                groups: all,
+            },
+            ToolbarPreset::Compact => Self {
+                mode: ToolbarMode::Tabs,
+                captions: false,
+                shortcuts: false,
+                essentials: false,
+                groups: all,
+            },
+            ToolbarPreset::Flat => Self {
+                mode: ToolbarMode::Flat,
+                captions: false,
+                shortcuts: false,
+                essentials: false,
+                groups: all,
+            },
+            ToolbarPreset::Minimal => Self {
+                mode: ToolbarMode::Flat,
+                captions: false,
+                shortcuts: false,
+                essentials: true,
+                groups: all,
+            },
+        }
+    }
+
+    /// The preset this layout equals, `None` once it was customised.
+    pub fn preset_of(&self) -> Option<ToolbarPreset> {
+        ToolbarPreset::ALL
+            .into_iter()
+            .find(|preset| Self::preset(*preset) == *self)
+    }
+
+    /// Whether `group` shows.
+    pub fn group_shown(&self, group: ToolbarGroup) -> bool {
+        ToolbarGroup::ALL
+            .iter()
+            .position(|candidate| *candidate == group)
+            .is_some_and(|index| self.groups[index])
+    }
+
+    /// The first category that shows (the first of all when none is set).
+    pub fn first_group(&self) -> ToolbarGroup {
+        ToolbarGroup::ALL
+            .into_iter()
+            .find(|group| self.group_shown(*group))
+            .unwrap_or(ToolbarGroup::Files)
+    }
+
+    /// Whether the button for `id` in `group` shows.
+    pub fn shows(&self, id: CommandId, group: ToolbarGroup) -> bool {
+        self.group_shown(group) && (!self.essentials || is_essential(id))
+    }
+}
+
+/// The buttons the minimal toolbar keeps.
+pub fn is_essential(id: CommandId) -> bool {
+    matches!(
+        id,
+        C::Project
+            | C::Files
+            | C::Search
+            | C::Save
+            | C::SourceControl
+            | C::Problems
+            | C::NewTerminal
+            | C::RunTask
+            | C::Commands
+            | C::Settings
+    )
+}
+
 /// The name of the icon drawn on a toolbar button (a file of the UI's bundled toolbar icons).
 pub fn toolbar_icon(id: CommandId) -> &'static str {
     match id {
@@ -240,6 +383,37 @@ pub fn toolbar_pressed(id: CommandId, dock_visible: bool, inspector_visible: boo
 mod tests {
     use super::*;
     use crate::workbench::commands::catalog;
+
+    #[test]
+    fn presets_differ_and_are_found_again_until_customised() {
+        let layouts: Vec<ToolbarLayout> = ToolbarPreset::ALL
+            .into_iter()
+            .map(ToolbarLayout::preset)
+            .collect();
+        for (index, layout) in layouts.iter().enumerate() {
+            assert_eq!(layout.preset_of(), Some(ToolbarPreset::ALL[index]));
+            assert!(layouts.iter().filter(|other| *other == layout).count() == 1);
+        }
+        let mut custom = ToolbarLayout::default();
+        custom.groups[2] = false;
+        assert_eq!(custom.preset_of(), None);
+        assert!(!custom.group_shown(ToolbarGroup::Work));
+        assert!(custom.group_shown(ToolbarGroup::Files));
+    }
+
+    #[test]
+    fn the_minimal_preset_keeps_only_essential_buttons_that_exist() {
+        let minimal = ToolbarLayout::preset(ToolbarPreset::Minimal);
+        let mut group = ToolbarGroup::Files;
+        let mut shown = 0;
+        for item in toolbar() {
+            match item {
+                ToolbarItem::Group(next) => group = *next,
+                ToolbarItem::Button(id, _) => shown += usize::from(minimal.shows(*id, group)),
+            }
+        }
+        assert_eq!(shown, 10);
+    }
 
     const TARGETS: [MenuTarget; 4] = [
         MenuTarget::TerminalTitle,

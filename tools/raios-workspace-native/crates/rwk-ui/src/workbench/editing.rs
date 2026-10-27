@@ -40,7 +40,32 @@ impl Workbench {
         cx.emit(super::WorkbenchEvent::PreferencesChanged {
             auto_save: self.auto_save,
             format_on_save: self.format_on_save,
+            toolbar: self.toolbar_layout,
         });
+    }
+
+    /// Sets the stored toolbar layout without announcing it.
+    pub fn set_toolbar_layout(&mut self, layout: rwk_core::workbench::ToolbarLayout) {
+        self.toolbar_layout = layout;
+    }
+
+    /// What the toolbar shows and how.
+    pub fn toolbar_layout(&self) -> rwk_core::workbench::ToolbarLayout {
+        self.toolbar_layout
+    }
+
+    /// Replaces the toolbar layout, repaints and stores it.
+    pub(super) fn change_toolbar(
+        &mut self,
+        layout: rwk_core::workbench::ToolbarLayout,
+        cx: &mut Context<Self>,
+    ) {
+        if layout == self.toolbar_layout {
+            return;
+        }
+        self.toolbar_layout = layout;
+        self.preferences_changed(cx);
+        cx.notify();
     }
 
     pub(super) fn toggle_auto_save(&mut self, cx: &mut Context<Self>) {

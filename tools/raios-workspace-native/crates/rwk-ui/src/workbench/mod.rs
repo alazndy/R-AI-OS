@@ -85,6 +85,8 @@ pub enum WorkbenchEvent {
         auto_save: bool,
         /// Format with the language server before saving.
         format_on_save: bool,
+        /// What the toolbar shows.
+        toolbar: rwk_core::workbench::ToolbarLayout,
     },
 }
 
@@ -298,6 +300,8 @@ pub struct Workbench {
     locations_view: Option<Entity<crate::problems::ProblemsView>>,
     /// The toolbar category whose buttons show.
     toolbar_tab: rwk_core::workbench::ToolbarGroup,
+    /// What the toolbar shows and how.
+    toolbar_layout: rwk_core::workbench::ToolbarLayout,
     settings_view: Option<Entity<crate::settings::SettingsView>>,
     file_replace: Option<Entity<crate::file_replace::FileReplaceView>>,
     file_replace_subscription: Option<Subscription>,
@@ -565,6 +569,7 @@ impl Workbench {
             problems_view: None,
             problems_subscription: None,
             toolbar_tab: rwk_core::workbench::ToolbarGroup::Files,
+            toolbar_layout: rwk_core::workbench::ToolbarLayout::default(),
             settings_view: None,
             file_replace: None,
             file_replace_subscription: None,
@@ -1883,7 +1888,12 @@ impl Render for Workbench {
             .children(self.dock_tree(theme, cx));
         let main = h_resizable("workbench")
             .with_state(&self.sizes)
-            .child(resizable_panel().size(px(260.0)).child(self.files.clone()))
+            .child(
+                resizable_panel()
+                    .size(px(260.0))
+                    .size_range(px(150.0)..px(640.0))
+                    .child(self.files.clone()),
+            )
             .child(resizable_panel().child(self.editor.clone()))
             .child(
                 resizable_panel()
