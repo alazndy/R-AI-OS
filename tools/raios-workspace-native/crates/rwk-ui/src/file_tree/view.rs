@@ -125,6 +125,11 @@ impl FileTreeView {
         }
     }
 
+    /// The folders that are open (the project root is not among them).
+    pub fn expanded_folders(&self) -> Vec<String> {
+        self.expanded.iter().cloned().collect()
+    }
+
     /// Expands a folder, listing it when it has not been listed yet.
     pub fn expand(&mut self, path: &str, cx: &mut Context<Self>) {
         self.expanded.insert(path.to_owned());

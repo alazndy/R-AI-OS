@@ -141,6 +141,24 @@ impl ProjectRoot {
         Ok(entries)
     }
 
+    /// When and how big `relative` is (a file or a folder; empty is the project root): the
+    /// modification time in nanoseconds since the epoch and the size. Cheap enough to poll.
+    pub fn stamp(&self, relative: &str) -> Result<(u128, u64)> {
+        validate_relative_path(relative, true)?;
+        let metadata = if relative.is_empty() {
+            self.dir.dir_metadata()?
+        } else {
+            self.dir.metadata(relative).map_err(path_error)?
+        };
+        let modified = metadata
+            .modified()
+            .ok()
+            .map(cap_std::time::SystemTime::into_std)
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        Ok((modified, metadata.len()))
+    }
+
     /// Reads a regular UTF-8 file of at most [`MAX_FILE_BYTES`] and returns it with its revision.
     pub fn read_document(&self, relative: &str) -> Result<Document> {
         validate_relative_path(relative, false)?;

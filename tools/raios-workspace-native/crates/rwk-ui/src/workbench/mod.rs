@@ -21,6 +21,7 @@ pub mod runner;
 pub mod search;
 pub mod settings;
 pub mod usage;
+pub mod watch;
 pub mod workspace;
 
 use std::path::PathBuf;
@@ -319,6 +320,9 @@ pub struct Workbench {
     quota: Option<String>,
     /// The background task that reads the quota signal and refreshes it on a timer.
     usage_task: Option<Task<()>>,
+    /// Checks open files and folders for changes made elsewhere.
+    watch_task: Option<Task<()>>,
+    watch_stamps: watch::Stamps,
     consent: Arc<ConsentRegistry>,
     consent_wait: Option<std::sync::mpsc::Receiver<rwk_core::consent::ConsentDecision>>,
     composer: Option<Entity<crate::handoff::HandoffComposer>>,
@@ -586,6 +590,8 @@ impl Workbench {
             usage_source: None,
             quota: None,
             usage_task: None,
+            watch_task: None,
+            watch_stamps: std::collections::HashMap::new(),
             consent: Arc::new(ConsentRegistry::new()),
             consent_wait: None,
             composer: None,
@@ -1519,6 +1525,7 @@ impl Workbench {
                         .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));
                     self.register_if_unknown(window, cx);
                     self.restore_workspace(window, cx);
+                    self.start_watching(window, cx);
                     if let Some(command) = self.after_pick.take() {
                         self.run(command, window, cx);
                     }

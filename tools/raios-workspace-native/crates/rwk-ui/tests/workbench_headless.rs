@@ -5588,3 +5588,43 @@ fn go_to_line_comment_toggle_and_zoom_work_on_the_open_file() {
     rig.run(CommandId::ToggleWordWrap);
     assert!(rig.read(|wb, _| wb.editor_prefs().soft_wrap));
 }
+
+#[test]
+fn changes_made_elsewhere_reload_clean_tabs_and_refresh_the_tree() {
+    use std::time::Duration;
+
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("a.txt"), "one\n").expect("a.txt");
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().is_some()));
+
+    // The first look only records the stamps.
+    rig.cx.executor().advance_clock(Duration::from_millis(2100));
+    rig.settle_for(50);
+
+    // Another tool rewrites the open file and adds a new one.
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::write(rig.dir.path().join("a.txt"), "two\n").expect("rewrite");
+    std::fs::write(rig.dir.path().join("b.txt"), "new\n").expect("b.txt");
+    rig.cx.executor().advance_clock(Duration::from_millis(2100));
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two\n"));
+    assert!(rig.settle_until(|rig| {
+        rig.read(|wb, cx| wb.files().read(cx).visible_ids(cx))
+            .iter()
+            .any(|id| id == "b.txt")
+    }));
+
+    // A tab with unsaved typing is left alone and the user is told.
+    rig.with(|wb, window, cx| {
+        wb.editor().update(cx, |editor, cx| {
+            editor.replace_all("two", "mine", false, window, cx);
+        })
+    });
+    let _ = rig.editor_text();
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::write(rig.dir.path().join("a.txt"), "theirs\n").expect("rewrite again");
+    rig.cx.executor().advance_clock(Duration::from_millis(2100));
+    rig.settle_for(100);
+    assert_ne!(rig.editor_text(), "theirs\n");
+}
