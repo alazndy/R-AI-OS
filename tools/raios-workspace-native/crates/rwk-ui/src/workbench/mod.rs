@@ -6,6 +6,7 @@ pub mod control;
 pub mod dock;
 pub mod editing;
 pub mod entries;
+pub mod file_replace;
 pub mod footer;
 pub mod git;
 pub mod host;
@@ -18,7 +19,9 @@ pub mod palette;
 pub mod remote;
 pub mod runner;
 pub mod search;
+pub mod settings;
 pub mod usage;
+pub mod watch;
 pub mod workspace;
 
 use std::path::PathBuf;
@@ -74,6 +77,8 @@ pub enum WorkbenchEvent {
     /// The daemon confirmed this project is registered (newly or before); the application
     /// remembers it so the registration is not offered again at every start.
     ProjectRegistered(PathBuf),
+    /// The recently opened projects changed (newest first); the application stores them.
+    RecentProjectsChanged(Vec<PathBuf>),
     /// The open project's workspace changed (tabs, layout, sessions); the application writes
     /// it so the next start reopens the project as it was left.
     WorkspaceChanged(SavedWorkspace),
@@ -83,10 +88,17 @@ pub enum WorkbenchEvent {
         auto_save: bool,
         /// Format with the language server before saving.
         format_on_save: bool,
+        /// What the toolbar shows.
+        toolbar: rwk_core::workbench::ToolbarLayout,
+        /// Text size, tab width and wrapping.
+        editor: rwk_core::workbench::EditorPrefs,
     },
 }
 
 impl gpui::EventEmitter<WorkbenchEvent> for Workbench {}
+
+/// Reads the user's snippet file; called each time the snippet picker opens.
+pub type SnippetSource = Arc<dyn Fn() -> Vec<rwk_core::workbench::Snippet> + Send + Sync>;
 
 /// An action that waits for the user's decision about unsaved edits or a running session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,6 +295,9 @@ pub struct Workbench {
     task_source: Option<Arc<dyn rwk_core::runner::TaskSource>>,
     /// The open palette lists tasks, not files.
     palette_picks_tasks: bool,
+    /// The open palette lists snippets, not files.
+    palette_picks_snippets: bool,
+    snippet_source: Option<SnippetSource>,
     git_view: Option<Entity<crate::git::GitView>>,
     git_subscription: Option<Subscription>,
     /// Bumped by every git action and on close; an answer for an older one is dropped.
@@ -292,6 +307,19 @@ pub struct Workbench {
     problems: rwk_core::lsp::Problems,
     problems_view: Option<Entity<crate::problems::ProblemsView>>,
     problems_subscription: Option<Subscription>,
+    /// A list of places (usages, a file's symbols), shown like the Problems view.
+    locations_view: Option<Entity<crate::problems::ProblemsView>>,
+    /// The toolbar category whose buttons show.
+    toolbar_tab: rwk_core::workbench::ToolbarGroup,
+    /// What the toolbar shows and how.
+    toolbar_layout: rwk_core::workbench::ToolbarLayout,
+    /// Text size, tab width and wrapping.
+    editor_prefs: rwk_core::workbench::EditorPrefs,
+    settings_view: Option<Entity<crate::settings::SettingsView>>,
+    file_replace: Option<Entity<crate::file_replace::FileReplaceView>>,
+    file_replace_subscription: Option<Subscription>,
+    settings_subscription: Option<Subscription>,
+    locations_subscription: Option<Subscription>,
     lsp_task: Option<Task<()>>,
     lsp_sync_task: Option<Task<()>>,
     /// Where the quota signal is read from (the application sets it).
@@ -300,6 +328,15 @@ pub struct Workbench {
     quota: Option<String>,
     /// The background task that reads the quota signal and refreshes it on a timer.
     usage_task: Option<Task<()>>,
+    /// Checks open files and folders for changes made elsewhere.
+    watch_task: Option<Task<()>>,
+    watch_stamps: watch::Stamps,
+    /// The grid lines behind the open terminal search results, in list order.
+    terminal_hits: Option<Vec<i32>>,
+    /// The projects behind the open recent-projects list, in list order.
+    recent_choices: Option<Vec<PathBuf>>,
+    /// Recently opened projects, newest first.
+    recent_projects: Vec<PathBuf>,
     consent: Arc<ConsentRegistry>,
     consent_wait: Option<std::sync::mpsc::Receiver<rwk_core::consent::ConsentDecision>>,
     composer: Option<Entity<crate::handoff::HandoffComposer>>,
@@ -545,6 +582,8 @@ impl Workbench {
             extra_footer: Vec::new(),
             task_source: None,
             palette_picks_tasks: false,
+            palette_picks_snippets: false,
+            snippet_source: None,
             git_view: None,
             git_subscription: None,
             git_generation: 0,
@@ -553,11 +592,25 @@ impl Workbench {
             problems: rwk_core::lsp::Problems::default(),
             problems_view: None,
             problems_subscription: None,
+            toolbar_tab: rwk_core::workbench::ToolbarGroup::Files,
+            toolbar_layout: rwk_core::workbench::ToolbarLayout::default(),
+            editor_prefs: rwk_core::workbench::EditorPrefs::default(),
+            settings_view: None,
+            file_replace: None,
+            file_replace_subscription: None,
+            settings_subscription: None,
+            locations_view: None,
+            locations_subscription: None,
             lsp_task: None,
             lsp_sync_task: None,
             usage_source: None,
             quota: None,
             usage_task: None,
+            watch_task: None,
+            watch_stamps: std::collections::HashMap::new(),
+            terminal_hits: None,
+            recent_choices: None,
+            recent_projects: Vec::new(),
             consent: Arc::new(ConsentRegistry::new()),
             consent_wait: None,
             composer: None,
@@ -807,6 +860,40 @@ impl Workbench {
             CommandId::SplitEditor => self.editor.update(cx, |editor, cx| editor.toggle_split(cx)),
             CommandId::FindInFile => self.find(false, window, cx),
             CommandId::ReplaceInFile => self.find(true, window, cx),
+            CommandId::ReplaceRegexInFile => self.open_file_replace(window, cx),
+            CommandId::GoToLine => self.open_go_to_line(window, cx),
+            CommandId::ToggleComment => {
+                let done = self
+                    .editor
+                    .update(cx, |editor, cx| editor.toggle_comment(window, cx));
+                if !done {
+                    self.say("Bu dosya türünde satır yorumu yok", cx);
+                }
+            }
+            CommandId::ToggleWordWrap => {
+                let prefs = self.editor_prefs;
+                self.change_editor_prefs(
+                    rwk_core::workbench::EditorPrefs {
+                        soft_wrap: !prefs.soft_wrap,
+                        ..prefs
+                    },
+                    window,
+                    cx,
+                );
+            }
+            CommandId::ZoomIn => self.zoom(1, window, cx),
+            CommandId::ZoomOut => self.zoom(-1, window, cx),
+            CommandId::ZoomReset => {
+                let prefs = self.editor_prefs;
+                self.change_editor_prefs(
+                    rwk_core::workbench::EditorPrefs {
+                        font_size: rwk_core::workbench::DEFAULT_FONT_SIZE,
+                        ..prefs
+                    },
+                    window,
+                    cx,
+                );
+            }
             CommandId::ToggleAutoSave => self.toggle_auto_save(cx),
             CommandId::ToggleFormatOnSave => self.toggle_format_on_save(cx),
             CommandId::CloseTab => {
@@ -814,6 +901,8 @@ impl Workbench {
                     self.request_close_tab(path, window, cx);
                 }
             }
+            CommandId::CloseOtherTabs => self.close_tabs(true, window, cx),
+            CommandId::CloseAllTabs => self.close_tabs(false, window, cx),
             CommandId::Diff => {
                 if let Some(project) = self.project.clone() {
                     self.editor
@@ -843,6 +932,14 @@ impl Workbench {
             CommandId::FocusFiles => self.files.update(cx, |files, cx| files.focus(window, cx)),
             CommandId::NextTerminal => self.select_terminal_offset(1, window, cx),
             CommandId::PreviousTerminal => self.select_terminal_offset(-1, window, cx),
+            CommandId::ToolbarTab(number) => {
+                if let Some(group) = rwk_core::workbench::ToolbarGroup::ALL
+                    .get(usize::from(number).saturating_sub(1))
+                {
+                    self.toolbar_tab = *group;
+                    cx.notify();
+                }
+            }
             CommandId::FocusTerminal(number) => {
                 self.select_terminal(usize::from(number).saturating_sub(1), window, cx);
             }
@@ -877,7 +974,7 @@ impl Workbench {
             | CommandId::GrowTerminal
             | CommandId::ShrinkTerminal => self.arrange(id, window, cx),
             CommandId::Refresh => self.files.update(cx, |files, cx| files.refresh(cx)),
-            CommandId::Settings => self.toggle_tone(cx),
+            CommandId::Settings => self.open_settings(window, cx),
             CommandId::Skin => self.toggle_skin(cx),
             CommandId::GrowDock => self.nudge_dock(DOCK_STEP_PX, window, cx),
             CommandId::ShrinkDock => self.nudge_dock(-DOCK_STEP_PX, window, cx),
@@ -896,6 +993,15 @@ impl Workbench {
             CommandId::RunTask => self.open_task_palette(window, cx),
             CommandId::OpenOutputLocation => self.open_output_location(window, cx),
             CommandId::RenameSymbol => self.open_symbol_prompt(window, cx),
+            CommandId::FindReferences => self.find_references(window, cx),
+            CommandId::Outline => self.show_outline(window, cx),
+            CommandId::WorkspaceSymbols => self.open_symbol_search(window, cx),
+            CommandId::FindInTerminal => self.open_terminal_search(window, cx),
+            CommandId::RecentProjects => self.show_recent_projects(window, cx),
+            CommandId::InsertSnippet => self.open_snippet_palette(window, cx),
+            CommandId::SignatureHelp => self.signature_help(window, cx),
+            CommandId::RestartServers => self.restart_servers(cx),
+            CommandId::BlameLine => self.blame_line(cx),
             CommandId::Format => self
                 .editor
                 .update(cx, |editor, cx| editor.format(window, cx)),
@@ -927,8 +1033,11 @@ impl Workbench {
                 PaletteEvent::Close => this.close_palette(window, cx),
                 PaletteEvent::OpenFile(path) => {
                     let tasks = std::mem::take(&mut this.palette_picks_tasks);
+                    let snippets = std::mem::take(&mut this.palette_picks_snippets);
                     this.close_palette(window, cx);
-                    if tasks {
+                    if snippets {
+                        this.insert_named_snippet(&path, window, cx);
+                    } else if tasks {
                         this.run_named_task(&path, window, cx);
                     } else {
                         this.request_open_file(path, window, cx);
@@ -996,13 +1105,22 @@ impl Workbench {
             || self.memory.is_some()
             || self.search.is_some()
             || self.problems_view.is_some()
+            || self.locations_view.is_some()
+            || self.settings_view.is_some()
+            || self.file_replace.is_some()
             || self.git_view.is_some()
     }
 
     /// Closes the panel on top (the one opened last).
     pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.git_view.is_some() {
+        if self.file_replace.is_some() {
+            self.close_file_replace(window, cx);
+        } else if self.settings_view.is_some() {
+            self.close_settings(window, cx);
+        } else if self.git_view.is_some() {
             self.close_git(window, cx);
+        } else if self.locations_view.is_some() {
+            self.close_locations(window, cx);
         } else if self.problems_view.is_some() {
             self.close_problems(window, cx);
         } else if self.search.is_some() {
@@ -1025,6 +1143,7 @@ impl Workbench {
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.file_search_task = None;
         self.palette_picks_tasks = false;
+        self.palette_picks_snippets = false;
         self.palette = None;
         self.palette_subscription = None;
         window.focus(&self.focus, cx);
@@ -1064,10 +1183,25 @@ impl Workbench {
         self.apply_appearance(cx);
     }
 
+    pub(super) fn set_skin(&mut self, skin: Skin, cx: &mut Context<Self>) {
+        if self.appearance.skin != skin {
+            self.appearance.skin = skin;
+            self.apply_appearance(cx);
+        }
+    }
+
+    pub(super) fn set_tone(&mut self, tone: Tone, cx: &mut Context<Self>) {
+        if self.appearance.tone != tone {
+            self.appearance.tone = tone;
+            self.apply_appearance(cx);
+        }
+    }
+
     fn toggle_skin(&mut self, cx: &mut Context<Self>) {
         self.appearance.skin = match self.appearance.skin {
             Skin::Standard => Skin::Lcars,
-            Skin::Lcars => Skin::Standard,
+            Skin::Lcars => Skin::Aperture,
+            Skin::Aperture => Skin::Standard,
         };
         self.apply_appearance(cx);
     }
@@ -1214,6 +1348,33 @@ impl Workbench {
             return;
         }
         self.perform(PendingAction::OpenFile { path, line }, window, cx);
+    }
+
+    /// Closes every tab (all but the active one when `keep_active`). A tab with unsaved edits
+    /// stays open rather than starting a chain of questions.
+    fn close_tabs(&mut self, keep_active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (paths, dirty, active) = {
+            let editor = self.editor.read(cx);
+            (
+                editor.paths(),
+                editor.dirty_paths(),
+                editor.path().map(str::to_owned),
+            )
+        };
+        let mut kept = 0;
+        for path in paths {
+            if keep_active && active.as_deref() == Some(path.as_str()) {
+                continue;
+            }
+            if dirty.contains(&path) {
+                kept += 1;
+                continue;
+            }
+            self.perform(PendingAction::CloseTab(path), window, cx);
+        }
+        if kept > 0 {
+            self.say(format!("{kept} değiştirilmiş sekme açık bırakıldı"), cx);
+        }
     }
 
     /// Closes an editor tab; a tab with unsaved edits is asked about first.
@@ -1413,6 +1574,7 @@ impl Workbench {
                     self.files
                         .update(cx, |files, cx| files.set_project(Arc::clone(&project), cx));
                     let root = project.info().root.clone();
+                    self.remember_recent(&root, cx);
                     self.project = Some(project);
                     self.server_status.clear();
                     self.refresh_branch(cx);
@@ -1422,6 +1584,7 @@ impl Workbench {
                         .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));
                     self.register_if_unknown(window, cx);
                     self.restore_workspace(window, cx);
+                    self.start_watching(window, cx);
                     if let Some(command) = self.after_pick.take() {
                         self.run(command, window, cx);
                     }
@@ -1534,6 +1697,8 @@ impl Workbench {
         let appearance = terminal_appearance(self.theme());
         let id = info.id.clone();
         let view = cx.new(|cx| TerminalView::new(engine, host, id, appearance, gate, receiver, cx));
+        let font_size = f32::from(self.editor_prefs.font_size);
+        view.update(cx, |view, cx| view.set_font_size(font_size, cx));
         let (resume, name) = match &launch {
             SessionLaunch::Resume(key) => (Some(key.clone()), None),
             SessionLaunch::Fresh { name, .. } => (None, name.clone()),
@@ -1717,7 +1882,7 @@ impl Workbench {
         self.select_terminal(next, window, cx);
     }
 
-    fn with_selected_terminal(
+    pub(super) fn with_selected_terminal(
         &mut self,
         cx: &mut Context<Self>,
         action: impl FnOnce(&mut TerminalView, &mut Context<TerminalView>),
@@ -1788,6 +1953,7 @@ fn terminal_appearance(theme: Theme) -> TerminalAppearance {
         foreground: theme.text,
         background: theme.editor,
         selection: theme.selected,
+        aperture: theme.skin == Skin::Aperture,
     }
 }
 
@@ -1828,7 +1994,12 @@ impl Render for Workbench {
             .children(self.dock_tree(theme, cx));
         let main = h_resizable("workbench")
             .with_state(&self.sizes)
-            .child(resizable_panel().size(px(260.0)).child(self.files.clone()))
+            .child(
+                resizable_panel()
+                    .size(px(260.0))
+                    .size_range(px(150.0)..px(640.0))
+                    .child(self.files.clone()),
+            )
             .child(resizable_panel().child(self.editor.clone()))
             .child(
                 resizable_panel()
@@ -1937,7 +2108,10 @@ impl Render for Workbench {
             .children(self.memory.clone())
             .children(self.search.clone())
             .children(self.problems_view.clone())
+            .children(self.locations_view.clone())
             .children(self.git_view.clone())
+            .children(self.settings_view.clone())
+            .children(self.file_replace.clone())
             .children(self.menu.as_ref().map(|open| open.view.clone()))
             .children(dialog)
     }

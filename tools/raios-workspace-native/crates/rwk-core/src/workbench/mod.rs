@@ -3,8 +3,10 @@
 
 pub mod appearance;
 pub mod commands;
+pub mod comments;
 pub mod dock;
 pub mod documents;
+pub mod editor_prefs;
 pub mod file_types;
 pub mod footer;
 pub mod layout;
@@ -14,6 +16,7 @@ pub mod offers;
 pub mod palette;
 pub mod quick_open;
 pub mod side_diff;
+pub mod snippets;
 pub mod theme;
 
 pub use appearance::{parse_appearance, serialize_appearance, Appearance, Skin, Tone};
@@ -21,10 +24,12 @@ pub use commands::{
     available, catalog, resolve_shortcut, Binding, Command, CommandId, CommandState,
     KeyboardContext, Keystroke, WorkbenchState,
 };
+pub use comments::{line_comment_prefix, parse_line_target, toggle_line_comments};
 pub use dock::{
     zone_at, Axis, DockError, DockLayout, DropZone, Edge, Node, EDGE_BAND, MAX_DEPTH, MIN_SHARE,
 };
 pub use documents::{DocumentSession, SaveBlocked, SaveTicket, SwitchDecision};
+pub use editor_prefs::{EditorPrefs, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE};
 pub use file_types::{presentation, FileIcon, FilePresentation, FileTone};
 pub use footer::{footer_items, upsert as upsert_footer_item, FooterInfo, FooterItem, FooterLevel};
 pub use layout::{LayoutPreset, MIN_EDITOR_PX, MIN_SIDE_PANE_PX};
@@ -33,12 +38,15 @@ pub use layout_state::{
     SavedWorkspace, WorkspaceStateSource, MAX_SAVED_TABS,
 };
 pub use menus::{
-    menu_entries, toolbar, toolbar_icon, toolbar_pressed, MenuEntry, MenuTarget, ToolbarGroup,
-    ToolbarItem,
+    is_essential, menu_entries, toolbar, toolbar_icon, toolbar_pressed, MenuEntry, MenuTarget,
+    ToolbarGroup, ToolbarItem, ToolbarLayout, ToolbarMode, ToolbarPreset,
 };
 pub use offers::{
     parse_catalog, plan_offers, MatchedSession, SavedSessionRow, SessionCatalog, SessionOffer,
 };
 pub use palette::{palette_entries, PaletteEntry};
 pub use side_diff::{side_by_side, SideBySide};
+pub use snippets::{
+    expand as expand_snippet, parse_user_snippets, snippets_for, Expansion, Snippet,
+};
 pub use theme::Theme;

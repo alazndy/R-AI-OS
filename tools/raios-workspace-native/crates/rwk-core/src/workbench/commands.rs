@@ -11,6 +11,8 @@ pub enum CommandId {
     Commands,
     /// Open a project folder.
     Project,
+    /// Choose one of the recently opened projects.
+    RecentProjects,
     /// Search files.
     Files,
     /// Search the project's text through the RAIOS CLI's index.
@@ -21,12 +23,40 @@ pub enum CommandId {
     Format,
     /// Rename the symbol under the cursor in every file, through the language server.
     RenameSymbol,
+    /// List where the symbol under the cursor is used.
+    FindReferences,
+    /// List the symbols of the open file.
+    Outline,
+    /// Search the symbols of the whole project through the language server.
+    WorkspaceSymbols,
+    /// Pick a snippet and insert it at the cursor.
+    InsertSnippet,
+    /// Show the parameters of the call the cursor is inside.
+    SignatureHelp,
+    /// Start the language servers again, also the ones that gave up.
+    RestartServers,
     /// Show the next open file read-only beside the active one, or close that split.
     SplitEditor,
     /// Find text in the open file.
     FindInFile,
     /// Find and replace text in the open file.
     ReplaceInFile,
+    /// Replace in the open file by regular expression (`$1` inserts a group).
+    ReplaceRegexInFile,
+    /// Say who last changed the cursor line and in which commit.
+    BlameLine,
+    /// Ask for a line number and put the cursor there.
+    GoToLine,
+    /// Comment or uncomment the selected lines.
+    ToggleComment,
+    /// Wrap long lines at the window edge, or stop wrapping.
+    ToggleWordWrap,
+    /// Make the editor and terminal text bigger.
+    ZoomIn,
+    /// Make the editor and terminal text smaller.
+    ZoomOut,
+    /// Back to the default text size.
+    ZoomReset,
     /// Save changed files when the window loses focus (on or off).
     ToggleAutoSave,
     /// Format with the language server before saving (on or off).
@@ -41,6 +71,10 @@ pub enum CommandId {
     Save,
     /// Close the active editor tab.
     CloseTab,
+    /// Close every tab but the active one; tabs with unsaved edits stay open.
+    CloseOtherTabs,
+    /// Close every tab; tabs with unsaved edits stay open.
+    CloseAllTabs,
     /// Git diff of the open file.
     Diff,
     /// Switch the diff between unified and side-by-side.
@@ -59,8 +93,12 @@ pub enum CommandId {
     PreviousTerminal,
     /// Focus terminal 1 to 4.
     FocusTerminal(u8),
+    /// Show the buttons of toolbar category 1 to 5.
+    ToolbarTab(u8),
     /// Clear the selected terminal's screen.
     ClearTerminal,
+    /// Search the selected terminal's output, scrollback included.
+    FindInTerminal,
     /// Copy the terminal selection.
     CopyTerminal,
     /// Paste into the selected terminal.
@@ -111,7 +149,7 @@ pub enum CommandId {
     Settings,
     /// Keyboard shortcut list.
     Shortcuts,
-    /// Switch between the standard and the GT-LCARS skin.
+    /// Switch to the next skin (standard, GT-LCARS, Aperture).
     Skin,
     /// Widen the dock (the divider moves left).
     GrowDock,
@@ -184,7 +222,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 61] = [
+const COMMANDS: [Command; 84] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -196,6 +234,12 @@ const COMMANDS: [Command; 61] = [
         "Proje klasörü aç",
         Some("Ctrl O"),
         &[bind("o")],
+    ),
+    cmd(
+        CommandId::RecentProjects,
+        "Son açılan projeler",
+        Some("Ctrl Alt O"),
+        &[bind_terminal("o", false, true)],
     ),
     cmd(
         CommandId::Files,
@@ -221,6 +265,13 @@ const COMMANDS: [Command; 61] = [
         Some("Ctrl W"),
         &[bind("w")],
     ),
+    cmd(
+        CommandId::CloseOtherTabs,
+        "Diğer sekmeleri kapat",
+        None,
+        &[],
+    ),
+    cmd(CommandId::CloseAllTabs, "Tüm sekmeleri kapat", None, &[]),
     cmd(
         CommandId::Diff,
         "Açık dosyanın Git diff görünümü",
@@ -290,6 +341,42 @@ const COMMANDS: [Command; 61] = [
         "4. terminale odaklan",
         Some("Ctrl Alt 4"),
         &[bind_terminal("4", false, true)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(1),
+        "Araç çubuğu: Dosya sekmesi",
+        Some("Ctrl Shift 1"),
+        &[bind_terminal("1", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(2),
+        "Araç çubuğu: Terminal sekmesi",
+        Some("Ctrl Shift 2"),
+        &[bind_terminal("2", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(3),
+        "Araç çubuğu: İş sekmesi",
+        Some("Ctrl Shift 3"),
+        &[bind_terminal("3", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(4),
+        "Araç çubuğu: Görünüm sekmesi",
+        Some("Ctrl Shift 4"),
+        &[bind_terminal("4", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(5),
+        "Araç çubuğu: Araç sekmesi",
+        Some("Ctrl Shift 5"),
+        &[bind_terminal("5", true, false)],
+    ),
+    cmd(
+        CommandId::FindInTerminal,
+        "Terminal çıktısında ara",
+        Some("Ctrl Alt F"),
+        &[bind_terminal("f", false, true)],
     ),
     cmd(
         CommandId::ClearTerminal,
@@ -398,6 +485,57 @@ const COMMANDS: [Command; 61] = [
         &[],
     ),
     cmd(
+        CommandId::ReplaceRegexInFile,
+        "Dosyada regex ile değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::BlameLine,
+        "Satırı en son kim değiştirdi (git blame)",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::GoToLine,
+        "Satıra git",
+        Some("Ctrl G"),
+        &[bind("g")],
+    ),
+    cmd(
+        CommandId::ToggleComment,
+        "Satırı yorumla / yorumu kaldır",
+        Some("Ctrl /"),
+        &[bind("/")],
+    ),
+    cmd(
+        CommandId::ToggleWordWrap,
+        "Satır kaydırmayı aç/kapat",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::ZoomIn,
+        "Yazıyı büyüt",
+        Some("Ctrl +"),
+        &[
+            bind_terminal("=", false, false),
+            bind_terminal("=", true, false),
+        ],
+    ),
+    cmd(
+        CommandId::ZoomOut,
+        "Yazıyı küçült",
+        Some("Ctrl -"),
+        &[bind_terminal("-", false, false)],
+    ),
+    cmd(
+        CommandId::ZoomReset,
+        "Yazı boyutunu sıfırla",
+        Some("Ctrl 0"),
+        &[bind_terminal("0", false, false)],
+    ),
+    cmd(
         CommandId::ToggleAutoSave,
         "Otomatik kaydetmeyi aç/kapat",
         None,
@@ -413,6 +551,42 @@ const COMMANDS: [Command; 61] = [
     cmd(
         CommandId::RenameSymbol,
         "Sembolü yeniden adlandır",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::FindReferences,
+        "Sembolün kullanıldığı yerleri bul",
+        None,
+        &[],
+    ),
+    cmd(CommandId::Outline, "Dosyadaki sembolleri göster", None, &[]),
+    cmd(
+        CommandId::WorkspaceSymbols,
+        "Projede sembol ara",
+        Some("Ctrl T"),
+        &[bind("t")],
+    ),
+    cmd(
+        CommandId::InsertSnippet,
+        "Kod parçası (snippet) ekle",
+        Some("Ctrl J"),
+        &[bind("j")],
+    ),
+    cmd(
+        CommandId::SignatureHelp,
+        "Parametre ipucu",
+        Some("Ctrl Shift Space"),
+        &[Binding {
+            key: "space",
+            shift: true,
+            alt: false,
+            terminal: false,
+        }],
+    ),
+    cmd(
+        CommandId::RestartServers,
+        "Dil sunucularını yeniden başlat",
         None,
         &[],
     ),
@@ -442,7 +616,12 @@ const COMMANDS: [Command; 61] = [
         Some("Ctrl ,"),
         &[bind(",")],
     ),
-    cmd(CommandId::Skin, "GT-LCARS görünümünü aç / kapat", None, &[]),
+    cmd(
+        CommandId::Skin,
+        "Görünümü değiştir (standart / GT-LCARS / Aperture)",
+        None,
+        &[],
+    ),
     cmd(
         CommandId::GrowDock,
         "Dock'u genişlet",
@@ -619,17 +798,20 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         }
     };
     match id {
-        ToggleAutoSave | ToggleFormatOnSave | Commands | Project | Settings | Skin | Shortcuts
-        | Balanced | EditorLayout | AgentsLayout => allow(),
+        ToggleAutoSave | ToggleFormatOnSave | ToggleWordWrap | ZoomIn | ZoomOut | ZoomReset
+        | Commands | Project | RecentProjects | Settings | Skin | Shortcuts | Balanced
+        | EditorLayout | AgentsLayout => allow(),
         Files | Search | Problems | SourceControl | Refresh | RunTask | FocusFiles | Memory
-        | Inspector => needs_project(),
+        | Inspector | RestartServers => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor | CloseTab | Format | RenameSymbol | FindInFile
-        | ReplaceInFile | SplitEditor => {
+        Diff | DiffSplit | FocusEditor | CloseTab | CloseOtherTabs | CloseAllTabs | Format
+        | RenameSymbol | FindReferences | Outline | WorkspaceSymbols | SignatureHelp
+        | InsertSnippet | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine
+        | ToggleComment | BlameLine | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -660,15 +842,22 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("Dock gizli")
             }
         }
-        NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
-        | OpenOutputLocation | StopTerminal | CloseTerminal | KillTerminal | RenameTerminal
-        | UngroupTerminal => needs_terminal(),
+        NextTerminal | PreviousTerminal | ClearTerminal | FindInTerminal | CopyTerminal
+        | PasteTerminal | OpenOutputLocation | StopTerminal | CloseTerminal | KillTerminal
+        | RenameTerminal | UngroupTerminal => needs_terminal(),
         MoveTerminalPrevious | MoveTerminalNext | SplitTerminalRight | SplitTerminalDown
         | JoinTerminalPrevious | GrowTerminal | ShrinkTerminal => {
             if state.terminals >= 2 {
                 allow()
             } else {
                 deny("En az iki terminal gerekir")
+            }
+        }
+        ToolbarTab(number) => {
+            if (1..=5).contains(&number) {
+                allow()
+            } else {
+                deny("Böyle bir sekme yok")
             }
         }
         FocusTerminal(index) => {
@@ -726,7 +915,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 61);
+        assert_eq!(catalog().len(), 84);
     }
 
     #[test]

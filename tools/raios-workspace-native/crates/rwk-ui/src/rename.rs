@@ -25,6 +25,12 @@ pub enum PromptPurpose {
     RenameEntry,
     /// Rename the symbol under the editor's cursor.
     RenameSymbol,
+    /// Ask for a line (and column) to go to.
+    GoToLine,
+    /// Ask for text to search the project's symbols for.
+    SearchSymbols,
+    /// Ask for text to search the selected terminal's output for.
+    SearchTerminal,
 }
 
 /// What the prompt asks of the workbench.
@@ -142,6 +148,31 @@ impl RenameTerminalPrompt {
             cx.notify();
             return;
         }
+        if matches!(
+            self.purpose,
+            PromptPurpose::SearchSymbols | PromptPurpose::SearchTerminal
+        ) {
+            let query = text.trim();
+            if query.is_empty() {
+                self.problem = Some("Aranacak adı yazın".into());
+            } else {
+                self.problem = None;
+                cx.emit(RenamePromptEvent::EntryName(query.to_owned()));
+            }
+            cx.notify();
+            return;
+        }
+        if self.purpose == PromptPurpose::GoToLine {
+            let target = text.trim();
+            if rwk_core::workbench::parse_line_target(target).is_some() {
+                self.problem = None;
+                cx.emit(RenamePromptEvent::EntryName(target.to_owned()));
+            } else {
+                self.problem = Some("Satır numarası yazın (ör. 120 ya da 120:8)".into());
+            }
+            cx.notify();
+            return;
+        }
         if self.purpose == PromptPurpose::RenameSymbol {
             let name = text.trim();
             if name.is_empty() || name.contains(char::is_whitespace) {
@@ -201,8 +232,17 @@ impl Render for RenameTerminalPrompt {
             PromptPurpose::NewFolder => "Yeni klasör",
             PromptPurpose::RenameEntry => "Yeniden adlandır",
             PromptPurpose::RenameSymbol => "Sembolü yeniden adlandır",
+            PromptPurpose::GoToLine => "Satıra git",
+            PromptPurpose::SearchSymbols => "Projede sembol ara",
+            PromptPurpose::SearchTerminal => "Terminal çıktısında ara",
         };
-        let note = if self.purpose == PromptPurpose::RenameSymbol {
+        let note = if self.purpose == PromptPurpose::SearchTerminal {
+            "Seçili terminalin çıktısında, kaydırma geçmişi dahil aranır; büyük/küçük harf önemsiz. Enter arar, Esc kapatır."
+        } else if self.purpose == PromptPurpose::SearchSymbols {
+            "Fonksiyon, tür ya da değişken adının bir parçasını yazın. Enter arar, Esc kapatır."
+        } else if self.purpose == PromptPurpose::GoToLine {
+            "Satır numarası, ya da satır:sütun. Enter gider, Esc kapatır."
+        } else if self.purpose == PromptPurpose::RenameSymbol {
             "Ad, dil sunucusunun bulduğu her kullanımda değişir; açık sekmeler kaydedilmeden güncellenir. Enter uygular, Esc kapatır."
         } else if matches!(
             self.purpose,

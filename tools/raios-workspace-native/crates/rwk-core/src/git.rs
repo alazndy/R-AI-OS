@@ -203,6 +203,50 @@ pub fn head_branch(root: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Who last changed one line of a file, and in which commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Blame {
+    /// Full hash of the commit; all zeros for a line not committed yet.
+    pub commit: String,
+    /// Name of the commit's author.
+    pub author: String,
+    /// First line of the commit message.
+    pub summary: String,
+    /// Seconds since the epoch; zero for a line not committed yet.
+    pub time: i64,
+    /// False when the line only exists in the working tree.
+    pub committed: bool,
+}
+
+/// Blames one 1-based line of `relative`. A line that is not committed yet comes back with
+/// `committed == false`.
+pub fn blame_line(root: &Path, relative: &str, line: usize) -> Result<Blame> {
+    let range = format!("{line},{line}");
+    let out = run(
+        root,
+        &["blame", "--porcelain", "-L", &range, "--", relative],
+        None,
+    )?;
+    let mut blame = Blame {
+        commit: out.split_whitespace().next().unwrap_or_default().to_owned(),
+        author: String::new(),
+        summary: String::new(),
+        time: 0,
+        committed: true,
+    };
+    for row in out.lines() {
+        if let Some(name) = row.strip_prefix("author ") {
+            name.clone_into(&mut blame.author);
+        } else if let Some(time) = row.strip_prefix("author-time ") {
+            blame.time = time.trim().parse().unwrap_or(0);
+        } else if let Some(summary) = row.strip_prefix("summary ") {
+            summary.clone_into(&mut blame.summary);
+        }
+    }
+    blame.committed = !blame.commit.chars().all(|c| c == '0');
+    Ok(blame)
+}
+
 fn git_error(error: std::io::Error) -> AppError {
     match error.kind() {
         std::io::ErrorKind::NotFound => AppError::new(ErrorCode::Io, "Git is not installed."),

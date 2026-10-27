@@ -15,7 +15,7 @@ use rwk_core::handoff_flow::TaskLink;
 use rwk_core::tasks::TaskStatus;
 use rwk_core::workbench::{
     available, catalog, menu_entries, toolbar, toolbar_icon, toolbar_pressed, CommandId, MenuEntry,
-    MenuTarget, Theme, ToolbarGroup, ToolbarItem,
+    MenuTarget, Theme, ToolbarGroup, ToolbarItem, ToolbarMode,
 };
 
 use super::Workbench;
@@ -563,6 +563,11 @@ impl Workbench {
 
     // ----- toolbar ---------------------------------------------------------------------
 
+    /// The category whose buttons the toolbar shows.
+    pub fn toolbar_tab(&self) -> ToolbarGroup {
+        self.toolbar_tab
+    }
+
     /// What each toolbar button shows right now, left to right (rules are not listed).
     pub fn toolbar_buttons(&self, cx: &gpui::App) -> Vec<ToolbarButton> {
         let state = self.state(cx);
@@ -593,20 +598,21 @@ impl Workbench {
                         tip,
                         icon: toolbar_icon(*id),
                         group,
+                        shortcut: command.and_then(|c| c.shortcut).map(short_shortcut),
                     })
                 }
             })
             .collect()
     }
 
-    /// The row of buttons above the panes: the RAIOS mark, then the buttons by category, each
-    /// category in its own colour with its label in front.
+    /// The row above the panes: the RAIOS mark, then the buttons as the toolbar layout says,
+    /// either one category at a time under tabs (`Ctrl Shift 1` to `5`) or all in one row.
     pub(super) fn toolbar_row(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
-        let mut buttons = self.toolbar_buttons(cx).into_iter();
+        let layout = self.toolbar_layout;
         let mark = div()
             .id("toolbar-brand")
             .flex_none()
-            .mr_1()
+            .mr_2()
             .child(
                 gpui::svg()
                     .path(crate::assets::BRAND_PATH)
@@ -615,94 +621,144 @@ impl Workbench {
             )
             .tooltip(|_window, cx| cx.new(|_| Tip("RAIOS Workspace".into())).into())
             .into_any_element();
-        let mut group = ToolbarGroup::Files;
-        let items = toolbar()
+        let tabbed = layout.mode == ToolbarMode::Tabs;
+        let open = if layout.group_shown(self.toolbar_tab) {
+            self.toolbar_tab
+        } else {
+            layout.first_group()
+        };
+        let tabs = ToolbarGroup::ALL
             .iter()
             .enumerate()
-            .map(|(index, item)| match item {
-                ToolbarItem::Group(next) => {
-                    group = *next;
-                    let color = group_color(group, theme.dark);
-                    div()
-                        .id(SharedString::from(format!("toolbar-group-{index}")))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .ml_2()
-                        .mr_0p5()
-                        .pl_1()
-                        .h(px(18.0))
-                        .border_l_2()
-                        .border_color(gpui::rgb(color))
-                        .text_color(gpui::rgb(color))
-                        .text_size(px(9.0))
-                        .whitespace_nowrap()
-                        .child(group.label())
-                        .into_any_element()
-                }
-                ToolbarItem::Button(..) => {
-                    let Some(shown) = buttons.next() else {
-                        return div().into_any_element();
-                    };
-                    let id = shown.id;
-                    let tip = shown.tip.clone();
-                    let color = group_color(shown.group, theme.dark);
-                    div()
-                        .id(SharedString::from(format!("toolbar-{id:?}")))
-                        .flex_none()
-                        .px_2()
-                        .h(px(24.0))
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .rounded_sm()
-                        .text_xs()
-                        .whitespace_nowrap()
-                        .cursor_pointer()
-                        .text_color(gpui::rgb(if shown.enabled {
-                            theme.text
-                        } else {
-                            theme.muted
-                        }))
-                        .when_pressed(shown.pressed, theme)
-                        .hover(move |style| style.bg(gpui::rgb(theme.raised)))
-                        .child(
-                            gpui::svg()
-                                .path(crate::assets::toolbar_icon_path(shown.icon))
-                                .size(px(14.0))
-                                .flex_none()
-                                .text_color(gpui::rgb(if shown.enabled {
-                                    color
-                                } else {
-                                    theme.muted
-                                })),
-                        )
-                        .child(shown.caption)
-                        .tooltip(move |_window, cx| {
-                            let text = SharedString::from(tip.clone());
-                            cx.new(|_| Tip(text)).into()
-                        })
-                        // A disabled button still answers: the command says why it cannot run.
-                        .on_click(cx.listener(move |this, _, window, cx| this.run(id, window, cx)))
-                        .into_any_element()
-                }
+            .filter(|(_, group)| tabbed && layout.group_shown(**group))
+            .map(|(index, group)| {
+                let group = *group;
+                let color = group_color(group, theme.dark);
+                let active = group == open;
+                let number = index as u8 + 1;
+                div()
+                    .id(SharedString::from(format!("toolbar-tab-{number}")))
+                    .flex_none()
+                    .h(px(28.0))
+                    .px_2p5()
+                    .flex()
+                    .items_center()
+                    .text_size(px(11.0))
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .border_b_2()
+                    .border_color(gpui::rgb(if active { color } else { theme.panel }))
+                    .text_color(gpui::rgb(if active { color } else { theme.muted }))
+                    .hover(move |style| style.text_color(gpui::rgb(color)))
+                    .child(group.label())
+                    .tooltip(move |_window, cx| {
+                        let text = SharedString::from(format!(
+                            "{} sekmesi (Ctrl Shift {number})",
+                            group.label()
+                        ));
+                        cx.new(|_| Tip(text)).into()
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.run(CommandId::ToolbarTab(number), window, cx)
+                    }))
+                    .into_any_element()
             });
+        let mut previous_group: Option<ToolbarGroup> = None;
+        let mut buttons = Vec::new();
+        for shown in self.toolbar_buttons(cx) {
+            if !layout.shows(shown.id, shown.group) || (tabbed && shown.group != open) {
+                continue;
+            }
+            // In the flat row a coloured rule starts each category.
+            if !tabbed && previous_group != Some(shown.group) {
+                let color = group_color(shown.group, theme.dark);
+                buttons.push(
+                    div()
+                        .flex_none()
+                        .mx_1p5()
+                        .w(px(2.0))
+                        .h(px(16.0))
+                        .rounded_full()
+                        .bg(gpui::rgb(color))
+                        .into_any_element(),
+                );
+            }
+            previous_group = Some(shown.group);
+            let id = shown.id;
+            let tip = shown.tip.clone();
+            let color = group_color(shown.group, theme.dark);
+            let captions = layout.captions;
+            let shortcut = shown
+                .shortcut
+                .clone()
+                .filter(|_| layout.shortcuts && captions);
+            buttons.push(
+                div()
+                    .id(SharedString::from(format!("toolbar-{id:?}")))
+                    .flex_none()
+                    .px(px(if captions { 8.0 } else { 7.0 }))
+                    .h(px(26.0))
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .rounded_sm()
+                    .text_xs()
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .text_color(gpui::rgb(if shown.enabled {
+                        theme.text
+                    } else {
+                        theme.muted
+                    }))
+                    .when_pressed(shown.pressed, theme)
+                    .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+                    .child(
+                        gpui::svg()
+                            .path(crate::assets::toolbar_icon_path(shown.icon))
+                            .size(px(if captions { 14.0 } else { 16.0 }))
+                            .flex_none()
+                            .text_color(gpui::rgb(if shown.enabled { color } else { theme.muted })),
+                    )
+                    .children(captions.then_some(shown.caption))
+                    .children(shortcut.map(|keys| {
+                        div()
+                            .text_size(px(9.0))
+                            .text_color(gpui::rgb(theme.muted))
+                            .child(SharedString::from(keys))
+                    }))
+                    .tooltip(move |_window, cx| {
+                        let text = SharedString::from(tip.clone());
+                        cx.new(|_| Tip(text)).into()
+                    })
+                    // A disabled button still answers: the command says why it cannot run.
+                    .on_click(cx.listener(move |this, _, window, cx| this.run(id, window, cx)))
+                    .into_any_element(),
+            );
+        }
         div()
             .id("toolbar")
             .flex_none()
-            .h(px(32.0))
-            .px_2()
+            .h(px(34.0))
+            .px_3()
             .flex()
             .flex_row()
             .items_center()
-            .gap_0p5()
+            .gap_1()
             .overflow_x_scroll()
             .bg(gpui::rgb(theme.panel))
             .border_b_1()
             .border_color(gpui::rgb(theme.line))
             .child(mark)
-            .children(items)
+            .children(tabs)
+            .children(tabbed.then(|| {
+                div()
+                    .flex_none()
+                    .mx_2()
+                    .w(px(1.0))
+                    .h(px(16.0))
+                    .bg(gpui::rgb(theme.line))
+            }))
+            .children(buttons)
             .into_any_element()
     }
 }
@@ -724,6 +780,13 @@ pub struct ToolbarButton {
     pub icon: &'static str,
     /// The category the button sits in.
     pub group: ToolbarGroup,
+    /// The shortcut, in short form (`Ctrl+Shift+T`), when the command has one.
+    pub shortcut: Option<String>,
+}
+
+/// `Ctrl Shift P` as `Ctrl+Shift+P`; a shortcut with alternatives keeps only the first.
+fn short_shortcut(text: &str) -> String {
+    text.split(" / ").next().unwrap_or(text).replace(' ', "+")
 }
 
 /// The colour of a toolbar category: bright on a dark tone, deep on a light one.

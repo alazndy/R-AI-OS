@@ -81,6 +81,47 @@ impl Workbench {
         }));
     }
 
+    /// Says in the toast which parameter the call under the cursor expects next.
+    pub(super) fn signature_help(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(requester) = self.language_requester() else {
+            self.say("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        let Some((path, line, character)) = self.editor.read(cx).cursor_at(cx) else {
+            return;
+        };
+        let answer = crate::editor::lsp::ask_with_timeout(
+            &requester,
+            &path,
+            "textDocument/signatureHelp",
+            Some((line, character)),
+            serde_json::Value::Null,
+            Duration::from_secs(5),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update(cx, |workbench, cx| match answer {
+                Ok(Ok(value)) => match rwk_core::lsp::signature::signature_line(&value) {
+                    Some(line) => workbench.say(line, cx),
+                    None => workbench.say("Burada parametre ipucu yok", cx),
+                },
+                _ => workbench.say("Dil sunucusu yanıt vermedi", cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Starts the servers again, those that gave up included.
+    pub(super) fn restart_servers(&mut self, cx: &mut Context<Self>) {
+        let Some(servers) = &self.servers else {
+            self.say("Dil sunucuları kapalı", cx);
+            return;
+        };
+        servers.restart();
+        self.say("Dil sunucuları yeniden başlatılıyor…", cx);
+    }
+
     /// Stops the servers; waiting for them to exit happens off the UI thread.
     pub(super) fn stop_language_servers(&mut self, cx: &mut Context<Self>) {
         self.lsp_task = None;
@@ -188,5 +229,367 @@ impl Workbench {
         self.problems_subscription = None;
         window.focus(&self.focus, cx);
         cx.notify();
+    }
+}
+
+impl Workbench {
+    /// Shows a list of places under `title`; choosing one opens it.
+    fn show_locations(
+        &mut self,
+        title: String,
+        places: Vec<rwk_core::lsp::symbols::Place>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let list = places
+            .into_iter()
+            .map(|place| rwk_core::lsp::Problem {
+                path: place.path,
+                line: place.line,
+                column: place.column,
+                severity: rwk_core::lsp::Severity::Info,
+                message: place.label,
+                source: None,
+            })
+            .collect();
+        let theme = self.theme();
+        let view = cx.new(|cx| ProblemsView::titled(title, list, window, cx));
+        view.update(cx, |view, cx| view.set_theme(theme, cx));
+        self.locations_subscription = Some(cx.subscribe_in(
+            &view,
+            window,
+            |this, _view, event: &ProblemsEvent, window, cx| match event {
+                ProblemsEvent::Open(path, line) => {
+                    // Terminal hits have no file: the line is the place in the result list.
+                    if let Some(projects) = this.recent_choices.take() {
+                        this.close_locations(window, cx);
+                        if let Some(root) = projects.get(line.saturating_sub(1)) {
+                            this.open_project(root.clone(), window, cx);
+                        }
+                        return;
+                    }
+                    if let Some(hits) = this.terminal_hits.take() {
+                        this.close_locations(window, cx);
+                        if let Some(grid_line) = hits.get(line.saturating_sub(1)) {
+                            let grid_line = *grid_line;
+                            this.with_selected_terminal(cx, |view, cx| {
+                                view.scroll_to_line(grid_line, cx)
+                            });
+                        }
+                        return;
+                    }
+                    this.close_locations(window, cx);
+                    this.request_open_file_at(path.clone(), Some(*line), window, cx);
+                }
+                ProblemsEvent::Close => this.close_locations(window, cx),
+            },
+        ));
+        self.locations_view = Some(view);
+        cx.notify();
+    }
+
+    /// Closes the places list and returns focus to the workbench.
+    pub fn close_locations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.terminal_hits = None;
+        self.recent_choices = None;
+        self.locations_view = None;
+        self.locations_subscription = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// The places list on screen.
+    pub fn locations_view(&self) -> Option<&gpui::Entity<ProblemsView>> {
+        self.locations_view.as_ref()
+    }
+
+    /// Lists where the symbol under the cursor is used.
+    pub(super) fn find_references(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(requester), Some(project)) = (self.language_requester(), self.project.clone())
+        else {
+            self.say("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        let Some((path, line, character, word)) = self.editor.read(cx).symbol_at_cursor(cx) else {
+            self.say("İmleç bir sembolün üzerinde değil", cx);
+            return;
+        };
+        self.say("Kullanılan yerler aranıyor…", cx);
+        let answer = crate::editor::lsp::ask_with_timeout(
+            &requester,
+            &path,
+            "textDocument/references",
+            Some((line, character)),
+            serde_json::json!({"context": {"includeDeclaration": true}}),
+            Duration::from_secs(10),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            let places = match answer {
+                Ok(Ok(value)) => {
+                    rwk_core::lsp::symbols::references(value, |uri| requester.relative_path(uri))
+                }
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(rwk_core::error::AppError::new(
+                    rwk_core::error::ErrorCode::NotFound,
+                    "Dil sunucusu yanıt vermedi",
+                )),
+            };
+            // The lines are read on the background executor, each file once.
+            let filled = match places {
+                Ok(places) => Ok(cx
+                    .background_executor()
+                    .spawn(async move {
+                        let mut files: std::collections::HashMap<String, Vec<String>> =
+                            std::collections::HashMap::new();
+                        places
+                            .into_iter()
+                            .map(|mut place| {
+                                let lines = files.entry(place.path.clone()).or_insert_with(|| {
+                                    project
+                                        .read_document(&place.path)
+                                        .map(|document| {
+                                            document.content.lines().map(str::to_owned).collect()
+                                        })
+                                        .unwrap_or_default()
+                                });
+                                place.label = lines
+                                    .get(place.line - 1)
+                                    .map(|text| text.trim().to_owned())
+                                    .unwrap_or_default();
+                                place
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .await),
+                Err(error) => Err(error),
+            };
+            this.update_in(cx, |workbench, window, cx| match filled {
+                Ok(places) if places.is_empty() => workbench.say("Kullanıldığı yer bulunamadı", cx),
+                Ok(places) => {
+                    workbench.show_locations(format!("KULLANIMLAR · {word}"), places, window, cx)
+                }
+                Err(error) => workbench.say(error.message, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Lists the symbols of the open file.
+    pub(super) fn show_outline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(requester), Some(path)) = (
+            self.language_requester(),
+            self.editor.read(cx).path().map(str::to_owned),
+        ) else {
+            self.say("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        let answer = crate::editor::lsp::ask_with_timeout(
+            &requester,
+            &path,
+            "textDocument/documentSymbol",
+            None,
+            serde_json::json!({}),
+            Duration::from_secs(10),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update_in(cx, |workbench, window, cx| {
+                let places = match answer {
+                    Ok(Ok(value)) => rwk_core::lsp::symbols::outline(value, &path),
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(rwk_core::error::AppError::new(
+                        rwk_core::error::ErrorCode::NotFound,
+                        "Dil sunucusu yanıt vermedi",
+                    )),
+                };
+                match places {
+                    Ok(places) if places.is_empty() => workbench.say("Dosyada sembol yok", cx),
+                    Ok(places) => {
+                        workbench.show_locations(format!("SEMBOLLER · {path}"), places, window, cx)
+                    }
+                    Err(error) => workbench.say(error.message, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Asks for text and lists the project's symbols that match it.
+    pub(super) fn open_symbol_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::rename::{PromptPurpose, RenamePromptEvent, RenameTerminalPrompt};
+        if self.rename_prompt.is_some() {
+            return;
+        }
+        if self.language_requester().is_none() {
+            self.say("Bu dosya için dil sunucusu yok", cx);
+            return;
+        }
+        let theme = self.theme();
+        let prompt =
+            cx.new(|cx| RenameTerminalPrompt::entry(PromptPurpose::SearchSymbols, "", window, cx));
+        prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        self.rename_subscription = Some(cx.subscribe_in(
+            &prompt,
+            window,
+            |this, _prompt, event: &RenamePromptEvent, window, cx| match event {
+                RenamePromptEvent::EntryName(query) => {
+                    this.close_rename_prompt(window, cx);
+                    this.search_symbols(query.clone(), window, cx);
+                }
+                RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
+                RenamePromptEvent::NewTask(_) | RenamePromptEvent::Rename(_) => {}
+            },
+        ));
+        self.rename_prompt = Some(prompt);
+        cx.notify();
+    }
+
+    /// Asks the open file's language server for the symbols named like `query`.
+    fn search_symbols(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(requester), Some(path)) = (
+            self.language_requester(),
+            self.editor.read(cx).path().map(str::to_owned),
+        ) else {
+            self.say("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        self.say("Semboller aranıyor…", cx);
+        // The server is the one of the open file; the question itself is about the project.
+        let answer = crate::editor::lsp::ask_with_timeout(
+            &requester,
+            &path,
+            "workspace/symbol",
+            None,
+            serde_json::json!({"query": query}),
+            Duration::from_secs(10),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update_in(cx, |workbench, window, cx| {
+                let places = match answer {
+                    Ok(Ok(value)) => rwk_core::lsp::symbols::workspace_symbols(value, |uri| {
+                        requester.relative_path(uri)
+                    }),
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(rwk_core::error::AppError::new(
+                        rwk_core::error::ErrorCode::NotFound,
+                        "Dil sunucusu yanıt vermedi",
+                    )),
+                };
+                match places {
+                    Ok(places) if places.is_empty() => workbench.say("Eşleşen sembol yok", cx),
+                    Ok(places) => {
+                        workbench.show_locations(format!("SEMBOL · {query}"), places, window, cx)
+                    }
+                    Err(error) => workbench.say(error.message, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Asks for text and lists the lines of the selected terminal's output that contain it.
+    pub(super) fn open_terminal_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::rename::{PromptPurpose, RenamePromptEvent, RenameTerminalPrompt};
+        if self.rename_prompt.is_some() || self.terminals.get(self.selected).is_none() {
+            return;
+        }
+        let theme = self.theme();
+        let prompt =
+            cx.new(|cx| RenameTerminalPrompt::entry(PromptPurpose::SearchTerminal, "", window, cx));
+        prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        self.rename_subscription = Some(cx.subscribe_in(
+            &prompt,
+            window,
+            |this, _prompt, event: &RenamePromptEvent, window, cx| match event {
+                RenamePromptEvent::EntryName(query) => {
+                    this.close_rename_prompt(window, cx);
+                    this.search_terminal(query, window, cx);
+                }
+                RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
+                RenamePromptEvent::NewTask(_) | RenamePromptEvent::Rename(_) => {}
+            },
+        ));
+        self.rename_prompt = Some(prompt);
+        cx.notify();
+    }
+
+    fn search_terminal(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pane) = self.terminals.get(self.selected) else {
+            return;
+        };
+        let found = pane.view.read(cx).find_lines(query, 500);
+        if found.is_empty() {
+            self.say("Terminal çıktısında bulunamadı", cx);
+            return;
+        }
+        let places = found
+            .iter()
+            .enumerate()
+            .map(|(index, (_, text))| rwk_core::lsp::symbols::Place {
+                path: String::new(),
+                line: index + 1,
+                column: 1,
+                label: text.trim().to_owned(),
+            })
+            .collect();
+        self.show_locations(format!("TERMİNAL · {query}"), places, window, cx);
+        // Set after the list opens: opening a list resets any earlier terminal results.
+        self.terminal_hits = Some(found.into_iter().map(|(line, _)| line).collect());
+    }
+
+    /// The recently opened projects, newest first, as stored.
+    pub fn recent_projects(&self) -> &[std::path::PathBuf] {
+        &self.recent_projects
+    }
+
+    /// Sets the stored list (at start-up; nothing is announced).
+    pub fn set_recent_projects(&mut self, projects: Vec<std::path::PathBuf>) {
+        self.recent_projects = projects;
+    }
+
+    /// Puts `root` first in the recent list and tells the application to store it.
+    pub(super) fn remember_recent(&mut self, root: &std::path::Path, cx: &mut Context<Self>) {
+        self.recent_projects.retain(|known| known != root);
+        self.recent_projects.insert(0, root.to_path_buf());
+        self.recent_projects.truncate(10);
+        cx.emit(super::WorkbenchEvent::RecentProjectsChanged(
+            self.recent_projects.clone(),
+        ));
+    }
+
+    /// Lists the recent projects; choosing one opens it (through the usual unsaved-edits and
+    /// running-sessions questions).
+    pub(super) fn show_recent_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self
+            .project
+            .as_ref()
+            .map(|project| project.info().root.clone());
+        let choices: Vec<std::path::PathBuf> = self
+            .recent_projects
+            .iter()
+            .filter(|root| Some(*root) != current.as_ref() && root.is_dir())
+            .cloned()
+            .collect();
+        if choices.is_empty() {
+            self.say("Başka son açılan proje yok", cx);
+            return;
+        }
+        let places = choices
+            .iter()
+            .enumerate()
+            .map(|(index, root)| rwk_core::lsp::symbols::Place {
+                path: String::new(),
+                line: index + 1,
+                column: 1,
+                label: root.display().to_string(),
+            })
+            .collect();
+        self.show_locations("SON PROJELER".to_owned(), places, window, cx);
+        self.recent_choices = Some(choices);
     }
 }

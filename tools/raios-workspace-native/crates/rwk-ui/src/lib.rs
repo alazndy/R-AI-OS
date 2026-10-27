@@ -4,6 +4,7 @@
 pub mod assets;
 pub mod context_menu;
 pub mod editor;
+pub mod file_replace;
 pub mod file_tree;
 pub mod fonts;
 pub mod git;
@@ -14,6 +15,7 @@ pub mod overlay;
 pub mod problems;
 pub mod rename;
 pub mod search;
+pub mod settings;
 pub mod ssh_picker;
 pub mod terminal;
 pub mod workbench;

@@ -217,6 +217,40 @@ impl Workbench {
         .detach();
     }
 
+    /// Says in the toast who last changed the cursor line.
+    pub(super) fn blame_line(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        let (path, line) = {
+            let editor = self.editor.read(cx);
+            match (editor.path(), editor.cursor_line(cx)) {
+                (Some(path), Some(line)) => (path.to_owned(), line),
+                _ => return,
+            }
+        };
+        let root: PathBuf = project.info().root.clone();
+        cx.spawn(async move |this, cx| {
+            let blame = cx
+                .background_executor()
+                .spawn(async move { git::blame_line(&root, &path, line) })
+                .await;
+            this.update(cx, |workbench, cx| match blame {
+                Ok(blame) if blame.committed => {
+                    let short = blame.commit.chars().take(8).collect::<String>();
+                    workbench.say(
+                        format!("{} · {short} · {}", blame.author, blame.summary),
+                        cx,
+                    );
+                }
+                Ok(_) => workbench.say("Satır henüz commit edilmedi", cx),
+                Err(error) => workbench.say(error.to_string(), cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Reads one file's diff on the background executor for the hunk panel.
     fn load_hunks(
         &mut self,

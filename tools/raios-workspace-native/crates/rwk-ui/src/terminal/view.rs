@@ -44,6 +44,8 @@ pub enum Appearance {
         background: u32,
         /// Selection colour, 0xRRGGBB.
         selection: u32,
+        /// The dark Aperture ANSI colours instead of the standard dark ones.
+        aperture: bool,
     },
 }
 
@@ -68,6 +70,7 @@ impl Appearance {
                 foreground,
                 background,
                 selection,
+                aperture,
             } => {
                 let surface = Surface {
                     foreground: Rgb::from_hex(foreground),
@@ -75,7 +78,9 @@ impl Appearance {
                     cursor: Rgb::from_hex(foreground),
                     selection: Rgb::from_hex(selection),
                 };
-                if dark {
+                if dark && aperture {
+                    Palette::aperture(surface)
+                } else if dark {
                     Palette::dark(surface)
                 } else {
                     Palette::light(surface)
@@ -109,6 +114,8 @@ pub(crate) struct ViewShared {
     pub(crate) session: SessionId,
     pub(crate) gate: Arc<FrameGate>,
     pub(crate) appearance: Cell<Appearance>,
+    /// Text size in pixels.
+    pub(crate) font_size: Cell<f32>,
     pub(crate) stats: Cell<FrameStats>,
     pub(crate) grid: Cell<TerminalSize>,
     /// Cell width and line height in pixels, measured at paint time.
@@ -173,6 +180,7 @@ impl TerminalView {
             session,
             gate,
             appearance: Cell::new(appearance),
+            font_size: Cell::new(14.0),
             stats: Cell::new(FrameStats::default()),
             grid: Cell::new(TerminalSize { cols: 0, rows: 0 }),
             cell: Cell::new((0.0, 0.0)),
@@ -207,6 +215,30 @@ impl TerminalView {
             .set_theme_colors(hex(palette.foreground), hex(palette.background));
         self.shared.appearance.set(appearance);
         cx.notify();
+    }
+
+    /// The lines of the output (history included) containing `query`, with their grid lines.
+    pub fn find_lines(&self, query: &str, limit: usize) -> Vec<(i32, String)> {
+        self.shared.engine.find_lines(query, true, limit)
+    }
+
+    /// Scrolls so that grid `line` is in view.
+    pub fn scroll_to_line(&mut self, line: i32, cx: &mut Context<Self>) {
+        self.shared.engine.scroll_to_line(line);
+        cx.notify();
+    }
+
+    /// Sets the text size in pixels; the grid is refitted at the next paint.
+    pub fn set_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
+        if (self.shared.font_size.get() - size).abs() > f32::EPSILON {
+            self.shared.font_size.set(size);
+            cx.notify();
+        }
+    }
+
+    /// The text size in pixels.
+    pub fn font_size(&self) -> f32 {
+        self.shared.font_size.get()
     }
 
     /// Frame counters.

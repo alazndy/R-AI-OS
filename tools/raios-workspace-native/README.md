@@ -61,11 +61,34 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
   and on tabs.
 - **Project search and replace** use `raios locate`; the pattern is a regular expression and
   replacing shows a preview before it writes. Files with unsaved edits are skipped.
+- **Settings** (`Ctrl ,`): sections for appearance (skin, tone), editor (font size, tab width, word
+  wrap), editing (auto-save, format on save) and the toolbar (four presets: tabbed, compact, flat,
+  minimal; captions, shortcuts, per-category switches). Everything is remembered between runs.
+- **Editor commands**: go to line (`Ctrl G`, `line` or `line:column`), comment or uncomment the
+  selected lines (`Ctrl /`), zoom editor and terminal text (`Ctrl +`, `Ctrl -`, `Ctrl 0`), word wrap
+  toggle, "who last changed this line" (palette: git blame), close other / all tabs (tab menu).
+  Multi-cursor (`Ctrl Alt Up/Down`), code actions (`Ctrl .`) and gutter folding come from the
+  editor widget.
+- **Parameter hint** (`Ctrl Shift Space`) shows the signature of the call under the cursor with the
+  current parameter between « », in the footer.
+- **Snippets** (`Ctrl J`) lists the snippets of the open file's type and inserts one at the cursor,
+  indented like the line, cursor on its first place to edit. A few ship built in (Rust, Python, JS/TS,
+  Go, C); add your own in `~/.config/raios-workspace-native/snippets.json`:
+  `{"snippets":[{"prefix":"todo","extensions":["rs"],"body":"// TODO ${1:what}\n$0"}]}`
+  (no `extensions` = every file; `$1`/`${1:default}` mark places, `$0` the end; tab-through is not
+  implemented).
+- **Project symbols** (`Ctrl T`) searches symbols of the whole project through the language server
+  of the open file. **Recent projects** (`Ctrl Alt O`) lists the folders opened before.
+- **Changes on disk**: open files and the file tree notice edits made elsewhere (checked every
+  two seconds). A clean file reloads; one with unsaved edits is flagged instead of overwritten.
+- **Terminal search** (`Ctrl Alt F`) searches a terminal's output, scrollback included.
+- **Regex replace in the open file** (palette: "Dosyada regex ile değiştir"): live match count,
+  `$1` inserts a group, one undoable edit. `Ctrl F` / `Ctrl H` stay plain text.
 - `Ctrl`-click a `path:line` or a web address in terminal output to open it.
 
 ## Appearance
 
-Skin (standard or GT-LCARS) and tone (dark or light) are independent and persisted; switching repaints every pane, the editor and the terminal surface without recreating sessions. The 28 KDE Breeze file icons are bundled unmodified (checksums in `crates/rwk-ui/assets/file-icons/provenance.json`, licenses in `crates/rwk-ui/assets/licenses`) and tinted by file type; Antonio (OFL) is the LCARS display font.
+Skin (standard, GT-LCARS or Aperture, the black and orange KDE theme: its editor syntax colours and Konsole terminal colours included) and tone (dark or light) are independent and persisted; switching repaints every pane, the editor and the terminal surface without recreating sessions. The 28 KDE Breeze file icons are bundled unmodified (checksums in `crates/rwk-ui/assets/file-icons/provenance.json`, licenses in `crates/rwk-ui/assets/licenses`) and tinted by file type; Antonio (OFL) is the LCARS display font.
 
 The palette's "Diff: yan yana / birleşik" switches the Git diff between one unified column and two aligned columns (old and new); the terminal shows IME pre-edit text at the cursor until it is committed.
 

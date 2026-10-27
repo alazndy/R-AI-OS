@@ -398,6 +398,33 @@ fn discarding_a_dirty_tab_closes_it_and_keeps_the_disk_content() {
 }
 
 #[test]
+fn close_other_and_close_all_tabs_leave_the_unsaved_ones_open() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    rig.open_file("b.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two"));
+    assert_eq!(rig.editor_paths().len(), 2);
+
+    rig.run(CommandId::CloseOtherTabs);
+    assert_eq!(rig.editor_paths(), vec!["b.txt".to_owned()]);
+
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == "one"));
+    rig.type_text("x");
+    rig.run(CommandId::CloseAllTabs);
+    assert_eq!(
+        rig.editor_paths(),
+        vec!["a.txt".to_owned()],
+        "the edited tab stays"
+    );
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("açık bırakıldı")));
+}
+
+#[test]
 fn the_close_tab_command_and_its_shortcut_close_the_active_tab() {
     let mut rig = rig();
     rig.open_project();
@@ -702,6 +729,12 @@ fn changing_the_tone_announces_the_new_appearance_and_keeps_the_terminals() {
         .detach();
     });
     rig.run(CommandId::Settings);
+    let settings = rig.read(|wb, _| wb.settings_view().cloned()).expect("view");
+    rig.with(|_wb, _w, cx| {
+        settings.update(cx, |view, cx| {
+            view.toggle(rwk_ui::settings::Setting::Tone, cx)
+        })
+    });
     let seen = events.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
     let WorkbenchEvent::AppearanceChanged(appearance) = seen[0].clone() else {
@@ -3825,11 +3858,13 @@ fn clicking_along_the_toolbar_presses_real_buttons() {
 
     let mut rig = rig();
     rig.open_project();
+    rig.run(CommandId::ToolbarTab(2));
     rig.settle_for(100);
     let size = rig.cx.update(|window, _| window.viewport_size());
     // The toolbar is the row under the title area; sweep it from the left until a click
-    // opens a terminal (the "Terminal +" button) or the row is exhausted.
-    let mut x = px(4.0);
+    // opens a terminal (the "Terminal +" button) or the row is exhausted. The sweep starts
+    // after the category tabs, which would switch the buttons under the pointer.
+    let mut x = px(380.0);
     while x < size.width && rig.read(|wb, _| wb.terminal_count()) == 0 {
         for y in [px(14.0), px(30.0), px(44.0)] {
             let at = point(x, y);
@@ -4204,6 +4239,10 @@ while True:
             uri: [e(name)], uri.replace('a.rs', 'b.rs'): [e(name)]}}})
     elif method == 'textDocument/completion':
         send({'jsonrpc': '2.0', 'id': m['id'], 'result': [{'label': 'alpha'}]})
+    elif method == 'textDocument/signatureHelp':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'signatures': [
+            {'label': 'fn a(x: i32, y: u8)', 'parameters': [{'label': 'x: i32'}, {'label': 'y: u8'}]}],
+            'activeParameter': 1}})
     elif method == 'shutdown':
         send({'jsonrpc': '2.0', 'id': m['id'], 'result': None})
     elif method == 'exit':
@@ -4517,10 +4556,10 @@ fn the_source_control_view_creates_a_branch_stashes_and_pushes_after_a_yes() {
             .update(|_, cx| view.read(cx).status().and_then(|s| s.branch.clone()))
     };
 
-    // The message box names the new branch.
+    // The second box names the new branch.
     rig.with(|_wb, window, cx| {
         view.update(cx, |view, cx| {
-            view.set_message("feature/y", window, cx);
+            view.set_detail("feature/y", window, cx);
             view.create_branch(cx)
         })
     });
@@ -4530,7 +4569,7 @@ fn the_source_control_view_creates_a_branch_stashes_and_pushes_after_a_yes() {
     std::fs::write(root.join("a.txt"), "dirty\n").unwrap();
     rig.with(|_wb, window, cx| {
         view.update(cx, |view, cx| {
-            view.set_message("wip", window, cx);
+            view.set_detail("wip", window, cx);
             view.stash(cx)
         })
     });
@@ -5218,5 +5257,555 @@ fn rust_analyzer_formats_a_file_and_answers_completion_and_hover() {
             rwk_core::lsp::lsp_types::CompletionResponse::List(list) => !list.items.is_empty(),
         }),
         "no completions after v.le"
+    );
+}
+
+#[test]
+fn rust_analyzer_lists_usages_and_the_outline_of_a_file() {
+    // A rustup proxy answers `--version` with a failure when the component is missing.
+    if !std::process::Command::new("rust-analyzer")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return;
+    }
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/util.rs"),
+        "pub fn helper() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/main.rs"),
+        "mod util;\nstruct Shape;\nfn main() {\n    let _ = (Shape, util::helper(), util::helper());\n}\n",
+    )
+    .unwrap();
+    rig.with(|wb, _, _| wb.set_language_server_launcher(Some(rwk_core::lsp::default_launcher())));
+    rig.open_project();
+    rig.open_file("src/main.rs");
+    assert!(rig.settle_until(|rig| rig.editor_text().contains("helper")));
+
+    let list = |rig: &mut Rig| {
+        rig.read(|wb, cx| {
+            wb.locations_view().map(|view| {
+                view.read(cx)
+                    .problems()
+                    .iter()
+                    .map(|p| (p.path.clone(), p.line, p.message.clone()))
+                    .collect::<Vec<_>>()
+            })
+        })
+    };
+
+    // The server needs a while to load the crate; ask again until it answers with the usages.
+    let started = Instant::now();
+    let mut usages = None;
+    while started.elapsed() < Duration::from_secs(120) && usages.is_none() {
+        rig.with(|wb, window, cx| {
+            wb.editor()
+                .clone()
+                .update(cx, |editor, cx| editor.set_cursor(3, 28, window, cx))
+        });
+        rig.run(CommandId::FindReferences);
+        rig.settle_for(2500);
+        usages = list(&mut rig).filter(|lines| lines.len() >= 3);
+        if usages.is_none() {
+            rig.with(|wb, window, cx| wb.close_overlay(window, cx));
+        }
+    }
+    let usages = usages.expect("rust-analyzer listed the usages");
+    assert!(
+        usages.iter().any(|(path, _, _)| path == "src/util.rs"),
+        "{usages:?}"
+    );
+    assert!(
+        usages
+            .iter()
+            .any(|(_, _, text)| text.contains("util::helper()")),
+        "{usages:?}"
+    );
+
+    // The outline of main.rs names its struct and function.
+    rig.with(|wb, window, cx| wb.close_overlay(window, cx));
+    rig.run(CommandId::Outline);
+    assert!(rig.settle_until(|rig| list(rig).is_some()));
+    let outline: Vec<String> = list(&mut rig)
+        .unwrap()
+        .into_iter()
+        .map(|(_, _, label)| label)
+        .collect();
+    assert!(outline.contains(&"struct Shape".to_owned()), "{outline:?}");
+    assert!(outline.contains(&"fn main".to_owned()), "{outline:?}");
+
+    // The whole project's symbols: `helper` lives in util.rs.
+    rig.with(|wb, window, cx| wb.close_overlay(window, cx));
+    rig.run(CommandId::WorkspaceSymbols);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("prompt");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("helper", window, cx);
+            prompt.submit(cx)
+        })
+    });
+    assert!(rig.settle_until(|rig| list(rig).is_some()));
+    let symbols = list(&mut rig).unwrap();
+    assert!(
+        symbols
+            .iter()
+            .any(|(path, _, label)| path == "src/util.rs" && label.contains("helper")),
+        "{symbols:?}"
+    );
+}
+
+/// A server that was missing shows in the footer; once it can start, clicking its item
+/// (the restart command) brings it up without reopening the project.
+#[test]
+fn restarting_language_servers_recovers_one_that_gave_up() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    let installed = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&installed);
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            if !flag.load(Ordering::SeqCst) {
+                return Err(rwk_core::error::AppError::new(
+                    rwk_core::error::ErrorCode::NotFound,
+                    "not installed",
+                ));
+            }
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+
+    let server_item = |rig: &mut Rig| {
+        rig.read(|wb, cx| {
+            wb.footer_items(cx)
+                .into_iter()
+                .find(|item| item.id.starts_with("lsp-"))
+        })
+    };
+    assert!(rig.settle_until(|rig| server_item(rig).is_some_and(|i| i.text.ends_with("yok"))));
+    let item = server_item(&mut rig).unwrap();
+    assert_eq!(item.command, Some(CommandId::RestartServers));
+    assert_eq!(rig.read(|wb, _| wb.problem_summary()), None);
+
+    installed.store(true, Ordering::SeqCst);
+    rig.run(item.command.unwrap());
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+    let item = server_item(&mut rig).unwrap();
+    assert!(item.text.ends_with('✓'), "{}", item.text);
+    assert_eq!(item.command, None);
+}
+
+#[test]
+fn the_settings_view_flips_switches_and_shows_the_new_values() {
+    let mut rig = rig();
+    rig.run(CommandId::Settings);
+    assert!(rig.read(|wb, _| wb.settings_view().is_some()));
+    assert!(rig.read(|wb, _| wb.overlay_open()));
+
+    // The first row is the theme: the right arrow picks the next skin.
+    assert_eq!(
+        rig.read(|wb, _| wb.appearance().skin),
+        rwk_core::workbench::Skin::Standard
+    );
+    rig.cx.simulate_keystrokes("right right");
+    assert_eq!(
+        rig.read(|wb, _| wb.appearance().skin),
+        rwk_core::workbench::Skin::Aperture
+    );
+    // Down to the tone, then the editing switches: Enter flips them and the list shows it.
+    rig.cx.simulate_keystrokes("down right");
+    assert_eq!(
+        rig.read(|wb, _| wb.appearance().tone),
+        rwk_core::workbench::Tone::Light
+    );
+    // The editor rows: the right arrow on the text size picks the next size.
+    rig.cx.simulate_keystrokes("down right");
+    assert_eq!(rig.read(|wb, _| wb.editor_prefs().font_size), 16);
+    rig.cx.simulate_keystrokes("down down down enter");
+    assert!(rig.read(|wb, _| wb.auto_save()));
+    let view = rig.read(|wb, _| wb.settings_view().cloned()).unwrap();
+    let value = rig.cx.update(|_, cx| {
+        let rows = view.read(cx).rows().to_vec();
+        rows.into_iter()
+            .find(|row| row.setting == rwk_ui::settings::Setting::AutoSave)
+            .map(|row| row.value)
+    });
+    assert_eq!(value, Some(rwk_ui::settings::SettingValue::Switch(true)));
+    rig.cx.simulate_keystrokes("down enter");
+    assert!(rig.read(|wb, _| wb.format_on_save()));
+
+    rig.cx.simulate_keystrokes("escape");
+    assert!(rig.read(|wb, _| wb.settings_view().is_none()));
+}
+
+#[test]
+fn the_regex_replace_bar_counts_matches_and_replaces_them_with_groups() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("a.txt"), "fn one()\nfn two()\nlet x\n").expect("a.txt");
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().is_some()));
+    rig.run(CommandId::ReplaceRegexInFile);
+    let bar = rig.read(|wb, _| wb.file_replace().cloned()).expect("bar");
+
+    // The count follows the pattern; a bad pattern says why.
+    rig.with(|_wb, window, cx| bar.update(cx, |bar, cx| bar.set_find(r"fn (\w+)", window, cx)));
+    assert_eq!(
+        rig.cx.update(|_, cx| bar.read(cx).note().to_owned()),
+        "2 eşleşme"
+    );
+    rig.with(|_wb, window, cx| bar.update(cx, |bar, cx| bar.set_find("(", window, cx)));
+    assert!(rig
+        .cx
+        .update(|_, cx| bar.read(cx).note().to_owned())
+        .starts_with("Desen geçersiz"));
+
+    // Replacing expands the group and closes the bar.
+    rig.with(|_wb, window, cx| {
+        bar.update(cx, |bar, cx| {
+            bar.set_find(r"fn (\w+)", window, cx);
+            bar.set_with("def $1", window, cx);
+            bar.apply(cx)
+        })
+    });
+    assert!(rig.read(|wb, _| wb.file_replace().is_none()));
+    let text = rig.read(|wb, cx| wb.editor().read(cx).text_of("a.txt", cx));
+    assert_eq!(text.as_deref(), Some("def one()\ndef two()\nlet x\n"));
+}
+
+#[test]
+fn toolbar_tabs_show_one_category_and_follow_their_shortcuts() {
+    let mut rig = rig();
+    rig.open_project();
+    let shown = |rig: &mut Rig| rig.read(|wb, _| wb.toolbar_tab());
+    assert_eq!(shown(&mut rig), rwk_core::workbench::ToolbarGroup::Files);
+    rig.cx.simulate_keystrokes("ctrl-shift-2");
+    assert_eq!(shown(&mut rig), rwk_core::workbench::ToolbarGroup::Terminal);
+    rig.run(CommandId::ToolbarTab(5));
+    assert_eq!(shown(&mut rig), rwk_core::workbench::ToolbarGroup::Tools);
+}
+
+#[test]
+fn the_toolbar_follows_its_presets_and_refuses_to_hide_every_category() {
+    use rwk_core::workbench::{ToolbarLayout, ToolbarPreset};
+    use rwk_ui::settings::Setting;
+
+    let mut rig = rig();
+    let events: Arc<Mutex<Vec<WorkbenchEvent>>> = Arc::default();
+    let sink = Arc::clone(&events);
+    let view = rig.view.clone();
+    rig.cx.update(|_w, app| {
+        app.subscribe(&view, move |_wb, event: &WorkbenchEvent, _app| {
+            sink.lock().unwrap().push(event.clone());
+        })
+        .detach();
+    });
+    rig.run(CommandId::Settings);
+    let settings = rig.read(|wb, _| wb.settings_view().cloned()).expect("view");
+    assert_eq!(
+        rig.read(|wb, _| wb.toolbar_layout().preset_of()),
+        Some(ToolbarPreset::Tabbed)
+    );
+
+    // Picking a preset changes the layout and tells the application to store it.
+    rig.with(|_wb, _w, cx| {
+        settings.update(cx, |view, cx| view.choose(Setting::ToolbarPreset, 3, cx))
+    });
+    assert_eq!(
+        rig.read(|wb, _| wb.toolbar_layout()),
+        ToolbarLayout::preset(ToolbarPreset::Minimal)
+    );
+    assert!(events.lock().unwrap().iter().any(|event| matches!(
+        event,
+        WorkbenchEvent::PreferencesChanged { toolbar, .. }
+            if *toolbar == ToolbarLayout::preset(ToolbarPreset::Minimal)
+    )));
+
+    // Editing one switch makes the layout custom: no preset matches any more.
+    rig.with(|_wb, _w, cx| {
+        settings.update(cx, |view, cx| view.toggle(Setting::ToolbarCaptions, cx))
+    });
+    assert_eq!(rig.read(|wb, _| wb.toolbar_layout().preset_of()), None);
+
+    // Hiding categories works until one is left; the last one stays.
+    for index in 0..5u8 {
+        rig.with(|_wb, _w, cx| {
+            settings.update(cx, |view, cx| view.toggle(Setting::ToolbarGroup(index), cx))
+        });
+    }
+    let layout = rig.read(|wb, _| wb.toolbar_layout());
+    assert_eq!(layout.groups.iter().filter(|shown| **shown).count(), 1);
+    assert!(layout.groups[4], "the last category is the one left");
+}
+
+#[test]
+fn go_to_line_comment_toggle_and_zoom_work_on_the_open_file() {
+    let mut rig = rig();
+    std::fs::write(
+        rig.dir.path().join("m.rs"),
+        "fn a() {\n    let x = 1;\n    let y = 2;\n}\n",
+    )
+    .expect("m.rs");
+    rig.open_project();
+    rig.open_file("m.rs");
+    assert!(rig.settle_until(|rig| rig.editor_path().is_some()));
+
+    // Go to line: the prompt takes a line, or line:column, and refuses nonsense.
+    rig.run(CommandId::GoToLine);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("prompt");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("zzz", window, cx);
+            prompt.submit(cx)
+        })
+    });
+    assert!(rig.cx.update(|_, cx| prompt.read(cx).problem()).is_some());
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("3", window, cx);
+            prompt.submit(cx)
+        })
+    });
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(3)
+    );
+
+    // Comment the cursor's line, then take it back.
+    rig.run(CommandId::ToggleComment);
+    assert_eq!(
+        rig.editor_text(),
+        "fn a() {\n    let x = 1;\n    // let y = 2;\n}\n"
+    );
+    rig.run(CommandId::ToggleComment);
+    assert_eq!(
+        rig.editor_text(),
+        "fn a() {\n    let x = 1;\n    let y = 2;\n}\n"
+    );
+
+    // The shortcuts reach the same commands.
+    rig.cx.simulate_keystrokes("ctrl-g");
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_some()));
+    rig.cx.simulate_keystrokes("escape");
+    rig.cx.simulate_keystrokes("ctrl-/");
+    assert!(rig.editor_text().contains("// let y"));
+    rig.cx.simulate_keystrokes("ctrl-/");
+
+    // Zoom stays inside its limits and resets.
+    let size = |rig: &mut Rig| rig.read(|wb, _| wb.editor_prefs().font_size);
+    assert_eq!(size(&mut rig), rwk_core::workbench::DEFAULT_FONT_SIZE);
+    rig.run(CommandId::ZoomIn);
+    assert_eq!(size(&mut rig), rwk_core::workbench::DEFAULT_FONT_SIZE + 1);
+    rig.cx.simulate_keystrokes("ctrl-shift-=");
+    assert_eq!(size(&mut rig), rwk_core::workbench::DEFAULT_FONT_SIZE + 2);
+    rig.cx.simulate_keystrokes("ctrl--");
+    assert_eq!(size(&mut rig), rwk_core::workbench::DEFAULT_FONT_SIZE + 1);
+    rig.run(CommandId::ZoomReset);
+    assert_eq!(size(&mut rig), rwk_core::workbench::DEFAULT_FONT_SIZE);
+    for _ in 0..40 {
+        rig.run(CommandId::ZoomOut);
+    }
+    assert_eq!(size(&mut rig), rwk_core::workbench::MIN_FONT_SIZE);
+
+    rig.run(CommandId::ToggleWordWrap);
+    assert!(rig.read(|wb, _| wb.editor_prefs().soft_wrap));
+}
+
+#[test]
+fn changes_made_elsewhere_reload_clean_tabs_and_refresh_the_tree() {
+    use std::time::Duration;
+
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("a.txt"), "one\n").expect("a.txt");
+    rig.open_project();
+    rig.open_file("a.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().is_some()));
+
+    // The first look only records the stamps.
+    rig.cx.executor().advance_clock(Duration::from_millis(2100));
+    rig.settle_for(50);
+
+    // Another tool rewrites the open file and adds a new one.
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::write(rig.dir.path().join("a.txt"), "two\n").expect("rewrite");
+    std::fs::write(rig.dir.path().join("b.txt"), "new\n").expect("b.txt");
+    rig.cx.executor().advance_clock(Duration::from_millis(2100));
+    assert!(rig.settle_until(|rig| rig.editor_text() == "two\n"));
+    assert!(rig.settle_until(|rig| {
+        rig.read(|wb, cx| wb.files().read(cx).visible_ids(cx))
+            .iter()
+            .any(|id| id == "b.txt")
+    }));
+
+    // A tab with unsaved typing is left alone and the user is told.
+    rig.with(|wb, window, cx| {
+        wb.editor().update(cx, |editor, cx| {
+            editor.replace_all("two", "mine", false, window, cx);
+        })
+    });
+    let _ = rig.editor_text();
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::write(rig.dir.path().join("a.txt"), "theirs\n").expect("rewrite again");
+    rig.cx.executor().advance_clock(Duration::from_millis(2100));
+    rig.settle_for(100);
+    assert_ne!(rig.editor_text(), "theirs\n");
+}
+
+#[test]
+fn terminal_search_needs_a_terminal_and_says_when_nothing_matches() {
+    let mut rig = rig();
+    rig.open_project();
+    rig.run(CommandId::FindInTerminal);
+    assert!(
+        rig.read(|wb, _| wb.rename_prompt().is_none()),
+        "no terminal yet"
+    );
+
+    rig.run(CommandId::NewTerminal);
+    rig.run(CommandId::FindInTerminal);
+    let prompt = rig
+        .read(|wb, _| wb.rename_prompt().cloned())
+        .expect("prompt");
+    rig.with(|_wb, window, cx| {
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_text("zzz-never-printed", window, cx);
+            prompt.submit(cx)
+        })
+    });
+    assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
+    assert!(rig.read(|wb, _| wb.locations_view().is_none()));
+}
+
+#[test]
+fn recent_projects_are_remembered_newest_first_and_can_be_reopened() {
+    let mut rig = rig();
+    let first = rig.dir.path().to_path_buf();
+    let other = tempfile::tempdir().expect("second project");
+    let events: Arc<Mutex<Vec<WorkbenchEvent>>> = Arc::default();
+    let sink = Arc::clone(&events);
+    let view = rig.view.clone();
+    rig.cx.update(|_w, app| {
+        app.subscribe(&view, move |_wb, event: &WorkbenchEvent, _app| {
+            sink.lock().unwrap().push(event.clone());
+        })
+        .detach();
+    });
+
+    // With only one project there is nothing else to offer.
+    rig.open_project();
+    rig.run(CommandId::RecentProjects);
+    assert!(rig.read(|wb, _| wb.locations_view().is_none()));
+
+    let second = other.path().to_path_buf();
+    rig.with(|wb, window, cx| wb.open_project(second.clone(), window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.recent_projects().first() == Some(&second))));
+    assert_eq!(
+        rig.read(|wb, _| wb.recent_projects().to_vec()),
+        [second.clone(), first.clone()]
+    );
+    assert!(events.lock().unwrap().iter().any(|event| matches!(
+        event,
+        WorkbenchEvent::RecentProjectsChanged(list) if list.first() == Some(&second)
+    )));
+
+    // The list offers the one that is not open; choosing it switches back.
+    rig.run(CommandId::RecentProjects);
+    let list = rig
+        .read(|wb, _| wb.locations_view().cloned())
+        .expect("list");
+    assert_eq!(rig.cx.update(|_, cx| list.read(cx).problems().len()), 1);
+    rig.with(|_wb, _w, cx| list.update(cx, |list, cx| list.choose_selected(cx)));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.recent_projects().first() == Some(&first))));
+}
+
+#[test]
+fn signature_help_shows_the_active_parameter_in_the_toast() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("a.rs"), "fn a() {}\nlet x\n").expect("a.rs");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    rig.open_file("a.rs");
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.problem_summary().is_some())));
+
+    rig.run(CommandId::SignatureHelp);
+    assert!(rig.settle_until(|rig| rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("«y: u8»"))));
+}
+
+#[test]
+fn a_snippet_is_inserted_indented_with_the_cursor_on_its_first_place() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("s.rs"), "    ").expect("s.rs");
+    rig.with(|wb, _, _| {
+        wb.set_snippet_source(Some(Arc::new(|| {
+            rwk_core::workbench::parse_user_snippets(
+                r#"{"snippets":[{"prefix":"todo","body":"// TODO ${1:what}\n$0"}]}"#,
+            )
+        })))
+    });
+    rig.open_project();
+    rig.open_file("s.rs");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("s.rs")));
+    rig.with(|wb, window, cx| {
+        wb.editor().clone().update(cx, |editor, cx| {
+            editor.set_cursor(0, 4, window, cx);
+        })
+    });
+
+    rig.run(CommandId::InsertSnippet);
+    assert!(rig.read(|wb, _| wb.palette().is_some()));
+    rig.cx.simulate_input("todo");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.palette().is_none()));
+    assert_eq!(rig.editor_text(), "    // TODO what\n    ");
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_at(cx)),
+        Some(("s.rs".to_owned(), 0, 4 + 8))
     );
 }
