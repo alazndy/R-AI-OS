@@ -318,6 +318,42 @@ impl EditorView {
         }
     }
 
+    /// Inserts the snippet `body` at the cursor, indented like the cursor's line, and puts the
+    /// cursor on its first place to edit.
+    pub fn insert_snippet(&mut self, body: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let (start, indent) = {
+            let state = tab.state.read(cx);
+            let start = state.cursor_position();
+            let text = state.value().to_string();
+            let indent: String = text
+                .lines()
+                .nth(usize::try_from(start.line).unwrap_or(usize::MAX))
+                .unwrap_or_default()
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect();
+            (start, indent)
+        };
+        let expansion = rwk_core::workbench::expand_snippet(body, &indent);
+        let before = &expansion.text[..expansion.cursor];
+        let newlines = before.matches('\n').count();
+        let tail = before.rsplit('\n').next().unwrap_or_default();
+        let units = u32::try_from(tail.encode_utf16().count()).unwrap_or(0);
+        let target = if newlines == 0 {
+            Position::new(start.line, start.character + units)
+        } else {
+            Position::new(start.line + newlines as u32, units)
+        };
+        let text = expansion.text;
+        tab.state.update(cx, |state, cx| {
+            state.insert(text.as_str(), window, cx);
+            state.set_cursor_position(target, window, cx);
+        });
+    }
+
     /// Closes every tab (a project switch discards them all).
     pub fn clear(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.tabs.clear();

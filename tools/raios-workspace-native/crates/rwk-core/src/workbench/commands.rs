@@ -29,6 +29,8 @@ pub enum CommandId {
     Outline,
     /// Search the symbols of the whole project through the language server.
     WorkspaceSymbols,
+    /// Pick a snippet and insert it at the cursor.
+    InsertSnippet,
     /// Show the parameters of the call the cursor is inside.
     SignatureHelp,
     /// Start the language servers again, also the ones that gave up.
@@ -220,7 +222,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 83] = [
+const COMMANDS: [Command; 84] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -566,6 +568,12 @@ const COMMANDS: [Command; 83] = [
         &[bind("t")],
     ),
     cmd(
+        CommandId::InsertSnippet,
+        "Kod parçası (snippet) ekle",
+        Some("Ctrl J"),
+        &[bind("j")],
+    ),
+    cmd(
         CommandId::SignatureHelp,
         "Parametre ipucu",
         Some("Ctrl Shift Space"),
@@ -802,8 +810,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         },
         Diff | DiffSplit | FocusEditor | CloseTab | CloseOtherTabs | CloseAllTabs | Format
         | RenameSymbol | FindReferences | Outline | WorkspaceSymbols | SignatureHelp
-        | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment
-        | BlameLine | SplitEditor => {
+        | InsertSnippet | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine
+        | ToggleComment | BlameLine | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -907,7 +915,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 83);
+        assert_eq!(catalog().len(), 84);
     }
 
     #[test]

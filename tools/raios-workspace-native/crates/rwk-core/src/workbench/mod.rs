@@ -16,6 +16,7 @@ pub mod offers;
 pub mod palette;
 pub mod quick_open;
 pub mod side_diff;
+pub mod snippets;
 pub mod theme;
 
 pub use appearance::{parse_appearance, serialize_appearance, Appearance, Skin, Tone};
@@ -45,4 +46,7 @@ pub use offers::{
 };
 pub use palette::{palette_entries, PaletteEntry};
 pub use side_diff::{side_by_side, SideBySide};
+pub use snippets::{
+    expand as expand_snippet, parse_user_snippets, snippets_for, Expansion, Snippet,
+};
 pub use theme::Theme;

@@ -5777,3 +5777,35 @@ fn signature_help_shows_the_active_parameter_in_the_toast() {
         .read(|wb, _| wb.toast())
         .is_some_and(|toast| toast.contains("«y: u8»"))));
 }
+
+#[test]
+fn a_snippet_is_inserted_indented_with_the_cursor_on_its_first_place() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("s.rs"), "    ").expect("s.rs");
+    rig.with(|wb, _, _| {
+        wb.set_snippet_source(Some(Arc::new(|| {
+            rwk_core::workbench::parse_user_snippets(
+                r#"{"snippets":[{"prefix":"todo","body":"// TODO ${1:what}\n$0"}]}"#,
+            )
+        })))
+    });
+    rig.open_project();
+    rig.open_file("s.rs");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("s.rs")));
+    rig.with(|wb, window, cx| {
+        wb.editor().clone().update(cx, |editor, cx| {
+            editor.set_cursor(0, 4, window, cx);
+        })
+    });
+
+    rig.run(CommandId::InsertSnippet);
+    assert!(rig.read(|wb, _| wb.palette().is_some()));
+    rig.cx.simulate_input("todo");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.palette().is_none()));
+    assert_eq!(rig.editor_text(), "    // TODO what\n    ");
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_at(cx)),
+        Some(("s.rs".to_owned(), 0, 4 + 8))
+    );
+}

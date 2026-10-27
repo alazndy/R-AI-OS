@@ -97,6 +97,9 @@ pub enum WorkbenchEvent {
 
 impl gpui::EventEmitter<WorkbenchEvent> for Workbench {}
 
+/// Reads the user's snippet file; called each time the snippet picker opens.
+pub type SnippetSource = Arc<dyn Fn() -> Vec<rwk_core::workbench::Snippet> + Send + Sync>;
+
 /// An action that waits for the user's decision about unsaved edits or a running session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingAction {
@@ -292,6 +295,9 @@ pub struct Workbench {
     task_source: Option<Arc<dyn rwk_core::runner::TaskSource>>,
     /// The open palette lists tasks, not files.
     palette_picks_tasks: bool,
+    /// The open palette lists snippets, not files.
+    palette_picks_snippets: bool,
+    snippet_source: Option<SnippetSource>,
     git_view: Option<Entity<crate::git::GitView>>,
     git_subscription: Option<Subscription>,
     /// Bumped by every git action and on close; an answer for an older one is dropped.
@@ -576,6 +582,8 @@ impl Workbench {
             extra_footer: Vec::new(),
             task_source: None,
             palette_picks_tasks: false,
+            palette_picks_snippets: false,
+            snippet_source: None,
             git_view: None,
             git_subscription: None,
             git_generation: 0,
@@ -990,6 +998,7 @@ impl Workbench {
             CommandId::WorkspaceSymbols => self.open_symbol_search(window, cx),
             CommandId::FindInTerminal => self.open_terminal_search(window, cx),
             CommandId::RecentProjects => self.show_recent_projects(window, cx),
+            CommandId::InsertSnippet => self.open_snippet_palette(window, cx),
             CommandId::SignatureHelp => self.signature_help(window, cx),
             CommandId::RestartServers => self.restart_servers(cx),
             CommandId::BlameLine => self.blame_line(cx),
@@ -1024,8 +1033,11 @@ impl Workbench {
                 PaletteEvent::Close => this.close_palette(window, cx),
                 PaletteEvent::OpenFile(path) => {
                     let tasks = std::mem::take(&mut this.palette_picks_tasks);
+                    let snippets = std::mem::take(&mut this.palette_picks_snippets);
                     this.close_palette(window, cx);
-                    if tasks {
+                    if snippets {
+                        this.insert_named_snippet(&path, window, cx);
+                    } else if tasks {
                         this.run_named_task(&path, window, cx);
                     } else {
                         this.request_open_file(path, window, cx);
@@ -1131,6 +1143,7 @@ impl Workbench {
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.file_search_task = None;
         self.palette_picks_tasks = false;
+        self.palette_picks_snippets = false;
         self.palette = None;
         self.palette_subscription = None;
         window.focus(&self.focus, cx);

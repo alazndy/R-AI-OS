@@ -60,6 +60,24 @@ pub fn load_user_servers(path: &Path) -> Vec<(rwk_core::lsp::ServerSpec, Vec<Str
     rwk_core::lsp::parse_user_servers(&text)
 }
 
+/// Reads the user's snippet file; edits apply the next time the picker opens.
+pub fn load_snippets(config_home: &Path) -> Vec<rwk_core::workbench::Snippet> {
+    use std::io::Read;
+    let path = config_home.join(APP_DIR).join("snippets.json");
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut text = String::new();
+    if file
+        .take(rwk_core::workbench::snippets::MAX_SNIPPET_BYTES as u64)
+        .read_to_string(&mut text)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    rwk_core::workbench::parse_user_snippets(&text)
+}
+
 /// Reads the user's task file on every call, so edits apply without a restart.
 pub struct FsTaskStore {
     path: PathBuf,

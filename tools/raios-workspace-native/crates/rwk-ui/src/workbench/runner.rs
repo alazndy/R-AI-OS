@@ -52,6 +52,69 @@ impl Workbench {
         self.palette_picks_tasks = true;
     }
 
+    /// Connects the user's snippet file (the application reads it from its config directory).
+    pub fn set_snippet_source(&mut self, source: Option<super::SnippetSource>) {
+        self.snippet_source = source;
+    }
+
+    /// The snippets that apply to the open file.
+    fn snippets(&self, cx: &gpui::App) -> Vec<rwk_core::workbench::Snippet> {
+        let Some(path) = self.editor.read(cx).path().map(str::to_owned) else {
+            return Vec::new();
+        };
+        let user = self
+            .snippet_source
+            .as_ref()
+            .map(|s| s())
+            .unwrap_or_default();
+        rwk_core::workbench::snippets_for(&path, user)
+    }
+
+    /// Lists the snippets of the open file in the picker.
+    pub(super) fn open_snippet_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_palette(window, cx);
+        let mut names: Vec<String> = self
+            .snippets(cx)
+            .into_iter()
+            .map(|snippet| snippet.prefix)
+            .collect();
+        names.dedup();
+        if names.is_empty() {
+            self.say("Bu dosya için kod parçası yok (snippets.json ekleyin)", cx);
+            return;
+        }
+        let theme = self.theme();
+        let palette = cx.new(|cx| PaletteView::for_files(window, cx));
+        palette.update(cx, |palette, cx| {
+            palette.set_theme(theme, cx);
+            palette.set_files(
+                FileListing {
+                    files: names,
+                    truncated: false,
+                },
+                cx,
+            );
+        });
+        self.attach_palette(palette, window, cx);
+        self.palette_picks_snippets = true;
+    }
+
+    /// Inserts the snippet called `prefix` at the cursor.
+    pub(super) fn insert_named_snippet(
+        &mut self,
+        prefix: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(snippet) = self.snippets(cx).into_iter().find(|s| s.prefix == prefix) else {
+            return;
+        };
+        self.editor.update(cx, |editor, cx| {
+            editor.insert_snippet(&snippet.body, window, cx);
+            editor.focus(window, cx);
+        });
+    }
+
     /// Runs the task called `name` in a new terminal.
     pub(super) fn run_named_task(
         &mut self,

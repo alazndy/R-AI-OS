@@ -120,6 +120,11 @@ fn main() {
                 let source: Arc<dyn rwk_core::runner::TaskSource> =
                     Arc::new(persistence::FsTaskStore::new(&home));
                 workbench.update(cx, |workbench, _| workbench.set_task_source(Some(source)));
+                let snippets: rwk_ui::workbench::SnippetSource =
+                    Arc::new(move || persistence::load_snippets(&home));
+                workbench.update(cx, |workbench, _| {
+                    workbench.set_snippet_source(Some(snippets))
+                });
             }
             let preferences_file = config_home().map(|home| persistence::preferences_path(&home));
             if let Some(file) = &preferences_file {
