@@ -1079,6 +1079,50 @@ impl EditorView {
         true
     }
 
+    /// Replaces the merge conflict around the cursor by one `side`. False when the cursor is
+    /// not inside a conflict.
+    pub fn resolve_conflict(
+        &mut self,
+        side: rwk_core::workbench::conflicts::Side,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return false;
+        };
+        let (text, line) = {
+            let state = tab.state.read(cx);
+            (
+                state.value().to_string(),
+                state.cursor_position().line as usize,
+            )
+        };
+        let Some(new) = rwk_core::workbench::conflicts::resolve(&text, line, side) else {
+            return false;
+        };
+        self.apply_new_text(&text, &new, window, cx);
+        true
+    }
+
+    /// Moves the cursor to the next merge conflict (wrapping). Returns how many conflicts the
+    /// file has.
+    pub fn next_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) -> usize {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return 0;
+        };
+        let (text, line) = {
+            let state = tab.state.read(cx);
+            (
+                state.value().to_string(),
+                state.cursor_position().line as usize,
+            )
+        };
+        if let Some(target) = rwk_core::workbench::conflicts::next_after(&text, line) {
+            self.go_to_line(target as u32 + 1, 1, window, cx);
+        }
+        rwk_core::workbench::conflicts::find(&text).len()
+    }
+
     /// Puts the cursor on 1-based `line` (and `column`, default the start of the line).
     pub fn go_to_line(
         &mut self,

@@ -69,6 +69,11 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
   toggle, "who last changed this line" (palette: git blame), close other / all tabs (tab menu).
   Multi-cursor (`Ctrl Alt Up/Down`), code actions (`Ctrl .`) and gutter folding come from the
   editor widget.
+- **Merge conflicts**: in a file with git conflict markers, "Sonraki çakışmaya git" (`Ctrl Alt N`)
+  jumps to the next block (wrapping) and says how many there are; with the cursor inside a block,
+  "Çakışma: bizimkini / gelenini / ikisini de tut" replaces it by one side (diff3 base sections are
+  dropped, CRLF kept). Each resolution is one undoable edit. The git view does not list conflicted
+  files specially yet.
 - **Parameter hint** (`Ctrl Shift Space`) shows the signature of the call under the cursor with the
   current parameter between « », in the footer.
 - **Snippets** (`Ctrl J`) lists the snippets of the open file's type and inserts one at the cursor,

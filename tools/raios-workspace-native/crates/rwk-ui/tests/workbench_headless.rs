@@ -5809,3 +5809,44 @@ fn a_snippet_is_inserted_indented_with_the_cursor_on_its_first_place() {
         Some(("s.rs".to_owned(), 0, 4 + 8))
     );
 }
+
+#[test]
+fn merge_conflicts_are_found_and_resolved_one_side_at_a_time() {
+    let mut rig = rig();
+    let text = "top\n<<<<<<< HEAD\nmine 1\n=======\nyours 1\n>>>>>>> topic\nmid\n<<<<<<< HEAD\nmine 2\n=======\nyours 2\n>>>>>>> topic\nend\n";
+    std::fs::write(rig.dir.path().join("m.txt"), text).expect("m.txt");
+    rig.open_project();
+    rig.open_file("m.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == text));
+
+    // Outside a block there is nothing to resolve.
+    rig.run(CommandId::KeepOurs);
+    assert_eq!(rig.editor_text(), text);
+
+    // The jump lands on the first block, then keeps our side of it.
+    rig.run(CommandId::NextConflict);
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(2)
+    );
+    rig.run(CommandId::KeepOurs);
+    assert_eq!(
+        rig.editor_text(),
+        "top\nmine 1\nmid\n<<<<<<< HEAD\nmine 2\n=======\nyours 2\n>>>>>>> topic\nend\n"
+    );
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("1 kaldı")));
+
+    // The second block: keep both, then nothing is left to jump to.
+    rig.run(CommandId::NextConflict);
+    rig.run(CommandId::KeepBoth);
+    assert_eq!(
+        rig.editor_text(),
+        "top\nmine 1\nmid\nmine 2\nyours 2\nend\n"
+    );
+    rig.run(CommandId::NextConflict);
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("çakışma yok")));
+}

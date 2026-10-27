@@ -43,6 +43,7 @@ use rwk_core::sessions::{
     TerminalSize, MAX_SESSIONS,
 };
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
+use rwk_core::workbench::conflicts::Side;
 use rwk_core::workbench::{
     available, resolve_shortcut, Appearance, CommandId, DockLayout, KeyboardContext, Keystroke,
     SavedWorkspace, SessionOffer, Skin, SwitchDecision, Theme, Tone, WorkbenchState,
@@ -901,6 +902,19 @@ impl Workbench {
                     self.request_close_tab(path, window, cx);
                 }
             }
+            CommandId::KeepOurs => self.resolve_conflict(Side::Ours, window, cx),
+            CommandId::KeepTheirs => self.resolve_conflict(Side::Theirs, window, cx),
+            CommandId::KeepBoth => self.resolve_conflict(Side::Both, window, cx),
+            CommandId::NextConflict => {
+                let count = self
+                    .editor
+                    .update(cx, |editor, cx| editor.next_conflict(window, cx));
+                if count == 0 {
+                    self.say("Bu dosyada çakışma yok", cx);
+                } else {
+                    self.say(format!("{count} çakışma"), cx);
+                }
+            }
             CommandId::CloseOtherTabs => self.close_tabs(true, window, cx),
             CommandId::CloseAllTabs => self.close_tabs(false, window, cx),
             CommandId::Diff => {
@@ -1006,6 +1020,31 @@ impl Workbench {
                 .editor
                 .update(cx, |editor, cx| editor.format(window, cx)),
         }
+    }
+
+    /// Resolves the merge conflict under the cursor, then tells how many are left.
+    fn resolve_conflict(
+        &mut self,
+        side: rwk_core::workbench::conflicts::Side,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let done = self
+            .editor
+            .update(cx, |editor, cx| editor.resolve_conflict(side, window, cx));
+        if !done {
+            self.say("İmleç bir çakışmanın içinde değil", cx);
+            return;
+        }
+        let left = rwk_core::workbench::conflicts::find(&self.editor.read(cx).text(cx)).len();
+        self.say(
+            if left == 0 {
+                "Çakışma çözüldü; dosyada başka yok".to_owned()
+            } else {
+                format!("Çakışma çözüldü; {left} kaldı")
+            },
+            cx,
+        );
     }
 
     fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
