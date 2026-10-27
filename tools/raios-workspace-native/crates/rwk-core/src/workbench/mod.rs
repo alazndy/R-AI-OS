@@ -4,6 +4,7 @@
 pub mod appearance;
 pub mod commands;
 pub mod comments;
+pub mod conflicts;
 pub mod dock;
 pub mod documents;
 pub mod editor_prefs;

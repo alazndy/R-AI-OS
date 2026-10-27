@@ -71,6 +71,14 @@ pub enum CommandId {
     Save,
     /// Close the active editor tab.
     CloseTab,
+    /// In a git merge conflict, keep our side.
+    KeepOurs,
+    /// In a git merge conflict, keep the incoming side.
+    KeepTheirs,
+    /// In a git merge conflict, keep both sides, ours first.
+    KeepBoth,
+    /// Jump to the next merge conflict of the file.
+    NextConflict,
     /// Pin the active tab to the start of the strip, or unpin it.
     PinTab,
     /// Move the active tab one place to the left.
@@ -228,7 +236,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 87] = [
+const COMMANDS: [Command; 91] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -270,6 +278,20 @@ const COMMANDS: [Command; 87] = [
         "Sekmeyi kapat",
         Some("Ctrl W"),
         &[bind("w")],
+    ),
+    cmd(CommandId::KeepOurs, "Çakışma: bizimkini tut", None, &[]),
+    cmd(CommandId::KeepTheirs, "Çakışma: gelenini tut", None, &[]),
+    cmd(CommandId::KeepBoth, "Çakışma: ikisini de tut", None, &[]),
+    cmd(
+        CommandId::NextConflict,
+        "Sonraki çakışmaya git",
+        Some("Ctrl Alt N"),
+        &[Binding {
+            key: "n",
+            shift: false,
+            alt: true,
+            terminal: false,
+        }],
     ),
     cmd(
         CommandId::PinTab,
@@ -842,10 +864,11 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor | CloseTab | CloseOtherTabs | CloseAllTabs | PinTab
-        | MoveTabLeft | MoveTabRight | Format | RenameSymbol | FindReferences | Outline
-        | WorkspaceSymbols | SignatureHelp | InsertSnippet | FindInFile | ReplaceInFile
-        | ReplaceRegexInFile | GoToLine | ToggleComment | BlameLine | SplitEditor => {
+        Diff | DiffSplit | FocusEditor | CloseTab | CloseOtherTabs | CloseAllTabs | KeepOurs
+        | KeepTheirs | KeepBoth | NextConflict | PinTab | MoveTabLeft | MoveTabRight | Format
+        | RenameSymbol | FindReferences | Outline | WorkspaceSymbols | SignatureHelp
+        | InsertSnippet | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine
+        | ToggleComment | BlameLine | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -949,7 +972,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 87);
+        assert_eq!(catalog().len(), 91);
     }
 
     #[test]

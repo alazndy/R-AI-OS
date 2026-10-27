@@ -69,6 +69,11 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
   toggle, "who last changed this line" (palette: git blame), close other / all tabs (tab menu).
   Multi-cursor (`Ctrl Alt Up/Down`), code actions (`Ctrl .`) and gutter folding come from the
   editor widget.
+- **Merge conflicts**: in a file with git conflict markers, "Sonraki çakışmaya git" (`Ctrl Alt N`)
+  jumps to the next block (wrapping) and says how many there are; with the cursor inside a block,
+  "Çakışma: bizimkini / gelenini / ikisini de tut" replaces it by one side (diff3 base sections are
+  dropped, CRLF kept). Each resolution is one undoable edit. The git view marks conflicted files with `!`, counts them in its
+  heading, and opening one from there lands on its first conflict.
 - **Tabs**: drag a tab along the strip to reorder it, or use `Ctrl Shift PageUp/PageDown`. "Sekmeyi
   sabitle" (tab menu) pins it to the front with a ◆; pinned tabs stay when you close other / all tabs
   and are remembered between runs. Tabs only move inside their group (pinned / unpinned).

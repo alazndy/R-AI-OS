@@ -5815,6 +5815,97 @@ fn a_snippet_is_inserted_indented_with_the_cursor_on_its_first_place() {
 }
 
 #[test]
+fn merge_conflicts_are_found_and_resolved_one_side_at_a_time() {
+    let mut rig = rig();
+    let text = "top\n<<<<<<< HEAD\nmine 1\n=======\nyours 1\n>>>>>>> topic\nmid\n<<<<<<< HEAD\nmine 2\n=======\nyours 2\n>>>>>>> topic\nend\n";
+    std::fs::write(rig.dir.path().join("m.txt"), text).expect("m.txt");
+    rig.open_project();
+    rig.open_file("m.txt");
+    assert!(rig.settle_until(|rig| rig.editor_text() == text));
+
+    // Outside a block there is nothing to resolve.
+    rig.run(CommandId::KeepOurs);
+    assert_eq!(rig.editor_text(), text);
+
+    // The jump lands on the first block, then keeps our side of it.
+    rig.run(CommandId::NextConflict);
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)),
+        Some(2)
+    );
+    rig.run(CommandId::KeepOurs);
+    assert_eq!(
+        rig.editor_text(),
+        "top\nmine 1\nmid\n<<<<<<< HEAD\nmine 2\n=======\nyours 2\n>>>>>>> topic\nend\n"
+    );
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("1 kaldı")));
+
+    // The second block: keep both, then nothing is left to jump to.
+    rig.run(CommandId::NextConflict);
+    rig.run(CommandId::KeepBoth);
+    assert_eq!(
+        rig.editor_text(),
+        "top\nmine 1\nmid\nmine 2\nyours 2\nend\n"
+    );
+    rig.run(CommandId::NextConflict);
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("çakışma yok")));
+}
+
+#[test]
+fn a_conflicted_file_opened_from_source_control_lands_on_its_first_conflict() {
+    let mut rig = rig();
+    let root = rig.dir.path().to_path_buf();
+    let git = |args: &[&str]| {
+        // A merge that stops on a conflict exits non-zero on purpose.
+        let _ = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .expect("git");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(root.join("c.txt"), "a\nb\nc\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "base"]);
+    git(&["checkout", "-q", "-b", "topic"]);
+    std::fs::write(root.join("c.txt"), "a\ntopic\nc\n").unwrap();
+    git(&["commit", "-q", "-am", "topic"]);
+    git(&["checkout", "-q", "main"]);
+    std::fs::write(root.join("c.txt"), "a\nmain\nc\n").unwrap();
+    git(&["commit", "-q", "-am", "main"]);
+    git(&["merge", "topic"]);
+
+    rig.open_project();
+    rig.run(CommandId::SourceControl);
+    let view = rig.read(|wb, _| wb.git_view().cloned()).expect("view");
+    assert!(rig.settle_until(|rig| rig.cx.update(|_, cx| view.read(cx).status().is_some())));
+    assert!(rig.cx.update(|_, cx| view
+        .read(cx)
+        .status()
+        .is_some_and(|status| status.entries.iter().any(|entry| entry.conflicted))));
+
+    rig.with(|_wb, _w, cx| {
+        view.update(cx, |_, cx| {
+            cx.emit(rwk_ui::git::GitEvent::Open("c.txt".to_owned()))
+        })
+    });
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("c.txt")));
+    assert!(
+        rig.settle_until(|rig| rig.read(|wb, cx| wb.editor().read(cx).cursor_line(cx)) == Some(2))
+    );
+    assert!(rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("1 çakışma")));
+}
+
+#[test]
 fn pinned_tabs_lead_the_strip_and_tabs_move_only_inside_their_group() {
     let mut rig = rig();
     std::fs::write(rig.dir.path().join("c.txt"), "three").expect("c");
