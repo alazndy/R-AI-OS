@@ -230,6 +230,13 @@ impl Workbench {
             |this, _view, event: &ProblemsEvent, window, cx| match event {
                 ProblemsEvent::Open(path, line) => {
                     // Terminal hits have no file: the line is the place in the result list.
+                    if let Some(projects) = this.recent_choices.take() {
+                        this.close_locations(window, cx);
+                        if let Some(root) = projects.get(line.saturating_sub(1)) {
+                            this.open_project(root.clone(), window, cx);
+                        }
+                        return;
+                    }
                     if let Some(hits) = this.terminal_hits.take() {
                         this.close_locations(window, cx);
                         if let Some(grid_line) = hits.get(line.saturating_sub(1)) {
@@ -253,6 +260,7 @@ impl Workbench {
     /// Closes the places list and returns focus to the workbench.
     pub fn close_locations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.terminal_hits = None;
+        self.recent_choices = None;
         self.locations_view = None;
         self.locations_subscription = None;
         window.focus(&self.focus, cx);
@@ -501,5 +509,56 @@ impl Workbench {
         self.show_locations(format!("TERMİNAL · {query}"), places, window, cx);
         // Set after the list opens: opening a list resets any earlier terminal results.
         self.terminal_hits = Some(found.into_iter().map(|(line, _)| line).collect());
+    }
+
+    /// The recently opened projects, newest first, as stored.
+    pub fn recent_projects(&self) -> &[std::path::PathBuf] {
+        &self.recent_projects
+    }
+
+    /// Sets the stored list (at start-up; nothing is announced).
+    pub fn set_recent_projects(&mut self, projects: Vec<std::path::PathBuf>) {
+        self.recent_projects = projects;
+    }
+
+    /// Puts `root` first in the recent list and tells the application to store it.
+    pub(super) fn remember_recent(&mut self, root: &std::path::Path, cx: &mut Context<Self>) {
+        self.recent_projects.retain(|known| known != root);
+        self.recent_projects.insert(0, root.to_path_buf());
+        self.recent_projects.truncate(10);
+        cx.emit(super::WorkbenchEvent::RecentProjectsChanged(
+            self.recent_projects.clone(),
+        ));
+    }
+
+    /// Lists the recent projects; choosing one opens it (through the usual unsaved-edits and
+    /// running-sessions questions).
+    pub(super) fn show_recent_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self
+            .project
+            .as_ref()
+            .map(|project| project.info().root.clone());
+        let choices: Vec<std::path::PathBuf> = self
+            .recent_projects
+            .iter()
+            .filter(|root| Some(*root) != current.as_ref() && root.is_dir())
+            .cloned()
+            .collect();
+        if choices.is_empty() {
+            self.say("Başka son açılan proje yok", cx);
+            return;
+        }
+        let places = choices
+            .iter()
+            .enumerate()
+            .map(|(index, root)| rwk_core::lsp::symbols::Place {
+                path: String::new(),
+                line: index + 1,
+                column: 1,
+                label: root.display().to_string(),
+            })
+            .collect();
+        self.show_locations("SON PROJELER".to_owned(), places, window, cx);
+        self.recent_choices = Some(choices);
     }
 }

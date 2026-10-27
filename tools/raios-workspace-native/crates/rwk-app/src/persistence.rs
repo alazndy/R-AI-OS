@@ -134,6 +134,48 @@ pub fn remember_registered(path: &Path, project: &Path) -> std::io::Result<()> {
     std::fs::rename(&temporary, path)
 }
 
+const RECENT_FILE: &str = "recent-projects.json";
+
+/// How many projects the recent list keeps.
+pub const MAX_RECENT_PROJECTS: usize = 10;
+
+/// The recent-projects file inside a config home.
+pub fn recent_path(config_home: &Path) -> PathBuf {
+    config_home.join(APP_DIR).join(RECENT_FILE)
+}
+
+/// The stored recent projects, newest first; projects that no longer exist are left out.
+pub fn load_recent(path: &Path) -> Vec<PathBuf> {
+    let names: Vec<String> = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    names
+        .into_iter()
+        .map(PathBuf::from)
+        .filter(|project| project.is_dir())
+        .take(MAX_RECENT_PROJECTS)
+        .collect()
+}
+
+/// Writes the recent projects atomically, owner-only.
+pub fn save_recent(path: &Path, projects: &[PathBuf]) -> std::io::Result<()> {
+    let Some(directory) = path.parent() else {
+        return Err(std::io::Error::other("the recent path has no directory"));
+    };
+    create_private_dir(directory)?;
+    let temporary = directory.join(format!(".{RECENT_FILE}.tmp"));
+    let names: Vec<String> = projects
+        .iter()
+        .take(MAX_RECENT_PROJECTS)
+        .map(|project| project.to_string_lossy().into_owned())
+        .collect();
+    let mut file = open_private(&temporary)?;
+    file.write_all(serde_json::to_string(&names).unwrap_or_default().as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, path)
+}
+
 /// The appearance file inside a config home.
 pub fn appearance_path(config_home: &Path) -> PathBuf {
     config_home.join(APP_DIR).join(FILE)
@@ -340,6 +382,19 @@ mod tests {
         assert_eq!(load_preferences(&path), on);
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(load_preferences(&path), Preferences::default());
+    }
+
+    #[test]
+    fn recent_projects_round_trip_and_skip_folders_that_are_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = recent_path(dir.path());
+        assert!(load_recent(&path).is_empty());
+        let here = dir.path().to_path_buf();
+        let gone = dir.path().join("gone");
+        save_recent(&path, &[here.clone(), gone]).unwrap();
+        assert_eq!(load_recent(&path), vec![here]);
+        std::fs::write(&path, "not json").unwrap();
+        assert!(load_recent(&path).is_empty());
     }
 
     #[test]

@@ -11,6 +11,8 @@ pub enum CommandId {
     Commands,
     /// Open a project folder.
     Project,
+    /// Choose one of the recently opened projects.
+    RecentProjects,
     /// Search files.
     Files,
     /// Search the project's text through the RAIOS CLI's index.
@@ -210,7 +212,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 78] = [
+const COMMANDS: [Command; 79] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -222,6 +224,12 @@ const COMMANDS: [Command; 78] = [
         "Proje klasörü aç",
         Some("Ctrl O"),
         &[bind("o")],
+    ),
+    cmd(
+        CommandId::RecentProjects,
+        "Son açılan projeler",
+        Some("Ctrl Alt O"),
+        &[bind_terminal("o", false, true)],
     ),
     cmd(
         CommandId::Files,
@@ -751,8 +759,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
     };
     match id {
         ToggleAutoSave | ToggleFormatOnSave | ToggleWordWrap | ZoomIn | ZoomOut | ZoomReset
-        | Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
-        | AgentsLayout => allow(),
+        | Commands | Project | RecentProjects | Settings | Skin | Shortcuts | Balanced
+        | EditorLayout | AgentsLayout => allow(),
         Files | Search | Problems | SourceControl | Refresh | RunTask | FocusFiles | Memory
         | Inspector | RestartServers => needs_project(),
         Save => match (state.file_open, state.dirty) {
@@ -866,7 +874,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 78);
+        assert_eq!(catalog().len(), 79);
     }
 
     #[test]

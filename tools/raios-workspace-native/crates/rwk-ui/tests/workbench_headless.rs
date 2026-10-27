@@ -5674,3 +5674,45 @@ fn terminal_search_needs_a_terminal_and_says_when_nothing_matches() {
     assert!(rig.read(|wb, _| wb.rename_prompt().is_none()));
     assert!(rig.read(|wb, _| wb.locations_view().is_none()));
 }
+
+#[test]
+fn recent_projects_are_remembered_newest_first_and_can_be_reopened() {
+    let mut rig = rig();
+    let first = rig.dir.path().to_path_buf();
+    let other = tempfile::tempdir().expect("second project");
+    let events: Arc<Mutex<Vec<WorkbenchEvent>>> = Arc::default();
+    let sink = Arc::clone(&events);
+    let view = rig.view.clone();
+    rig.cx.update(|_w, app| {
+        app.subscribe(&view, move |_wb, event: &WorkbenchEvent, _app| {
+            sink.lock().unwrap().push(event.clone());
+        })
+        .detach();
+    });
+
+    // With only one project there is nothing else to offer.
+    rig.open_project();
+    rig.run(CommandId::RecentProjects);
+    assert!(rig.read(|wb, _| wb.locations_view().is_none()));
+
+    let second = other.path().to_path_buf();
+    rig.with(|wb, window, cx| wb.open_project(second.clone(), window, cx));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.recent_projects().first() == Some(&second))));
+    assert_eq!(
+        rig.read(|wb, _| wb.recent_projects().to_vec()),
+        [second.clone(), first.clone()]
+    );
+    assert!(events.lock().unwrap().iter().any(|event| matches!(
+        event,
+        WorkbenchEvent::RecentProjectsChanged(list) if list.first() == Some(&second)
+    )));
+
+    // The list offers the one that is not open; choosing it switches back.
+    rig.run(CommandId::RecentProjects);
+    let list = rig
+        .read(|wb, _| wb.locations_view().cloned())
+        .expect("list");
+    assert_eq!(rig.cx.update(|_, cx| list.read(cx).problems().len()), 1);
+    rig.with(|_wb, _w, cx| list.update(cx, |list, cx| list.choose_selected(cx)));
+    assert!(rig.settle_until(|rig| rig.read(|wb, _| wb.recent_projects().first() == Some(&first))));
+}

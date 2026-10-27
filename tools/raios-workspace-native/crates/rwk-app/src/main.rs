@@ -130,6 +130,11 @@ fn main() {
                     workbench.set_editor_prefs(stored.editor, cx);
                 });
             }
+            let recent_file = config_home().map(|home| persistence::recent_path(&home));
+            if let Some(file) = &recent_file {
+                let stored = persistence::load_recent(file);
+                workbench.update(cx, |workbench, _| workbench.set_recent_projects(stored));
+            }
             let workspace_store_for_events = workspace_store.clone();
             cx.subscribe(
                 &workbench,
@@ -138,6 +143,13 @@ fn main() {
                         if let Some(path) = &saved_path {
                             if let Err(error) = persistence::save_appearance(path, appearance) {
                                 eprintln!("rwk-app: could not save the appearance: {error}");
+                            }
+                        }
+                    }
+                    WorkbenchEvent::RecentProjectsChanged(projects) => {
+                        if let Some(file) = &recent_file {
+                            if let Err(error) = persistence::save_recent(file, projects) {
+                                eprintln!("rwk-app: could not save the recent projects: {error}");
                             }
                         }
                     }

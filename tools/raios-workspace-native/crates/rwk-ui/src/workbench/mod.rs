@@ -77,6 +77,8 @@ pub enum WorkbenchEvent {
     /// The daemon confirmed this project is registered (newly or before); the application
     /// remembers it so the registration is not offered again at every start.
     ProjectRegistered(PathBuf),
+    /// The recently opened projects changed (newest first); the application stores them.
+    RecentProjectsChanged(Vec<PathBuf>),
     /// The open project's workspace changed (tabs, layout, sessions); the application writes
     /// it so the next start reopens the project as it was left.
     WorkspaceChanged(SavedWorkspace),
@@ -325,6 +327,10 @@ pub struct Workbench {
     watch_stamps: watch::Stamps,
     /// The grid lines behind the open terminal search results, in list order.
     terminal_hits: Option<Vec<i32>>,
+    /// The projects behind the open recent-projects list, in list order.
+    recent_choices: Option<Vec<PathBuf>>,
+    /// Recently opened projects, newest first.
+    recent_projects: Vec<PathBuf>,
     consent: Arc<ConsentRegistry>,
     consent_wait: Option<std::sync::mpsc::Receiver<rwk_core::consent::ConsentDecision>>,
     composer: Option<Entity<crate::handoff::HandoffComposer>>,
@@ -595,6 +601,8 @@ impl Workbench {
             watch_task: None,
             watch_stamps: std::collections::HashMap::new(),
             terminal_hits: None,
+            recent_choices: None,
+            recent_projects: Vec::new(),
             consent: Arc::new(ConsentRegistry::new()),
             consent_wait: None,
             composer: None,
@@ -979,6 +987,7 @@ impl Workbench {
             CommandId::Outline => self.show_outline(window, cx),
             CommandId::WorkspaceSymbols => self.open_symbol_search(window, cx),
             CommandId::FindInTerminal => self.open_terminal_search(window, cx),
+            CommandId::RecentProjects => self.show_recent_projects(window, cx),
             CommandId::RestartServers => self.restart_servers(cx),
             CommandId::Format => self
                 .editor
@@ -1521,6 +1530,7 @@ impl Workbench {
                     self.files
                         .update(cx, |files, cx| files.set_project(Arc::clone(&project), cx));
                     let root = project.info().root.clone();
+                    self.remember_recent(&root, cx);
                     self.project = Some(project);
                     self.server_status.clear();
                     self.refresh_branch(cx);
