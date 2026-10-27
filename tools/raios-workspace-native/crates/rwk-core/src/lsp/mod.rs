@@ -16,4 +16,7 @@ pub use manager::{
     default_launcher, LanguageServers, Launcher, ManagerEvent, Reply, Requester, ServerStatus,
 };
 pub use problems::{summary, Counts, Problem, Problems, Severity};
-pub use servers::{find_program, spec_for_path, ServerSpec, SERVERS};
+pub use servers::{
+    find_program, parse_user_servers, set_user_servers, spec_for_path, spec_named, ServerSpec,
+    SERVERS,
+};

@@ -129,6 +129,36 @@ pub fn location_at(line: &str, column: usize) -> Option<Location> {
     locations(&word).into_iter().next()
 }
 
+/// Longest URL a click will open.
+const MAX_URL_BYTES: usize = 2048;
+
+/// The `http://` or `https://` address written at character `column` of `line`, without the
+/// punctuation that ends a sentence around it. Anything else (other schemes, control
+/// characters, a very long text) is not opened.
+pub fn url_at(line: &str, column: usize) -> Option<String> {
+    let characters: Vec<char> = line.chars().collect();
+    let is_gap = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>');
+    if column >= characters.len() || is_gap(characters[column]) {
+        return None;
+    }
+    let (mut from, mut to) = (column, column);
+    while from > 0 && !is_gap(characters[from - 1]) {
+        from -= 1;
+    }
+    while to + 1 < characters.len() && !is_gap(characters[to + 1]) {
+        to += 1;
+    }
+    let word: String = characters[from..=to].iter().collect();
+    // A link inside brackets or after `=` starts later in the word.
+    let start = word.find("https://").or_else(|| word.find("http://"))?;
+    let url = word[start..].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}']);
+    let after_scheme = url.split_once("://")?.1;
+    if after_scheme.is_empty() || url.len() > MAX_URL_BYTES || url.chars().any(char::is_control) {
+        return None;
+    }
+    Some(url.to_owned())
+}
+
 /// Every `path:line` or `path:line:col` in `text`, in order. Anything with `://` is a URL and
 /// is skipped. Whether the path exists is for the caller to check.
 pub fn locations(text: &str) -> Vec<Location> {
@@ -257,5 +287,26 @@ mod tests {
         assert_eq!(at(36), Some(("lib.rs".to_owned(), 3)));
         assert_eq!(at(8), None, "a space is not a location");
         assert_eq!(at(500), None);
+    }
+
+    #[test]
+    fn a_web_address_under_the_column_is_found_and_trimmed() {
+        let line = "see (https://example.com/a?b=1). or ftp://x.org and http://";
+        assert_eq!(
+            url_at(line, 10).as_deref(),
+            Some("https://example.com/a?b=1")
+        );
+        assert_eq!(
+            url_at(line, 5).as_deref(),
+            Some("https://example.com/a?b=1")
+        );
+        assert_eq!(url_at(line, 0), None);
+        assert_eq!(url_at(line, 40), None, "only http and https open");
+        assert_eq!(url_at(line, 52), None, "a bare scheme is not an address");
+        assert_eq!(
+            url_at("link=https://a.io,", 8).as_deref(),
+            Some("https://a.io")
+        );
+        assert_eq!(url_at(line, 999), None);
     }
 }

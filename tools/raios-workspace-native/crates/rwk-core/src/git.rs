@@ -352,6 +352,129 @@ pub fn unstage(root: &Path, paths: &[String]) -> Result<()> {
     }
 }
 
+fn check_branch_name(root: &Path, name: &str) -> Result<()> {
+    if name.is_empty() || name.starts_with('-') || name.contains(['\0', '\n']) {
+        return Err(AppError::new(ErrorCode::InvalidInput, "Not a branch name."));
+    }
+    run(root, &["check-ref-format", "--branch", name], None)
+        .map(drop)
+        .map_err(|_| AppError::new(ErrorCode::InvalidInput, "Not a valid branch name."))
+}
+
+/// Creates branch `name` at the current commit and switches to it.
+pub fn create_branch(root: &Path, name: &str) -> Result<()> {
+    check_branch_name(root, name)?;
+    run(root, &["switch", "-q", "-c", name], None).map(drop)
+}
+
+/// Deletes a branch that is fully merged; git refuses an unmerged one and the checked-out one.
+pub fn delete_branch(root: &Path, name: &str) -> Result<()> {
+    check_branch_name(root, name)?;
+    run(root, &["branch", "-d", "--", name], None).map(drop)
+}
+
+/// One entry of the stash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stash {
+    /// Position, 0 being the newest.
+    pub index: usize,
+    /// What git shows for it (`On main: message`).
+    pub message: String,
+}
+
+/// Puts the changes, untracked files included, on the stash and cleans the working tree.
+pub fn stash_push(root: &Path, message: &str) -> Result<()> {
+    if message.len() > MAX_MESSAGE_BYTES || message.contains('\0') {
+        return Err(AppError::new(
+            ErrorCode::InvalidInput,
+            "The message is too long.",
+        ));
+    }
+    let output = run(
+        root,
+        // Stashing untracked files breaks under `--literal-pathspecs`, which `run` always adds.
+        &[
+            "--no-literal-pathspecs",
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            message,
+        ],
+        None,
+    )?;
+    if output.contains("No local changes") {
+        return Err(AppError::new(
+            ErrorCode::InvalidInput,
+            "There is nothing to stash.",
+        ));
+    }
+    Ok(())
+}
+
+/// The stash, newest first.
+pub fn stash_list(root: &Path) -> Result<Vec<Stash>> {
+    let output = run(root, &["stash", "list", "--format=%gs"], None)?;
+    Ok(output
+        .lines()
+        .enumerate()
+        .map(|(index, message)| Stash {
+            index,
+            message: message.to_owned(),
+        })
+        .collect())
+}
+
+/// Applies stash entry `index` and drops it. A conflict leaves the entry in place.
+pub fn stash_pop(root: &Path, index: usize) -> Result<()> {
+    run(
+        root,
+        &["stash", "pop", "--index", &format!("stash@{{{index}}}")],
+        None,
+    )
+    .map(drop)
+}
+
+/// The branch the current one follows (`origin/main`), if it follows one.
+pub fn upstream(root: &Path) -> Option<String> {
+    run(
+        root,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+        None,
+    )
+    .ok()
+    .map(|name| name.trim().to_owned())
+    .filter(|name| !name.is_empty())
+}
+
+/// Fast-forwards the current branch from its upstream; a diverged branch is an error, not a
+/// merge.
+pub fn pull(root: &Path) -> Result<()> {
+    run(root, &["pull", "--ff-only", "-q"], None).map(drop)
+}
+
+/// Pushes the current branch to its upstream, or to `origin` as a new upstream when it has none.
+/// Never forces.
+pub fn push(root: &Path) -> Result<()> {
+    if upstream(root).is_some() {
+        return run(root, &["push", "-q"], None).map(drop);
+    }
+    let branch = run(root, &["branch", "--show-current"], None)?;
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::InvalidInput,
+            "HEAD is detached; nothing to push.",
+        ));
+    }
+    run(root, &["push", "-q", "-u", "origin", "--", branch], None).map(drop)
+}
+
 /// How a changed file is marked in the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BadgeKind {

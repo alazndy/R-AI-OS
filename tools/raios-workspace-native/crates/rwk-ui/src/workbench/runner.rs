@@ -76,6 +76,11 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(url) = rwk_core::runner::url_at(line, column) {
+            cx.open_url(&url);
+            self.say(format!("Açılıyor: {url}"), cx);
+            return;
+        }
         let Some(project) = self.project.clone() else {
             return;
         };

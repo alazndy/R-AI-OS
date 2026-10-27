@@ -46,6 +46,23 @@ The inspector lists the open project's tasks, running agents and pending approva
 
 Shows `memory.md` as a heading outline with checklist progress and search, and the structured RAIOS records (type and layer filters) from a read-only connection to `workspace.db`. Links, images and HTML are shown as inert text; credentials in stored records are replaced by `[gizli]`. Budgets: 64,000 characters, 300 headings, 2,000 lines per section, 32 table columns.
 
+## Editing, language servers, git and tasks
+
+- **Language servers** start lazily per language and only from programs found on `PATH`
+  (`rust-analyzer`, `typescript-language-server`, `pyright-langserver`, `gopls`, `clangd`). Add your
+  own in `~/.config/raios-workspace-native/language-servers.json`, never in a project:
+  `{"servers":[{"name":"zig","program":"zls","args":[],"extensions":["zig"],"language":"zig"}]}`.
+  The program is a bare name, not a path. Without a server there are no problems, hover,
+  completion, rename or formatting for that language; the footer says which server is missing.
+- **Tasks** come from `~/.config/raios-workspace-native/tasks.json` (program and arguments, never
+  a shell string) and run in a terminal.
+- **Git** (source control view): stage, unstage, hunks, discard, commit, branches, stash, pull
+  (fast-forward only) and push (asks first, never forces). Changed files carry a mark in the tree
+  and on tabs.
+- **Project search and replace** use `raios locate`; the pattern is a regular expression and
+  replacing shows a preview before it writes. Files with unsaved edits are skipped.
+- `Ctrl`-click a `path:line` or a web address in terminal output to open it.
+
 ## Appearance
 
 Skin (standard or GT-LCARS) and tone (dark or light) are independent and persisted; switching repaints every pane, the editor and the terminal surface without recreating sessions. The 28 KDE Breeze file icons are bundled unmodified (checksums in `crates/rwk-ui/assets/file-icons/provenance.json`, licenses in `crates/rwk-ui/assets/licenses`) and tinted by file type; Antonio (OFL) is the LCARS display font.

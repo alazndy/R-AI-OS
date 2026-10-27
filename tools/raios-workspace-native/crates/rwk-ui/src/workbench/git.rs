@@ -112,6 +112,55 @@ impl Workbench {
                 window,
                 cx,
             ),
+            GitEvent::Pull => self.git_job(
+                |root| {
+                    git::pull(root)?;
+                    // Files differ from before: every open clean tab is reloaded.
+                    Ok(Aftermath {
+                        committed: false,
+                        rewritten: vec![String::new()],
+                    })
+                },
+                window,
+                cx,
+            ),
+            GitEvent::Push => self.git_job(
+                |root| git::push(root).map(|()| Aftermath::default()),
+                window,
+                cx,
+            ),
+            GitEvent::StashPush(message) => self.git_job(
+                move |root| {
+                    git::stash_push(root, &message)?;
+                    Ok(Aftermath {
+                        committed: false,
+                        rewritten: vec![String::new()],
+                    })
+                },
+                window,
+                cx,
+            ),
+            GitEvent::StashPop(index) => self.git_job(
+                move |root| {
+                    git::stash_pop(root, index)?;
+                    Ok(Aftermath {
+                        committed: false,
+                        rewritten: vec![String::new()],
+                    })
+                },
+                window,
+                cx,
+            ),
+            GitEvent::CreateBranch(name) => self.git_job(
+                move |root| git::create_branch(root, &name).map(|()| Aftermath::default()),
+                window,
+                cx,
+            ),
+            GitEvent::DeleteBranch(name) => self.git_job(
+                move |root| git::delete_branch(root, &name).map(|()| Aftermath::default()),
+                window,
+                cx,
+            ),
             GitEvent::Switch(branch) => self.git_job(
                 move |root| {
                     git::switch(root, &branch)?;
@@ -228,7 +277,8 @@ impl Workbench {
                     // The status is read even after a failure, so the view shows the truth.
                     let state = git::status(&root).map(|status| {
                         let branches = git::branches(&root).unwrap_or_default();
-                        (status, branches)
+                        let stashes = git::stash_list(&root).unwrap_or_default();
+                        (status, branches, stashes)
                     });
                     (aftermath, state)
                 })
@@ -254,8 +304,11 @@ impl Workbench {
                     Err(error) => failure = Some(error.message),
                 }
                 match state {
-                    Ok((status, branches)) => {
-                        view.update(cx, |view, cx| view.set_status(status, branches, cx));
+                    Ok((status, branches, stashes)) => {
+                        view.update(cx, |view, cx| {
+                            view.set_stashes(stashes, cx);
+                            view.set_status(status, branches, cx)
+                        });
                     }
                     Err(error) => {
                         failure.get_or_insert(error.message);

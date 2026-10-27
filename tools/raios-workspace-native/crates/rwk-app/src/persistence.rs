@@ -36,6 +36,30 @@ pub fn tasks_path(config_home: &Path) -> PathBuf {
     config_home.join(APP_DIR).join(TASKS_FILE)
 }
 
+const SERVERS_FILE: &str = "language-servers.json";
+
+/// The user's own language servers inside a config home.
+pub fn servers_path(config_home: &Path) -> PathBuf {
+    config_home.join(APP_DIR).join(SERVERS_FILE)
+}
+
+/// Reads the user's language-server file (once, at start); nothing when there is none.
+pub fn load_user_servers(path: &Path) -> Vec<(rwk_core::lsp::ServerSpec, Vec<String>, String)> {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut text = String::new();
+    if file
+        .take(MAX_TASKS_FILE_BYTES)
+        .read_to_string(&mut text)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    rwk_core::lsp::parse_user_servers(&text)
+}
+
 /// Reads the user's task file on every call, so edits apply without a restart.
 pub struct FsTaskStore {
     path: PathBuf,
