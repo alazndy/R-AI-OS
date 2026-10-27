@@ -72,8 +72,8 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
 - **Merge conflicts**: in a file with git conflict markers, "Sonraki çakışmaya git" (`Ctrl Alt N`)
   jumps to the next block (wrapping) and says how many there are; with the cursor inside a block,
   "Çakışma: bizimkini / gelenini / ikisini de tut" replaces it by one side (diff3 base sections are
-  dropped, CRLF kept). Each resolution is one undoable edit. The git view does not list conflicted
-  files specially yet.
+  dropped, CRLF kept). Each resolution is one undoable edit. The git view marks conflicted files with `!`, counts them in its
+  heading, and opening one from there lands on its first conflict.
 - **Parameter hint** (`Ctrl Shift Space`) shows the signature of the call under the cursor with the
   current parameter between « », in the footer.
 - **Snippets** (`Ctrl J`) lists the snippets of the open file's type and inserts one at the cursor,

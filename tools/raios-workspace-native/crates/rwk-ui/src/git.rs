@@ -782,17 +782,26 @@ impl Render for GitView {
                     .child(section(theme, format!("HAZIR ({})", staged.len())))
                     .children(staged_rows)
                     .child(
-                        section(theme, format!("DEĞİŞİKLİKLER ({})", changes.len()))
-                            .child(
-                                button(theme, "stage-all", "Tümünü ekle").on_click(
-                                    cx.listener(|this, _, _window, cx| this.stage_all(cx)),
-                                ),
-                            )
-                            .child(button(theme, "discard-all", "Tümünü geri al").on_click(
-                                cx.listener(move |this, _, _window, cx| {
+                        section(
+                            theme,
+                            match changes.iter().filter(|entry| entry.conflicted).count() {
+                                0 => format!("DEĞİŞİKLİKLER ({})", changes.len()),
+                                clash => {
+                                    format!("DEĞİŞİKLİKLER ({}) · {clash} ÇAKIŞMA", changes.len())
+                                }
+                            },
+                        )
+                        .child(
+                            button(theme, "stage-all", "Tümünü ekle")
+                                .on_click(cx.listener(|this, _, _window, cx| this.stage_all(cx))),
+                        )
+                        .child(
+                            button(theme, "discard-all", "Tümünü geri al").on_click(cx.listener(
+                                move |this, _, _window, cx| {
                                     this.ask_discard(all_changes.clone(), cx)
-                                }),
+                                },
                             )),
+                        ),
                     )
                     .children(change_rows)
                     .children(
