@@ -377,3 +377,30 @@ fn only_a_shell_session_can_be_remote_and_a_missing_client_is_reported() {
     }
     assert_eq!(missing.unwrap_err().code, ErrorCode::NotFound);
 }
+
+#[test]
+fn a_terminal_does_not_inherit_the_markers_of_a_claude_code_session() {
+    // The workspace may itself have been started from inside an agent session.
+    std::env::set_var("CLAUDE_CODE_CHILD_SESSION", "1");
+    std::env::set_var("CLAUDE_CODE_SESSION_ID", "parent");
+    std::env::set_var("CLAUDECODE", "1");
+
+    let command = build_command(
+        &programs(),
+        &PathBuf::from("/work/app"),
+        SessionKind::Shell,
+        &SessionLaunch::Fresh {
+            prompt: None,
+            name: None,
+        },
+    )
+    .unwrap();
+
+    for name in [
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDECODE",
+    ] {
+        assert!(command.get_env(name).is_none(), "{name} leaked");
+    }
+}

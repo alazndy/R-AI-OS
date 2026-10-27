@@ -17,6 +17,11 @@ pub const MAX_PROMPT_CHARS: usize = 600;
 /// a fresh wrapper run, not a nested child of whatever agent started the workspace.
 const INHERITED_RUN_VARIABLES: [&str; 2] = ["RAIOS_WRAPPER_RUN_ID", "RAIOS_AGENT_IDENTITY"];
 
+/// Prefixes of the variables a Claude Code session sets for what it starts. A terminal here is
+/// the user's own shell: an agent started in it would take these for a nested child session and
+/// stop saving its transcript.
+const INHERITED_AGENT_PREFIXES: [&str; 2] = ["CLAUDE_CODE_", "CLAUDECODE"];
+
 /// Where the programs of a session are found. `None` means: look it up the normal way.
 #[derive(Debug, Clone, Default)]
 pub struct ProgramPaths {
@@ -144,6 +149,17 @@ pub fn build_command(
     command.env("COLORTERM", "truecolor");
     for name in INHERITED_RUN_VARIABLES {
         command.env_remove(name);
+    }
+    for (name, _) in std::env::vars_os() {
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if INHERITED_AGENT_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        {
+            command.env_remove(name);
+        }
     }
     Ok(command)
 }
