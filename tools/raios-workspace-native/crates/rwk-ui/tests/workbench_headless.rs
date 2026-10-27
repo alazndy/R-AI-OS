@@ -5377,14 +5377,32 @@ fn the_settings_view_flips_switches_and_shows_the_new_values() {
     assert!(rig.read(|wb, _| wb.settings_view().is_some()));
     assert!(rig.read(|wb, _| wb.overlay_open()));
 
-    // Enter on the first row flips auto-save and the list shows it.
-    rig.cx.simulate_keystrokes("enter");
+    // The first row is the theme: the right arrow picks the next skin.
+    assert_eq!(
+        rig.read(|wb, _| wb.appearance().skin),
+        rwk_core::workbench::Skin::Standard
+    );
+    rig.cx.simulate_keystrokes("right right");
+    assert_eq!(
+        rig.read(|wb, _| wb.appearance().skin),
+        rwk_core::workbench::Skin::Aperture
+    );
+    // Down to the tone, then the editing switches: Enter flips them and the list shows it.
+    rig.cx.simulate_keystrokes("down right");
+    assert_eq!(
+        rig.read(|wb, _| wb.appearance().tone),
+        rwk_core::workbench::Tone::Light
+    );
+    rig.cx.simulate_keystrokes("down enter");
     assert!(rig.read(|wb, _| wb.auto_save()));
     let view = rig.read(|wb, _| wb.settings_view().cloned()).unwrap();
-    let value = rig.cx.update(|_, cx| view.read(cx).rows()[0].value.clone());
-    assert_eq!(value, "açık");
-
-    // Down, Enter: format on save.
+    let value = rig.cx.update(|_, cx| {
+        let rows = view.read(cx).rows().to_vec();
+        rows.into_iter()
+            .find(|row| row.setting == rwk_ui::settings::Setting::AutoSave)
+            .map(|row| row.value)
+    });
+    assert_eq!(value, Some(rwk_ui::settings::SettingValue::Switch(true)));
     rig.cx.simulate_keystrokes("down enter");
     assert!(rig.read(|wb, _| wb.format_on_save()));
 

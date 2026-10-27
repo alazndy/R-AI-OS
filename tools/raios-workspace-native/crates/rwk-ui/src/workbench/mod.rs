@@ -1103,6 +1103,20 @@ impl Workbench {
         self.apply_appearance(cx);
     }
 
+    pub(super) fn set_skin(&mut self, skin: Skin, cx: &mut Context<Self>) {
+        if self.appearance.skin != skin {
+            self.appearance.skin = skin;
+            self.apply_appearance(cx);
+        }
+    }
+
+    pub(super) fn set_tone(&mut self, tone: Tone, cx: &mut Context<Self>) {
+        if self.appearance.tone != tone {
+            self.appearance.tone = tone;
+            self.apply_appearance(cx);
+        }
+    }
+
     fn toggle_skin(&mut self, cx: &mut Context<Self>) {
         self.appearance.skin = match self.appearance.skin {
             Skin::Standard => Skin::Lcars,
