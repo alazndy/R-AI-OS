@@ -5810,8 +5810,44 @@ fn a_snippet_is_inserted_indented_with_the_cursor_on_its_first_place() {
     assert_eq!(rig.editor_text(), "    // TODO what\n    ");
     assert_eq!(
         rig.read(|wb, cx| wb.editor().read(cx).cursor_at(cx)),
-        Some(("s.rs".to_owned(), 0, 4 + 8))
+        Some(("s.rs".to_owned(), 0, 4 + 8 + 4))
     );
+}
+
+#[test]
+fn tab_walks_through_the_places_of_a_snippet_and_typing_replaces_the_default() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("t.rs"), "").expect("t.rs");
+    rig.with(|wb, _, _| {
+        wb.set_snippet_source(Some(Arc::new(|| {
+            rwk_core::workbench::parse_user_snippets(
+                r#"{"snippets":[{"prefix":"two","body":"f(${1:a}, ${2:b})$0"}]}"#,
+            )
+        })))
+    });
+    rig.open_project();
+    rig.open_file("t.rs");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("t.rs")));
+
+    rig.run(CommandId::InsertSnippet);
+    rig.cx.simulate_input("two");
+    rig.cx.simulate_keystrokes("enter");
+    assert_eq!(rig.editor_text(), "f(a, b)");
+
+    // Typing over the first default moves the later places along with it.
+    rig.cx.simulate_input("long");
+    rig.cx.simulate_keystrokes("tab");
+    rig.cx.simulate_input("x");
+    assert_eq!(rig.editor_text(), "f(long, x)");
+    rig.cx.simulate_keystrokes("tab");
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_at(cx)),
+        Some(("t.rs".to_owned(), 0, 10))
+    );
+
+    // The walk is over, so Tab is an ordinary key again.
+    rig.cx.simulate_keystrokes("tab");
+    assert_ne!(rig.editor_text(), "f(long, x)");
 }
 
 #[test]
