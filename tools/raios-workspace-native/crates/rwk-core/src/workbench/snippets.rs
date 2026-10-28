@@ -90,14 +90,16 @@ pub struct Expansion {
     pub text: String,
     /// Byte offset in `text` where the cursor goes (the first tab stop, else `$0`, else the end).
     pub cursor: usize,
+    /// Every place to edit as a byte range in `text`, in Tab order: `$1`, `$2`, … then `$0`.
+    /// A number that appears twice is listed once, at its first place.
+    pub stops: Vec<std::ops::Range<usize>>,
 }
 
 /// Expands `body`; every line after the first starts with `indent` (the indentation of the line
 /// the snippet is inserted into).
 pub fn expand(body: &str, indent: &str) -> Expansion {
     let mut text = String::new();
-    let mut first: Option<usize> = None;
-    let mut last: Option<usize> = None;
+    let mut numbered: Vec<(u32, std::ops::Range<usize>)> = Vec::new();
     let mut chars = body.chars().peekable();
     while let Some(ch) = chars.next() {
         match ch {
@@ -138,12 +140,14 @@ pub fn expand(body: &str, indent: &str) -> Expansion {
                     continue;
                 }
                 let at = text.len();
-                if digits == "0" {
-                    last = Some(at);
-                } else if first.is_none() {
-                    first = Some(at);
-                }
                 text.push_str(&default.unwrap_or_default());
+                let number =
+                    digits
+                        .parse::<u32>()
+                        .map_or(u32::MAX, |n| if n == 0 { u32::MAX } else { n });
+                if !numbered.iter().any(|(n, _)| *n == number) {
+                    numbered.push((number, at..text.len()));
+                }
             }
             '\n' => {
                 text.push('\n');
@@ -152,8 +156,14 @@ pub fn expand(body: &str, indent: &str) -> Expansion {
             other => text.push(other),
         }
     }
-    let cursor = first.or(last).unwrap_or(text.len());
-    Expansion { text, cursor }
+    numbered.sort_by_key(|(number, _)| *number);
+    let stops: Vec<_> = numbered.into_iter().map(|(_, range)| range).collect();
+    let cursor = stops.first().map_or(text.len(), |range| range.start);
+    Expansion {
+        text,
+        cursor,
+        stops,
+    }
 }
 
 #[cfg(test)]
@@ -165,6 +175,18 @@ mod tests {
         let e = expand("fn ${1:name}($2) {\n\t$0\n}", "  ");
         assert_eq!(e.text, "fn name() {\n  \t\n  }");
         assert_eq!(&e.text[e.cursor..e.cursor + 4], "name");
+    }
+
+    #[test]
+    fn stops_come_in_tab_order_with_the_final_one_last() {
+        let e = expand("$0 ${2:b} ${1:a} $2", "");
+        assert_eq!(e.text, " b a ");
+        assert_eq!(e.stops, vec![3..4, 1..2, 0..0]);
+        assert_eq!(e.cursor, 3);
+        assert_eq!(
+            expand("plain", "").stops,
+            Vec::<std::ops::Range<usize>>::new()
+        );
     }
 
     #[test]
