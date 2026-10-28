@@ -298,6 +298,7 @@ pub struct Workbench {
     palette_picks_tasks: bool,
     /// The open palette lists snippets, not files.
     palette_picks_snippets: bool,
+    palette_picks_tabs: bool,
     /// A conflicted file opened from the git view: the cursor goes to its first conflict once
     /// it has loaded.
     jump_to_conflict: Option<String>,
@@ -587,6 +588,7 @@ impl Workbench {
             task_source: None,
             palette_picks_tasks: false,
             palette_picks_snippets: false,
+            palette_picks_tabs: false,
             jump_to_conflict: None,
             snippet_source: None,
             git_view: None,
@@ -1020,6 +1022,7 @@ impl Workbench {
             CommandId::FindInTerminal => self.open_terminal_search(window, cx),
             CommandId::RecentProjects => self.show_recent_projects(window, cx),
             CommandId::InsertSnippet => self.open_snippet_palette(window, cx),
+            CommandId::SearchTabs => self.open_tab_palette(window, cx),
             CommandId::SignatureHelp => self.signature_help(window, cx),
             CommandId::RestartServers => self.restart_servers(cx),
             CommandId::BlameLine => self.blame_line(cx),
@@ -1080,8 +1083,12 @@ impl Workbench {
                 PaletteEvent::OpenFile(path) => {
                     let tasks = std::mem::take(&mut this.palette_picks_tasks);
                     let snippets = std::mem::take(&mut this.palette_picks_snippets);
+                    let tabs = std::mem::take(&mut this.palette_picks_tabs);
                     this.close_palette(window, cx);
-                    if snippets {
+                    if tabs {
+                        this.editor
+                            .update(cx, |editor, cx| editor.activate_tab(&path, window, cx));
+                    } else if snippets {
                         this.insert_named_snippet(&path, window, cx);
                     } else if tasks {
                         this.run_named_task(&path, window, cx);
@@ -1190,6 +1197,7 @@ impl Workbench {
         self.file_search_task = None;
         self.palette_picks_tasks = false;
         self.palette_picks_snippets = false;
+        self.palette_picks_tabs = false;
         self.palette = None;
         self.palette_subscription = None;
         window.focus(&self.focus, cx);

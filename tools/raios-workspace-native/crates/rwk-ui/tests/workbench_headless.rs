@@ -5815,6 +5815,27 @@ fn a_snippet_is_inserted_indented_with_the_cursor_on_its_first_place() {
 }
 
 #[test]
+fn the_open_tabs_can_be_searched_and_the_chosen_one_is_shown() {
+    let mut rig = rig();
+    for name in ["alpha.txt", "beta.txt"] {
+        std::fs::write(rig.dir.path().join(name), name).expect("file");
+    }
+    rig.open_project();
+    rig.open_file("alpha.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("alpha.txt")));
+    rig.open_file("beta.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("beta.txt")));
+
+    rig.run(CommandId::SearchTabs);
+    assert!(rig.read(|wb, _| wb.palette().is_some()));
+    rig.cx.simulate_input("alp");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.palette().is_none()));
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("alpha.txt")));
+    assert_eq!(rig.editor_paths().len(), 2);
+}
+
+#[test]
 fn merge_conflicts_are_found_and_resolved_one_side_at_a_time() {
     let mut rig = rig();
     let text = "top\n<<<<<<< HEAD\nmine 1\n=======\nyours 1\n>>>>>>> topic\nmid\n<<<<<<< HEAD\nmine 2\n=======\nyours 2\n>>>>>>> topic\nend\n";
