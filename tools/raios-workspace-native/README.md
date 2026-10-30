@@ -85,6 +85,7 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
   `{"snippets":[{"prefix":"todo","extensions":["rs"],"body":"// TODO ${1:what}\n$0"}]}`
   (no `extensions` = every file; `$1`/`${1:default}` mark places, `$0` the end; tab-through is not
   implemented).
+- **Breadcrumbs** under the tab strip show where the open file lives (`src › editor › view.rs`).
 - **Project symbols** (`Ctrl T`) searches symbols of the whole project through the language server
   of the open file. **Recent projects** (`Ctrl Alt O`) lists the folders opened before.
 - **Changes on disk**: open files and the file tree notice edits made elsewhere (checked every

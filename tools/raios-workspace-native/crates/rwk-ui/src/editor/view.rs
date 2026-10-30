@@ -1761,11 +1761,39 @@ impl Render for EditorView {
             _ => None,
         };
 
+        // "src › editor › view.rs": where the active file lives in the project.
+        let breadcrumbs = (!title.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .px_2()
+                .text_xs()
+                .text_color(gpui::rgb(theme.muted))
+                .children(
+                    title
+                        .split(['/', '\\'])
+                        .filter(|part| !part.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, part)| {
+                            div().flex().flex_row().gap_1().child(if index == 0 {
+                                part
+                            } else {
+                                format!("› {part}")
+                            })
+                        }),
+                )
+        });
+
         div()
             .size_full()
             .flex()
             .flex_col()
             .children(strip)
+            .children(breadcrumbs)
             .child(
                 div()
                     .flex_1()
