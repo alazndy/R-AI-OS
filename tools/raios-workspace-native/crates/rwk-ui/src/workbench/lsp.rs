@@ -424,7 +424,7 @@ impl Workbench {
             return;
         }
         if self.language_requester().is_none() {
-            self.say("Bu dosya için dil sunucusu yok", cx);
+            self.say("Bu proje için dil sunucusu yok", cx);
             return;
         }
         let theme = self.theme();
@@ -449,20 +449,21 @@ impl Workbench {
 
     /// Asks the open file's language server for the symbols named like `query`.
     fn search_symbols(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(requester), Some(path)) = (
-            self.language_requester(),
-            self.editor.read(cx).path().map(str::to_owned),
-        ) else {
-            self.say("Bu dosya için dil sunucusu yok", cx);
+        let Some(requester) = self.language_requester() else {
+            self.say("Bu proje için dil sunucusu yok", cx);
+            return;
+        };
+        // The server is the one of the open file, else of the project's manifest.
+        let open_file = self.editor.read(cx).path().map(str::to_owned);
+        let Some(hint) = open_file.or_else(|| requester.language_hint().map(str::to_owned)) else {
+            self.say("Bu proje için dil sunucusu yok", cx);
             return;
         };
         self.say("Semboller aranıyor…", cx);
-        // The server is the one of the open file; the question itself is about the project.
-        let answer = crate::editor::lsp::ask_with_timeout(
+        let answer = crate::editor::lsp::ask_workspace_with_timeout(
             &requester,
-            &path,
+            &hint,
             "workspace/symbol",
-            None,
             serde_json::json!({"query": query}),
             Duration::from_secs(10),
         );

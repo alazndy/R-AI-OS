@@ -2,7 +2,7 @@
 //! add servers of their own in a file under their config home (never in a project), so
 //! opening a repository never runs anything the user did not install or name themselves.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// One language server: how to start it and which files it serves.
@@ -184,6 +184,24 @@ pub fn spec_for_path(path: &str) -> Option<(&'static ServerSpec, &'static str)> 
         .map(|spec| (spec, language))
 }
 
+/// A file name in the language the project at `root` is written in, going by its manifest
+/// (`Cargo.toml` → `project.rs`); `None` when no known manifest is there.
+pub fn language_hint(root: &Path) -> Option<&'static str> {
+    const MANIFESTS: [(&str, &str); 7] = [
+        ("Cargo.toml", "project.rs"),
+        ("tsconfig.json", "project.ts"),
+        ("package.json", "project.js"),
+        ("go.mod", "project.go"),
+        ("pyproject.toml", "project.py"),
+        ("requirements.txt", "project.py"),
+        ("compile_commands.json", "project.cpp"),
+    ];
+    MANIFESTS
+        .iter()
+        .find(|(manifest, _)| root.join(manifest).is_file())
+        .map(|(_, hint)| *hint)
+}
+
 /// The absolute path of `spec`'s program on `PATH`, when it is installed. A relative `PATH`
 /// entry is ignored: it would make the result depend on the project directory.
 pub fn find_program(spec: &ServerSpec) -> Option<PathBuf> {
@@ -196,6 +214,16 @@ pub fn find_program(spec: &ServerSpec) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_manifest_names_the_language_of_the_project() {
+        let dir = tempfile::tempdir().expect("dir");
+        assert_eq!(language_hint(dir.path()), None);
+        std::fs::write(dir.path().join("go.mod"), "").expect("go.mod");
+        assert_eq!(language_hint(dir.path()), Some("project.go"));
+        std::fs::write(dir.path().join("Cargo.toml"), "").expect("Cargo.toml");
+        assert_eq!(language_hint(dir.path()), Some("project.rs"));
+    }
 
     #[test]
     fn extensions_pick_a_server_and_a_language_id() {
