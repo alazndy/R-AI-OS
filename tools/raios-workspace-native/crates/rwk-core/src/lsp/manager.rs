@@ -78,6 +78,13 @@ enum Message {
         extra: Value,
         reply: Reply,
     },
+    /// A question about the whole project; `hint` only names the language (any path of it).
+    Workspace {
+        hint: String,
+        method: &'static str,
+        extra: Value,
+        reply: Reply,
+    },
     Open {
         path: String,
         text: String,
@@ -139,6 +146,26 @@ impl Requester {
         reply: Reply,
     ) {
         self.send(path, method, Some((line, character)), extra, reply);
+    }
+
+    /// A file name in the project's main language, for [`Self::request_workspace`].
+    pub fn language_hint(&self) -> Option<&'static str> {
+        super::servers::language_hint(&self.root)
+    }
+
+    /// A question about the whole project (workspace symbols) for the server of the language
+    /// `hint` (a path, which need not be open or exist) is written in. When that server is not
+    /// running it is started and this one question gets an error: ask again in a moment.
+    pub fn request_workspace(&self, hint: &str, method: &'static str, extra: Value, reply: Reply) {
+        let message = Message::Workspace {
+            hint: hint.to_owned(),
+            method,
+            extra,
+            reply,
+        };
+        if let Err(mpsc::SendError(Message::Workspace { reply, .. })) = self.sender.send(message) {
+            reply(Err(unavailable()));
+        }
     }
 
     /// Like [`Self::request`] for a question about the whole document (formatting, code
@@ -368,6 +395,12 @@ impl Manager {
                 extra,
                 reply,
             } => self.request(&path, method, position, extra, reply),
+            Message::Workspace {
+                hint,
+                method,
+                extra,
+                reply,
+            } => self.workspace_request(&hint, method, extra, reply),
             Message::Restart => self.restart(),
             Message::Shutdown => {}
         }
@@ -417,6 +450,31 @@ impl Manager {
         let _ = std::thread::Builder::new()
             .name("lsp-request".into())
             .spawn(move || reply(client.request(method, params, REQUEST_TIMEOUT)));
+    }
+
+    fn workspace_request(&mut self, hint: &str, method: &'static str, extra: Value, reply: Reply) {
+        let Some((spec, _)) = spec_for_path(hint) else {
+            reply(Err(unavailable()));
+            return;
+        };
+        let client = self
+            .slots
+            .get(spec.name)
+            .and_then(|slot| slot.running.as_ref())
+            .map(|running| Arc::clone(&running.client));
+        let Some(client) = client else {
+            if !self.slots.get(spec.name).is_some_and(|s| s.gave_up) {
+                self.start(spec);
+            }
+            reply(Err(AppError::new(
+                ErrorCode::NotFound,
+                "Dil sunucusu başlatılıyor; birazdan tekrar deneyin",
+            )));
+            return;
+        };
+        let _ = std::thread::Builder::new()
+            .name("lsp-request".into())
+            .spawn(move || reply(client.request(method, extra, REQUEST_TIMEOUT)));
     }
 
     fn open(&mut self, path: String, text: String) {

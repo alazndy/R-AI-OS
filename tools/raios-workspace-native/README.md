@@ -86,7 +86,8 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
   (no `extensions` = every file; `$1`/`${1:default}` mark places, `$0` the end; tab-through is not
   implemented).
 - **Project symbols** (`Ctrl T`) searches symbols of the whole project through the language server
-  of the open file. **Recent projects** (`Ctrl Alt O`) lists the folders opened before.
+  of the open file, or of the one the project's manifest names when no file is open (the first
+  search starts it; ask again). **Recent projects** (`Ctrl Alt O`) lists the folders opened before.
 - **Changes on disk**: open files and the file tree notice edits made elsewhere (checked every
   two seconds). A clean file reloads; one with unsaved edits is flagged instead of overwritten.
 - **Terminal search** (`Ctrl Alt F`) searches a terminal's output, scrollback included.

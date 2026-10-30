@@ -301,6 +301,37 @@ pub fn ask_with_timeout(
     receiver
 }
 
+/// Like [`ask_with_timeout`] for a question about the whole project, put to the server of the
+/// language `hint` is written in (started when it is not running).
+pub fn ask_workspace_with_timeout(
+    requester: &Requester,
+    hint: &str,
+    method: &'static str,
+    extra: Value,
+    timeout: std::time::Duration,
+) -> async_channel::Receiver<rwk_core::error::Result<Value>> {
+    let (sender, receiver) = async_channel::bounded(1);
+    let late = sender.clone();
+    let _ = std::thread::Builder::new()
+        .name("lsp-ask-timeout".into())
+        .spawn(move || {
+            std::thread::sleep(timeout);
+            let _ = late.try_send(Err(rwk_core::error::AppError::new(
+                rwk_core::error::ErrorCode::NotFound,
+                "Dil sunucusu zamanında yanıt vermedi",
+            )));
+        });
+    requester.request_workspace(
+        hint,
+        method,
+        extra,
+        Box::new(move |answer| {
+            let _ = sender.send_blocking(answer);
+        }),
+    );
+    receiver
+}
+
 /// Asks the server to rename the symbol at `line`:`character`; the answer is a workspace edit.
 pub fn rename_request(
     requester: &Requester,
