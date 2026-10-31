@@ -1,3 +1,4 @@
+use super::snapshots::compact_memory_preview;
 use super::*;
 
 /// Points `dirs::config_dir()` at an empty tempdir for the duration of a
