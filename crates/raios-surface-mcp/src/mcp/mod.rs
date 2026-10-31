@@ -92,6 +92,11 @@ pub(super) struct McpServer {
     /// `[filesystem] blocked_paths`, enforced against every path-resolving
     /// tool's declared filesystem capability.
     blocked_paths: Vec<String>,
+    /// Capability of the tool call currently being dispatched. Set by
+    /// `handle_tools_call` and read by `authorize_path`, the single filesystem
+    /// gate every path resolver goes through. `None` outside a dispatch, in
+    /// which case `authorize_path` fails closed.
+    active_caps: Option<raios_core::security::policy::ToolCapabilities>,
 }
 
 impl McpServer {
@@ -148,6 +153,7 @@ impl McpServer {
             umai,
             egress,
             blocked_paths,
+            active_caps: None,
         }
     }
 
@@ -161,6 +167,7 @@ impl McpServer {
             umai: Umai::new(None),
             egress: EgressFilter::disabled(),
             blocked_paths: Vec::new(),
+            active_caps: None,
         }
     }
 

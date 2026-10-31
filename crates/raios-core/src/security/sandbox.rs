@@ -116,7 +116,7 @@ fn expand_home(path: &str) -> PathBuf {
         path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\"))
     };
     match (rest, dirs::home_dir()) {
-        (Some(rest), Some(home)) if rest.is_empty() => home,
+        (Some(""), Some(home)) => home,
         (Some(rest), Some(home)) => home.join(rest),
         _ => PathBuf::from(path),
     }

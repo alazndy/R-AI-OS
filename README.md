@@ -83,9 +83,13 @@ The Security Kernel is the core of R-AI-OS. It enforces a **zero-trust model** f
 >
 > Within its scope, a few boundaries to be aware of:
 >
-> - **Filesystem checks** apply to tools that resolve a `project` path
->   (`capabilities::PATH_RESOLVING_TOOLS`); a new tool is not covered until it is
->   added to that list. Per-tool `capabilities` declarations are otherwise declarative.
+> - **Filesystem checks** run at one gate (`McpServer::authorize_path`) that every
+>   path a tool receives from the caller (`project`, `path`, `project_path`) must pass:
+>   inside the workspace root, outside `blocked_paths`, and the tool must declare a
+>   filesystem capability. A new tool that resolves a path through the shared resolvers
+>   is covered automatically; one that opens a raw argument path itself would bypass it.
+>   The default search scope (the server's own working directory) is not re-checked.
+>   `exec` capabilities remain declarative.
 > - **`confirm` over MCP** is returned to the caller as an error — there is no
 >   interactive prompt on that channel.
 > - **Secret leases** (`raios secret grant`) scope a secret only inside the `raios`

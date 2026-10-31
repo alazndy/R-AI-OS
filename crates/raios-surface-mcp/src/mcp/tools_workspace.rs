@@ -330,27 +330,17 @@ impl McpServer {
     }
 
     /// Resolve the `path` arg to a search scope: an explicit project name/absolute
-    /// path if given, otherwise the current working directory (the project the
-    /// MCP server itself was launched from).
+    /// path if given (authorized through the single filesystem gate), otherwise
+    /// the current working directory — the project the MCP server itself was
+    /// launched from, chosen by whoever launched it rather than by the model,
+    /// so it is not re-checked.
     fn resolve_search_scope(&self, args: &Value) -> Result<std::path::PathBuf, String> {
         let Some(project) = args["path"].as_str() else {
             return std::env::current_dir().map_err(|e| e.to_string());
         };
-        let direct = std::path::Path::new(project);
-        if direct.exists() {
-            return Ok(direct.to_path_buf());
-        }
-        if let Ok(conn) = raios_core::db::open_db() {
-            if let Ok(projects) = raios_core::db::load_all_projects(&conn) {
-                if let Some(found) = projects
-                    .iter()
-                    .find(|p| p.name.to_lowercase().contains(&project.to_lowercase()))
-                {
-                    return Ok(std::path::PathBuf::from(&found.path));
-                }
-            }
-        }
-        Err(format!("Project not found: {}", project))
+        let path = self.lookup_project(project)?;
+        self.authorize_path(&path)?;
+        Ok(path)
     }
 
     pub(super) fn tool_semantic_search(&self, args: &Value) -> Result<Value, String> {
@@ -704,9 +694,7 @@ mod resolve_search_scope_tests {
     fn resolve_search_scope_accepts_a_direct_existing_path() {
         let dir = tempfile::tempdir().unwrap();
         let server = super::McpServer::new_for_test();
-        let scope = server
-            .resolve_search_scope(&json!({ "path": dir.path().to_str().unwrap() }))
-            .unwrap();
+        let scope = server.lookup_project(dir.path().to_str().unwrap()).unwrap();
         assert_eq!(scope, dir.path());
     }
 
@@ -720,9 +708,7 @@ mod resolve_search_scope_tests {
             .unwrap();
 
             let server = super::McpServer::new_for_test();
-            let scope = server
-                .resolve_search_scope(&json!({ "path": "ai-os" }))
-                .unwrap();
+            let scope = server.lookup_project("ai-os").unwrap();
             assert_eq!(
                 scope,
                 std::path::PathBuf::from("/does/not/exist/on/this/machine")
