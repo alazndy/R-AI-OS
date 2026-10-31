@@ -154,11 +154,12 @@ impl McpServer {
         }
 
         // Inject active secret leases into the process environment for this tool call.
-        if let Ok(conn) = raios_core::db::open_db() {
-            for (var, val) in raios_core::security::secret_lease::active_env_for_tool(&conn, name) {
-                std::env::set_var(var, val);
-            }
-        }
+        // Leasable secrets are scrubbed from the ambient environment and
+        // re-exposed only to the tool they are leased to, for this call only.
+        // The guard lives until this function returns (any exit path).
+        let _lease_env = raios_core::db::open_db()
+            .ok()
+            .map(|conn| raios_core::security::secret_lease::inject_active_env(&conn, name));
 
         if let Err(e) = self.enforce_capability(name, args) {
             return Err(format!("capability:{}", e));
