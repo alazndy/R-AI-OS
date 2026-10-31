@@ -67,7 +67,31 @@ Human → [ R-AI-OS Kernel ] → Agent Swarm (Claude / Codex / OpenCode / AGY / 
 
 ## 🛡️ Security Kernel
 
-The Security Kernel is the core of R-AI-OS. It enforces a **zero-trust model** for all agent tool calls: every action is policy-gated, logged, and auditable. All 4 phases are implemented and tested.
+The Security Kernel is the core of R-AI-OS. It enforces a **zero-trust model** for all agent tool calls that are routed through it: every such action is policy-gated, logged, and auditable. All 4 phases are implemented and tested.
+
+> **Scope: a policy proxy, not an OS sandbox.** The kernel enforces policy on calls
+> that go *through R-AI-OS*: MCP tool calls (`:42070`) and daemon commands
+> (`:42069` / `:42071`). It does not see or restrict what an agent does outside those
+> channels. An agent that can run its own shell or use its host's built-in file-edit
+> and network tools can read, write, or send data without the policy gate, audit
+> ledger, egress filter, or secret leases ever being involved.
+>
+> Treat it as guardrails and a tamper-evident audit trail for cooperating agents,
+> not containment for a hostile or compromised one. If you need containment, run the
+> agent inside an OS-level sandbox (container, VM, `bubblewrap`/`firejail`, macOS
+> Seatbelt) and use R-AI-OS within it.
+>
+> Within its scope, a few boundaries to be aware of:
+>
+> - **Filesystem checks** apply to tools that resolve a `project` path
+>   (`capabilities::PATH_RESOLVING_TOOLS`); a new tool is not covered until it is
+>   added to that list. Per-tool `capabilities` declarations are otherwise declarative.
+> - **`confirm` over MCP** is returned to the caller as an error — there is no
+>   interactive prompt on that channel.
+> - **Secret leases** (`raios secret grant`) scope a secret only inside the `raios`
+>   MCP server process: env vars named in any lease are removed from that process's
+>   environment and re-exposed only to the leased tool for the duration of its call.
+>   Secrets never named in a lease stay ambient, and the daemon does not apply this.
 
 ### Architecture
 
