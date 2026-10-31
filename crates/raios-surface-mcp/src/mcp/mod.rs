@@ -115,8 +115,13 @@ impl McpServer {
         let quarantine = QuarantineStore::from_policy(policy.and_then(|p| p.quarantine));
 
         if quarantine.is_enabled() {
-            if let Ok(conn) = raios_core::db::open_db() {
-                let _ = quarantine::ensure_table(&conn);
+            match raios_core::db::open_db() {
+                Ok(conn) => {
+                    if let Err(e) = quarantine::ensure_table(&conn) {
+                        eprintln!("[raios] quarantine table init failed: {e}");
+                    }
+                }
+                Err(e) => eprintln!("[raios] quarantine store unavailable: {e}"),
             }
         }
 
@@ -200,6 +205,7 @@ impl McpServer {
             Err(msg) if msg.starts_with("rate_limit:") => RpcResponse::err(id, -32029, msg),
             Err(msg) if msg.starts_with("tool_pin:") => RpcResponse::err(id, -32028, msg),
             Err(msg) if msg.starts_with("quarantine:") => RpcResponse::err(id, -32027, msg),
+            Err(msg) if msg.starts_with("audit:") => RpcResponse::err(id, -32030, msg),
             Err(msg) if msg.starts_with("method_not_found:") => RpcResponse::err(id, -32601, msg),
             Err(msg) => RpcResponse::err(id, -32603, msg),
         })

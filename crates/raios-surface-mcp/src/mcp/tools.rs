@@ -10,15 +10,18 @@ impl McpServer {
     /// cannot itself become a secret-leak vector. `rule_source` distinguishes
     /// an explicit `[[tools.rules]]` match from a fallback to `default_action`,
     /// which `raios policy suggest` (Phase 1) uses to propose new rules.
+    ///
+    /// Returns `Err` when the ledger cannot be opened or written. Callers must
+    /// treat that as fail-closed for allowed calls: an action that cannot be
+    /// audited must not run.
     fn record_tool_audit(
         &self,
         name: &str,
         raw_args: &str,
         decision: &raios_core::security::UmaiDecision,
-    ) {
-        let Ok(conn) = raios_core::db::open_db() else {
-            return;
-        };
+    ) -> Result<(), String> {
+        let conn =
+            raios_core::db::open_db().map_err(|e| format!("audit ledger unavailable: {e}"))?;
         let event_type = match decision {
             raios_core::security::UmaiDecision::Allow => "tool_allow",
             raios_core::security::UmaiDecision::Deny(_) => "tool_deny",
@@ -26,14 +29,15 @@ impl McpServer {
         };
         let args_hash = format!("{:x}", Sha256::digest(raw_args.as_bytes()));
         let actor = std::env::var("RAIOS_AGENT_IDENTITY").unwrap_or_else(|_| "claude_kaira".into());
-        let _ = raios_core::security::record_tool_decision(
+        raios_core::security::record_tool_decision(
             &conn,
             name,
             &args_hash,
             self.umai.rule_source(name),
             event_type,
             &actor,
-        );
+        )
+        .map_err(|e| format!("audit write failed: {e}"))
     }
 
     /// Enforces the capability-declaration sandbox ("no ambient authority")
@@ -117,7 +121,13 @@ impl McpServer {
 
         let raw_args = serde_json::to_string(args).unwrap_or_default();
         let decision = self.umai.check(name, Some(&raw_args));
-        self.record_tool_audit(name, &raw_args, &decision);
+        if let Err(e) = self.record_tool_audit(name, &raw_args, &decision) {
+            // Fail closed: only an allowed call is affected, since deny/confirm
+            // already stop here with their own error below.
+            if decision.is_allowed() {
+                return Err(format!("audit:{e}"));
+            }
+        }
         match decision {
             raios_core::security::UmaiDecision::Allow => {}
             raios_core::security::UmaiDecision::Deny(reason) => {
@@ -134,10 +144,12 @@ impl McpServer {
 
         if self.quarantine.is_enabled() {
             let args_str = serde_json::to_string(args).unwrap_or_default();
-            if let Ok(conn) = raios_core::db::open_db() {
-                if let Err(e) = self.quarantine.check(&conn, name, &args_str) {
-                    return Err(e.to_string());
-                }
+            // Fail closed: if the quarantine store cannot be consulted, a
+            // previously denied tool must not slip through.
+            let conn = raios_core::db::open_db()
+                .map_err(|e| format!("quarantine: store unavailable: {e}"))?;
+            if let Err(e) = self.quarantine.check(&conn, name, &args_str) {
+                return Err(e.to_string());
             }
         }
 
