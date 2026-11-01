@@ -222,8 +222,6 @@ fn a_failing_agent_makes_a_failed_run_and_a_non_zero_exit() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr)
         .contains("Agent Runner Error: Agent exited with exit status: 3"));
-    // NB: the handoff hint after a failure reads `claude_kaira-kaira` - the
-    // identity gets the `-kaira` suffix added a second time. Pinned as-is.
     assert_eq!(
         normalized(&output),
         [
@@ -233,7 +231,7 @@ fn a_failing_agent_makes_a_failed_run_and_a_non_zero_exit() {
             "✗ Session ended (non-zero)  run: <run>",
             "  Duration: <n>s",
             "  Tests in session: no",
-            "  Handoff: raios handoff --to claude_kaira-kaira --status failed --msg \"...\"",
+            "  Handoff: raios handoff --to claude-kaira --status failed --msg \"...\"",
         ]
     );
     assert_eq!(
@@ -265,7 +263,7 @@ fn the_death_timer_kills_a_slow_agent_and_fails_the_run() {
             "✗ Session ended (non-zero)  run: <run>",
             "  Duration: <n>s",
             "  Tests in session: no",
-            "  Handoff: raios handoff --to claude_kaira-kaira --status failed --msg \"...\"",
+            "  Handoff: raios handoff --to claude-kaira --status failed --msg \"...\"",
         ]
     );
     assert_eq!(
@@ -292,4 +290,37 @@ fn an_agent_that_cannot_start_leaves_no_running_session_and_no_session_block() {
     assert_eq!(running, 0);
     let after = fs::read_to_string(f.root.join("home/.claude/CLAUDE.md")).unwrap_or_default();
     assert!(!after.contains("RAIOS WRAPPER SESSION"));
+}
+
+#[test]
+fn the_handoff_hint_after_a_failed_run_is_a_command_raios_accepts() {
+    let f = Fixture::new();
+    f.fake_claude("exit 3");
+    let failed = f.run(&["run", "claude"]);
+    let hint = normalized(&failed)
+        .into_iter()
+        .find(|l| l.contains("raios handoff"))
+        .expect("a handoff hint is printed");
+    let target = hint
+        .split_whitespace()
+        .skip_while(|word| *word != "--to")
+        .nth(1)
+        .expect("the hint names a target");
+    assert_eq!(target, "claude-kaira");
+
+    // Running the suggested command (with a message filled in) is accepted.
+    let handoff = f.run(&[
+        "handoff",
+        "--to",
+        target,
+        "--status",
+        "failed",
+        "--msg",
+        "follow up",
+    ]);
+    assert!(
+        handoff.status.success(),
+        "the printed target was rejected: {}",
+        String::from_utf8_lossy(&handoff.stderr)
+    );
 }

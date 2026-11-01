@@ -554,3 +554,22 @@ mod wrapper_note_ipc {
         }
     }
 }
+
+// ─── the handoff hint printed after a run ─────────────────────────────
+
+#[test]
+fn handoff_target_is_the_value_raios_handoff_accepts() {
+    // These are exactly the `raios handoff --to` choices (HandoffTarget).
+    assert_eq!(handoff_target("claude"), "claude-kaira");
+    assert_eq!(handoff_target("codex"), "codex-kaira");
+    assert_eq!(handoff_target("opencode"), "opencode-kaira");
+    assert_eq!(handoff_target("antigravity"), "antigravity-kaira");
+    // Aliases and case resolve through the canonical identity.
+    assert_eq!(handoff_target("agy"), "antigravity-kaira");
+    assert_eq!(handoff_target("Claude"), "claude-kaira");
+}
+
+#[test]
+fn handoff_target_for_an_agent_without_an_identity_keeps_the_plain_form() {
+    assert_eq!(handoff_target("cursor"), "cursor-kaira");
+}

@@ -492,6 +492,16 @@ pub(super) fn wait_for_agent(
     }
 }
 
+/// The value `raios handoff --to` accepts for this agent: its canonical identity with `-` for `_`
+/// (`claude-kaira`, `antigravity-kaira`, ...). An agent that has no identity keeps the plain
+/// `<agent>-kaira` form, which `raios handoff` will reject - there is nobody to hand to.
+pub(super) fn handoff_target(agent: &str) -> String {
+    match canonical_agent_identity(agent) {
+        Some(identity) => identity.replace('_', "-"),
+        None => format!("{agent}-kaira"),
+    }
+}
+
 /// Phase 6: builds the post-session review, closes the session row, records the trace and
 /// prints the summary.
 pub(super) fn finish_session(
@@ -552,7 +562,6 @@ pub(super) fn finish_session(
         .as_ref()
         .map(|(_, run_id)| format!("  \x1b[90mrun: {}\x1b[0m", &run_id[..8]))
         .unwrap_or_default();
-    let identity = canonical_agent_identity(agent).unwrap_or(agent);
     if success {
         println!(
             "\x1b[32m✓ Session ended\x1b[0m{}\n  \x1b[90mDuration:\x1b[0m {}s",
@@ -586,11 +595,10 @@ pub(super) fn finish_session(
         }
     }
     println!(
-        "  \x1b[90mHandoff:\x1b[0m raios handoff --to {}-kaira --status {} --msg \"...\"",
-        if success { agent } else { identity },
+        "  \x1b[90mHandoff:\x1b[0m raios handoff --to {} --status {} --msg \"...\"",
+        handoff_target(agent),
         if success { "success" } else { "failed" }
     );
-    let _ = identity;
 }
 
 /// Phase 7: a clean session counts towards the instincts.
