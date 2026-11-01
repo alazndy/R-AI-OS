@@ -324,3 +324,57 @@ fn the_handoff_hint_after_a_failed_run_is_a_command_raios_accepts() {
         String::from_utf8_lossy(&handoff.stderr)
     );
 }
+
+#[test]
+fn terminating_the_wrapper_stops_the_agent_and_still_cleans_up() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.root.join("home/.claude")).unwrap();
+    fs::write(f.root.join("home/.claude/CLAUDE.md"), "# My instructions\n").unwrap();
+    // Signal readiness, then block until killed.
+    f.fake_claude("echo up > \"$RAIOS_TEST_SEEN\"\nexec /bin/sleep 30");
+    let mut wrapper = Command::new(env!("CARGO_BIN_EXE_raios"))
+        .args(["run", "claude"])
+        .current_dir(&f.project)
+        .env("HOME", f.root.join("home"))
+        .env("XDG_CONFIG_HOME", f.root.join("config"))
+        .env("RAIOS_DB_PATH", f.root.join("workspace.db"))
+        .env("PATH", f.root.join("bin"))
+        .env("RAIOS_TEST_SEEN", f.root.join("seen"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !f.root.join("seen").exists() {
+        assert!(Instant::now() < deadline, "the agent never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let during = fs::read_to_string(f.root.join("home/.claude/CLAUDE.md")).unwrap();
+    assert!(during.contains("RAIOS WRAPPER SESSION"), "block injected while running");
+
+    let terminated = Instant::now();
+    let sent = Command::new("kill")
+        .args(["-TERM", &wrapper.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success());
+    while wrapper.try_wait().unwrap().is_none() {
+        assert!(
+            terminated.elapsed() < Duration::from_secs(20),
+            "the wrapper did not stop after SIGTERM"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let output = wrapper.wait_with_output().unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("termination signal"));
+    let after = fs::read_to_string(f.root.join("home/.claude/CLAUDE.md")).unwrap();
+    assert_eq!(after, "# My instructions\n", "block removed after SIGTERM");
+    assert_eq!(
+        f.recorded_run(),
+        ("failed".to_string(), Some("nonzero_exit".to_string()))
+    );
+}
