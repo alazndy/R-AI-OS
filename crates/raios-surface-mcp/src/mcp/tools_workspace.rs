@@ -580,7 +580,7 @@ impl McpServer {
             let rf = health["refactor_grade"].as_str().unwrap_or("-");
             text_lines.push(format!(
                 "{:<30} {:<10} {:<8} {:<6} {:<6} {:<8}",
-                &p.name[..p.name.len().min(29)],
+                raios_core::text::truncate_at_char_boundary(&p.name, 29),
                 p.status,
                 dirty,
                 comp,
@@ -725,5 +725,34 @@ mod resolve_search_scope_tests {
                 .unwrap_err();
             assert_eq!(err, "Project not found: totally-unregistered-name");
         });
+    }
+}
+
+/// Project names come from directory names, so they are arbitrary text:
+/// cutting one to a column width must not split a multi-byte character.
+#[cfg(test)]
+mod portfolio_status_tests {
+    use serde_json::json;
+
+    #[test]
+    fn portfolio_status_lists_a_project_whose_name_is_cut_inside_a_multibyte_char() {
+        let _db = raios_core::test_support::IsolatedDb::new();
+        let conn = raios_core::db::open_db().unwrap();
+        // 20 x "ş" = 40 bytes; the 29-byte column limit falls inside the 15th.
+        let name = "ş".repeat(20);
+        conn.execute(
+            "INSERT INTO projects (name, path) VALUES (?1, ?2)",
+            rusqlite::params![name, "/does/not/exist/on/this/machine"],
+        )
+        .unwrap();
+        drop(conn);
+
+        let server = super::McpServer::new_for_test();
+        let result = server.tool_portfolio_status(&json!({})).unwrap();
+
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains(&"ş".repeat(14)), "{text}");
+        // The full name is still reported untruncated in the structured rows.
+        assert_eq!(result["projects"][0]["name"], name);
     }
 }
