@@ -328,6 +328,7 @@ pub fn run_agent_with_session_labels(
 
     // For claude: inject session block into ~/.claude/CLAUDE.md so it's visible
     // inside Claude Code's own UI (system context, /status). Stripped on exit.
+    sweep_stale_session_block();
     let injected_claude_md = inject_claude_session_block(agent, &session_ids, &now_str);
 
     #[cfg(unix)]

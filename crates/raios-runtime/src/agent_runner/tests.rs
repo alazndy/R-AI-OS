@@ -675,4 +675,80 @@ mod cleanup_guard {
         let _again = SignalGuard::install();
         assert!(!termination_requested(), "flag must reset on a new run");
     }
+
+    fn block_with_pid(pid: Option<u32>) -> String {
+        let pid_line = pid
+            .map(|p| format!("- Wrapper PID: {p}\n"))
+            .unwrap_or_default();
+        format!(
+            "# my rules\n\n<!-- raios-session-begin -->\n# RAIOS WRAPPER SESSION\n- Session ID: `deadbeef`\n{pid_line}<!-- raios-session-end -->\n"
+        )
+    }
+
+    fn dead_pid() -> u32 {
+        let mut child = Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    #[test]
+    fn the_block_records_the_wrapper_pid() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = FakeHome::new("# my rules\n");
+        inject_session_to_claude_md("0123456789abcdef", "claude_kaira", "now");
+        let content = std::fs::read_to_string(&home.claude_md).unwrap();
+        assert_eq!(session_block_pid(&content), Some(std::process::id()));
+    }
+
+    #[test]
+    fn a_wrapper_does_not_strip_a_block_another_live_wrapper_wrote() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // PID 1 always exists and is not us.
+        let home = FakeHome::new(&block_with_pid(Some(1)));
+        strip_session_from_claude_md();
+        assert!(std::fs::read_to_string(&home.claude_md)
+            .unwrap()
+            .contains("raios-session-begin"));
+    }
+
+    #[test]
+    fn a_wrapper_strips_its_own_block_and_a_legacy_block_without_a_pid() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = FakeHome::new(&block_with_pid(Some(std::process::id())));
+        strip_session_from_claude_md();
+        assert!(!std::fs::read_to_string(&home.claude_md)
+            .unwrap()
+            .contains("raios-session"));
+
+        std::fs::write(&home.claude_md, block_with_pid(None)).unwrap();
+        strip_session_from_claude_md();
+        assert!(!std::fs::read_to_string(&home.claude_md)
+            .unwrap()
+            .contains("raios-session"));
+    }
+
+    #[test]
+    fn the_sweep_removes_a_block_whose_wrapper_is_gone_and_keeps_live_or_unknown_ones() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = FakeHome::new(&block_with_pid(Some(dead_pid())));
+        sweep_stale_session_block();
+        let after = std::fs::read_to_string(&home.claude_md).unwrap();
+        assert!(
+            !after.contains("raios-session"),
+            "stale block survived: {after}"
+        );
+        assert!(after.contains("# my rules"));
+
+        for kept in [Some(1), None] {
+            std::fs::write(&home.claude_md, block_with_pid(kept)).unwrap();
+            sweep_stale_session_block();
+            assert!(
+                std::fs::read_to_string(&home.claude_md)
+                    .unwrap()
+                    .contains("raios-session-begin"),
+                "sweep removed a block it cannot prove stale (pid {kept:?})"
+            );
+        }
+    }
 }
