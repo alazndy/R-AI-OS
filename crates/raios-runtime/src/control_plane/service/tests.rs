@@ -57,6 +57,7 @@ fn snapshot_generation_on_in_memory_db() {
 
 #[test]
 fn work_snapshot_projects_read_only_factory_overview() {
+    let _db = raios_core::test_support::IsolatedDb::new();
     let conn = Connection::open_in_memory().unwrap();
     raios_core::db::migrate_existing(&conn).unwrap();
     conn.execute(
@@ -118,6 +119,7 @@ fn memory_preview_is_bounded_and_skips_blank_lines() {
 
 #[test]
 fn command_dispatch_idempotency_and_payload_check() {
+    let _db = raios_core::test_support::IsolatedDb::new();
     let mut conn = Connection::open_in_memory().unwrap();
     raios_core::db::migrate_existing(&conn).unwrap();
 
@@ -196,6 +198,7 @@ fn command_dispatch_idempotency_and_payload_check() {
 
 #[test]
 fn handoff_command_updates_snapshot_and_audit_atomically() {
+    let _db = raios_core::test_support::IsolatedDb::new();
     let mut conn = Connection::open_in_memory().unwrap();
     raios_core::db::migrate_existing(&conn).unwrap();
     let workflow = raios_core::db::create_handoff_workflow(
@@ -596,6 +599,7 @@ fn launch_validation_bounds_identity_and_prompt_without_spawning() {
 
 #[test]
 fn tui_personal_task_create_and_status_update_are_transactional() {
+    let _db = raios_core::test_support::IsolatedDb::new();
     let project_path = if cfg!(windows) {
         r"C:\workspace\raios"
     } else {
@@ -739,6 +743,7 @@ fn stored(conn: &Connection, task_id: &str) -> (Option<String>, Option<String>, 
 
 #[test]
 fn assigning_a_task_sets_and_clears_the_agent_and_shows_in_the_snapshot() {
+    let _db = raios_core::test_support::IsolatedDb::new();
     let mut conn = Connection::open_in_memory().unwrap();
     raios_core::db::migrate_existing(&conn).unwrap();
     let task_id = new_operator_task(&mut conn, "assign-create");

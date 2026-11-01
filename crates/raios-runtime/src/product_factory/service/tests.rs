@@ -270,6 +270,7 @@ fn factory_stage_validation_accepts_only_canonical_lifecycle_stages() {
 
 #[test]
 fn scaffold_project_rejects_pre_existing_nonempty_directory_and_writes_raios_yaml() {
+    let _db = raios_core::test_support::IsolatedDb::new();
     let temp = tempfile::tempdir().unwrap();
     let mut cfg = raios_core::config::Config::load().unwrap_or_default();
     cfg.dev_ops_path = temp.path().to_path_buf();

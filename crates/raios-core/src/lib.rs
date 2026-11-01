@@ -13,3 +13,4 @@ pub mod safe_io;
 pub mod security;
 pub mod shield;
 pub mod task_graph;
+pub mod test_support;

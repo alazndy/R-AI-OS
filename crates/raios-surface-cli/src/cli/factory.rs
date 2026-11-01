@@ -160,6 +160,7 @@ mod tests {
 
     #[test]
     fn overview_is_read_only() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let conn = Connection::open_in_memory().unwrap();
         raios_core::db::migrate_existing(&conn).unwrap();
         let changes_before = total_changes(&conn);

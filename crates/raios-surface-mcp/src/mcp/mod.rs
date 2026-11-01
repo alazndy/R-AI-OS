@@ -277,7 +277,7 @@ pub fn run_stdio() -> Result<()> {
 // other's env var (reproduced live in CI: one test's temp DB leaked into
 // another's `open_db()` call, causing a spurious "Project not found").
 #[cfg(test)]
-pub(super) static DB_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) use raios_core::test_support::DB_ENV_LOCK;
 
 #[cfg(test)]
 mod tests {

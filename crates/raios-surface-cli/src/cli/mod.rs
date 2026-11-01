@@ -53,7 +53,7 @@ pub use args::*;
 // var (same class of bug already fixed once in raios-surface-mcp, see its
 // mcp/mod.rs::DB_ENV_LOCK comment and this repo's memory.md PR #26 entry).
 #[cfg(test)]
-pub(crate) static DB_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) use raios_core::test_support::DB_ENV_LOCK;
 
 // ─── Config helper ────────────────────────────────────────────────────────────
 

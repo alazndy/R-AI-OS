@@ -666,6 +666,7 @@ mod authorize_path_tests {
 
     #[test]
     fn locate_search_cannot_scan_a_directory_outside_the_workspace() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         // Regression: locate_search is policy-`allow` and used to accept any
         // `path` without a filesystem check.
         let ws = tempfile::tempdir().unwrap();
@@ -682,6 +683,7 @@ mod authorize_path_tests {
 
     #[test]
     fn create_swarm_task_cannot_target_a_project_outside_the_workspace() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let ws = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let mut server = server_in(ws.path());
@@ -700,6 +702,7 @@ mod authorize_path_tests {
 
     #[test]
     fn active_caps_are_cleared_after_a_dispatch() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let ws = tempfile::tempdir().unwrap();
         let mut server = server_in(ws.path());
         let _ = server.handle_tools_call(&json!({ "name": "get_stats", "arguments": {} }));

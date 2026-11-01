@@ -52,7 +52,7 @@ pub mod cli {
 // of bug already fixed in raios-surface-cli/src/cli/mod.rs::DB_ENV_LOCK and
 // raios-surface-mcp/src/mcp/mod.rs, see this repo's memory.md PR #26 entry).
 #[cfg(test)]
-pub(crate) static DB_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) use raios_core::test_support::DB_ENV_LOCK;
 
 // `HOME`/`XDG_CONFIG_HOME` are process-global, and `raios_core::config::
 // Config::load()` resolves through them. Every test that redirects them
