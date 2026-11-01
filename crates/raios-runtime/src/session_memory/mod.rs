@@ -60,20 +60,17 @@ TRANSCRIPT:\n{}\n",
     )
 }
 
-/// Append a change log entry to the project's memory.md.
-/// Inserts after the `## Change Log` heading (or appends at end if not found).
+/// Add a change log entry to the project's memory.md, inside the
+/// `## Change Log` section on the side that section treats as newest (or in a
+/// new section if there is none). Never appended to the end of the file: that
+/// is where `## Instincts` lives in the usual layout.
 pub fn append_to_memory_md(project_path: &str, entry: &str) -> std::io::Result<()> {
     let memory_path = Path::new(project_path).join("memory.md");
     if !memory_path.exists() {
         return Ok(());
     }
     let content = std::fs::read_to_string(&memory_path)?;
-    let updated = if content.contains("## Change Log") {
-        // Append right before the end of the file
-        format!("{}\n{}\n", content.trim_end(), entry)
-    } else {
-        format!("{}\n\n## Change Log\n{}\n", content.trim_end(), entry)
-    };
+    let updated = crate::memory_archive::insert_change_log_entry(&content, entry);
     std::fs::write(&memory_path, updated)
 }
 
@@ -371,6 +368,34 @@ pub fn auto_sync_claude_memory(project_path: &str, session_started: SystemTime) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `raios memory-gen` used to append to the end of the file, which in the
+    /// usual layout is the `## Instincts` section.
+    #[test]
+    fn memory_gen_entry_lands_in_the_change_log_not_in_instincts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("memory.md"),
+            "# P\n\n## Change Log & Agent Trail\n\n- [2026-10-02] [A]: newer\n- [2026-10-01] [A]: older\n\n## Instincts\n- a rule\n",
+        )
+        .unwrap();
+
+        append_to_memory_md(
+            dir.path().to_str().unwrap(),
+            "- [2026-11-01] [Claude Kaira]: fresh",
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join("memory.md")).unwrap();
+        let fresh = content.find("fresh").unwrap();
+        assert!(content.find("## Change Log").unwrap() < fresh);
+        assert!(
+            fresh < content.find("newer").unwrap(),
+            "newest-first log: goes on top"
+        );
+        assert!(fresh < content.find("## Instincts").unwrap());
+        assert!(content.ends_with("- a rule\n"), "Instincts untouched");
+    }
 
     /// Turkish text puts multi-byte characters (ş, ı, ğ, ü …) all through the
     /// transcript, so the 6000-byte cut can land inside one.

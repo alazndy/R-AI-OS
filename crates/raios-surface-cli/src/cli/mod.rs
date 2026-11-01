@@ -385,6 +385,24 @@ pub fn run(cli: Cli) {
         Commands::MemoryGen { project } => {
             raios_runtime::session_memory::cmd_memory_gen(project.as_deref(), cli.json);
         }
+        Commands::MemoryArchive {
+            project,
+            dry_run,
+            change_log_kb,
+            instincts_kb,
+        } => {
+            let policy = raios_runtime::memory_archive::ArchivePolicy {
+                change_log_bytes: change_log_kb * 1024,
+                instinct_bytes: instincts_kb * 1024,
+                ..Default::default()
+            };
+            raios_runtime::memory_archive::cmd_memory_archive(
+                project.as_deref(),
+                dry_run,
+                &policy,
+                cli.json,
+            );
+        }
         Commands::Mem { action } => cmd_mem(action, cli.json),
         Commands::Trace { action } => cmd_trace(action, cli.json),
         Commands::Factory { action } => cmd_factory(action, cli.json),

@@ -20,6 +20,7 @@ pub mod health;
 pub mod intelligence;
 pub mod job_executor;
 pub mod kernel;
+pub mod memory_archive;
 pub mod new_project;
 pub mod obsidian;
 pub mod product_factory;

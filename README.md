@@ -693,6 +693,7 @@ targets = ["~/.claude/rules", "~/.antigravity/rules"]
 | `raios trace kg-export [query]` | Export trace memory as MemPalace-compatible KG triple JSON |
 | `raios mem export-portable [output.json]` | Export all structured memory items as a portable JSON snapshot; refuses secret-like content |
 | `raios mem import-portable [input.json]` | Atomically merge a portable memory snapshot; rejects secret-like content and inputs over 16 MiB or 50,000 items |
+| `raios memory-archive [project] [--dry-run] [--change-log-kb N] [--instincts-kb N]` | Move the oldest `memory.md` Change Log / Instincts entries into `memory.archive.md` once they exceed a size budget (default 24 KB / 16 KB). Nothing is deleted; also runs automatically after a successful `raios run` when `memory.md` passes 64 KB |
 | `raios evolve from-traces` | Generate pending instinct candidates from successful trace fixes |
 | `raios ocak overview [--json]` (alias: `factory`) | Read the canonical Ocak (Product Factory) snapshot without changing state |
 | `raios ocak execute --file <command.json> [--json]` (alias: `factory`) | Dispatch one bounded local typed `FactoryCommand`; human-only approval, cancellation, stage activation/completion, requirement application, and release approval commands are rejected |

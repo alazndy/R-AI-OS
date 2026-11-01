@@ -823,10 +823,33 @@ pub fn run_agent_with_session_labels(
             if agent.to_lowercase() == "claude" {
                 crate::session_memory::post_session_memory_prompt(dir, session_start_time);
             }
+            archive_oversized_memory(Path::new(dir));
         }
     }
 
     result
+}
+
+/// Keeps `memory.md` from growing without bound: once it passes the trigger
+/// size, the oldest log entries move to `memory.archive.md`. Nothing is
+/// deleted; failures only warn.
+fn archive_oversized_memory(dir: &Path) {
+    use crate::memory_archive::{archive_if_oversized, ArchivePolicy};
+    match archive_if_oversized(dir, &ArchivePolicy::default()) {
+        Ok(Some(report)) if report.applied => println!(
+            "  \x1b[90mmemory.md: {} older entries moved to memory.archive.md ({} KB → {} KB)\x1b[0m",
+            report.moved(),
+            report.bytes_before / 1024,
+            report.bytes_after / 1024
+        ),
+        Ok(Some(report)) => {
+            if let Some(reason) = report.skipped_reason {
+                println!("  \x1b[90mmemory.md archiving skipped: {reason}\x1b[0m");
+            }
+        }
+        Ok(None) => {}
+        Err(e) => eprintln!("  memory.md archiving failed: {e:#}"),
+    }
 }
 
 /// Spawn an agent without waiting for it to exit.
