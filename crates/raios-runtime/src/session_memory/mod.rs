@@ -17,14 +17,9 @@ use std::time::SystemTime;
 /// Run `claude --print` to generate a single memory.md Change Log entry
 /// from the given transcript. Returns the raw line(s) Claude produces.
 pub fn generate_memory_entry(transcript: &str) -> Option<String> {
-    let date = chrono::Local::now().format("%Y-%m-%d");
-    let prompt = format!(
-        "Based on this Claude Code session transcript, write ONE concise Change Log \
-entry for memory.md using this exact format (no extra text, just the line):\n\
-`- [{date}] [Claude Kaira]: <brief summary of what was accomplished>`\n\n\
-Keep it under 120 characters. Focus on what changed, not how.\n\n\
-TRANSCRIPT:\n{}\n",
-        &transcript[..transcript.len().min(6000)]
+    let prompt = memory_entry_prompt(
+        transcript,
+        &chrono::Local::now().format("%Y-%m-%d").to_string(),
     );
 
     let output = Command::new("claude")
@@ -49,6 +44,20 @@ TRANSCRIPT:\n{}\n",
     } else {
         Some(entry)
     }
+}
+
+/// Maximum transcript bytes sent to `claude --print`.
+const MAX_TRANSCRIPT_PROMPT_BYTES: usize = 6000;
+
+fn memory_entry_prompt(transcript: &str, date: &str) -> String {
+    format!(
+        "Based on this Claude Code session transcript, write ONE concise Change Log \
+entry for memory.md using this exact format (no extra text, just the line):\n\
+`- [{date}] [Claude Kaira]: <brief summary of what was accomplished>`\n\n\
+Keep it under 120 characters. Focus on what changed, not how.\n\n\
+TRANSCRIPT:\n{}\n",
+        raios_core::text::truncate_at_char_boundary(transcript, MAX_TRANSCRIPT_PROMPT_BYTES)
+    )
 }
 
 /// Append a change log entry to the project's memory.md.
@@ -362,6 +371,21 @@ pub fn auto_sync_claude_memory(project_path: &str, session_started: SystemTime) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Turkish text puts multi-byte characters (ş, ı, ğ, ü …) all through the
+    /// transcript, so the 6000-byte cut can land inside one.
+    #[test]
+    fn memory_entry_prompt_survives_a_cut_inside_a_multibyte_character() {
+        // 5999 ASCII bytes, then "ş" (2 bytes) straddles the 6000-byte limit.
+        let transcript = format!("{}şşş sonra devam", "a".repeat(5999));
+        assert!(!transcript.is_char_boundary(MAX_TRANSCRIPT_PROMPT_BYTES));
+
+        let prompt = memory_entry_prompt(&transcript, "2026-11-01");
+
+        let body = prompt.split("TRANSCRIPT:\n").nth(1).unwrap().trim_end();
+        assert!(body.len() <= MAX_TRANSCRIPT_PROMPT_BYTES);
+        assert!(body.starts_with(&"a".repeat(5999)));
+    }
 
     const TRANSCRIPT: &str = "User: don't use npm here, use pnpm\n\nAssistant: Anlaşıldı.\n\nUser: we decided to use SQLite for everything\n\nUser: ben gömülü sistem geliştiriciyim";
 

@@ -14,3 +14,4 @@ pub mod security;
 pub mod shield;
 pub mod task_graph;
 pub mod test_support;
+pub mod text;
