@@ -26,7 +26,12 @@ pub(super) fn inject_session_to_claude_md(run_id: &str, agent_identity: &str, st
         agent_identity,
         started_at,
     );
-    let _ = std::fs::write(&path, format!("{}{}", stripped.trim_end(), block));
+    if let Err(error) = std::fs::write(&path, format!("{}{}", stripped.trim_end(), block)) {
+        eprintln!(
+            "raios: could not write the session block to {}: {error}",
+            path.display()
+        );
+    }
 }
 
 /// Remove the RAIOS session block from ~/.claude/CLAUDE.md.
@@ -40,7 +45,12 @@ pub(super) fn strip_session_from_claude_md() {
     };
     let stripped = strip_session_block(&content);
     if stripped != content {
-        let _ = std::fs::write(&path, stripped.trim_end().to_string() + "\n");
+        if let Err(error) = std::fs::write(&path, stripped.trim_end().to_string() + "\n") {
+            eprintln!(
+                "raios: could not remove the session block from {}: {error}",
+                path.display()
+            );
+        }
     }
 }
 

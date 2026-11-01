@@ -454,40 +454,34 @@ pub(super) fn wait_for_agent(
 ) -> Result<(), String> {
     if let Some(timeout) = timeout_secs {
         println!("⏱️ Death timer active: {} seconds.", timeout);
-        let start = Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    println!("✅ Agent ({}) exited: {}", agent, status);
-                    if status.success() {
-                        break Ok(());
-                    } else {
-                        break Err(format!("Agent exited with {}", status));
-                    }
-                }
-                Ok(None) => {
-                    if start.elapsed().as_secs() > timeout {
-                        println!("💀 TIMEOUT! Killing agent ({}) for budget safety...", agent);
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break Err(format!("Agent {} timed out.", agent));
-                    }
-                    thread::sleep(Duration::from_millis(250));
-                }
-                Err(e) => break Err(format!("Process error: {}", e)),
-            }
-        }
-    } else {
-        match child.wait() {
-            Ok(status) => {
+    }
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
                 println!("✅ Agent ({}) exited: {}", agent, status);
-                if status.success() {
+                return if status.success() {
                     Ok(())
                 } else {
                     Err(format!("Agent exited with {}", status))
-                }
+                };
             }
-            Err(e) => Err(format!("Wait error: {}", e)),
+            Ok(None) => {
+                if termination_requested() {
+                    println!("🛑 Wrapper received a termination signal; stopping agent ({}).", agent);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("Agent {} stopped: wrapper was terminated.", agent));
+                }
+                if timeout_secs.is_some_and(|timeout| start.elapsed().as_secs() > timeout) {
+                    println!("💀 TIMEOUT! Killing agent ({}) for budget safety...", agent);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("Agent {} timed out.", agent));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("Process error: {}", e)),
         }
     }
 }

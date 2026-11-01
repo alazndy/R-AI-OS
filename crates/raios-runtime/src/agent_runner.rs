@@ -20,9 +20,11 @@ const BUDGET_LIMIT_KB: u64 = 300;
 
 const MAX_WRAPPER_LAUNCH_INPUT_CHARS: usize = 600;
 mod claude_md;
+mod cleanup;
 mod detached;
 mod phases;
 use claude_md::*;
+use cleanup::*;
 use detached::*;
 use phases::*;
 
@@ -345,19 +347,19 @@ pub fn run_agent_with_session_labels(
             cmd.env("RAIOS_WRAPPER_NOTE_SOCKET", ipc.addr.to_string());
         }
     }
+    // From here on the CLAUDE.md block and the note socket are released by `cleanup`, whichever
+    // way this function is left; SIGTERM/SIGHUP become a flag `wait_for_agent` polls.
+    let mut cleanup = RunCleanup::new(
+        injected_claude_md,
+        #[cfg(unix)]
+        wrapper_note_ipc,
+    );
+    let _signals = SignalGuard::install();
     print_wrapper_banner(agent, &session_ids, &native_id, &name, &work);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            if injected_claude_md {
-                strip_session_from_claude_md();
-            }
-            #[cfg(unix)]
-            if let Some(ipc) = wrapper_note_ipc {
-                ipc.stop.store(true, Ordering::Relaxed);
-                let _ = ipc.worker.join();
-            }
             close_unstarted_session(&session_ids);
             return Err(format!("Failed to spawn agent: {e}"));
         }
@@ -374,16 +376,9 @@ pub fn run_agent_with_session_labels(
     // Stop periodic sync thread before doing the final verbose sync below.
     stop_sync.store(true, Ordering::Relaxed);
     let _ = sync_thread.join();
-    #[cfg(unix)]
-    if let Some(ipc) = wrapper_note_ipc {
-        ipc.stop.store(true, Ordering::Relaxed);
-        let _ = ipc.worker.join();
-    }
-
-    // 6. Close session row in DB and print post-session summary.
-    if injected_claude_md {
-        strip_session_from_claude_md();
-    }
+    // 6. Release the note socket and the CLAUDE.md block, then close the session row and print
+    // the post-session summary.
+    cleanup.release();
     let success = result.is_ok();
     finish_session(
         agent,

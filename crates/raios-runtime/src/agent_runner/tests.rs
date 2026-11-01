@@ -573,3 +573,96 @@ fn handoff_target_is_the_value_raios_handoff_accepts() {
 fn handoff_target_for_an_agent_without_an_identity_keeps_the_plain_form() {
     assert_eq!(handoff_target("cursor"), "cursor-kaira");
 }
+
+#[cfg(unix)]
+mod cleanup_guard {
+    use super::*;
+
+    /// Points HOME at a temp dir holding a `.claude/CLAUDE.md` for the duration of a test.
+    struct FakeHome {
+        _dir: tempfile::TempDir,
+        claude_md: std::path::PathBuf,
+        old_home: Option<std::ffi::OsString>,
+    }
+
+    impl FakeHome {
+        fn new(content: &str) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+            let claude_md = dir.path().join(".claude/CLAUDE.md");
+            std::fs::write(&claude_md, content).unwrap();
+            let old_home = std::env::var_os("HOME");
+            std::env::set_var("HOME", dir.path());
+            FakeHome { _dir: dir, claude_md, old_home }
+        }
+    }
+
+    impl Drop for FakeHome {
+        fn drop(&mut self) {
+            match &self.old_home {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn dropping_the_cleanup_removes_the_session_block_on_any_exit_path() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = FakeHome::new("# my rules\n");
+        inject_session_to_claude_md("0123456789abcdef", "claude_kaira", "now");
+        assert!(std::fs::read_to_string(&home.claude_md)
+            .unwrap()
+            .contains("raios-session-begin"));
+
+        // Simulates an early return / panic: the guard is dropped without `release()`.
+        drop(RunCleanup::new(true, None));
+
+        let after = std::fs::read_to_string(&home.claude_md).unwrap();
+        assert!(!after.contains("raios-session"), "block left behind: {after}");
+        assert!(after.contains("# my rules"));
+    }
+
+    #[test]
+    fn release_is_idempotent_and_leaves_a_later_block_alone() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = FakeHome::new("# my rules\n");
+        let mut cleanup = RunCleanup::new(true, None);
+        cleanup.release();
+        // Another wrapper injects its own block after our explicit release...
+        inject_session_to_claude_md("fedcba9876543210", "claude_kaira", "later");
+        // ...and our guard dropping afterwards must not strip it.
+        drop(cleanup);
+        assert!(std::fs::read_to_string(&home.claude_md)
+            .unwrap()
+            .contains("fedcba98"));
+    }
+
+    #[test]
+    fn sigterm_to_the_wrapper_stops_the_agent_instead_of_killing_the_wrapper() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _signals = SignalGuard::install();
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let started = Instant::now();
+
+        // SAFETY: raises a signal on this process; the installed handler only sets a flag.
+        assert_eq!(unsafe { libc::raise(libc::SIGTERM) }, 0);
+        let result = wait_for_agent(&mut child, "sleep", None);
+
+        assert!(result.unwrap_err().contains("terminated"));
+        assert!(started.elapsed() < Duration::from_secs(5), "agent was not stopped promptly");
+        assert!(child.try_wait().unwrap().is_some(), "agent still running");
+    }
+
+    #[test]
+    fn signal_guard_restores_the_previous_handler_and_clears_the_flag() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let _signals = SignalGuard::install();
+            unsafe { libc::raise(libc::SIGHUP) };
+            assert!(termination_requested());
+        }
+        let _again = SignalGuard::install();
+        assert!(!termination_requested(), "flag must reset on a new run");
+    }
+}
