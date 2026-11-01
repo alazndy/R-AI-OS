@@ -322,17 +322,7 @@ pub fn run_agent_with_session_labels(
     // 2. Token Budgeting (Sigmap Integration)
     let mut budget_active = false;
     if let Some(ref dir) = project_dir {
-        let size = get_dir_size(Path::new(dir)).unwrap_or(0);
-        if size > BUDGET_LIMIT_KB * 1024 {
-            println!(
-                "📉 Project size ({} KB) exceeds budget ({} KB).",
-                size / 1024,
-                BUDGET_LIMIT_KB
-            );
-            println!("🔍 Compacting context via Sigmap...");
-            let _ = Command::new("sigmap").current_dir(dir).status();
-            budget_active = true;
-        }
+        budget_active = prepare_compact_context(Path::new(dir));
     }
 
     // Resolve effective project dir: explicit flag > CWD
@@ -957,20 +947,51 @@ fn canonical_agent_identity(agent: &str) -> Option<&'static str> {
     }
 }
 
-fn get_dir_size(path: &Path) -> std::io::Result<u64> {
-    let mut total_size = 0;
-    if path.is_dir() {
-        for entry in std::fs::read_dir(path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                total_size += get_dir_size(&path)?;
-            } else {
-                total_size += entry.metadata()?.len();
-            }
+/// Decides whether the project is too large to hand to the agent raw and, if
+/// so, makes sure a signature map (`SIGMAP.md`) is available.
+///
+/// Returns true only when compact context is genuinely available — either
+/// `SIGMAP.md` is already newer than every source file, or `sigmap` just
+/// (re)generated it. A missing or failing `sigmap` is reported and the agent
+/// starts without `RAIOS_CONTEXT_MODE=compact`, rather than being told about a
+/// map that does not exist.
+fn prepare_compact_context(dir: &Path) -> bool {
+    prepare_compact_context_with(dir, BUDGET_LIMIT_KB * 1024, "sigmap")
+}
+
+fn prepare_compact_context_with(
+    dir: &Path,
+    budget_bytes: u64,
+    sigmap: impl AsRef<std::ffi::OsStr>,
+) -> bool {
+    if !crate::context_budget::measure(dir, budget_bytes).exceeded {
+        return false;
+    }
+    println!(
+        "📉 Project source exceeds the {} KB context budget.",
+        budget_bytes / 1024
+    );
+
+    if crate::context_budget::sigmap_is_fresh(dir) {
+        println!("✓ SIGMAP.md is up to date.");
+        return true;
+    }
+
+    println!("🔍 Compacting context via Sigmap...");
+    match Command::new(sigmap).current_dir(dir).status() {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            println!("⚠ sigmap exited with {status}; continuing without compact context.");
+            false
+        }
+        Err(e) => {
+            println!(
+                "⚠ Could not run sigmap ({e}); continuing without compact context. \
+                 Install it with `raios bootstrap` or `npm i -g sigmap`."
+            );
+            false
         }
     }
-    Ok(total_size)
 }
 
 #[cfg(test)]

@@ -321,35 +321,90 @@ fn strip_session_block_handles_multiple_begin_markers_by_taking_outermost_span()
     assert_eq!(stripped, "pre\npost");
 }
 
-// ─── get_dir_size ─────────────────────────────────────────────────────
+// ─── compact context (budget + sigmap) ────────────────────────────────
 
+/// A project of `bytes` source bytes, optionally with a fake `sigmap` script
+/// that records that it ran and exits with `exit_code`.
+#[cfg(unix)]
+fn budget_fixture(bytes: usize) -> tempfile::TempDir {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("main.rs"), vec![b'x'; bytes]).unwrap();
+    dir
+}
+
+#[cfg(unix)]
+fn fake_sigmap(exit_code: i32) -> (tempfile::TempDir, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let script = dir.path().join("sigmap");
+    // Runs in the project dir (current_dir): leave a marker there.
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\ntouch sigmap-ran\nexit {exit_code}\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (dir, script)
+}
+
+#[cfg(unix)]
 #[test]
-fn get_dir_size_sums_files_recursively() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    std::fs::write(tmp.path().join("a.txt"), b"12345").unwrap(); // 5 bytes
-    let sub = tmp.path().join("sub");
-    std::fs::create_dir(&sub).unwrap();
-    std::fs::write(sub.join("b.txt"), b"1234567890").unwrap(); // 10 bytes
+fn small_project_stays_under_budget_and_never_runs_sigmap() {
+    let project = budget_fixture(100);
+    let (_keep, sigmap) = fake_sigmap(0);
+    assert!(!prepare_compact_context_with(project.path(), 1024, &sigmap));
+    assert!(!project.path().join("sigmap-ran").exists());
+}
 
-    let size = get_dir_size(tmp.path()).unwrap();
-    assert_eq!(size, 15);
+#[cfg(unix)]
+#[test]
+fn large_project_runs_sigmap_and_enables_compact_mode_on_success() {
+    let project = budget_fixture(5000);
+    let (_keep, sigmap) = fake_sigmap(0);
+    assert!(prepare_compact_context_with(project.path(), 1024, &sigmap));
+    assert!(project.path().join("sigmap-ran").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn failing_sigmap_does_not_promise_compact_context() {
+    let project = budget_fixture(5000);
+    let (_keep, sigmap) = fake_sigmap(3);
+    assert!(!prepare_compact_context_with(project.path(), 1024, &sigmap));
 }
 
 #[test]
-fn get_dir_size_of_empty_dir_is_zero() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    assert_eq!(get_dir_size(tmp.path()).unwrap(), 0);
+fn missing_sigmap_does_not_promise_compact_context() {
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::write(project.path().join("main.rs"), vec![b'x'; 5000]).unwrap();
+    assert!(!prepare_compact_context_with(
+        project.path(),
+        1024,
+        "/definitely/not/installed/sigmap"
+    ));
 }
 
+#[cfg(unix)]
 #[test]
-fn get_dir_size_of_a_file_path_is_zero() {
-    // Matches the real call site's behavior: `path.is_dir()` gates the
-    // whole body, so pointing this at a plain file (not a directory)
-    // silently returns 0 rather than that file's own size.
-    let tmp = tempfile::TempDir::new().unwrap();
-    let file = tmp.path().join("solo.txt");
-    std::fs::write(&file, b"some bytes").unwrap();
-    assert_eq!(get_dir_size(&file).unwrap(), 0);
+fn fresh_sigmap_is_reused_without_running_the_tool_again() {
+    let project = budget_fixture(5000);
+    let main = project.path().join("main.rs");
+    let map = project.path().join("SIGMAP.md");
+    std::fs::write(&map, "map").unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(100);
+    std::fs::File::options()
+        .write(true)
+        .open(&main)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+
+    let (_keep, sigmap) = fake_sigmap(1);
+    assert!(prepare_compact_context_with(project.path(), 1024, &sigmap));
+    assert!(
+        !project.path().join("sigmap-ran").exists(),
+        "an up-to-date map must not be regenerated"
+    );
 }
 
 // ─── wrapper-note IPC — real loopback TCP transport ────────────────────

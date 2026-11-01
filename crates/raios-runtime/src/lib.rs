@@ -6,6 +6,7 @@ pub mod bootstrap;
 pub mod compliance;
 pub mod compressor;
 pub mod constitution;
+pub mod context_budget;
 pub mod control_plane;
 pub mod cortex;
 pub mod daemon;
