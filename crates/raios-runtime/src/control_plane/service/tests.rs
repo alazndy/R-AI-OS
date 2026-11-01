@@ -867,3 +867,133 @@ fn assigning_leaves_agent_owned_tasks_alone_and_replays_by_idempotency_key() {
     assert!(assign(&mut conn, "same-key", &task_id, Some("claude"), None).is_err());
     assert_eq!(stored(&conn, &task_id).1.as_deref(), Some("opencode"));
 }
+
+// ─── cron commands (characterization: pinned before the dispatcher was split) ─
+
+fn new_cron_job(conn: &Connection) -> String {
+    // Far-future first run, so "run now" is observable as a change.
+    raios_core::db::cp_scheduled_job_create(conn, "nightly", "claude", "check things", 86_400)
+        .unwrap()
+}
+
+fn cron_row(conn: &Connection, job_id: &str) -> (String, bool) {
+    conn.query_row(
+        "SELECT status, next_run_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         FROM cp_scheduled_jobs WHERE id = ?1",
+        params![job_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .unwrap()
+}
+
+fn trigger(
+    conn: &mut Connection,
+    key: &str,
+    job_id: &str,
+) -> Result<Option<serde_json::Value>, Problem> {
+    dispatch_control_command(
+        conn,
+        &ControlActor::test_local(),
+        &Command::TriggerCronJob {
+            job_id: job_id.into(),
+            idempotency_key: key.into(),
+        },
+    )
+}
+
+fn toggle(
+    conn: &mut Connection,
+    key: &str,
+    job_id: &str,
+    paused: bool,
+) -> Result<Option<serde_json::Value>, Problem> {
+    dispatch_control_command(
+        conn,
+        &ControlActor::test_local(),
+        &Command::ToggleCronJob {
+            job_id: job_id.into(),
+            paused,
+            idempotency_key: key.into(),
+        },
+    )
+}
+
+#[test]
+fn triggering_a_cron_job_makes_it_due_now() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    raios_core::db::migrate_existing(&conn).unwrap();
+    let job = new_cron_job(&conn);
+    assert!(!cron_row(&conn, &job).1, "fixture: not due yet");
+
+    let result = trigger(&mut conn, "trigger-1", &job).unwrap().unwrap();
+
+    assert_eq!(result["job_id"], job.as_str());
+    assert_eq!(result["status"], "scheduled_now");
+    let (status, due) = cron_row(&conn, &job);
+    assert_eq!(
+        status, "active",
+        "triggering does not change the job's status"
+    );
+    assert!(due, "next_run_at moved to now");
+}
+
+#[test]
+fn toggling_a_cron_job_pauses_and_resumes_it() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    raios_core::db::migrate_existing(&conn).unwrap();
+    let job = new_cron_job(&conn);
+
+    let paused = toggle(&mut conn, "pause-1", &job, true).unwrap().unwrap();
+    assert_eq!(paused["status"], "paused");
+    assert_eq!(paused["job_id"], job.as_str());
+    assert_eq!(cron_row(&conn, &job).0, "paused");
+
+    let resumed = toggle(&mut conn, "resume-1", &job, false).unwrap().unwrap();
+    assert_eq!(resumed["status"], "active");
+    assert_eq!(cron_row(&conn, &job).0, "active");
+}
+
+#[test]
+fn cron_commands_refuse_unknown_and_deleted_jobs_and_leave_no_idempotency_row() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    raios_core::db::migrate_existing(&conn).unwrap();
+    let deleted = new_cron_job(&conn);
+    raios_core::db::cp_scheduled_job_delete(&conn, &deleted).unwrap();
+
+    for (label, job) in [("unknown", "no-such-job"), ("deleted", deleted.as_str())] {
+        let err = trigger(&mut conn, &format!("t-{label}"), job).unwrap_err();
+        assert_eq!(err.code, "NOT_FOUND", "trigger {label}");
+        assert_eq!(err.message, "Scheduled job not found", "trigger {label}");
+        let err = toggle(&mut conn, &format!("p-{label}"), job, true).unwrap_err();
+        assert_eq!(err.code, "NOT_FOUND", "toggle {label}");
+    }
+
+    // A refused command rolled back: its key is free to be used again.
+    let used: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM cp_idempotency WHERE idempotency_key IN ('t-unknown','p-unknown','t-deleted','p-deleted')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(used, 0);
+}
+
+#[test]
+fn cron_commands_replay_by_idempotency_key_without_acting_twice() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    raios_core::db::migrate_existing(&conn).unwrap();
+    let job = new_cron_job(&conn);
+
+    let first = toggle(&mut conn, "same-key", &job, true).unwrap();
+    // Un-pause behind the dispatcher's back; a replay must not re-run the command.
+    raios_core::db::cp_scheduled_job_set_status(&conn, &job, "active").unwrap();
+    let replay = toggle(&mut conn, "same-key", &job, true).unwrap();
+
+    assert_eq!(first, replay, "the cached result is returned");
+    assert_eq!(
+        cron_row(&conn, &job).0,
+        "active",
+        "the command was not applied again"
+    );
+}

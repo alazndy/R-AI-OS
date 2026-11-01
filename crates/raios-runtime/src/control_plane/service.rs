@@ -9,6 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+mod commands;
 mod snapshots;
 pub use snapshots::{
     load_explore_snapshot, load_govern_snapshot, load_now_snapshot, load_system_snapshot,
@@ -389,7 +390,47 @@ pub(super) fn dispatch_with_seams(
     init_idempotency_table(conn).map_err(Problem::internal)?;
 
     let command_name = command_name(cmd);
-    let audit_event_type =
+    let audit_event_type = policy_audit_event(conn, actor, cmd, command_name, load_policy)?;
+
+    let key = cmd.idempotency_key();
+    let payload_hash = payload_hash(cmd)?;
+    if let Some(replayed) = replayed_result(conn, key, &payload_hash)? {
+        return Ok(replayed);
+    }
+
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| Problem::internal(format!("Failed starting transaction: {}", e)))?;
+
+    let mut effects = commands::Effects::default();
+    let result_val = run_command(&tx, actor, cmd, &mut effects)?;
+
+    record_outcome(
+        &tx,
+        actor,
+        key,
+        &payload_hash,
+        command_name,
+        audit_event_type,
+        result_val.as_ref(),
+    )?;
+    tx.commit()
+        .map_err(|e| Problem::internal(format!("Commit failed: {}", e)))?;
+
+    finish(conn, key, effects, launcher)?;
+    Ok(result_val)
+}
+
+/// Applies the security policy to this command and returns the audit event type
+/// to record if it goes ahead. A denied command is audited here and refused.
+fn policy_audit_event(
+    conn: &Connection,
+    actor: &ControlActor,
+    cmd: &Command,
+    command_name: &str,
+    load_policy: &dyn Fn() -> Option<raios_core::security::PolicyConfig>,
+) -> Result<&'static str, Problem> {
+    Ok(
         match load_policy().map(|policy| policy.tool_action(policy_name(cmd)).clone()) {
             Some(raios_core::security::policy::PolicyAction::Deny) => {
                 let _ = raios_core::security::record_tool_decision(
@@ -408,14 +449,27 @@ pub(super) fn dispatch_with_seams(
             // The authenticated human gesture that submitted this command is the
             // confirmation required by the policy; it remains distinct in audit.
             Some(raios_core::security::policy::PolicyAction::Confirm) | None => "tool_confirm",
-        };
+        },
+    )
+}
 
-    let key = cmd.idempotency_key();
+/// SHA-256 of the command's serialized payload: detects one idempotency key
+/// being reused for a different command.
+fn payload_hash(cmd: &Command) -> Result<String, Problem> {
     let payload_json = serde_json::to_string(cmd).map_err(|e| {
         Problem::invalid_input(format!("Failed serializing command payload: {}", e))
     })?;
-    let payload_hash = format!("{:x}", Sha256::digest(payload_json.as_bytes()));
+    Ok(format!("{:x}", Sha256::digest(payload_json.as_bytes())))
+}
 
+/// Idempotent replay. `Ok(Some(result))` means this key already ran with the same
+/// payload and `result` is what it returned (possibly nothing); `Ok(None)` means it
+/// has not run. Reusing the key for a different payload is refused.
+fn replayed_result(
+    conn: &Connection,
+    key: &str,
+    payload_hash: &str,
+) -> Result<Option<Option<serde_json::Value>>, Problem> {
     let existing: Result<Option<(String, Option<String>)>, _> = conn
         .query_row(
             "SELECT payload_hash, result_json FROM cp_idempotency WHERE idempotency_key = ?1",
@@ -433,304 +487,97 @@ pub(super) fn dispatch_with_seams(
         }
         let val: Option<serde_json::Value> =
             cached_json_opt.and_then(|j| serde_json::from_str(&j).ok());
-        return Ok(val);
+        return Ok(Some(val));
     }
+    Ok(None)
+}
 
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| Problem::internal(format!("Failed starting transaction: {}", e)))?;
-
-    let mut launch_request: Option<AgentLaunchRequest> = None;
-    let mut pending_events: Vec<Event> = Vec::new();
-    let result_val: Option<serde_json::Value> = match cmd {
+/// Routes a command to its handler in [`commands`]. Runs inside the dispatcher's
+/// transaction, so any `Err` rolls the whole command back.
+fn run_command(
+    tx: &Connection,
+    actor: &ControlActor,
+    cmd: &Command,
+    effects: &mut commands::Effects,
+) -> Result<Option<serde_json::Value>, Problem> {
+    match cmd {
         Command::ApproveHandoff {
             approval_id,
             expected_revision,
             ..
-        } => {
-            require_expected_revision(&tx, approval_id, *expected_revision)?;
-            let run_id = handoff_run_id(&tx, approval_id)?;
-            // The owner's consent: the approval resolves as approved and the run leaves the
-            // queue, but the task stays open. Only the addressed agent's own wrapper marks
-            // delivery (`handover_delivered`).
-            if !raios_core::db::cp_approve_handoff_by_owner(
-                &tx,
-                approval_id,
-                actor.subject(),
-                actor.subject(),
-            )
-            .map_err(|e| Problem::internal(e.to_string()))?
-            {
-                return Err(Problem::not_found("Pending handoff approval not found"));
-            }
-            push_handoff_resolution_events(
-                &tx,
-                approval_id,
-                run_id.as_deref(),
-                "approved",
-                &mut pending_events,
-            )?;
-            Some(serde_json::json!({"approval_id": approval_id, "status": "approved"}))
-        }
+        } => commands::approve_handoff(tx, actor, approval_id, *expected_revision, effects),
         Command::RejectHandoff {
             approval_id,
             reason,
             expected_revision,
             ..
-        } => {
-            require_expected_revision(&tx, approval_id, *expected_revision)?;
-            if reason.trim().is_empty() || reason.len() > 2_000 {
-                return Err(Problem::invalid_input(
-                    "Rejection reason must contain at most 2000 characters",
-                ));
-            }
-            let run_id = handoff_run_id(&tx, approval_id)?;
-            if !raios_core::db::cp_resolve_handoff(
-                &tx,
-                approval_id,
-                actor.subject(),
-                actor.subject(),
-                Some(reason),
-            )
-            .map_err(|e| Problem::internal(e.to_string()))?
-            {
-                return Err(Problem::not_found("Pending handoff approval not found"));
-            }
-            push_handoff_resolution_events(
-                &tx,
-                approval_id,
-                run_id.as_deref(),
-                "rejected",
-                &mut pending_events,
-            )?;
-            Some(serde_json::json!({"approval_id": approval_id, "status": "rejected"}))
-        }
-        Command::TriggerCronJob { job_id, .. } => {
-            let exists: Option<i64> = tx
-                .query_row(
-                    "SELECT 1 FROM cp_scheduled_jobs WHERE id = ?1 AND status != 'deleted'",
-                    params![job_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| Problem::internal(e.to_string()))?;
-            if exists.is_none() {
-                return Err(Problem::not_found("Scheduled job not found"));
-            }
-            raios_core::db::cp_scheduled_job_trigger_now(&tx, job_id)
-                .map_err(|e| Problem::internal(e.to_string()))?;
-            Some(serde_json::json!({"job_id": job_id, "status": "scheduled_now"}))
-        }
+        } => commands::reject_handoff(tx, actor, approval_id, *expected_revision, reason, effects),
+        Command::TriggerCronJob { job_id, .. } => commands::trigger_cron_job(tx, job_id),
         Command::ToggleCronJob { job_id, paused, .. } => {
-            let exists: Option<i64> = tx
-                .query_row(
-                    "SELECT 1 FROM cp_scheduled_jobs WHERE id = ?1 AND status != 'deleted'",
-                    params![job_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| Problem::internal(e.to_string()))?;
-            if exists.is_none() {
-                return Err(Problem::not_found("Scheduled job not found"));
-            }
-            let status_str = if *paused { "paused" } else { "active" };
-            raios_core::db::cp_scheduled_job_set_status(&tx, job_id, status_str)
-                .map_err(|e| Problem::internal(e.to_string()))?;
-            Some(serde_json::json!({"job_id": job_id, "status": status_str}))
+            commands::toggle_cron_job(tx, job_id, *paused)
         }
         Command::LaunchAgent {
             agent_name,
             project_path,
             prompt,
             ..
-        } => {
-            let request = super::agent_launch::validate_launch(
-                &tx,
-                agent_name,
-                project_path,
-                prompt.as_deref(),
-            )?;
-            let result = super::agent_launch::launch_result(&request, "launching");
-            launch_request = Some(request);
-            Some(result)
-        }
+        } => commands::launch_agent(tx, agent_name, project_path, prompt.as_deref(), effects),
         Command::ValidateAgentLaunch {
             agent_name,
             project_path,
             prompt,
             ..
-        } => {
-            let request = super::agent_launch::validate_launch(
-                &tx,
-                agent_name,
-                project_path,
-                prompt.as_deref(),
-            )?;
-            Some(super::agent_launch::launch_result(&request, "validated"))
-        }
+        } => commands::validate_agent_launch(tx, agent_name, project_path, prompt.as_deref()),
         Command::CreateTask {
             title,
             project_path,
             priority,
             ..
-        } => {
-            let title = validate_task_title(title)?;
-            let project_path = validate_project_path(project_path.as_deref())?;
-            let project_id = project_path
-                .as_deref()
-                .map(|path| {
-                    tx.query_row(
-                        "SELECT id FROM projects WHERE path = ?1",
-                        params![path],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .optional()
-                })
-                .transpose()
-                .map_err(|error| Problem::internal(error.to_string()))?
-                .flatten();
-            let task_id = uuid::Uuid::new_v4().to_string();
-            let now = Utc::now().to_rfc3339();
-            let display_order: i64 = tx
-                .query_row(
-                    "SELECT COALESCE(MAX(display_order), -1) + 1 FROM cp_task_list_items",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(|error| Problem::internal(error.to_string()))?;
-
-            tx.execute(
-                "INSERT INTO cp_tasks
-                 (id, project_id, plan_id, parent_task_id, title, description, priority, status,
-                  assignee_kind, assignee_id, acceptance_criteria, created_at, updated_at)
-                 VALUES (?1, ?2, NULL, NULL, ?3, '', ?4, 'queued',
-                         NULL, NULL, '', ?5, ?5)",
-                params![task_id, project_id, title, i64::from(*priority), now],
-            )
-            .map_err(|error| Problem::internal(error.to_string()))?;
-            tx.execute(
-                "INSERT INTO cp_task_list_items
-                 (task_id, source_kind, source_path, display_order, project_name, created_at)
-                 VALUES (?1, 'tui', 'control-plane', ?2, ?3, ?4)",
-                params![task_id, display_order, project_path, now],
-            )
-            .map_err(|error| Problem::internal(error.to_string()))?;
-
-            Some(serde_json::json!({
-                "task_id": task_id,
-                "status": "queued",
-            }))
-        }
+        } => commands::create_task(tx, title, project_path.as_deref(), *priority),
         Command::UpdateTaskStatus {
             task_id, status, ..
-        } => {
-            let status = status.trim();
-            if task_id.trim().is_empty() || !OPERATOR_TASK_STATUSES.contains(&status) {
-                return Err(Problem::invalid_input(
-                    "Task id and an allowed operator task status are required",
-                ));
-            }
-            let now = Utc::now().to_rfc3339();
-            let changed = tx
-                .execute(
-                    &format!(
-                        "UPDATE cp_tasks
-                         SET status = ?1, updated_at = ?2
-                         WHERE id = ?3 AND {OPERATOR_TASK_CONDITIONS}"
-                    ),
-                    params![status, now, task_id],
-                )
-                .map_err(|error| Problem::internal(error.to_string()))?;
-            if changed != 1 {
-                return Err(Problem::not_found(
-                    "Operator-managed personal task was not found or cannot be updated",
-                ));
-            }
-            Some(serde_json::json!({"task_id": task_id, "status": status}))
-        }
+        } => commands::update_task_status(tx, task_id, status),
         Command::AssignTask {
             task_id,
             assignee,
             expected_updated_at,
             ..
-        } => {
-            let assignee = assignee.as_deref().map(str::trim);
-            if task_id.trim().is_empty()
-                || assignee.is_some_and(|name| !TASK_ASSIGNEES.contains(&name))
-            {
-                return Err(Problem::invalid_input(
-                    "A task id and, when given, one of the known agents are required",
-                ));
-            }
-            let current: Option<String> = tx
-                .query_row(
-                    &format!(
-                        "SELECT updated_at FROM cp_tasks WHERE id = ?1 AND {OPERATOR_TASK_CONDITIONS}"
-                    ),
-                    params![task_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|error| Problem::internal(error.to_string()))?;
-            let Some(current) = current else {
-                return Err(Problem::not_found(
-                    "Operator-managed personal task was not found or cannot be updated",
-                ));
-            };
-            if expected_updated_at
-                .as_deref()
-                .is_some_and(|expected| expected != current)
-            {
-                return Err(Problem::conflict(
-                    "The task changed since it was read; reload it and try again",
-                ));
-            }
-            let now = Utc::now().to_rfc3339();
-            let changed = tx
-                .execute(
-                    &format!(
-                        "UPDATE cp_tasks
-                         SET assignee_kind = ?1, assignee_id = ?2, updated_at = ?3
-                         WHERE id = ?4 AND updated_at = ?5 AND {OPERATOR_TASK_CONDITIONS}"
-                    ),
-                    params![assignee.map(|_| "agent"), assignee, now, task_id, current],
-                )
-                .map_err(|error| Problem::internal(error.to_string()))?;
-            if changed != 1 {
-                return Err(Problem::conflict(
-                    "The task changed while it was being assigned; try again",
-                ));
-            }
-            Some(serde_json::json!({
-                "task_id": task_id,
-                "assignee": assignee,
-                "updated_at": now,
-            }))
-        }
-        Command::RegisterProject { project_path, .. } => Some(
-            super::project_registry::register_project(&tx, project_path)?,
+        } => commands::assign_task(
+            tx,
+            task_id,
+            assignee.as_deref(),
+            expected_updated_at.as_deref(),
         ),
+        Command::RegisterProject { project_path, .. } => Ok(Some(
+            super::project_registry::register_project(tx, project_path)?,
+        )),
         Command::CreateHandoff {
             project_path,
             from_agent,
             to_agent,
             summary,
             ..
-        } => {
-            let result =
-                super::handoff::create_handoff(&tx, project_path, from_agent, to_agent, summary)?;
-            push_handoff_created_events(&tx, &result, to_agent, &mut pending_events)?;
-            Some(result)
-        }
-        unhandled => {
-            return Err(Problem::not_implemented(format!(
-                "Command '{:?}' is not implemented",
-                unhandled
-            )));
-        }
-    };
+        } => commands::create_handoff(tx, project_path, from_agent, to_agent, summary, effects),
+        unhandled => Err(Problem::not_implemented(format!(
+            "Command '{:?}' is not implemented",
+            unhandled
+        ))),
+    }
+}
 
-    let cached_str = result_val.as_ref().map(|v| v.to_string());
+/// Writes the idempotency record and the audit entry in the command's own
+/// transaction, so a command is never recorded without its audit trail (or
+/// the reverse).
+fn record_outcome(
+    tx: &Connection,
+    actor: &ControlActor,
+    key: &str,
+    payload_hash: &str,
+    command_name: &str,
+    audit_event_type: &str,
+    result_val: Option<&serde_json::Value>,
+) -> Result<(), Problem> {
+    let cached_str = result_val.map(|v| v.to_string());
     tx.execute(
         "INSERT INTO cp_idempotency (idempotency_key, payload_hash, command_type, result_json, status) VALUES (?1, ?2, ?3, ?4, 'COMPLETED')",
         params![key, payload_hash, command_name, cached_str],
@@ -738,27 +585,34 @@ pub(super) fn dispatch_with_seams(
     .map_err(|e| Problem::internal(format!("Idempotency record failed: {}", e)))?;
 
     raios_core::security::record_tool_decision(
-        &tx,
+        tx,
         command_name,
-        &payload_hash,
+        payload_hash,
         "control_plane",
         audit_event_type,
         actor.subject(),
     )
     .map_err(|e| Problem::internal(format!("Audit write failed: {}", e)))?;
+    Ok(())
+}
 
-    tx.commit()
-        .map_err(|e| Problem::internal(format!("Commit failed: {}", e)))?;
-
+/// What happens after the transaction is durable: typed events, then starting an
+/// agent if the command asked for one.
+fn finish(
+    conn: &Connection,
+    key: &str,
+    effects: commands::Effects,
+    launcher: &dyn Fn(&AgentLaunchRequest) -> Result<(), Problem>,
+) -> Result<(), Problem> {
     // Typed events are published only after the transaction is durable, so a
     // subscriber that reacts by querying a snapshot always observes the
     // committed state. A replayed command (idempotency cache hit) returned
     // earlier and deliberately emits nothing a second time.
-    for event in pending_events {
+    for event in effects.events {
         crate::events::emit(event);
     }
 
-    if let Some(request) = launch_request {
+    if let Some(request) = effects.launch {
         if let Err(problem) = launcher(&request) {
             let failed_result = serde_json::json!({
                 "agent_name": request.agent_name,
@@ -772,8 +626,7 @@ pub(super) fn dispatch_with_seams(
             return Err(problem);
         }
     }
-
-    Ok(result_val)
+    Ok(())
 }
 
 #[cfg(test)]
