@@ -508,9 +508,9 @@ Use the bundled `install.sh` instead of running the steps above by hand. It inst
 ```
 
 What it does:
-1. `cargo build --release --workspace --locked`
-2. `cargo install --path crates/raios-surface-cli --locked --force` — replaces the existing binaries in the active install directory
-3. Restarts `aiosd.service` and `raios-tray.service` via `systemctl --user` (if present) so the new binary actually takes effect, not just the file on disk
+1. `cargo install --path crates/raios-surface-cli --locked --force --target-dir target` — a single release build that reuses `target/`, replacing the existing binaries in the active install directory. A failed build leaves the existing install untouched
+2. Restarts whichever of `raios-hub.service` (created by `raios hub install`), the older `aiosd.service` and `raios-tray.service` exists as a user systemd unit — transient units included — so the new binary actually takes effect, not just the file on disk. A unit whose `ExecStart` points at a different `aiosd` is repaired first
+3. Checks that every running `aiosd` is the freshly installed binary and exits non-zero if one is still running the old one (Linux), instead of reporting success over a stale daemon
 4. Warns if a stray `raios`/`aiosd` binary exists earlier on `$PATH` outside cargo's bin dir, which would silently shadow the freshly installed one
 
 Start the daemon (powers the TUI, MCP server, and HTTP API):
