@@ -452,3 +452,404 @@ fn run_git(project_path: &str, args: &[&str]) {
         .unwrap();
     assert!(status.success());
 }
+
+// ─── full lifecycle transcript (characterization of every command) ──────────
+//
+// Drives the factory through its whole lifecycle and pins every command's
+// result - or its refusal - so the dispatcher can be reorganised without
+// changing behaviour. Generated ids and timestamps are normalised.
+
+fn normalize(value: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    let is_uuid = |s: &str| {
+        s.len() == 36
+            && s.char_indices().all(|(i, c)| match i {
+                8 | 13 | 18 | 23 => c == '-',
+                _ => c.is_ascii_hexdigit(),
+            })
+    };
+    match value {
+        Value::String(s) if is_uuid(s) => Value::String("<id>".into()),
+        Value::Array(items) => Value::Array(items.iter().map(normalize).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    let v = if k == "oldest_open_created_at" {
+                        Value::String("<timestamp>".into())
+                    } else {
+                        normalize(v)
+                    };
+                    (k.clone(), v)
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+struct Lifecycle {
+    conn: Connection,
+    actor: ControlActor,
+    transcript: Vec<String>,
+}
+
+impl Lifecycle {
+    fn run(&mut self, label: &str, command: FactoryCommand) -> serde_json::Value {
+        let outcome = dispatch_factory_command(&mut self.conn, &self.actor, true, &command);
+        let (line, value) = match outcome {
+            Ok(value) => (format!("{label}: OK {}", normalize(&value)), value),
+            Err(problem) => (
+                format!("{label}: ERR {} / {}", problem.code, problem.message),
+                serde_json::Value::Null,
+            ),
+        };
+        self.transcript.push(line);
+        value
+    }
+}
+
+fn text(value: &serde_json::Value, field: &str) -> String {
+    value[field].as_str().unwrap_or("<missing>").to_owned()
+}
+
+fn lifecycle_transcript() -> String {
+    let _db = raios_core::test_support::IsolatedDb::new();
+    let conn = Connection::open_in_memory().unwrap();
+    raios_core::db::migrate_existing(&conn).unwrap();
+    let mut l = Lifecycle {
+        conn,
+        actor: ControlActor::local_session(),
+        transcript: Vec::new(),
+    };
+    let key = |name: &str| format!("{name}-key-0001");
+
+    let ws = l.run(
+        "workspace",
+        FactoryCommand::CreateWorkspace {
+            name: "W".into(),
+            idempotency_key: key("ws"),
+        },
+    );
+    let p = l.run(
+        "product",
+        FactoryCommand::CreateProductDraft {
+            workspace_id: text(&ws, "workspace_id"),
+            title: "P".into(),
+            idempotency_key: key("prod"),
+        },
+    );
+    let pid = text(&p, "product_id");
+    l.run(
+        "mode",
+        FactoryCommand::SetProductMode {
+            product_id: pid.clone(),
+            mode: raios_contracts::FactoryMode::Quick,
+            idempotency_key: key("mode"),
+        },
+    );
+    let intake = l.run(
+        "intake",
+        FactoryCommand::StartIntake {
+            product_id: pid.clone(),
+            idempotency_key: key("intake"),
+        },
+    );
+    let sid = text(&intake, "session_id");
+    for (i, answer) in ["problem_statement", "core_outcome", "success_metric"]
+        .iter()
+        .enumerate()
+    {
+        l.run(
+            "answer",
+            FactoryCommand::RecordIntakeAnswer {
+                session_id: sid.clone(),
+                question_key: (*answer).into(),
+                response: format!("A{i}"),
+                idempotency_key: format!("ans-key-{i:04}"),
+            },
+        );
+    }
+    l.run(
+        "charter",
+        FactoryCommand::GenerateCharterDraft {
+            product_id: pid.clone(),
+            idempotency_key: key("charter"),
+        },
+    );
+    let req = l.run(
+        "requirement",
+        FactoryCommand::CreateRequirementDraft {
+            product_id: pid.clone(),
+            stable_key: "req_one".into(),
+            content: "Do X".into(),
+            idempotency_key: key("req"),
+        },
+    );
+    let reqid = text(&req, "requirement_id");
+    let cr = l.run(
+        "submit_change_request",
+        FactoryCommand::SubmitChangeRequest {
+            product_id: pid.clone(),
+            summary: "Change it".into(),
+            idempotency_key: key("cr"),
+        },
+    );
+    let crid = text(&cr, "change_request_id");
+    let asmt = l.run(
+        "assess_change_request",
+        FactoryCommand::AssessChangeRequest {
+            change_request_id: crid.clone(),
+            idempotency_key: key("assess"),
+        },
+    );
+    let aid = text(&asmt, "assessment_id");
+    l.run(
+        "resolve_impact",
+        FactoryCommand::ResolveImpactAssessment {
+            assessment_id: aid.clone(),
+            approved: true,
+            idempotency_key: key("resolve"),
+        },
+    );
+    l.run(
+        "apply_change",
+        FactoryCommand::ApplyApprovedRequirementChange {
+            assessment_id: aid,
+            requirement_id: reqid.clone(),
+            content: "Do X better".into(),
+            idempotency_key: key("apply"),
+        },
+    );
+    let plan = l.run(
+        "plan_draft",
+        FactoryCommand::CreatePlanDraft {
+            product_id: pid.clone(),
+            title: "Plan".into(),
+            idempotency_key: key("plan"),
+        },
+    );
+    let planid = text(&plan, "plan_id");
+    l.run(
+        "approve_plan",
+        FactoryCommand::ApprovePlan {
+            plan_id: planid.clone(),
+            idempotency_key: key("appr"),
+        },
+    );
+    let cyc = l.run(
+        "materialize_cycle",
+        FactoryCommand::MaterializePlannedCycle {
+            plan_id: planid,
+            idempotency_key: key("cyc"),
+        },
+    );
+    let cid = text(&cyc, "cycle_id");
+    l.run(
+        "pause_cycle",
+        FactoryCommand::PauseCycle {
+            cycle_id: cid.clone(),
+            idempotency_key: key("pause"),
+        },
+    );
+    l.run(
+        "resume_cycle",
+        FactoryCommand::ResumeCycle {
+            cycle_id: cid.clone(),
+            idempotency_key: key("resume"),
+        },
+    );
+    l.run(
+        "task_graph",
+        FactoryCommand::MaterializeStageTaskGraph {
+            cycle_id: cid.clone(),
+            stage: "discover".into(),
+            idempotency_key: key("tg"),
+        },
+    );
+    l.run(
+        "activate_stage",
+        FactoryCommand::ActivateApprovedStage {
+            cycle_id: cid.clone(),
+            stage: "discover".into(),
+            idempotency_key: key("act"),
+        },
+    );
+    let ev = l.run(
+        "stage_evidence",
+        FactoryCommand::RecordStageEvidence {
+            cycle_id: cid.clone(),
+            stage: "discover".into(),
+            content_ref: "notes/discovery.md".into(),
+            idempotency_key: key("ev"),
+        },
+    );
+    l.run(
+        "link_evidence",
+        FactoryCommand::LinkStageEvidenceToRequirement {
+            evidence_id: text(&ev, "evidence_id"),
+            requirement_id: reqid,
+            idempotency_key: key("lev"),
+        },
+    );
+    l.run(
+        "complete_stage",
+        FactoryCommand::CompleteStage {
+            cycle_id: cid.clone(),
+            stage: "discover".into(),
+            idempotency_key: key("cs"),
+        },
+    );
+    let qp = l.run(
+        "quality_profile",
+        FactoryCommand::CreateQualityProfile {
+            product_id: pid.clone(),
+            name: "Gate".into(),
+            required: true,
+            idempotency_key: key("qp"),
+        },
+    );
+    l.run(
+        "react_native_profile",
+        FactoryCommand::EnsureReactNativeClosedTestingQualityProfile {
+            product_id: pid.clone(),
+            idempotency_key: key("rn"),
+        },
+    );
+    l.run(
+        "quality_check",
+        FactoryCommand::RecordQualityCheck {
+            profile_id: text(&qp, "profile_id"),
+            passed: true,
+            evidence_ref: "ci/run-1".into(),
+            idempotency_key: key("qc"),
+        },
+    );
+    let rel = l.run(
+        "release_draft",
+        FactoryCommand::CreateReleaseDraft {
+            product_id: pid.clone(),
+            build_ref: "build-1".into(),
+            idempotency_key: key("rel"),
+        },
+    );
+    l.run(
+        "release_readiness",
+        FactoryCommand::InspectReleaseReadiness {
+            product_id: pid.clone(),
+            idempotency_key: key("ready"),
+        },
+    );
+    l.run(
+        "approve_release",
+        FactoryCommand::ApproveClosedTestingRelease {
+            release_id: text(&rel, "release_id"),
+            idempotency_key: key("arel"),
+        },
+    );
+    let sup = l.run(
+        "support_item",
+        FactoryCommand::CreateSupportItem {
+            product_id: pid.clone(),
+            source_kind: "user_report".into(),
+            summary: "It broke".into(),
+            idempotency_key: key("sup"),
+        },
+    );
+    let supid = text(&sup, "support_item_id");
+    l.run(
+        "support_overview",
+        FactoryCommand::InspectSupportOverview {
+            product_id: pid,
+            idempotency_key: key("sov"),
+        },
+    );
+    l.run(
+        "triage_support",
+        FactoryCommand::TriageSupportItem {
+            support_item_id: supid.clone(),
+            idempotency_key: key("tri"),
+        },
+    );
+    l.run(
+        "link_support",
+        FactoryCommand::LinkSupportToChangeRequest {
+            support_item_id: supid.clone(),
+            change_request_id: crid.clone(),
+            idempotency_key: key("lsup"),
+        },
+    );
+    l.run(
+        "resolve_support",
+        FactoryCommand::ResolveSupportItem {
+            support_item_id: supid,
+            resolution_ref: "fix-1".into(),
+            idempotency_key: key("rsup"),
+        },
+    );
+    l.run(
+        "request_impact",
+        FactoryCommand::RequestImpactAssessment {
+            change_request_id: crid,
+            idempotency_key: key("rimp"),
+        },
+    );
+    l.run(
+        "cancel_cycle",
+        FactoryCommand::CancelCycle {
+            cycle_id: cid,
+            idempotency_key: key("cancel"),
+        },
+    );
+    l.transcript.join("\n")
+}
+
+#[test]
+fn factory_lifecycle_results_are_pinned() {
+    let actual = lifecycle_transcript();
+    // When a command's behaviour is changed on purpose, run this test with
+    // `PIN_PRINT=1 cargo test factory_lifecycle_results_are_pinned -- --nocapture`
+    // to print the new transcript and paste it into LIFECYCLE_TRANSCRIPT below.
+    if std::env::var_os("PIN_PRINT").is_some() {
+        println!("---TRANSCRIPT---\n{actual}\n---END---");
+    }
+    assert_eq!(actual, LIFECYCLE_TRANSCRIPT.trim());
+}
+
+const LIFECYCLE_TRANSCRIPT: &str = r#"
+workspace: OK {"name":"W","workspace_id":"<id>"}
+product: OK {"product_id":"<id>","title":"P","workspace_id":"<id>"}
+mode: OK {"mode":"quick","product_id":"<id>"}
+intake: OK {"product_id":"<id>","session_id":"<id>"}
+answer: OK {"question_key":"problem_statement","session_id":"<id>","status":"answered"}
+answer: OK {"question_key":"core_outcome","session_id":"<id>","status":"answered"}
+answer: OK {"question_key":"success_metric","session_id":"<id>","status":"answered"}
+charter: OK {"charter_revision_id":"<id>","generated":true,"product_id":"<id>","revision":1}
+requirement: OK {"product_id":"<id>","requirement_id":"<id>","requirement_revision_id":"<id>","stable_key":"req_one"}
+submit_change_request: OK {"change_request_id":"<id>","product_id":"<id>","status":"proposed"}
+assess_change_request: OK {"affected_count":2,"assessment_id":"<id>","change_request_id":"<id>","status":"awaiting_approval"}
+resolve_impact: OK {"approved":true,"assessment_id":"<id>"}
+apply_change: OK {"assessment_id":"<id>","requirement_id":"<id>","requirement_revision_id":"<id>"}
+plan_draft: OK {"plan_id":"<id>","product_id":"<id>","status":"planned","title":"Plan"}
+approve_plan: OK {"plan_id":"<id>","status":"approved"}
+materialize_cycle: OK {"created":true,"cycle_id":"<id>","plan_id":"<id>","product_id":"<id>","status":"planned"}
+pause_cycle: OK {"cycle_id":"<id>","status":"paused"}
+resume_cycle: OK {"cycle_id":"<id>","status":"resumed"}
+task_graph: OK {"cycle_id":"<id>","execution":"disabled","stage":"discover","task_graph_id":"<id>"}
+activate_stage: ERR FORBIDDEN / Stage requires an owned approved execution approval
+stage_evidence: OK {"cycle_id":"<id>","evidence_id":"<id>","stage":"discover"}
+link_evidence: OK {"evidence_id":"<id>","requirement_id":"<id>","status":"linked"}
+complete_stage: ERR FORBIDDEN / Active owned stage requires evidence before completion
+quality_profile: OK {"product_id":"<id>","profile_id":"<id>","required":true}
+react_native_profile: OK {"product_id":"<id>","profile":"react_native_closed_testing","profile_ids":["<id>","<id>","<id>","<id>","<id>","<id>"]}
+quality_check: OK {"check_id":"<id>","evidence_ref":"ci/run-1","passed":true,"profile_id":"<id>"}
+release_draft: ERR FORBIDDEN / Owned product is not release-ready; required quality evidence is missing
+release_readiness: OK {"completed_verify_stage":false,"pending_impact_assessments":0,"product_id":"<id>","ready":false,"required_quality_blockers":6,"stale_evidence_count":0}
+approve_release: ERR INVALID_INPUT / Factory command contains an empty, oversized, or invalid field
+support_item: OK {"status":"new","support_item_id":"<id>"}
+support_overview: OK {"linked_change_count":0,"oldest_open_created_at":"<timestamp>","open_count":1,"product_id":"<id>","resolved_count":0}
+triage_support: OK {"status":"triaged","support_item_id":"<id>"}
+link_support: OK {"change_request_id":"<id>","relation":"raised_by","support_item_id":"<id>"}
+resolve_support: OK {"resolution_ref":"fix-1","status":"resolved","support_item_id":"<id>"}
+request_impact: ERR NOT_IMPLEMENTED / Impact assessment mutation is not implemented in Phase 3
+cancel_cycle: OK {"cycle_id":"<id>","status":"cancelled"}
+"#;
