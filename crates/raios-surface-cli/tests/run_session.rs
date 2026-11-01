@@ -352,7 +352,10 @@ fn terminating_the_wrapper_stops_the_agent_and_still_cleans_up() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let during = fs::read_to_string(f.root.join("home/.claude/CLAUDE.md")).unwrap();
-    assert!(during.contains("RAIOS WRAPPER SESSION"), "block injected while running");
+    assert!(
+        during.contains("RAIOS WRAPPER SESSION"),
+        "block injected while running"
+    );
 
     let terminated = Instant::now();
     let sent = Command::new("kill")

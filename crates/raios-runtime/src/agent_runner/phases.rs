@@ -468,7 +468,10 @@ pub(super) fn wait_for_agent(
             }
             Ok(None) => {
                 if termination_requested() {
-                    println!("🛑 Wrapper received a termination signal; stopping agent ({}).", agent);
+                    println!(
+                        "🛑 Wrapper received a termination signal; stopping agent ({}).",
+                        agent
+                    );
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!("Agent {} stopped: wrapper was terminated.", agent));

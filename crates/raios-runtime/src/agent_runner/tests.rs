@@ -593,7 +593,11 @@ mod cleanup_guard {
             std::fs::write(&claude_md, content).unwrap();
             let old_home = std::env::var_os("HOME");
             std::env::set_var("HOME", dir.path());
-            FakeHome { _dir: dir, claude_md, old_home }
+            FakeHome {
+                _dir: dir,
+                claude_md,
+                old_home,
+            }
         }
     }
 
@@ -619,7 +623,10 @@ mod cleanup_guard {
         drop(RunCleanup::new(true, None));
 
         let after = std::fs::read_to_string(&home.claude_md).unwrap();
-        assert!(!after.contains("raios-session"), "block left behind: {after}");
+        assert!(
+            !after.contains("raios-session"),
+            "block left behind: {after}"
+        );
         assert!(after.contains("# my rules"));
     }
 
@@ -650,7 +657,10 @@ mod cleanup_guard {
         let result = wait_for_agent(&mut child, "sleep", None);
 
         assert!(result.unwrap_err().contains("terminated"));
-        assert!(started.elapsed() < Duration::from_secs(5), "agent was not stopped promptly");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "agent was not stopped promptly"
+        );
         assert!(child.try_wait().unwrap().is_some(), "agent still running");
     }
 
