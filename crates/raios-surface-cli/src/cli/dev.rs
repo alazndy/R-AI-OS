@@ -596,7 +596,7 @@ fn print_ci_report(report: &raios_core::core::ci::CiReport, json: bool) {
             .conclusion
             .as_deref()
             .unwrap_or(&report.run.status),
-        &report
+        report
             .run
             .created_at
             .get(..10)
