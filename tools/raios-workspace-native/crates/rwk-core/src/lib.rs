@@ -11,6 +11,7 @@
 
 #![warn(missing_docs)]
 
+pub mod badges;
 pub mod consent;
 pub mod control;
 pub mod documents;
