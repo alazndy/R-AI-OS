@@ -555,6 +555,15 @@ port_monitor_interval_secs = 30
 port_probe_timeout_ms = 75
 ```
 
+Cortex defaults to on-demand loading and indexing on all platforms. The first semantic
+search loads the model and refreshes its scope (or the workspace for an unscoped
+search); unchanged files are skipped using the persisted modification times.
+ONNX inference uses two intra-op threads with spinning disabled, and the daemon
+bounds tokenization and HNSW work to two Rayon threads. File events before the
+first semantic request do not load the model. A cold search can exceed the
+10-second response timeout; indexing continues and a subsequent search can use it.
+Set `startup_cortex_indexing = true` only to explicitly request eager indexing.
+
 Windows defaults are now intentionally calmer: no eager Cortex indexing, no periodic Sentinel compile loop, slower health/git/port polling.
 
 Launch the TUI:
