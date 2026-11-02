@@ -1,6 +1,6 @@
 # Workspace native: IDE features (LSP, git, tasks, editor)
 
-Status: **in progress** on `feat/workspace-native-ide-lsp`. Owner asked (2026-10-26) to work through the gap list in order.
+Status: **mostly shipped** (PRs #75–#90). Owner asked (2026-10-26) to work through the gap list in order. Checkboxes below mark what is in `master`; they were checked against the code on 2026-11-03, not against a user-facing test run.
 Builds on `2026-10-05-raios-workspace-native-design.md` and `2026-10-24-workspace-native-orchestration-design.md`.
 
 ## Order and why
@@ -29,20 +29,29 @@ Each step ends with tests, clippy `-D warnings`, the core boundary check and its
 
 ### Slices
 
-1. Core client: framing, URI mapping, catalog, client with initialize/didOpen/didChange/didClose/shutdown and `publishDiagnostics`, tested against a fake server (this file's first commit).
-2. A `LanguageServers` manager in core: one server per language per project, started on first file of that language, restarted once after a crash, stopped with the project.
-3. UI: diagnostics into the editor (underlines, gutter), Problems panel with click-to-open, status line count.
-4. UI: hover, go to definition, completion.
-5. Code actions, rename symbol, format on save.
+- [x] 1. Core client: framing, URI mapping, catalog, client with initialize/didOpen/didChange/didClose/shutdown and `publishDiagnostics`, tested against a fake server (this file's first commit).
+- [x] 2. A `LanguageServers` manager in core: one server per language per project, started on first file of that language, restarted once after a crash, stopped with the project.
+- [x] 3. UI: diagnostics into the editor (underlines, gutter), Problems panel with click-to-open, status line count.
+- [x] 4. UI: hover, go to definition, completion.
+- [x] 5. Code actions, rename symbol, format on save.
 
 ## 2. Git (outline)
+
+- [x] Status, stage/unstage/discard, hunk staging, commit, branches, pull/push/stash, tree and tab badges (#75, #77, #79–#81).
+- [ ] Not verified: the secret-looking check on the commit message.
 
 `git status --porcelain=v2 -z` through the existing bounded-process pattern; file list with stage/unstage/discard (discard asks); commit message box with the secret-looking check the handoff uses; branch list and switch (refuses with a dirty tree that conflicts); tree and tab badges. An agent's working-tree changes show up here without extra wiring.
 
 ## 3. Task runner (outline)
 
+- [x] Named commands run in a terminal pane; output paths are clickable (#75, #76).
+- [ ] Not verified: that commands come only from the user-owned config file.
+
 Named commands per project from a user-owned file in the config directory (never from the project), run in a terminal pane, output matched against `path:line:col` patterns so a click opens the file.
 
 ## 4. Editor (outline)
+
+- [x] Find and replace (with regex), project replace, split editor, auto-save, format on save (#76, #77, #82).
+- [ ] Not verified: the project-wide replace preview.
 
 Find and replace in file (regex off by default) and project-wide replace through the search index with a preview; side-by-side editors; auto-save on focus loss; formatter on save through the LSP where offered.
