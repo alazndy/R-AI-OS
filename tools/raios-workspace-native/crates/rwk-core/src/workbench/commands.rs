@@ -866,7 +866,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         | Commands | Project | RecentProjects | Settings | Skin | Shortcuts | Balanced
         | EditorLayout | AgentsLayout => allow(),
         Files | Search | Problems | SourceControl | Refresh | RunTask | FocusFiles | Memory
-        | Inspector | RestartServers => needs_project(),
+        | Inspector | RestartServers | WorkspaceSymbols => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
@@ -874,9 +874,9 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         },
         Diff | DiffSplit | FocusEditor | CloseTab | CloseOtherTabs | CloseAllTabs | KeepOurs
         | KeepTheirs | KeepBoth | NextConflict | PinTab | MoveTabLeft | MoveTabRight | Format
-        | RenameSymbol | FindReferences | Outline | WorkspaceSymbols | SignatureHelp
-        | InsertSnippet | SearchTabs | FindInFile | ReplaceInFile | ReplaceRegexInFile
-        | GoToLine | ToggleComment | BlameLine | SplitEditor => {
+        | RenameSymbol | FindReferences | Outline | SignatureHelp | InsertSnippet | SearchTabs
+        | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment
+        | BlameLine | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
