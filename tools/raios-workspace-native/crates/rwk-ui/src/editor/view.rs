@@ -190,6 +190,18 @@ pub struct EditorView {
     requester: Option<rwk_core::lsp::Requester>,
     /// Text size, tab width and wrapping.
     prefs: rwk_core::workbench::EditorPrefs,
+    /// The snippet whose places to edit Tab is walking through.
+    snippet: Option<SnippetSession>,
+}
+
+/// The places to edit of an inserted snippet, as byte ranges in the document.
+struct SnippetSession {
+    path: Option<String>,
+    stops: Vec<std::ops::Range<usize>>,
+    current: usize,
+    /// The document's length when `current` was selected; the difference to the length at the
+    /// next Tab is what typing in that place added, and moves the places after it.
+    len: usize,
 }
 
 impl EventEmitter<EditorEvent> for EditorView {}
@@ -222,6 +234,7 @@ impl EditorView {
             restore_generation: 0,
             requester: None,
             prefs: rwk_core::workbench::EditorPrefs::default(),
+            snippet: None,
             split: None,
         }
     }
@@ -411,34 +424,98 @@ impl EditorView {
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
-        let (start, indent) = {
+        let indent: String = {
             let state = tab.state.read(cx);
             let start = state.cursor_position();
             let text = state.value().to_string();
-            let indent: String = text
-                .lines()
+            text.lines()
                 .nth(usize::try_from(start.line).unwrap_or(usize::MAX))
                 .unwrap_or_default()
                 .chars()
                 .take_while(|c| *c == ' ' || *c == '\t')
-                .collect();
-            (start, indent)
+                .collect::<String>()
         };
         let expansion = rwk_core::workbench::expand_snippet(body, &indent);
-        let before = &expansion.text[..expansion.cursor];
-        let newlines = before.matches('\n').count();
-        let tail = before.rsplit('\n').next().unwrap_or_default();
-        let units = u32::try_from(tail.encode_utf16().count()).unwrap_or(0);
-        let target = if newlines == 0 {
-            Position::new(start.line, start.character + units)
-        } else {
-            Position::new(start.line + newlines as u32, units)
-        };
+        let path = tab.path().map(str::to_owned);
         let text = expansion.text;
-        tab.state.update(cx, |state, cx| {
+        let (origin, len) = tab.state.update(cx, |state, cx| {
+            let origin = state.cursor();
             state.insert(text.as_str(), window, cx);
-            state.set_cursor_position(target, window, cx);
+            let first = expansion.stops.first().cloned().unwrap_or(0..0);
+            state.set_selected_range(origin + first.start..origin + first.end, cx);
+            state.focus(window, cx);
+            (origin, state.value().len())
         });
+        // The last place (`$0`) alone needs no walk: the cursor is already there.
+        self.snippet = (expansion.stops.len() > 1).then(|| SnippetSession {
+            path,
+            stops: expansion
+                .stops
+                .iter()
+                .map(|r| origin + r.start..origin + r.end)
+                .collect(),
+            current: 0,
+            len,
+        });
+    }
+
+    /// Tab (`forward`) or Shift Tab inside an inserted snippet: moves to its next or previous
+    /// place to edit. Returns whether the key was used; it is not once the snippet is over or the
+    /// cursor has left the place being edited, and Tab then indents as usual.
+    pub fn snippet_step(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(session) = self.snippet.as_mut() else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            self.snippet = None;
+            return false;
+        };
+        if session.path.as_deref() != tab.path() {
+            self.snippet = None;
+            return false;
+        }
+        let (len, cursor) = {
+            let state = tab.state.read(cx);
+            (state.value().len(), state.cursor())
+        };
+        let delta = len as isize - session.len as isize;
+        let shift = |at: usize| usize::try_from(at as isize + delta).unwrap_or(0);
+        let here = session.stops[session.current].clone();
+        if cursor < here.start || cursor > shift(here.end) {
+            self.snippet = None;
+            return false;
+        }
+        session.stops[session.current].end = shift(here.end);
+        for stop in &mut session.stops[session.current + 1..] {
+            *stop = shift(stop.start)..shift(stop.end);
+        }
+        let next = if forward {
+            session.current + 1
+        } else {
+            session.current.saturating_sub(1)
+        };
+        let target = session.stops[next].clone();
+        session.current = next;
+        session.len = len;
+        let finished = next + 1 == session.stops.len();
+        tab.state.update(cx, |state, cx| {
+            state.set_selected_range(target, cx);
+            state.focus(window, cx);
+        });
+        if finished {
+            self.snippet = None;
+        }
+        true
+    }
+
+    /// Ends the snippet walk (Escape).
+    pub fn end_snippet(&mut self) {
+        self.snippet = None;
     }
 
     /// Closes every tab (a project switch discards them all).
@@ -1774,7 +1851,13 @@ impl Render for EditorView {
                     .flex_row()
                     .font_family(crate::fonts::monospace_family(window))
                     .text_size(gpui::px(f32::from(self.prefs.font_size)))
-                    .child(div().flex_1().min_w_0().child(Editor::new(shown)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .key_context("SnippetEditor")
+                            .child(Editor::new(shown)),
+                    )
                     .children(beside.map(|(path, state)| {
                         div()
                             .flex_1()

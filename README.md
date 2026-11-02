@@ -67,7 +67,35 @@ Human → [ R-AI-OS Kernel ] → Agent Swarm (Claude / Codex / OpenCode / AGY / 
 
 ## 🛡️ Security Kernel
 
-The Security Kernel is the core of R-AI-OS. It enforces a **zero-trust model** for all agent tool calls: every action is policy-gated, logged, and auditable. All 4 phases are implemented and tested.
+The Security Kernel is the core of R-AI-OS. It enforces a **zero-trust model** for all agent tool calls that are routed through it: every such action is policy-gated, logged, and auditable. All 4 phases are implemented and tested.
+
+> **Scope: a policy proxy, not an OS sandbox.** The kernel enforces policy on calls
+> that go *through R-AI-OS*: MCP tool calls (`:42070`) and daemon commands
+> (`:42069` / `:42071`). It does not see or restrict what an agent does outside those
+> channels. An agent that can run its own shell or use its host's built-in file-edit
+> and network tools can read, write, or send data without the policy gate, audit
+> ledger, egress filter, or secret leases ever being involved.
+>
+> Treat it as guardrails and a tamper-evident audit trail for cooperating agents,
+> not containment for a hostile or compromised one. If you need containment, run the
+> agent inside an OS-level sandbox (container, VM, `bubblewrap`/`firejail`, macOS
+> Seatbelt) and use R-AI-OS within it.
+>
+> Within its scope, a few boundaries to be aware of:
+>
+> - **Filesystem checks** run at one gate (`McpServer::authorize_path`) that every
+>   path a tool receives from the caller (`project`, `path`, `project_path`) must pass:
+>   inside the workspace root, outside `blocked_paths`, and the tool must declare a
+>   filesystem capability. A new tool that resolves a path through the shared resolvers
+>   is covered automatically; one that opens a raw argument path itself would bypass it.
+>   The default search scope (the server's own working directory) is not re-checked.
+>   `exec` capabilities remain declarative.
+> - **`confirm` over MCP** is returned to the caller as an error — there is no
+>   interactive prompt on that channel.
+> - **Secret leases** (`raios secret grant`) scope a secret only inside the `raios`
+>   MCP server process: env vars named in any lease are removed from that process's
+>   environment and re-exposed only to the leased tool for the duration of its call.
+>   Secrets never named in a lease stay ambient, and the daemon does not apply this.
 
 ### Architecture
 
@@ -480,9 +508,9 @@ Use the bundled `install.sh` instead of running the steps above by hand. It inst
 ```
 
 What it does:
-1. `cargo build --release --workspace --locked`
-2. `cargo install --path crates/raios-surface-cli --locked --force` — replaces the existing binaries in the active install directory
-3. Restarts `aiosd.service` and `raios-tray.service` via `systemctl --user` (if present) so the new binary actually takes effect, not just the file on disk
+1. `cargo install --path crates/raios-surface-cli --locked --force --target-dir target` — a single release build that reuses `target/`, replacing the existing binaries in the active install directory. A failed build leaves the existing install untouched
+2. Restarts whichever of `raios-hub.service` (created by `raios hub install`), the older `aiosd.service` and `raios-tray.service` exists as a user systemd unit — transient units included — so the new binary actually takes effect, not just the file on disk. A unit whose `ExecStart` points at a different `aiosd` is repaired first
+3. Checks that every running `aiosd` is the freshly installed binary and exits non-zero if one is still running the old one (Linux), instead of reporting success over a stale daemon
 4. Warns if a stray `raios`/`aiosd` binary exists earlier on `$PATH` outside cargo's bin dir, which would silently shadow the freshly installed one
 
 Start the daemon (powers the TUI, MCP server, and HTTP API):
@@ -665,6 +693,7 @@ targets = ["~/.claude/rules", "~/.antigravity/rules"]
 | `raios trace kg-export [query]` | Export trace memory as MemPalace-compatible KG triple JSON |
 | `raios mem export-portable [output.json]` | Export all structured memory items as a portable JSON snapshot; refuses secret-like content |
 | `raios mem import-portable [input.json]` | Atomically merge a portable memory snapshot; rejects secret-like content and inputs over 16 MiB or 50,000 items |
+| `raios memory-archive [project] [--dry-run] [--change-log-kb N] [--instincts-kb N]` | Move the oldest `memory.md` Change Log / Instincts entries into `memory.archive.md` once they exceed a size budget (default 24 KB / 16 KB). Nothing is deleted; also runs automatically after a successful `raios run` when `memory.md` passes 64 KB |
 | `raios evolve from-traces` | Generate pending instinct candidates from successful trace fixes |
 | `raios ocak overview [--json]` (alias: `factory`) | Read the canonical Ocak (Product Factory) snapshot without changing state |
 | `raios ocak execute --file <command.json> [--json]` (alias: `factory`) | Dispatch one bounded local typed `FactoryCommand`; human-only approval, cancellation, stage activation/completion, requirement application, and release approval commands are rejected |

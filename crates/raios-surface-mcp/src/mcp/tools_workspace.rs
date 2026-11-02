@@ -330,27 +330,17 @@ impl McpServer {
     }
 
     /// Resolve the `path` arg to a search scope: an explicit project name/absolute
-    /// path if given, otherwise the current working directory (the project the
-    /// MCP server itself was launched from).
+    /// path if given (authorized through the single filesystem gate), otherwise
+    /// the current working directory — the project the MCP server itself was
+    /// launched from, chosen by whoever launched it rather than by the model,
+    /// so it is not re-checked.
     fn resolve_search_scope(&self, args: &Value) -> Result<std::path::PathBuf, String> {
         let Some(project) = args["path"].as_str() else {
             return std::env::current_dir().map_err(|e| e.to_string());
         };
-        let direct = std::path::Path::new(project);
-        if direct.exists() {
-            return Ok(direct.to_path_buf());
-        }
-        if let Ok(conn) = raios_core::db::open_db() {
-            if let Ok(projects) = raios_core::db::load_all_projects(&conn) {
-                if let Some(found) = projects
-                    .iter()
-                    .find(|p| p.name.to_lowercase().contains(&project.to_lowercase()))
-                {
-                    return Ok(std::path::PathBuf::from(&found.path));
-                }
-            }
-        }
-        Err(format!("Project not found: {}", project))
+        let path = self.lookup_project(project)?;
+        self.authorize_path(&path)?;
+        Ok(path)
     }
 
     pub(super) fn tool_semantic_search(&self, args: &Value) -> Result<Value, String> {
@@ -590,7 +580,7 @@ impl McpServer {
             let rf = health["refactor_grade"].as_str().unwrap_or("-");
             text_lines.push(format!(
                 "{:<30} {:<10} {:<8} {:<6} {:<6} {:<8}",
-                &p.name[..p.name.len().min(29)],
+                raios_core::text::truncate_at_char_boundary(&p.name, 29),
                 p.status,
                 dirty,
                 comp,
@@ -704,9 +694,7 @@ mod resolve_search_scope_tests {
     fn resolve_search_scope_accepts_a_direct_existing_path() {
         let dir = tempfile::tempdir().unwrap();
         let server = super::McpServer::new_for_test();
-        let scope = server
-            .resolve_search_scope(&json!({ "path": dir.path().to_str().unwrap() }))
-            .unwrap();
+        let scope = server.lookup_project(dir.path().to_str().unwrap()).unwrap();
         assert_eq!(scope, dir.path());
     }
 
@@ -720,9 +708,7 @@ mod resolve_search_scope_tests {
             .unwrap();
 
             let server = super::McpServer::new_for_test();
-            let scope = server
-                .resolve_search_scope(&json!({ "path": "ai-os" }))
-                .unwrap();
+            let scope = server.lookup_project("ai-os").unwrap();
             assert_eq!(
                 scope,
                 std::path::PathBuf::from("/does/not/exist/on/this/machine")
@@ -739,5 +725,34 @@ mod resolve_search_scope_tests {
                 .unwrap_err();
             assert_eq!(err, "Project not found: totally-unregistered-name");
         });
+    }
+}
+
+/// Project names come from directory names, so they are arbitrary text:
+/// cutting one to a column width must not split a multi-byte character.
+#[cfg(test)]
+mod portfolio_status_tests {
+    use serde_json::json;
+
+    #[test]
+    fn portfolio_status_lists_a_project_whose_name_is_cut_inside_a_multibyte_char() {
+        let _db = raios_core::test_support::IsolatedDb::new();
+        let conn = raios_core::db::open_db().unwrap();
+        // 20 x "ş" = 40 bytes; the 29-byte column limit falls inside the 15th.
+        let name = "ş".repeat(20);
+        conn.execute(
+            "INSERT INTO projects (name, path) VALUES (?1, ?2)",
+            rusqlite::params![name, "/does/not/exist/on/this/machine"],
+        )
+        .unwrap();
+        drop(conn);
+
+        let server = super::McpServer::new_for_test();
+        let result = server.tool_portfolio_status(&json!({})).unwrap();
+
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains(&"ş".repeat(14)), "{text}");
+        // The full name is still reported untruncated in the structured rows.
+        assert_eq!(result["projects"][0]["name"], name);
     }
 }

@@ -856,6 +856,7 @@ mod tests {
         ignore = "tmux is not available on Windows; spawn_via_tmux has no Windows implementation yet"
     )]
     async fn steer_agent_sends_keys_into_live_session() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         use super::{AgentProcess, DaemonState, ExecutionProxy};
         use std::sync::Arc;
         use tokio::sync::RwLock;
@@ -1050,6 +1051,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn spawn_then_steer_full_roundtrip() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let state = Arc::new(RwLock::new(DaemonState::default()));
         let proxy = ExecutionProxy::new(state.clone());
         let id = uuid::Uuid::new_v4();
@@ -1138,6 +1140,7 @@ mod integration_tests {
     /// string as if it were harmless text.
     #[tokio::test]
     async fn steer_sends_control_sequence_looking_message_as_literal_text() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let state = Arc::new(RwLock::new(DaemonState::default()));
         let proxy = ExecutionProxy::new(state.clone());
         let id = uuid::Uuid::new_v4();
@@ -1222,6 +1225,7 @@ mod integration_tests {
     /// fails. The `--` end-of-options separator is what makes it text.
     #[tokio::test]
     async fn steer_sends_dash_prefixed_message_without_tmux_parsing_it_as_a_flag() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let state = Arc::new(RwLock::new(DaemonState::default()));
         let proxy = ExecutionProxy::new(state.clone());
         let id = uuid::Uuid::new_v4();

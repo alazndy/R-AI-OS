@@ -24,6 +24,16 @@ pub(super) fn cmd_doctor(agent: String, tier: Option<String>, json: bool) {
     }
 }
 
+/// Project column of the disk table: the directory name, cut to the column
+/// width on a character boundary (directory names are arbitrary text).
+fn disk_report_name(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    raios_core::text::truncate_at_char_boundary(&name, 31).to_string()
+}
+
 pub(super) fn cmd_disk(project: Option<String>, dev_ops: &Path, json: bool) {
     use raios_core::core::disk;
     let reports = if project.is_none() {
@@ -46,14 +56,9 @@ pub(super) fn cmd_disk(project: Option<String>, dev_ops: &Path, json: bool) {
     );
     println!("{}", "─".repeat(72));
     for r in &reports {
-        let name = r
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| r.path.display().to_string());
         println!(
             "{:<32} {:>10} {:>10} {:>10} {:>6}",
-            &name[..name.len().min(31)],
+            disk_report_name(&r.path),
             disk::human_size(r.total_bytes),
             disk::human_size(r.source_bytes),
             disk::human_size(r.cache_bytes),
@@ -591,7 +596,7 @@ fn print_ci_report(report: &raios_core::core::ci::CiReport, json: bool) {
             .conclusion
             .as_deref()
             .unwrap_or(&report.run.status),
-        &report
+        report
             .run
             .created_at
             .get(..10)
@@ -613,6 +618,23 @@ fn print_ci_report(report: &raios_core::core::ci::CiReport, json: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn disk_report_name_survives_a_cut_inside_a_multibyte_char() {
+        // 20 x "ş" = 40 bytes; the 31-byte column limit falls inside the 16th.
+        let path = std::path::Path::new("/projects").join("ş".repeat(20));
+        let cell = super::disk_report_name(&path);
+        assert!(cell.len() <= 31);
+        assert_eq!(cell, "ş".repeat(15));
+    }
+
+    #[test]
+    fn disk_report_name_keeps_short_names_whole() {
+        assert_eq!(
+            super::disk_report_name(std::path::Path::new("/p/R-AI-OS")),
+            "R-AI-OS"
+        );
+    }
+
     use super::{format_job_duration, job_status_icon, run_status_icon};
 
     #[test]

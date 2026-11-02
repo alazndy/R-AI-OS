@@ -96,7 +96,7 @@ mod tests {
     fn resolve_base_url_defaults_to_42071() {
         // No raios-policy.toml in the test's cwd → falls back to the
         // documented default port, same default the policy file itself
-        // ships (raios-policy.toml:7, `http_port = 42071`).
+        // ships (raios-policy.toml:9, `http_port = 42071`).
         assert_eq!(resolve_base_url(), "http://127.0.0.1:42071");
     }
 

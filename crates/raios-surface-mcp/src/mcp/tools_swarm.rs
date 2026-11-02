@@ -10,6 +10,7 @@ impl McpServer {
         let project_path = args["project_path"]
             .as_str()
             .ok_or("missing project_path")?;
+        self.authorize_path(std::path::Path::new(project_path))?;
         let description = args["description"].as_str().ok_or("missing description")?;
         let agent = args["agent"].as_str().unwrap_or("claude");
         let store = raios_runtime::swarm::store::SwarmStore::new(
