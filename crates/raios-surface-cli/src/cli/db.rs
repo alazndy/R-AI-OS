@@ -23,6 +23,8 @@ pub fn cmd_db(command: DbCmd, json: bool) {
         DbCmd::Check { full } => run_check(full, json),
         DbCmd::Backup { keep } => run_backup(keep, json),
         DbCmd::Checkpoint { truncate } => run_checkpoint(truncate, json),
+        DbCmd::BackupTimerInstall => run_backup_timer_install(json),
+        DbCmd::BackupTimerUninstall => run_backup_timer_uninstall(json),
     };
 
     if let Err(error) = result {
@@ -179,6 +181,47 @@ fn run_checkpoint(truncate: bool, json: bool) -> anyhow::Result<()> {
             human_bytes(report.wal_bytes_before),
             human_bytes(report.wal_bytes_after)
         );
+    }
+    Ok(())
+}
+
+fn run_backup_timer_install(json: bool) -> anyhow::Result<()> {
+    let report = super::db_backup_timer::install()?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("workspace.db backup timer installed and enabled");
+        println!("  Service: {}", report["service"].as_str().unwrap_or("?"));
+        println!("  Timer: {}", report["timer"].as_str().unwrap_or("?"));
+        println!(
+            "  Schedule: {} local, persistent catch-up, randomized by 15 min",
+            report["on_calendar"].as_str().unwrap_or("?")
+        );
+        println!("  Retention: {} snapshots", report["retention"]);
+        println!("  WAL: passive checkpoint after each successful backup");
+        println!();
+        println!("No backup has run yet; `raios db backup` takes one now.");
+    }
+    Ok(())
+}
+
+fn run_backup_timer_uninstall(json: bool) -> anyhow::Result<()> {
+    let report = super::db_backup_timer::uninstall()?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("workspace.db backup timer removed");
+        println!(
+            "  Disabled: {}{}",
+            report["disabled"],
+            report["disable_detail"]
+                .as_str()
+                .map(|detail| format!(" ({detail})"))
+                .unwrap_or_default()
+        );
+        println!("  Service removed: {}", report["service_removed"]);
+        println!("  Timer removed: {}", report["timer_removed"]);
+        println!("  Retained: workspace.db, managed snapshots, SHA-256 sidecars");
     }
     Ok(())
 }
