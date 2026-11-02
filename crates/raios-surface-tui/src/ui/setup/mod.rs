@@ -35,8 +35,9 @@ pub fn render_setup(frame: &mut Frame, app: &App) {
 }
 
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let step = app.wizard.step.index();
-    let total = WizardStep::total();
+    let plan = app.wizard.plan();
+    let step = app.wizard.step.position_in(&plan);
+    let total = plan.len() - 1;
     let pct = (step * 100 / total.max(1)) as u16;
 
     let [title_a, bar_a] =
@@ -95,7 +96,7 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
             frame,
             area,
             app,
-            "CODEX KAIRA",
+            "CODEX",
             app.wizard.skip_antigravity,
             app.wizard
                 .agent_status

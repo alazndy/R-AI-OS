@@ -524,7 +524,7 @@ impl App {
         }
 
         self.wizard.field_cursor = 0;
-        self.wizard.step = self.wizard.step.next();
+        self.wizard.step = self.wizard.step.next_in(&self.wizard.plan());
         self.wizard.field_cursor = 0;
     }
 
