@@ -426,6 +426,11 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // Later than the editor widget's own Tab bindings, so these win inside the editor.
+        cx.bind_keys([
+            gpui::KeyBinding::new("tab", SnippetNext, Some("SnippetEditor > Input")),
+            gpui::KeyBinding::new("shift-tab", SnippetPrev, Some("SnippetEditor > Input")),
+        ]);
         let gates = Arc::new(GateRegistry::new());
         let wake_gates = Arc::clone(&gates);
         let pty = Arc::new(PtyTerminalHost::new(
@@ -1966,6 +1971,22 @@ impl Workbench {
         }
     }
 
+    /// Tab / Shift Tab in the editor: walks a snippet's places, else indents as the editor does.
+    fn snippet_key(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .editor
+            .update(cx, |editor, cx| editor.snippet_step(forward, window, cx))
+        {
+            return;
+        }
+        let fallback: Box<dyn gpui::Action> = if forward {
+            Box::new(gpui_base::input::IndentInline)
+        } else {
+            Box::new(gpui_base::input::OutdentInline)
+        };
+        window.dispatch_action(fallback, cx);
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(dialog) = self.dialog() {
             // A dialog owns the keyboard: Enter takes the default button, Escape cancels.
@@ -1988,6 +2009,9 @@ impl Workbench {
             return;
         }
         let modifiers = event.keystroke.modifiers;
+        if event.keystroke.key == "escape" {
+            self.editor.update(cx, |editor, _| editor.end_snippet());
+        }
         let stroke = Keystroke {
             key: event.keystroke.key.clone(),
             ctrl: modifiers.control,
@@ -2005,6 +2029,8 @@ impl Workbench {
         }
     }
 }
+
+gpui::actions!(snippet, [SnippetNext, SnippetPrev]);
 
 fn terminal_appearance(theme: Theme) -> TerminalAppearance {
     TerminalAppearance::Themed {
@@ -2116,6 +2142,14 @@ impl Render for Workbench {
             .text_color(gpui::rgb(theme.text))
             // Capture phase: a shortcut is resolved before the focused terminal sees the key.
             .capture_key_down(cx.listener(Self::on_key_down))
+            .on_action(
+                cx.listener(|this, _: &SnippetNext, window, cx| this.snippet_key(true, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SnippetPrev, window, cx| {
+                    this.snippet_key(false, window, cx)
+                }),
+            )
             .children(
                 theme
                     .lcars

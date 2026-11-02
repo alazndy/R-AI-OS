@@ -80,11 +80,11 @@ Shows `memory.md` as a heading outline with checklist progress and search, and t
 - **Parameter hint** (`Ctrl Shift Space`) shows the signature of the call under the cursor with the
   current parameter between « », in the footer.
 - **Snippets** (`Ctrl J`) lists the snippets of the open file's type and inserts one at the cursor,
-  indented like the line, cursor on its first place to edit. A few ship built in (Rust, Python, JS/TS,
+  indented like the line, its first place to edit selected (typing replaces the default); `Tab` /
+  `Shift Tab` walk the places, `Esc` ends the walk. A few ship built in (Rust, Python, JS/TS,
   Go, C); add your own in `~/.config/raios-workspace-native/snippets.json`:
   `{"snippets":[{"prefix":"todo","extensions":["rs"],"body":"// TODO ${1:what}\n$0"}]}`
-  (no `extensions` = every file; `$1`/`${1:default}` mark places, `$0` the end; tab-through is not
-  implemented).
+  (no `extensions` = every file; `$1`/`${1:default}` mark places, `$0` the end).
 - **Project symbols** (`Ctrl T`) searches symbols of the whole project through the language server
   of the open file. **Recent projects** (`Ctrl Alt O`) lists the folders opened before.
 - **Changes on disk**: open files and the file tree notice edits made elsewhere (checked every
