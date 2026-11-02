@@ -5815,6 +5815,27 @@ fn a_snippet_is_inserted_indented_with_the_cursor_on_its_first_place() {
 }
 
 #[test]
+fn the_open_tabs_can_be_searched_and_the_chosen_one_is_shown() {
+    let mut rig = rig();
+    for name in ["alpha.txt", "beta.txt"] {
+        std::fs::write(rig.dir.path().join(name), name).expect("file");
+    }
+    rig.open_project();
+    rig.open_file("alpha.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("alpha.txt")));
+    rig.open_file("beta.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("beta.txt")));
+
+    rig.run(CommandId::SearchTabs);
+    assert!(rig.read(|wb, _| wb.palette().is_some()));
+    rig.cx.simulate_input("alp");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.palette().is_none()));
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("alpha.txt")));
+    assert_eq!(rig.editor_paths().len(), 2);
+}
+
+#[test]
 fn tab_walks_through_the_places_of_a_snippet_and_typing_replaces_the_default() {
     let mut rig = rig();
     std::fs::write(rig.dir.path().join("t.rs"), "").expect("t.rs");
