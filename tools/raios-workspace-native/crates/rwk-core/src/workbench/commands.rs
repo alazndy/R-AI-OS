@@ -875,8 +875,8 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         Diff | DiffSplit | FocusEditor | CloseTab | CloseOtherTabs | CloseAllTabs | KeepOurs
         | KeepTheirs | KeepBoth | NextConflict | PinTab | MoveTabLeft | MoveTabRight | Format
         | RenameSymbol | FindReferences | Outline | SignatureHelp | InsertSnippet | SearchTabs
-        | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment | BlameLine
-        | SplitEditor => {
+        | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment
+        | BlameLine | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
