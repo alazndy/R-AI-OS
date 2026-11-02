@@ -10,15 +10,18 @@ impl McpServer {
     /// cannot itself become a secret-leak vector. `rule_source` distinguishes
     /// an explicit `[[tools.rules]]` match from a fallback to `default_action`,
     /// which `raios policy suggest` (Phase 1) uses to propose new rules.
+    ///
+    /// Returns `Err` when the ledger cannot be opened or written. Callers must
+    /// treat that as fail-closed for allowed calls: an action that cannot be
+    /// audited must not run.
     fn record_tool_audit(
         &self,
         name: &str,
         raw_args: &str,
         decision: &raios_core::security::UmaiDecision,
-    ) {
-        let Ok(conn) = raios_core::db::open_db() else {
-            return;
-        };
+    ) -> Result<(), String> {
+        let conn =
+            raios_core::db::open_db().map_err(|e| format!("audit ledger unavailable: {e}"))?;
         let event_type = match decision {
             raios_core::security::UmaiDecision::Allow => "tool_allow",
             raios_core::security::UmaiDecision::Deny(_) => "tool_deny",
@@ -26,39 +29,49 @@ impl McpServer {
         };
         let args_hash = format!("{:x}", Sha256::digest(raw_args.as_bytes()));
         let actor = std::env::var("RAIOS_AGENT_IDENTITY").unwrap_or_else(|_| "claude_kaira".into());
-        let _ = raios_core::security::record_tool_decision(
+        raios_core::security::record_tool_decision(
             &conn,
             name,
             &args_hash,
             self.umai.rule_source(name),
             event_type,
             &actor,
-        );
+        )
+        .map_err(|e| format!("audit write failed: {e}"))
     }
 
-    /// Enforces the capability-declaration sandbox ("no ambient authority")
-    /// for one tool call. See `security::capabilities` module docs for the
-    /// exact scope of what is and isn't checked here.
-    fn enforce_capability(&self, name: &str, args: &Value) -> Result<(), String> {
+    /// Resolves the tool's capability and enforces its network half
+    /// ("no ambient authority"). The filesystem half is enforced at the single
+    /// gate, `authorize_path`, which every path resolver calls — so a tool
+    /// cannot touch a caller-supplied path without passing it. See the
+    /// `security::capabilities` module docs for the exact scope.
+    fn enforce_capability(
+        &self,
+        name: &str,
+    ) -> Result<raios_core::security::policy::ToolCapabilities, String> {
         let caps =
             raios_core::security::capabilities::resolve(name, self.umai.tool_capabilities(name));
-
-        if raios_core::security::capabilities::PATH_RESOLVING_TOOLS.contains(&name) {
-            // Only enforce once the tool would actually resolve a path — if
-            // resolution itself fails (e.g. missing "project"), let the real
-            // dispatch below surface that error instead of masking it here.
-            if let Ok(resolved) = self.resolve_git_path(args) {
-                raios_core::security::check_fs_capability(
-                    &caps,
-                    &self.config.dev_ops_path,
-                    &resolved,
-                    &self.blocked_paths,
-                )?;
-            }
-        }
-
         raios_core::security::check_network_capability(&caps, &self.egress)?;
-        Ok(())
+        Ok(caps)
+    }
+
+    /// The single filesystem gate. Every caller-supplied path a tool is about
+    /// to use must pass through here (the resolvers below all do): it must be
+    /// inside the workspace root, outside `[filesystem] blocked_paths`, and
+    /// the active tool must declare a filesystem capability at all.
+    ///
+    /// Fails closed when called outside a tool dispatch.
+    pub(super) fn authorize_path(&self, path: &std::path::Path) -> Result<(), String> {
+        let Some(caps) = &self.active_caps else {
+            return Err("capability:no active tool call to authorize a path against".to_string());
+        };
+        raios_core::security::check_fs_capability(
+            caps,
+            &self.config.dev_ops_path,
+            path,
+            &self.blocked_paths,
+        )
+        .map_err(|e| format!("capability:{e}"))
     }
 
     pub(super) fn handle_tools_list(&self) -> Result<Value, String> {
@@ -117,7 +130,13 @@ impl McpServer {
 
         let raw_args = serde_json::to_string(args).unwrap_or_default();
         let decision = self.umai.check(name, Some(&raw_args));
-        self.record_tool_audit(name, &raw_args, &decision);
+        if let Err(e) = self.record_tool_audit(name, &raw_args, &decision) {
+            // Fail closed: only an allowed call is affected, since deny/confirm
+            // already stop here with their own error below.
+            if decision.is_allowed() {
+                return Err(format!("audit:{e}"));
+            }
+        }
         match decision {
             raios_core::security::UmaiDecision::Allow => {}
             raios_core::security::UmaiDecision::Deny(reason) => {
@@ -134,25 +153,29 @@ impl McpServer {
 
         if self.quarantine.is_enabled() {
             let args_str = serde_json::to_string(args).unwrap_or_default();
-            if let Ok(conn) = raios_core::db::open_db() {
-                if let Err(e) = self.quarantine.check(&conn, name, &args_str) {
-                    return Err(e.to_string());
-                }
+            // Fail closed: if the quarantine store cannot be consulted, a
+            // previously denied tool must not slip through.
+            let conn = raios_core::db::open_db()
+                .map_err(|e| format!("quarantine: store unavailable: {e}"))?;
+            if let Err(e) = self.quarantine.check(&conn, name, &args_str) {
+                return Err(e.to_string());
             }
         }
 
         // Inject active secret leases into the process environment for this tool call.
-        if let Ok(conn) = raios_core::db::open_db() {
-            for (var, val) in raios_core::security::secret_lease::active_env_for_tool(&conn, name) {
-                std::env::set_var(var, val);
-            }
-        }
+        // Leasable secrets are scrubbed from the ambient environment and
+        // re-exposed only to the tool they are leased to, for this call only.
+        // The guard lives until this function returns (any exit path).
+        let _lease_env = raios_core::db::open_db()
+            .ok()
+            .map(|conn| raios_core::security::secret_lease::inject_active_env(&conn, name));
 
-        if let Err(e) = self.enforce_capability(name, args) {
-            return Err(format!("capability:{}", e));
-        }
+        let caps = self
+            .enforce_capability(name)
+            .map_err(|e| format!("capability:{e}"))?;
+        self.active_caps = Some(caps);
 
-        match name {
+        let result = match name {
             "update_state" => self.tool_update_state(args),
             "handover" => self.tool_handover(args),
             "add_task" => self.tool_add_task(args),
@@ -193,11 +216,15 @@ impl McpServer {
             "factory_overview" => self.tool_factory_overview(),
             "factory_execute" => self.tool_factory_execute(args),
             _ => Err(format!("Unknown tool: {}", name)),
-        }
+        };
+        self.active_caps = None;
+        result
     }
 
-    pub(super) fn resolve_git_path(&self, args: &Value) -> Result<std::path::PathBuf, String> {
-        let project = args["project"].as_str().ok_or("missing project")?;
+    /// Pure lookup of a project name or path → directory. No authorization:
+    /// callers must go through `authorize_path` before using the result
+    /// (`resolve_git_path` / `resolve_search_scope` / swarm do).
+    pub(super) fn lookup_project(&self, project: &str) -> Result<std::path::PathBuf, String> {
         let direct = std::path::Path::new(project);
         if direct.exists() {
             return Ok(direct.to_path_buf());
@@ -213,6 +240,13 @@ impl McpServer {
             }
         }
         Err(format!("Project not found: {}", project))
+    }
+
+    pub(super) fn resolve_git_path(&self, args: &Value) -> Result<std::path::PathBuf, String> {
+        let project = args["project"].as_str().ok_or("missing project")?;
+        let path = self.lookup_project(project)?;
+        self.authorize_path(&path)?;
+        Ok(path)
     }
 
     fn extract_steer_args(args: &Value) -> Result<(String, String), String> {
@@ -530,9 +564,7 @@ mod resolve_git_path_tests {
     fn resolve_git_path_accepts_a_direct_existing_path() {
         let dir = tempfile::tempdir().unwrap();
         let server = super::McpServer::new_for_test();
-        let resolved = server
-            .resolve_git_path(&json!({ "project": dir.path().to_str().unwrap() }))
-            .unwrap();
+        let resolved = server.lookup_project(dir.path().to_str().unwrap()).unwrap();
         assert_eq!(resolved, dir.path());
     }
 
@@ -546,9 +578,7 @@ mod resolve_git_path_tests {
             .unwrap();
 
             let server = super::McpServer::new_for_test();
-            let resolved = server
-                .resolve_git_path(&json!({ "project": "ai-os" }))
-                .unwrap();
+            let resolved = server.lookup_project("ai-os").unwrap();
             assert_eq!(
                 resolved,
                 std::path::PathBuf::from("/does/not/exist/on/this/machine")
@@ -571,5 +601,111 @@ mod resolve_git_path_tests {
                 .unwrap_err();
             assert_eq!(err, "Project not found: totally-unregistered-name");
         });
+    }
+}
+
+/// The single filesystem gate (`authorize_path`) and the three resolvers that
+/// feed it. Each test dispatches through `handle_tools_call` where it can, so
+/// it proves the gate is wired in, not just that the helper works.
+#[cfg(test)]
+mod authorize_path_tests {
+    use raios_core::security::policy::ToolCapabilities;
+    use serde_json::json;
+
+    fn server_in(workspace: &std::path::Path) -> super::McpServer {
+        let mut s = super::McpServer::new_for_test();
+        s.config.dev_ops_path = workspace.to_path_buf();
+        s
+    }
+
+    fn fs_caps() -> ToolCapabilities {
+        ToolCapabilities {
+            fs_read: vec!["*".into()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn authorize_path_fails_closed_outside_a_tool_dispatch() {
+        let ws = tempfile::tempdir().unwrap();
+        let server = server_in(ws.path());
+        let err = server.authorize_path(ws.path()).unwrap_err();
+        assert!(err.starts_with("capability:"), "{err}");
+    }
+
+    #[test]
+    fn authorize_path_allows_inside_and_denies_outside_the_workspace() {
+        let ws = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut server = server_in(ws.path());
+        server.active_caps = Some(fs_caps());
+
+        assert!(server.authorize_path(ws.path()).is_ok());
+        let err = server.authorize_path(outside.path()).unwrap_err();
+        assert!(err.starts_with("capability:"), "{err}");
+    }
+
+    #[test]
+    fn authorize_path_denies_a_tool_with_no_declared_fs_capability() {
+        let ws = tempfile::tempdir().unwrap();
+        let mut server = server_in(ws.path());
+        server.active_caps = Some(ToolCapabilities::default());
+        assert!(server.authorize_path(ws.path()).is_err());
+    }
+
+    #[test]
+    fn authorize_path_honours_blocked_paths() {
+        let ws = tempfile::tempdir().unwrap();
+        let secret = ws.path().join("secrets");
+        std::fs::create_dir_all(&secret).unwrap();
+        let mut server = server_in(ws.path());
+        server.blocked_paths = vec![secret.to_string_lossy().to_string()];
+        server.active_caps = Some(fs_caps());
+        assert!(server.authorize_path(&secret).is_err());
+    }
+
+    #[test]
+    fn locate_search_cannot_scan_a_directory_outside_the_workspace() {
+        let _db = raios_core::test_support::IsolatedDb::new();
+        // Regression: locate_search is policy-`allow` and used to accept any
+        // `path` without a filesystem check.
+        let ws = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut server = server_in(ws.path());
+        let err = server
+            .handle_tools_call(&json!({
+                "name": "locate_search",
+                "arguments": { "pattern": "x", "path": outside.path().to_str().unwrap() }
+            }))
+            .unwrap_err();
+        assert!(err.starts_with("capability:"), "{err}");
+    }
+
+    #[test]
+    fn create_swarm_task_cannot_target_a_project_outside_the_workspace() {
+        let _db = raios_core::test_support::IsolatedDb::new();
+        let ws = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut server = server_in(ws.path());
+        let err = server
+            .handle_tools_call(&json!({
+                "name": "create_swarm_task",
+                "arguments": {
+                    "project_name": "p",
+                    "project_path": outside.path().to_str().unwrap(),
+                    "description": "d"
+                }
+            }))
+            .unwrap_err();
+        assert!(err.starts_with("capability:"), "{err}");
+    }
+
+    #[test]
+    fn active_caps_are_cleared_after_a_dispatch() {
+        let _db = raios_core::test_support::IsolatedDb::new();
+        let ws = tempfile::tempdir().unwrap();
+        let mut server = server_in(ws.path());
+        let _ = server.handle_tools_call(&json!({ "name": "get_stats", "arguments": {} }));
+        assert!(server.active_caps.is_none());
     }
 }

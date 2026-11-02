@@ -1,18 +1,22 @@
 # R-AI-OS Security Policy Configuration
+#
+# Shipped default. Machine-specific values (your hub API key hash, personal
+# paths) belong in your own copy of this file, not here:
+#   * `raios hub api-key generate` writes `api_key_hash` under [server.hub].
+#   * Without an `api_key_hash`, remote hub access is refused (fail-closed).
 
 [server]
-[server.hub]
-api_key_hash = "1d41b48bbf183a496eea3b6a40336d4dc9aeb138788e4ec4763988081744fd89"
-
 http_port = 42071 # Axum HTTP/WebSocket API adapter port
 
 [filesystem]
 enforce_sandbox = true
 allowed_paths = []
+# A leading `~` is expanded to the current user's home directory.
 blocked_paths = [
-    "C:/Users/turha/.ssh",
+    "~/.ssh",
+    "~/.gnupg",
+    "~/.aws",
     "C:/Windows",
-    "C:/Users/turha/AppData"
 ]
 
 [tools]

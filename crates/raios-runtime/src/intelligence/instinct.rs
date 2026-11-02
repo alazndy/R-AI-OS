@@ -177,11 +177,7 @@ pub fn suggest_from_failure(description: &str, _command: &str, error: &str) -> V
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        s
-    } else {
-        &s[..max]
-    }
+    raios_core::text::truncate_at_char_boundary(s, max)
 }
 
 pub fn append_to_memory_md(project_path: &std::path::Path, rule: &str) -> anyhow::Result<()> {
@@ -252,6 +248,21 @@ mod tests {
     use super::*;
     use crate::health::ProjectHealth;
     use tempfile::TempDir;
+
+    /// Task descriptions are free text (Turkish included): the 40-byte quote in
+    /// a suggestion must not be cut inside a multi-byte character.
+    #[test]
+    fn suggestions_quote_a_task_description_cut_inside_a_multibyte_char() {
+        // 39 ASCII bytes, then "ş" straddles the 40-byte limit.
+        let description = format!("{}şşş görevi", "a".repeat(39));
+        assert!(!description.to_lowercase().is_char_boundary(40));
+
+        let from_outcome = suggest_from_outcome(&description, "cargo build", "ok");
+        assert!(from_outcome.iter().any(|s| s.contains(&"a".repeat(39))));
+
+        let from_failure = suggest_from_failure(&description, "", "permission denied");
+        assert!(from_failure.iter().any(|s| s.contains(&"a".repeat(39))));
+    }
 
     fn make_bad_health(tmp: &TempDir) -> ProjectHealth {
         ProjectHealth {

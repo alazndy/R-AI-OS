@@ -17,14 +17,9 @@ use std::time::SystemTime;
 /// Run `claude --print` to generate a single memory.md Change Log entry
 /// from the given transcript. Returns the raw line(s) Claude produces.
 pub fn generate_memory_entry(transcript: &str) -> Option<String> {
-    let date = chrono::Local::now().format("%Y-%m-%d");
-    let prompt = format!(
-        "Based on this Claude Code session transcript, write ONE concise Change Log \
-entry for memory.md using this exact format (no extra text, just the line):\n\
-`- [{date}] [Claude Kaira]: <brief summary of what was accomplished>`\n\n\
-Keep it under 120 characters. Focus on what changed, not how.\n\n\
-TRANSCRIPT:\n{}\n",
-        &transcript[..transcript.len().min(6000)]
+    let prompt = memory_entry_prompt(
+        transcript,
+        &chrono::Local::now().format("%Y-%m-%d").to_string(),
     );
 
     let output = Command::new("claude")
@@ -51,20 +46,31 @@ TRANSCRIPT:\n{}\n",
     }
 }
 
-/// Append a change log entry to the project's memory.md.
-/// Inserts after the `## Change Log` heading (or appends at end if not found).
+/// Maximum transcript bytes sent to `claude --print`.
+const MAX_TRANSCRIPT_PROMPT_BYTES: usize = 6000;
+
+fn memory_entry_prompt(transcript: &str, date: &str) -> String {
+    format!(
+        "Based on this Claude Code session transcript, write ONE concise Change Log \
+entry for memory.md using this exact format (no extra text, just the line):\n\
+`- [{date}] [Claude Kaira]: <brief summary of what was accomplished>`\n\n\
+Keep it under 120 characters. Focus on what changed, not how.\n\n\
+TRANSCRIPT:\n{}\n",
+        raios_core::text::truncate_at_char_boundary(transcript, MAX_TRANSCRIPT_PROMPT_BYTES)
+    )
+}
+
+/// Add a change log entry to the project's memory.md, inside the
+/// `## Change Log` section on the side that section treats as newest (or in a
+/// new section if there is none). Never appended to the end of the file: that
+/// is where `## Instincts` lives in the usual layout.
 pub fn append_to_memory_md(project_path: &str, entry: &str) -> std::io::Result<()> {
     let memory_path = Path::new(project_path).join("memory.md");
     if !memory_path.exists() {
         return Ok(());
     }
     let content = std::fs::read_to_string(&memory_path)?;
-    let updated = if content.contains("## Change Log") {
-        // Append right before the end of the file
-        format!("{}\n{}\n", content.trim_end(), entry)
-    } else {
-        format!("{}\n\n## Change Log\n{}\n", content.trim_end(), entry)
-    };
+    let updated = crate::memory_archive::insert_change_log_entry(&content, entry);
     std::fs::write(&memory_path, updated)
 }
 
@@ -362,6 +368,49 @@ pub fn auto_sync_claude_memory(project_path: &str, session_started: SystemTime) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `raios memory-gen` used to append to the end of the file, which in the
+    /// usual layout is the `## Instincts` section.
+    #[test]
+    fn memory_gen_entry_lands_in_the_change_log_not_in_instincts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("memory.md"),
+            "# P\n\n## Change Log & Agent Trail\n\n- [2026-10-02] [A]: newer\n- [2026-10-01] [A]: older\n\n## Instincts\n- a rule\n",
+        )
+        .unwrap();
+
+        append_to_memory_md(
+            dir.path().to_str().unwrap(),
+            "- [2026-11-01] [Claude Kaira]: fresh",
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join("memory.md")).unwrap();
+        let fresh = content.find("fresh").unwrap();
+        assert!(content.find("## Change Log").unwrap() < fresh);
+        assert!(
+            fresh < content.find("newer").unwrap(),
+            "newest-first log: goes on top"
+        );
+        assert!(fresh < content.find("## Instincts").unwrap());
+        assert!(content.ends_with("- a rule\n"), "Instincts untouched");
+    }
+
+    /// Turkish text puts multi-byte characters (ş, ı, ğ, ü …) all through the
+    /// transcript, so the 6000-byte cut can land inside one.
+    #[test]
+    fn memory_entry_prompt_survives_a_cut_inside_a_multibyte_character() {
+        // 5999 ASCII bytes, then "ş" (2 bytes) straddles the 6000-byte limit.
+        let transcript = format!("{}şşş sonra devam", "a".repeat(5999));
+        assert!(!transcript.is_char_boundary(MAX_TRANSCRIPT_PROMPT_BYTES));
+
+        let prompt = memory_entry_prompt(&transcript, "2026-11-01");
+
+        let body = prompt.split("TRANSCRIPT:\n").nth(1).unwrap().trim_end();
+        assert!(body.len() <= MAX_TRANSCRIPT_PROMPT_BYTES);
+        assert!(body.starts_with(&"a".repeat(5999)));
+    }
 
     const TRANSCRIPT: &str = "User: don't use npm here, use pnpm\n\nAssistant: Anlaşıldı.\n\nUser: we decided to use SQLite for everything\n\nUser: ben gömülü sistem geliştiriciyim";
 
