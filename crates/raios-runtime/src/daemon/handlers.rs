@@ -15,10 +15,8 @@ fn record_ws_tool_audit(
     cmd_name: &str,
     raw_payload: Option<&str>,
     decision: &UmaiDecision,
-) {
-    let Ok(conn) = raios_core::db::open_db() else {
-        return;
-    };
+) -> Result<(), String> {
+    let conn = raios_core::db::open_db().map_err(|e| format!("audit ledger unavailable: {e}"))?;
     let event_type = match decision {
         UmaiDecision::Allow => "tool_allow",
         UmaiDecision::Deny(_) => "tool_deny",
@@ -26,14 +24,15 @@ fn record_ws_tool_audit(
     };
     let args_hash = format!("{:x}", Sha256::digest(raw_payload.unwrap_or("").as_bytes()));
     let actor = std::env::var("RAIOS_AGENT_IDENTITY").unwrap_or_else(|_| "claude_kaira".into());
-    let _ = raios_core::security::record_tool_decision(
+    raios_core::security::record_tool_decision(
         &conn,
         cmd_name,
         &args_hash,
         umai.rule_source(cmd_name),
         event_type,
         &actor,
-    );
+    )
+    .map_err(|e| format!("audit write failed: {e}"))
 }
 
 /// Collects every string in an incoming WS command that AgentShield (UMAI
@@ -286,8 +285,16 @@ pub async fn handle_client_connection(h: ClientHandle) {
                     let cmd_name = v["command"].as_str().unwrap_or("");
                     let combined_payload = collect_scan_payload(&v);
                     let raw_payload = combined_payload.as_deref();
-                    let umai_result = umai.check(cmd_name, raw_payload);
-                    record_ws_tool_audit(&umai, cmd_name, raw_payload, &umai_result);
+                    let mut umai_result = umai.check(cmd_name, raw_payload);
+                    if let Err(e) =
+                        record_ws_tool_audit(&umai, cmd_name, raw_payload, &umai_result)
+                    {
+                        // Fail closed: an allowed command that cannot be
+                        // audited must not run.
+                        if umai_result.is_allowed() {
+                            umai_result = UmaiDecision::Deny(format!("audit: {e}"));
+                        }
+                    }
                     if !umai_result.is_allowed() {
                         let _ = writer
                             .write_all(format!("{}\n", umai_result.into_error_json()).as_bytes())

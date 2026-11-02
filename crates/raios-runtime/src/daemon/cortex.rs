@@ -61,6 +61,14 @@ impl CortexWorkerState {
                 scope,
                 reply,
             } => {
+                // Scanning checks persisted mtimes; only changed files run inference.
+                let indexed = match scope.as_deref() {
+                    Some(dir) => self.cortex.index_project(dir),
+                    None => self.cortex.index_workspace(&workspace_root()),
+                };
+                if let Err(e) = indexed {
+                    eprintln!("[Cortex Worker] On-demand indexing failed: {e:?}");
+                }
                 if self.tracker.on_search() {
                     self.cortex.rebuild_index();
                 }
@@ -87,44 +95,78 @@ impl CortexWorkerState {
     }
 }
 
-pub fn spawn_cortex_worker(eager_indexing: bool) -> tokio::sync::mpsc::Sender<CortexRequest> {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<CortexRequest>(64);
+fn workspace_root() -> PathBuf {
+    Config::load()
+        .unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()))
+        .dev_ops_path
+}
 
+fn run_cortex_worker(
+    eager_indexing: bool,
+    mut rx: tokio::sync::mpsc::Receiver<CortexRequest>,
+    initialize: impl Fn() -> anyhow::Result<CortexWorkerState>,
+) {
+    let mut state = None;
+    if eager_indexing {
+        match initialize() {
+            Ok(mut worker) => {
+                println!("[Cortex Worker] Starting initial indexing...");
+                match worker.cortex.index_workspace(&workspace_root()) {
+                    Ok(n) => {
+                        println!("[Cortex Worker] Initial indexing complete. {n} files indexed.")
+                    }
+                    Err(e) => eprintln!("[Cortex Worker] Initial indexing failed: {e:?}"),
+                }
+                state = Some(worker);
+            }
+            Err(e) => eprintln!("[Cortex Worker] Failed to initialize Cortex: {e:?}"),
+        }
+    } else {
+        println!("[Cortex Worker] Ready (model and indexing deferred until first request).");
+    }
+
+    while let Some(req) = rx.blocking_recv() {
+        // Before the first search/reindex, filesystem events must not load the
+        // model. The first on-demand scan catches these changes from disk.
+        if state.is_none() && matches!(req, CortexRequest::IndexFile { .. }) {
+            continue;
+        }
+        if state.is_none() {
+            match initialize() {
+                Ok(worker) => state = Some(worker),
+                Err(e) => {
+                    eprintln!("[Cortex Worker] Failed to initialize Cortex: {e:?}");
+                    continue;
+                }
+            }
+        }
+        if let Some(worker) = state.as_mut() {
+            worker.handle(req);
+        }
+    }
+}
+
+pub fn spawn_cortex_worker(eager_indexing: bool) -> tokio::sync::mpsc::Sender<CortexRequest> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<CortexRequest>(64);
     std::thread::spawn(move || {
-        println!("[Cortex Worker] Initializing resident thread...");
-        let cortex = match Cortex::init() {
-            Ok(c) => c,
+        // Bound Rayon work too (tokenization and HNSW graph construction).
+        let pool = match rayon::ThreadPoolBuilder::new().num_threads(2).build() {
+            Ok(pool) => pool,
             Err(e) => {
-                eprintln!("[Cortex Worker] Failed to initialize Cortex: {e:?}");
+                eprintln!("[Cortex Worker] Failed to create bounded thread pool: {e}");
                 return;
             }
         };
-
-        let mut state = CortexWorkerState {
-            cortex,
-            tracker: DirtyTracker::default(),
-        };
-
-        // Initial full index on startup
-        if eager_indexing {
-            let config =
-                Config::load().unwrap_or_else(|| Config::from_detect_result(Config::auto_detect()));
-            println!("[Cortex Worker] Starting initial indexing...");
-            let count = state
-                .cortex
-                .index_workspace(&config.dev_ops_path)
-                .unwrap_or(0);
-            println!(
-                "[Cortex Worker] Initial indexing complete. {} files indexed.",
-                count
-            );
-        }
-
-        while let Some(req) = rx.blocking_recv() {
-            state.handle(req);
-        }
+        pool.install(|| {
+            run_cortex_worker(eager_indexing, rx, || {
+                println!("[Cortex Worker] Loading model on demand...");
+                Ok(CortexWorkerState {
+                    cortex: Cortex::init()?,
+                    tracker: DirtyTracker::default(),
+                })
+            });
+        });
     });
-
     tx
 }
 
@@ -143,6 +185,39 @@ pub fn is_indexable(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_and_file_events_do_not_load_model() {
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        tx.try_send(super::CortexRequest::IndexFile {
+            path: "changed.rs".into(),
+        })
+        .unwrap();
+        drop(tx);
+        super::run_cortex_worker(false, rx, || panic!("idle worker loaded model"));
+    }
+
+    #[test]
+    fn first_search_loads_model_and_init_failure_can_retry() {
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        for _ in 0..2 {
+            let (reply, _result) = tokio::sync::oneshot::channel();
+            tx.try_send(super::CortexRequest::Search {
+                query: "test".into(),
+                top_k: 1,
+                scope: None,
+                reply,
+            })
+            .unwrap();
+        }
+        drop(tx);
+        let attempts = std::cell::Cell::new(0);
+        super::run_cortex_worker(false, rx, || {
+            attempts.set(attempts.get() + 1);
+            anyhow::bail!("simulated model unavailable")
+        });
+        assert_eq!(attempts.get(), 2);
+    }
 
     #[test]
     fn index_then_search_rebuilds_exactly_once() {

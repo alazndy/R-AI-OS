@@ -1,5 +1,6 @@
 //! The inspector: tasks, running agents and pending approvals of the open project, read from the
-//! daemon every few seconds. Read-only; approvals can be seen, not decided (spec section 8).
+//! daemon every few seconds. Reading never changes anything; the buttons and drags on a row only
+//! tell the workbench what the user wants, and the workbench sends it through the consent gate.
 //!
 //! The daemon is read on the background executor. Every result carries the generation of the
 //! project it was requested for, so a slow answer for the previous project is dropped.
@@ -9,8 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{div, Context, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window};
-use gpui::{InteractiveElement, StatefulInteractiveElement};
+use gpui::{
+    div, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Task, Window,
+};
 use rwk_core::control::{ConnectionState, ControlEvent, ControlPlane, EventSource};
 use rwk_core::inspector::{fetch, Banner, InspectorModel};
 use rwk_core::workbench::{Appearance, Theme};
@@ -34,6 +37,69 @@ pub enum InspectorEvent {
         /// Revision the row was displayed at.
         revision: i64,
     },
+    /// The user set the status of an operator task.
+    SetTaskStatus {
+        /// Target task identifier.
+        task_id: String,
+        /// The new status.
+        status: rwk_core::tasks::TaskStatus,
+    },
+    /// The user wants this task given to the agent of the selected terminal.
+    AssignToSelected {
+        /// Target task identifier.
+        task_id: String,
+        /// Revision the row was displayed at.
+        updated_at: String,
+    },
+    /// The user wants to hand this task over to another agent through a handoff note.
+    HandoffTask {
+        /// Target task identifier.
+        task_id: String,
+        /// Title, seeded into the note.
+        title: String,
+    },
+    /// The user wants the task's assignee cleared.
+    ClearAssignee {
+        /// Target task identifier.
+        task_id: String,
+        /// Revision the row was displayed at.
+        updated_at: String,
+    },
+    /// The user right-clicked a task row.
+    TaskMenu {
+        /// Task identifier.
+        task_id: String,
+        /// Title.
+        title: String,
+        /// Status label from the daemon.
+        status: String,
+        /// The task has an assignee.
+        assigned: bool,
+        /// Revision the row was displayed at.
+        updated_at: String,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
+    /// The user right-clicked a pending approval.
+    ApprovalMenu {
+        /// Target approval identifier.
+        approval_id: String,
+        /// Revision the row was displayed at.
+        revision: i64,
+        /// The approval is a handoff, which can be decided here.
+        decidable: bool,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
+    /// The user right-clicked a handoff row.
+    HandoffMenu {
+        /// Handoff approval identifier.
+        id: String,
+        /// The receiver can be started.
+        can_start: bool,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
     /// The user wants to reject a pending handoff approval; a reason is asked for before sending.
     RejectHandoff {
         /// Target approval identifier.
@@ -45,12 +111,44 @@ pub enum InspectorEvent {
 
 impl gpui::EventEmitter<InspectorEvent> for InspectorView {}
 
+/// What a dragged task row carries: dropped on a terminal, it is assigned to that terminal's
+/// agent.
+#[derive(Clone)]
+pub struct DraggedTask {
+    /// Task identifier.
+    pub task_id: String,
+    /// Revision the row was displayed at.
+    pub updated_at: String,
+    /// Title shown while dragging.
+    pub title: SharedString,
+}
+
+/// The label that follows the pointer while a task is dragged.
+struct TaskDragLabel(SharedString);
+
+impl Render for TaskDragLabel {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_0p5()
+            .text_xs()
+            .rounded_sm()
+            .bg(gpui::rgba(0x000000cc))
+            .text_color(gpui::rgb(0xffffff))
+            .child(self.0.clone())
+    }
+}
+
 /// One handoff line: approval id, text, and whether the receiver may be started.
 pub type HandoffLine = (String, String, bool);
 
 /// The inspector panel.
 pub struct InspectorView {
     handoffs: Vec<HandoffLine>,
+    /// Groups whose collapsed state the user flipped from its default.
+    flipped_groups: std::collections::HashSet<rwk_core::inspector::TaskGroup>,
+    /// Tasks whose terminal was closed.
+    closed_tasks: std::collections::HashSet<String>,
     theme: Theme,
     plane: Option<Arc<dyn ControlPlane>>,
     project: Option<PathBuf>,
@@ -71,6 +169,8 @@ impl InspectorView {
     pub fn new() -> Self {
         Self {
             handoffs: Vec::new(),
+            flipped_groups: std::collections::HashSet::new(),
+            closed_tasks: std::collections::HashSet::new(),
             theme: Theme::of(Appearance::default()),
             plane: None,
             project: None,
@@ -81,6 +181,36 @@ impl InspectorView {
             _stream_notifications: None,
             _poll: None,
         }
+    }
+
+    /// Sets the tasks whose terminal was closed; their rows say so.
+    pub fn set_closed_tasks(
+        &mut self,
+        closed: std::collections::HashSet<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.closed_tasks != closed {
+            self.closed_tasks = closed;
+            cx.notify();
+        }
+    }
+
+    /// True when the terminal that carried this task was closed.
+    pub fn task_terminal_closed(&self, task_id: &str) -> bool {
+        self.closed_tasks.contains(task_id)
+    }
+
+    /// True when the task group is shown collapsed.
+    pub fn group_collapsed(&self, group: rwk_core::inspector::TaskGroup) -> bool {
+        group.collapsed_by_default() != self.flipped_groups.contains(&group)
+    }
+
+    /// Collapses or expands a task group.
+    pub fn toggle_group(&mut self, group: rwk_core::inspector::TaskGroup, cx: &mut Context<Self>) {
+        if !self.flipped_groups.remove(&group) {
+            self.flipped_groups.insert(group);
+        }
+        cx.notify();
     }
 
     /// Sets (or removes) the daemon connection and restarts polling.
@@ -349,6 +479,25 @@ fn heading(theme: Theme, text: &str, count: usize) -> impl IntoElement {
         )))
 }
 
+/// A small bordered button of a task row.
+fn task_button(
+    theme: Theme,
+    id: String,
+    label: &'static str,
+    border: u32,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(SharedString::from(id))
+        .px_2()
+        .py_0p5()
+        .rounded_sm()
+        .border_1()
+        .border_color(gpui::rgb(border))
+        .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+        .text_xs()
+        .child(label)
+}
+
 fn row(theme: Theme, primary: String, secondary: String) -> impl IntoElement {
     div()
         .px_3()
@@ -375,17 +524,192 @@ impl Render for InspectorView {
                 .text_color(gpui::rgb(color))
                 .child(SharedString::from(text))
         });
-        let tasks = self.model.tasks.iter().map(|task| {
-            row(
-                theme,
-                task.title.clone(),
-                format!(
-                    "{} · {}",
-                    task.status,
-                    task.assignee.as_deref().unwrap_or("atanmamış")
-                ),
-            )
-        });
+        let tasks: Vec<(rwk_core::inspector::TaskGroup, gpui::AnyElement)> = self
+            .model
+            .tasks
+            .iter()
+            .map(|task| {
+                let group = rwk_core::inspector::TaskGroup::of(&task.status);
+                let line = row(
+                    theme,
+                    task.title.clone(),
+                    format!(
+                        "{} · {}{}",
+                        task.status,
+                        task.assignee.as_deref().unwrap_or("atanmamış"),
+                        if self.closed_tasks.contains(&task.id) {
+                            " · terminal kapandı"
+                        } else {
+                            ""
+                        }
+                    ),
+                );
+                let id = task.id.clone();
+                let revision = task.updated_at.clone();
+                let carried = DraggedTask {
+                    task_id: id.clone(),
+                    updated_at: revision.clone(),
+                    title: SharedString::from(task.title.clone()),
+                };
+                let mut actions: Vec<gpui::AnyElement> = Vec::new();
+                for (label, status) in [
+                    ("Başlat", rwk_core::tasks::TaskStatus::InProgress),
+                    ("Bitir", rwk_core::tasks::TaskStatus::Completed),
+                    ("İptal", rwk_core::tasks::TaskStatus::Cancelled),
+                ] {
+                    if task.status == status.as_str() {
+                        continue;
+                    }
+                    let task_id = id.clone();
+                    actions.push(
+                        task_button(theme, format!("task-{label}-{id}"), label, theme.line)
+                            .on_click(cx.listener(move |_, _, _window, cx| {
+                                cx.emit(InspectorEvent::SetTaskStatus {
+                                    task_id: task_id.clone(),
+                                    status,
+                                });
+                            }))
+                            .into_any_element(),
+                    );
+                }
+                {
+                    let (task_id, revision) = (id.clone(), revision.clone());
+                    actions.push(
+                        task_button(
+                            theme,
+                            format!("task-assign-{id}"),
+                            "Seçili terminale ata",
+                            theme.accent_ink,
+                        )
+                        .on_click(cx.listener(move |_, _, _window, cx| {
+                            cx.emit(InspectorEvent::AssignToSelected {
+                                task_id: task_id.clone(),
+                                updated_at: revision.clone(),
+                            });
+                        }))
+                        .into_any_element(),
+                    );
+                }
+                {
+                    let (task_id, title) = (id.clone(), task.title.clone());
+                    actions.push(
+                        task_button(
+                            theme,
+                            format!("task-handoff-{id}"),
+                            "Devret…",
+                            theme.accent_ink,
+                        )
+                        .on_click(cx.listener(move |_, _, _window, cx| {
+                            cx.emit(InspectorEvent::HandoffTask {
+                                task_id: task_id.clone(),
+                                title: title.clone(),
+                            });
+                        }))
+                        .into_any_element(),
+                    );
+                }
+                if task.assignee.is_some() {
+                    let (task_id, revision) = (id.clone(), revision.clone());
+                    actions.push(
+                        task_button(
+                            theme,
+                            format!("task-clear-{id}"),
+                            "Atamayı kaldır",
+                            theme.line,
+                        )
+                        .on_click(cx.listener(move |_, _, _window, cx| {
+                            cx.emit(InspectorEvent::ClearAssignee {
+                                task_id: task_id.clone(),
+                                updated_at: revision.clone(),
+                            });
+                        }))
+                        .into_any_element(),
+                    );
+                }
+                let menu_task = (
+                    id.clone(),
+                    task.title.clone(),
+                    task.status.clone(),
+                    task.assignee.is_some(),
+                    revision.clone(),
+                );
+                let element = div()
+                    .id(SharedString::from(format!("task-row-{id}")))
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |_, event: &gpui::MouseDownEvent, _window, cx| {
+                            let (task_id, title, status, assigned, updated_at) = menu_task.clone();
+                            cx.emit(InspectorEvent::TaskMenu {
+                                task_id,
+                                title,
+                                status,
+                                assigned,
+                                updated_at,
+                                position: event.position,
+                            });
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_drag(carried, |dragged, _offset, _window, cx| {
+                        let label = dragged.title.clone();
+                        cx.new(|_| TaskDragLabel(label))
+                    })
+                    .child(line)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .gap_1()
+                            .px_3()
+                            .pb_1()
+                            .children(actions),
+                    )
+                    .into_any_element();
+                (group, element)
+            })
+            .collect();
+        let mut task_groups: Vec<gpui::AnyElement> = Vec::new();
+        for group in rwk_core::inspector::TaskGroup::ALL {
+            let count = tasks.iter().filter(|(g, _)| *g == group).count();
+            if count == 0 {
+                continue;
+            }
+            let collapsed = self.group_collapsed(group);
+            task_groups.push(
+                div()
+                    .id(SharedString::from(format!("task-group-{group:?}")))
+                    .px_3()
+                    .pt_1()
+                    .text_xs()
+                    .cursor_pointer()
+                    .text_color(gpui::rgb(theme.muted))
+                    .hover(move |style| style.text_color(gpui::rgb(theme.text)))
+                    .child(SharedString::from(format!(
+                        "{} {} ({count})",
+                        if collapsed { "▸" } else { "▾" },
+                        group.label()
+                    )))
+                    .on_click(cx.listener(move |this, _, _window, cx| this.toggle_group(group, cx)))
+                    .into_any_element(),
+            );
+        }
+        let mut tasks = tasks;
+        // Rows follow their group's heading; a collapsed group shows none.
+        let mut shown: Vec<gpui::AnyElement> = Vec::new();
+        let mut headings = task_groups.into_iter();
+        for group in rwk_core::inspector::TaskGroup::ALL {
+            if !tasks.iter().any(|(g, _)| *g == group) {
+                continue;
+            }
+            shown.extend(headings.next());
+            let collapsed = self.group_collapsed(group);
+            let (mine, rest): (Vec<_>, Vec<_>) = tasks.into_iter().partition(|(g, _)| *g == group);
+            tasks = rest;
+            if !collapsed {
+                shown.extend(mine.into_iter().map(|(_, element)| element));
+            }
+        }
         let runs = self.model.runs.iter().map(|run| {
             row(
                 theme,
@@ -450,7 +774,25 @@ impl Render for InspectorView {
                             })),
                     )
             });
-            div().child(line).children(decisions)
+            let menu_id = approval.id.clone();
+            let menu_revision = approval.revision;
+            let decidable = approval.kind == "handover";
+            div()
+                .id(SharedString::from(format!("approval-row-{menu_id}")))
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |_, event: &gpui::MouseDownEvent, _window, cx| {
+                        cx.emit(InspectorEvent::ApprovalMenu {
+                            approval_id: menu_id.clone(),
+                            revision: menu_revision,
+                            decidable,
+                            position: event.position,
+                        });
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(line)
+                .children(decisions)
         });
         let handoffs: Vec<_> = self
             .handoffs
@@ -471,7 +813,23 @@ impl Render for InspectorView {
                             cx.emit(InspectorEvent::StartReceiver(id.clone()));
                         }))
                 });
-                div().child(line).children(start)
+                let menu_id = id.clone();
+                let can_start = *can_start;
+                div()
+                    .id(SharedString::from(format!("handoff-row-{menu_id}")))
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |_, event: &gpui::MouseDownEvent, _window, cx| {
+                            cx.emit(InspectorEvent::HandoffMenu {
+                                id: menu_id.clone(),
+                                can_start,
+                                position: event.position,
+                            });
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .child(line)
+                    .children(start)
             })
             .collect();
         let empty = (self.model.is_empty()
@@ -508,7 +866,7 @@ impl Render for InspectorView {
             .child(heading(theme, "Çalışanlar", self.model.runs.len()))
             .children(runs)
             .child(heading(theme, "Görevler", self.model.tasks.len()))
-            .children(tasks)
+            .children(shown)
             .child(heading(theme, "Devirler", self.handoffs.len()))
             .children(handoffs)
             .children(empty)

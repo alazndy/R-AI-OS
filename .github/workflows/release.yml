@@ -123,6 +123,11 @@ jobs:
         working-directory: vscode-extension
         run: |
           corepack enable
+          # Without a pin corepack fetches the newest pnpm; pnpm 12 no longer
+          # ships the bin/pnpm.cjs that corepack on Node 22.14 launches
+          # ("Cannot find module .../pnpm.cjs"). Keep this pin in lockstep
+          # with the security job in ci.yml.
+          corepack prepare pnpm@10.12.1 --activate
           pnpm install --frozen-lockfile
           pnpm run compile
           pnpm run package

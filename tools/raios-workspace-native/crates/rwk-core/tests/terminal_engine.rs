@@ -513,3 +513,33 @@ fn input_after_the_session_ended_reports_not_found() {
         || matches!(rig.engine.send_input(b"y"), Err(error) if error.code == ErrorCode::NotFound),
     );
 }
+
+#[test]
+fn find_lines_searches_history_and_scroll_to_line_brings_a_match_into_view() {
+    let mut text = String::new();
+    for line in 1..=100 {
+        text.push_str(&format!("Line {line}\r\n"));
+    }
+    let rig = print_and_finish(rig(20, 10), text.as_bytes());
+
+    // Case is ignored on request; the oldest match comes first and a limit cuts the list.
+    let all = rig.engine.find_lines("line 4", true, 50);
+    let texts: Vec<&str> = all.iter().map(|(_, text)| text.as_str()).collect();
+    assert_eq!(texts[0], "Line 4");
+    assert!(texts.contains(&"Line 40") && texts.contains(&"Line 49"));
+    assert!(all[0].0 < 0, "an old line is in the history");
+    assert!(rig.engine.find_lines("line 4", false, 50).is_empty());
+    assert_eq!(rig.engine.find_lines("Line 4", false, 3).len(), 3);
+    assert!(rig.engine.find_lines("", true, 5).is_empty());
+
+    // Scrolling to the first match shows it.
+    let (line, text) = all[0].clone();
+    rig.engine.scroll_to_line(line);
+    let shown = rig.engine.snapshot();
+    assert!(
+        (0..usize::from(shown.rows)).any(|row| shown.row_text(row) == text),
+        "{text:?} is on screen"
+    );
+    rig.engine.scroll(ScrollRequest::Bottom);
+    assert_eq!(rig.engine.snapshot().display_offset, 0);
+}

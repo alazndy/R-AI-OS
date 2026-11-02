@@ -13,10 +13,8 @@ use rwk_core::terminal::{build_paint_list, CursorShape, Rgb, TextItem};
 use super::metrics::grid_for;
 use super::view::{TerminalView, ViewShared};
 
-/// Font size in pixels for the first slice (configurable fonts are P3).
-const FONT_SIZE: f32 = 14.0;
-/// Line height in pixels.
-const LINE_HEIGHT: f32 = 18.0;
+/// The line height is this many times the font size.
+const LINE_HEIGHT_RATIO: f32 = 18.0 / 14.0;
 /// Painted frames slower than this many microseconds count as slow.
 const SLOW_FRAME_MICROS: u64 = 33_000;
 /// Thickness of underline and beam cursors.
@@ -141,8 +139,10 @@ impl Element for TerminalElement {
             ElementInputHandler::new(bounds, self.view.clone()),
             cx,
         );
-        let font_size = px(FONT_SIZE);
-        let line_height = px(LINE_HEIGHT);
+        let font_size_value = shared.font_size.get();
+        let line_height_value = (font_size_value * LINE_HEIGHT_RATIO).round();
+        let font_size = px(font_size_value);
+        let line_height = px(line_height_value);
         let base_font = gpui::font(crate::fonts::monospace_family(window));
 
         // Cell metrics: the advance of "M" in the base font.
@@ -151,8 +151,8 @@ impl Element for TerminalElement {
             .text_system()
             .advance(font_id, font_size, 'M')
             .map(|advance| f32::from(advance.width))
-            .unwrap_or(FONT_SIZE * 0.6);
-        let cell_height = LINE_HEIGHT;
+            .unwrap_or(font_size_value * 0.6);
+        let cell_height = line_height_value;
         if shared.cell.get() != (cell_width, cell_height) {
             shared.cell.set((cell_width, cell_height));
             shared

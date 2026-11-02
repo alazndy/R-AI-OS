@@ -1,14 +1,27 @@
 //! The workbench: the window's three panes, the terminal dock and the single place where
 //! commands take effect.
 
+pub mod binding;
 pub mod control;
+pub mod dock;
+pub mod editing;
+pub mod entries;
+pub mod file_replace;
+pub mod footer;
+pub mod git;
 pub mod host;
 pub mod layout;
+pub mod lsp;
 pub mod memory;
+pub mod menus;
 pub mod offers;
 pub mod palette;
+pub mod remote;
+pub mod runner;
 pub mod search;
+pub mod settings;
 pub mod usage;
+pub mod watch;
 pub mod workspace;
 
 use std::path::PathBuf;
@@ -26,13 +39,15 @@ use rwk_core::guarded::Guarded;
 use rwk_core::handoff_flow::TrackedHandoff;
 use rwk_core::project::ProjectRoot;
 use rwk_core::sessions::{
-    ResumeKey, SessionId, SessionKind, SessionLaunch, SessionRegistry, TerminalHost, TerminalSize,
-    MAX_SESSIONS,
+    ResumeKey, SessionId, SessionKind, SessionLaunch, SessionName, SessionRegistry, TerminalHost,
+    TerminalSize, MAX_SESSIONS,
 };
 use rwk_core::terminal::{ProgramPaths, PtyTerminalHost};
+use rwk_core::workbench::conflicts::Side;
 use rwk_core::workbench::{
-    available, resolve_shortcut, Appearance, CommandId, KeyboardContext, Keystroke, SavedWorkspace,
-    SessionOffer, Skin, SwitchDecision, Theme, Tone, WorkbenchState, WorkspaceStateSource,
+    available, resolve_shortcut, Appearance, CommandId, DockLayout, KeyboardContext, Keystroke,
+    SavedWorkspace, SessionOffer, Skin, SwitchDecision, Theme, Tone, WorkbenchState,
+    WorkspaceStateSource,
 };
 
 use crate::editor::view::{EditorEvent, EditorView};
@@ -56,19 +71,35 @@ const NEW_TERMINAL_SIZE: TerminalSize = TerminalSize {
 const WORKSPACE_SAVE_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// What the workbench tells the application around it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WorkbenchEvent {
     /// The user changed skin or tone; the application stores it.
     AppearanceChanged(Appearance),
     /// The daemon confirmed this project is registered (newly or before); the application
     /// remembers it so the registration is not offered again at every start.
     ProjectRegistered(PathBuf),
+    /// The recently opened projects changed (newest first); the application stores them.
+    RecentProjectsChanged(Vec<PathBuf>),
     /// The open project's workspace changed (tabs, layout, sessions); the application writes
     /// it so the next start reopens the project as it was left.
     WorkspaceChanged(SavedWorkspace),
+    /// An editing switch (auto-save, format on save) changed; the application stores it.
+    PreferencesChanged {
+        /// Save changed files when the window loses focus.
+        auto_save: bool,
+        /// Format with the language server before saving.
+        format_on_save: bool,
+        /// What the toolbar shows.
+        toolbar: rwk_core::workbench::ToolbarLayout,
+        /// Text size, tab width and wrapping.
+        editor: rwk_core::workbench::EditorPrefs,
+    },
 }
 
 impl gpui::EventEmitter<WorkbenchEvent> for Workbench {}
+
+/// Reads the user's snippet file; called each time the snippet picker opens.
+pub type SnippetSource = Arc<dyn Fn() -> Vec<rwk_core::workbench::Snippet> + Send + Sync>;
 
 /// An action that waits for the user's decision about unsaved edits or a running session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +123,20 @@ pub enum PendingAction {
     CloseWindow,
     /// Stop this terminal session.
     StopTerminal(SessionId),
+    /// End this terminal session and remove its pane; `force` skips an agent's grace period.
+    CloseTerminal {
+        /// The terminal.
+        id: SessionId,
+        /// End it at once.
+        force: bool,
+    },
+    /// Delete this file, or this folder when it is empty (project-relative path).
+    DeleteEntry {
+        /// Project-relative path.
+        path: String,
+        /// The entry is a folder.
+        folder: bool,
+    },
     /// Choose which agent to start.
     ChooseAgent,
     /// A command whose policy is `confirm` waits for an explicit yes; the text is derived from
@@ -150,6 +195,28 @@ impl PendingAction {
                 message: "Seçili terminal oturumu durdurulacak.".to_owned(),
                 buttons: vec![(Decision::Confirm, "Durdur"), (Decision::Cancel, "Vazgeç")],
             },
+            PendingAction::CloseTerminal { force: false, .. } => Dialog {
+                title: "Terminali kapat",
+                message: "Terminalde çalışan işlem sonlandırılacak ve panel kaldırılacak. Bir ajan oturumuna kapanması için kısa bir süre tanınır.".to_owned(),
+                buttons: vec![(Decision::Confirm, "Kapat"), (Decision::Cancel, "Vazgeç")],
+            },
+            PendingAction::CloseTerminal { force: true, .. } => Dialog {
+                title: "Terminali zorla öldür",
+                message: "Terminaldeki tüm işlemler hemen SIGKILL ile öldürülecek. Bir ajan oturumu temiz kapanamaz ve RAIOS'ta açık bir çalıştırma kaydı kalabilir.".to_owned(),
+                buttons: vec![(Decision::Confirm, "Öldür"), (Decision::Cancel, "Vazgeç")],
+            },
+            PendingAction::DeleteEntry { path, folder } => Dialog {
+                title: if *folder { "Klasörü sil" } else { "Dosyayı sil" },
+                message: format!(
+                    "{path} kalıcı olarak silinecek; geri alınamaz.{}",
+                    if *folder {
+                        " Yalnızca boş klasörler silinir."
+                    } else {
+                        ""
+                    }
+                ),
+                buttons: vec![(Decision::Confirm, "Sil"), (Decision::Cancel, "Vazgeç")],
+            },
             PendingAction::OpenProjectStoppingSessions(_) => Dialog {
                 title: "Projeyi değiştir",
                 message: "Çalışan terminal ve ajan oturumları durdurulacak.".to_owned(),
@@ -182,9 +249,20 @@ impl PendingAction {
 struct TerminalPane {
     kind: SessionKind,
     id: SessionId,
+    /// The name the user gave the terminal, when there is one.
+    name: Option<SessionName>,
     /// The saved conversation this pane continues, when it was started from an offer.
     resume: Option<ResumeKey>,
+    /// Where a remote shell (SSH) leads. Such a pane is not part of the saved workspace:
+    /// reopening the project never connects anywhere by itself.
+    ssh: Option<rwk_core::ssh::SshTarget>,
+    /// The task given to this terminal's agent from the task list.
+    task: Option<rwk_core::handoff_flow::TaskLink>,
+    /// A command from the user's task file runs here; the pane is not saved with the workspace.
+    run: bool,
     view: Entity<TerminalView>,
+    /// Opens a `path:line` that was Ctrl-clicked in the output.
+    _open_location: Subscription,
 }
 
 /// The application's main view.
@@ -202,19 +280,92 @@ pub struct Workbench {
     search_subscription: Option<Subscription>,
     /// Bumped on every search and on every close; an answer for an older search is dropped.
     search_generation: u64,
+    /// How language servers are started; `None` turns them off.
+    /// Save changed files when the window loses focus.
+    auto_save: bool,
+    /// Format with the language server before saving.
+    format_on_save: bool,
+    /// The checked-out git branch of the project.
+    branch: Option<String>,
+    /// Bumped on every status read for the tree marks; an older answer is dropped.
+    badge_generation: u64,
+    /// The state of each language server that was started.
+    server_status: Vec<(String, rwk_core::lsp::ServerStatus)>,
+    /// Footer items the application added.
+    extra_footer: Vec<rwk_core::workbench::FooterItem>,
+    task_source: Option<Arc<dyn rwk_core::runner::TaskSource>>,
+    /// The open palette lists tasks, not files.
+    palette_picks_tasks: bool,
+    /// The open palette lists snippets, not files.
+    palette_picks_snippets: bool,
+    palette_picks_tabs: bool,
+    /// A conflicted file opened from the git view: the cursor goes to its first conflict once
+    /// it has loaded.
+    jump_to_conflict: Option<String>,
+    snippet_source: Option<SnippetSource>,
+    git_view: Option<Entity<crate::git::GitView>>,
+    git_subscription: Option<Subscription>,
+    /// Bumped by every git action and on close; an answer for an older one is dropped.
+    git_generation: u64,
+    lsp_launcher: Option<rwk_core::lsp::Launcher>,
+    servers: Option<rwk_core::lsp::LanguageServers>,
+    problems: rwk_core::lsp::Problems,
+    problems_view: Option<Entity<crate::problems::ProblemsView>>,
+    problems_subscription: Option<Subscription>,
+    /// A list of places (usages, a file's symbols), shown like the Problems view.
+    locations_view: Option<Entity<crate::problems::ProblemsView>>,
+    /// The toolbar category whose buttons show.
+    toolbar_tab: rwk_core::workbench::ToolbarGroup,
+    /// What the toolbar shows and how.
+    toolbar_layout: rwk_core::workbench::ToolbarLayout,
+    /// Text size, tab width and wrapping.
+    editor_prefs: rwk_core::workbench::EditorPrefs,
+    settings_view: Option<Entity<crate::settings::SettingsView>>,
+    file_replace: Option<Entity<crate::file_replace::FileReplaceView>>,
+    file_replace_subscription: Option<Subscription>,
+    settings_subscription: Option<Subscription>,
+    locations_subscription: Option<Subscription>,
+    lsp_task: Option<Task<()>>,
+    lsp_sync_task: Option<Task<()>>,
     /// Where the quota signal is read from (the application sets it).
     usage_source: Option<Arc<dyn rwk_core::usage::UsageSource>>,
     /// The last quota reading, shown at the right of the status bar.
     quota: Option<String>,
     /// The background task that reads the quota signal and refreshes it on a timer.
     usage_task: Option<Task<()>>,
+    /// Checks open files and folders for changes made elsewhere.
+    watch_task: Option<Task<()>>,
+    watch_stamps: watch::Stamps,
+    /// The grid lines behind the open terminal search results, in list order.
+    terminal_hits: Option<Vec<i32>>,
+    /// The projects behind the open recent-projects list, in list order.
+    recent_choices: Option<Vec<PathBuf>>,
+    /// Recently opened projects, newest first.
+    recent_projects: Vec<PathBuf>,
     consent: Arc<ConsentRegistry>,
     consent_wait: Option<std::sync::mpsc::Receiver<rwk_core::consent::ConsentDecision>>,
     composer: Option<Entity<crate::handoff::HandoffComposer>>,
     composer_subscription: Option<Subscription>,
     reject_prompt: Option<Entity<crate::handoff::RejectHandoffPrompt>>,
     reject_prompt_subscription: Option<Subscription>,
+    /// How the dock arranges the terminal panes.
+    dock: DockLayout<SessionId>,
+    /// Where the terminal being dragged would land, while a drag is over a pane.
+    drop_hint: Option<(SessionId, rwk_core::workbench::DropZone)>,
+    rename_prompt: Option<Entity<crate::rename::RenameTerminalPrompt>>,
+    /// The open context menu.
+    menu: Option<menus::OpenMenu>,
+    /// The open SSH picker.
+    ssh_picker: Option<Entity<crate::ssh_picker::SshPicker>>,
+    ssh_subscription: Option<Subscription>,
+    /// Where `~/.ssh` is read from; `None` means `$HOME`.
+    ssh_home: Option<PathBuf>,
+    rename_subscription: Option<Subscription>,
     handoffs: Vec<TrackedHandoff>,
+    /// The task the open composer was started for.
+    composer_task: Option<rwk_core::handoff_flow::TaskLink>,
+    /// The task of a handoff that is waiting for policy and consent.
+    queued_task: Option<rwk_core::handoff_flow::TaskLink>,
     receipt_task: Option<Task<()>>,
     receiver_for: Option<String>,
     /// Projects already known to be registered with the daemon.
@@ -246,6 +397,10 @@ pub struct Workbench {
     workspace_save_task: Option<Task<()>>,
     /// Previous agent sessions offered for continuation, in saved order.
     offers: Vec<SessionOffer>,
+    /// The task and terminal of an assignment that was sent and not yet answered.
+    pending_bind: Option<(String, SessionId)>,
+    /// Tasks whose terminal was closed; the task list says so.
+    closed_tasks: std::collections::HashSet<String>,
     /// Bumped by every offer plan; a plan that finishes after a project switch is dropped.
     offers_generation: u64,
     /// Offers whose continuation is being validated or started right now.
@@ -272,6 +427,11 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // Later than the editor widget's own Tab bindings, so these win inside the editor.
+        cx.bind_keys([
+            gpui::KeyBinding::new("tab", SnippetNext, Some("SnippetEditor > Input")),
+            gpui::KeyBinding::new("shift-tab", SnippetPrev, Some("SnippetEditor > Input")),
+        ]);
         let gates = Arc::new(GateRegistry::new());
         let wake_gates = Arc::clone(&gates);
         let pty = Arc::new(PtyTerminalHost::new(
@@ -297,6 +457,28 @@ impl Workbench {
                 crate::inspector::InspectorEvent::StartReceiver(id) => {
                     this.start_receiver(id.clone(), window, cx);
                 }
+                crate::inspector::InspectorEvent::ApprovalMenu {
+                    approval_id,
+                    revision,
+                    decidable,
+                    position,
+                } => {
+                    this.open_approval_menu(
+                        approval_id.clone(),
+                        *revision,
+                        *decidable,
+                        *position,
+                        window,
+                        cx,
+                    );
+                }
+                crate::inspector::InspectorEvent::HandoffMenu {
+                    id,
+                    can_start,
+                    position,
+                } => {
+                    this.open_handoff_menu(id.clone(), *can_start, *position, window, cx);
+                }
                 crate::inspector::InspectorEvent::ApproveHandoff {
                     approval_id,
                     revision,
@@ -309,6 +491,52 @@ impl Workbench {
                 } => {
                     this.request_reject_handoff(approval_id.clone(), *revision, window, cx);
                 }
+                crate::inspector::InspectorEvent::SetTaskStatus { task_id, status } => {
+                    this.set_task_status(task_id.clone(), *status, window, cx);
+                }
+                crate::inspector::InspectorEvent::AssignToSelected {
+                    task_id,
+                    updated_at,
+                } => {
+                    let selected = this.selected;
+                    this.assign_task_to_terminal(
+                        task_id.clone(),
+                        updated_at.clone(),
+                        selected,
+                        window,
+                        cx,
+                    );
+                }
+                crate::inspector::InspectorEvent::TaskMenu {
+                    task_id,
+                    title,
+                    status,
+                    assigned,
+                    updated_at,
+                    position,
+                } => {
+                    let info = menus::TaskMenuInfo {
+                        task_id: task_id.clone(),
+                        title: title.clone(),
+                        status: status.clone(),
+                        assigned: *assigned,
+                        updated_at: updated_at.clone(),
+                    };
+                    this.open_task_menu(info, *position, window, cx);
+                }
+                crate::inspector::InspectorEvent::HandoffTask { task_id, title } => {
+                    let link = rwk_core::handoff_flow::TaskLink {
+                        task_id: task_id.clone(),
+                        title: title.clone(),
+                    };
+                    this.open_composer(Some(link), window, cx);
+                }
+                crate::inspector::InspectorEvent::ClearAssignee {
+                    task_id,
+                    updated_at,
+                } => {
+                    this.assign_task(task_id.clone(), updated_at.clone(), None, window, cx);
+                }
             },
         );
         let subscriptions = vec![
@@ -316,9 +544,15 @@ impl Workbench {
             cx.subscribe_in(
                 &files,
                 window,
-                |this, _files, event: &FileTreeEvent, window, cx| {
-                    let FileTreeEvent::OpenFile(path) = event;
-                    this.request_open_file(path.clone(), window, cx);
+                |this, _files, event: &FileTreeEvent, window, cx| match event {
+                    FileTreeEvent::OpenFile(path) => {
+                        this.request_open_file(path.clone(), window, cx);
+                    }
+                    FileTreeEvent::ContextMenu {
+                        path,
+                        folder,
+                        position,
+                    } => this.open_file_menu(path.clone(), *folder, *position, window, cx),
                 },
             ),
             cx.subscribe_in(
@@ -328,6 +562,14 @@ impl Workbench {
                     this.on_editor_event(event, window, cx);
                 },
             ),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.auto_save_now(cx);
+                } else {
+                    this.refresh_branch(cx);
+                    this.refresh_git_badges(cx);
+                }
+            }),
         ];
         Self {
             files,
@@ -342,16 +584,62 @@ impl Workbench {
             search: None,
             search_subscription: None,
             search_generation: 0,
+            auto_save: false,
+            format_on_save: false,
+            branch: None,
+            badge_generation: 0,
+            server_status: Vec::new(),
+            extra_footer: Vec::new(),
+            task_source: None,
+            palette_picks_tasks: false,
+            palette_picks_snippets: false,
+            palette_picks_tabs: false,
+            jump_to_conflict: None,
+            snippet_source: None,
+            git_view: None,
+            git_subscription: None,
+            git_generation: 0,
+            lsp_launcher: None,
+            servers: None,
+            problems: rwk_core::lsp::Problems::default(),
+            problems_view: None,
+            problems_subscription: None,
+            toolbar_tab: rwk_core::workbench::ToolbarGroup::Files,
+            toolbar_layout: rwk_core::workbench::ToolbarLayout::default(),
+            editor_prefs: rwk_core::workbench::EditorPrefs::default(),
+            settings_view: None,
+            file_replace: None,
+            file_replace_subscription: None,
+            settings_subscription: None,
+            locations_view: None,
+            locations_subscription: None,
+            lsp_task: None,
+            lsp_sync_task: None,
             usage_source: None,
             quota: None,
             usage_task: None,
+            watch_task: None,
+            watch_stamps: std::collections::HashMap::new(),
+            terminal_hits: None,
+            recent_choices: None,
+            recent_projects: Vec::new(),
             consent: Arc::new(ConsentRegistry::new()),
             consent_wait: None,
             composer: None,
             composer_subscription: None,
             reject_prompt: None,
             reject_prompt_subscription: None,
+            dock: DockLayout::new(),
+            drop_hint: None,
+            rename_prompt: None,
+            menu: None,
+            ssh_picker: None,
+            ssh_subscription: None,
+            ssh_home: None,
+            rename_subscription: None,
             handoffs: Vec::new(),
+            composer_task: None,
+            queued_task: None,
             receipt_task: None,
             receiver_for: None,
             known_projects: std::collections::HashSet::new(),
@@ -375,6 +663,8 @@ impl Workbench {
             pending_workspace: None,
             workspace_save_task: None,
             offers: Vec::new(),
+            pending_bind: None,
+            closed_tasks: std::collections::HashSet::new(),
             offers_generation: 0,
             resuming: std::collections::HashSet::new(),
             programs,
@@ -407,6 +697,10 @@ impl Workbench {
                     self.inspector.read(cx).model().banner,
                     rwk_core::inspector::Banner::Unreachable(_)
                 ),
+            reconnectable: self
+                .terminals
+                .get(self.selected)
+                .is_some_and(|pane| pane.ssh.is_some() && !self.session_running(&pane.id)),
         }
     }
 
@@ -520,6 +814,13 @@ impl Workbench {
         &self.files
     }
 
+    /// Resizes requested of the PTY host so far (a layout that makes terminals resize over
+    /// and over shows here). Read by the benchmark.
+    #[doc(hidden)]
+    pub fn pty_resize_count(&self) -> u64 {
+        self.host.0.resize_count()
+    }
+
     /// Sessions that are still running, according to the registry.
     pub fn running_sessions(&self) -> usize {
         self.sessions
@@ -567,12 +868,69 @@ impl Workbench {
         }
         match id {
             CommandId::Project => self.pick_project(window, cx),
-            CommandId::Save => self.save(cx),
+            CommandId::Save => self.save(window, cx),
+            CommandId::SplitEditor => self.editor.update(cx, |editor, cx| editor.toggle_split(cx)),
+            CommandId::FindInFile => self.find(false, window, cx),
+            CommandId::ReplaceInFile => self.find(true, window, cx),
+            CommandId::ReplaceRegexInFile => self.open_file_replace(window, cx),
+            CommandId::GoToLine => self.open_go_to_line(window, cx),
+            CommandId::ToggleComment => {
+                let done = self
+                    .editor
+                    .update(cx, |editor, cx| editor.toggle_comment(window, cx));
+                if !done {
+                    self.say("Bu dosya türünde satır yorumu yok", cx);
+                }
+            }
+            CommandId::ToggleWordWrap => {
+                let prefs = self.editor_prefs;
+                self.change_editor_prefs(
+                    rwk_core::workbench::EditorPrefs {
+                        soft_wrap: !prefs.soft_wrap,
+                        ..prefs
+                    },
+                    window,
+                    cx,
+                );
+            }
+            CommandId::ZoomIn => self.zoom(1, window, cx),
+            CommandId::ZoomOut => self.zoom(-1, window, cx),
+            CommandId::ZoomReset => {
+                let prefs = self.editor_prefs;
+                self.change_editor_prefs(
+                    rwk_core::workbench::EditorPrefs {
+                        font_size: rwk_core::workbench::DEFAULT_FONT_SIZE,
+                        ..prefs
+                    },
+                    window,
+                    cx,
+                );
+            }
+            CommandId::ToggleAutoSave => self.toggle_auto_save(cx),
+            CommandId::ToggleFormatOnSave => self.toggle_format_on_save(cx),
             CommandId::CloseTab => {
                 if let Some(path) = self.editor.read(cx).path().map(str::to_owned) {
                     self.request_close_tab(path, window, cx);
                 }
             }
+            CommandId::KeepOurs => self.resolve_conflict(Side::Ours, window, cx),
+            CommandId::KeepTheirs => self.resolve_conflict(Side::Theirs, window, cx),
+            CommandId::KeepBoth => self.resolve_conflict(Side::Both, window, cx),
+            CommandId::NextConflict => {
+                let count = self
+                    .editor
+                    .update(cx, |editor, cx| editor.next_conflict(window, cx));
+                if count == 0 {
+                    self.say("Bu dosyada çakışma yok", cx);
+                } else {
+                    self.say(format!("{count} çakışma"), cx);
+                }
+            }
+            CommandId::PinTab => self.editor.update(cx, |editor, cx| editor.toggle_pin(cx)),
+            CommandId::MoveTabLeft => self.editor.update(cx, |editor, cx| editor.move_tab(-1, cx)),
+            CommandId::MoveTabRight => self.editor.update(cx, |editor, cx| editor.move_tab(1, cx)),
+            CommandId::CloseOtherTabs => self.close_tabs(true, window, cx),
+            CommandId::CloseAllTabs => self.close_tabs(false, window, cx),
             CommandId::Diff => {
                 if let Some(project) = self.project.clone() {
                     self.editor
@@ -602,6 +960,14 @@ impl Workbench {
             CommandId::FocusFiles => self.files.update(cx, |files, cx| files.focus(window, cx)),
             CommandId::NextTerminal => self.select_terminal_offset(1, window, cx),
             CommandId::PreviousTerminal => self.select_terminal_offset(-1, window, cx),
+            CommandId::ToolbarTab(number) => {
+                if let Some(group) = rwk_core::workbench::ToolbarGroup::ALL
+                    .get(usize::from(number).saturating_sub(1))
+                {
+                    self.toolbar_tab = *group;
+                    cx.notify();
+                }
+            }
             CommandId::FocusTerminal(number) => {
                 self.select_terminal(usize::from(number).saturating_sub(1), window, cx);
             }
@@ -621,8 +987,22 @@ impl Workbench {
                     cx.notify();
                 }
             }
+            CommandId::CloseTerminal => self.request_close_terminal(false, window, cx),
+            CommandId::KillTerminal => self.request_close_terminal(true, window, cx),
+            CommandId::Ssh => self.open_ssh_picker(window, cx),
+            CommandId::Reconnect => self.reconnect_ssh(window, cx),
+            CommandId::RenameTerminal => self.open_rename_prompt(self.selected, window, cx),
+            CommandId::NewTask => self.open_new_task_prompt(window, cx),
+            CommandId::MoveTerminalPrevious
+            | CommandId::MoveTerminalNext
+            | CommandId::SplitTerminalRight
+            | CommandId::SplitTerminalDown
+            | CommandId::JoinTerminalPrevious
+            | CommandId::UngroupTerminal
+            | CommandId::GrowTerminal
+            | CommandId::ShrinkTerminal => self.arrange(id, window, cx),
             CommandId::Refresh => self.files.update(cx, |files, cx| files.refresh(cx)),
-            CommandId::Settings => self.toggle_tone(cx),
+            CommandId::Settings => self.open_settings(window, cx),
             CommandId::Skin => self.toggle_skin(cx),
             CommandId::GrowDock => self.nudge_dock(DOCK_STEP_PX, window, cx),
             CommandId::ShrinkDock => self.nudge_dock(-DOCK_STEP_PX, window, cx),
@@ -633,10 +1013,53 @@ impl Workbench {
             CommandId::Files => self.open_file_palette(window, cx),
             CommandId::Search => self.open_search(window, cx),
             CommandId::Agent => self.open_agent_chooser(cx),
-            CommandId::Handoff => self.open_composer(window, cx),
+            CommandId::Handoff => self.open_composer(None, window, cx),
             CommandId::RegisterProject => self.register_project(window, cx),
             CommandId::Memory => self.open_memory(window, cx),
+            CommandId::Problems => self.open_problems(window, cx),
+            CommandId::SourceControl => self.open_git(window, cx),
+            CommandId::RunTask => self.open_task_palette(window, cx),
+            CommandId::OpenOutputLocation => self.open_output_location(window, cx),
+            CommandId::RenameSymbol => self.open_symbol_prompt(window, cx),
+            CommandId::FindReferences => self.find_references(window, cx),
+            CommandId::Outline => self.show_outline(window, cx),
+            CommandId::WorkspaceSymbols => self.open_symbol_search(window, cx),
+            CommandId::FindInTerminal => self.open_terminal_search(window, cx),
+            CommandId::RecentProjects => self.show_recent_projects(window, cx),
+            CommandId::InsertSnippet => self.open_snippet_palette(window, cx),
+            CommandId::SearchTabs => self.open_tab_palette(window, cx),
+            CommandId::SignatureHelp => self.signature_help(window, cx),
+            CommandId::RestartServers => self.restart_servers(cx),
+            CommandId::BlameLine => self.blame_line(cx),
+            CommandId::Format => self
+                .editor
+                .update(cx, |editor, cx| editor.format(window, cx)),
         }
+    }
+
+    /// Resolves the merge conflict under the cursor, then tells how many are left.
+    fn resolve_conflict(
+        &mut self,
+        side: rwk_core::workbench::conflicts::Side,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let done = self
+            .editor
+            .update(cx, |editor, cx| editor.resolve_conflict(side, window, cx));
+        if !done {
+            self.say("İmleç bir çakışmanın içinde değil", cx);
+            return;
+        }
+        let left = rwk_core::workbench::conflicts::find(&self.editor.read(cx).text(cx)).len();
+        self.say(
+            if left == 0 {
+                "Çakışma çözüldü; dosyada başka yok".to_owned()
+            } else {
+                format!("Çakışma çözüldü; {left} kaldı")
+            },
+            cx,
+        );
     }
 
     fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -663,8 +1086,20 @@ impl Workbench {
             |this, _palette, event: &PaletteEvent, window, cx| match event.clone() {
                 PaletteEvent::Close => this.close_palette(window, cx),
                 PaletteEvent::OpenFile(path) => {
+                    let tasks = std::mem::take(&mut this.palette_picks_tasks);
+                    let snippets = std::mem::take(&mut this.palette_picks_snippets);
+                    let tabs = std::mem::take(&mut this.palette_picks_tabs);
                     this.close_palette(window, cx);
-                    this.request_open_file(path, window, cx);
+                    if tabs {
+                        this.editor
+                            .update(cx, |editor, cx| editor.activate_tab(&path, window, cx));
+                    } else if snippets {
+                        this.insert_named_snippet(&path, window, cx);
+                    } else if tasks {
+                        this.run_named_task(&path, window, cx);
+                    } else {
+                        this.request_open_file(path, window, cx);
+                    }
                 }
                 PaletteEvent::Run(id) => {
                     this.close_palette(window, cx);
@@ -718,8 +1153,56 @@ impl Workbench {
         }));
     }
 
+    /// Whether a panel (palette, picker, prompt or view) floats over the workbench.
+    pub fn overlay_open(&self) -> bool {
+        self.palette.is_some()
+            || self.ssh_picker.is_some()
+            || self.composer.is_some()
+            || self.reject_prompt.is_some()
+            || self.rename_prompt.is_some()
+            || self.memory.is_some()
+            || self.search.is_some()
+            || self.problems_view.is_some()
+            || self.locations_view.is_some()
+            || self.settings_view.is_some()
+            || self.file_replace.is_some()
+            || self.git_view.is_some()
+    }
+
+    /// Closes the panel on top (the one opened last).
+    pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.file_replace.is_some() {
+            self.close_file_replace(window, cx);
+        } else if self.settings_view.is_some() {
+            self.close_settings(window, cx);
+        } else if self.git_view.is_some() {
+            self.close_git(window, cx);
+        } else if self.locations_view.is_some() {
+            self.close_locations(window, cx);
+        } else if self.problems_view.is_some() {
+            self.close_problems(window, cx);
+        } else if self.search.is_some() {
+            self.close_search(window, cx);
+        } else if self.memory.is_some() {
+            self.close_memory(window, cx);
+        } else if self.rename_prompt.is_some() {
+            self.close_rename_prompt(window, cx);
+        } else if self.reject_prompt.is_some() {
+            self.close_reject_prompt(window, cx);
+        } else if self.composer.is_some() {
+            self.close_composer(window, cx);
+        } else if self.ssh_picker.is_some() {
+            self.close_ssh_picker(window, cx);
+        } else if self.palette.is_some() {
+            self.close_palette(window, cx);
+        }
+    }
+
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.file_search_task = None;
+        self.palette_picks_tasks = false;
+        self.palette_picks_snippets = false;
+        self.palette_picks_tabs = false;
         self.palette = None;
         self.palette_subscription = None;
         window.focus(&self.focus, cx);
@@ -751,13 +1234,6 @@ impl Workbench {
         .detach();
     }
 
-    fn save(&mut self, cx: &mut Context<Self>) {
-        if let Some(project) = self.project.clone() {
-            self.editor
-                .update(cx, |editor, cx| editor.save(project, cx));
-        }
-    }
-
     fn toggle_tone(&mut self, cx: &mut Context<Self>) {
         self.appearance.tone = match self.appearance.tone {
             Tone::Dark => Tone::Light,
@@ -766,10 +1242,25 @@ impl Workbench {
         self.apply_appearance(cx);
     }
 
+    pub(super) fn set_skin(&mut self, skin: Skin, cx: &mut Context<Self>) {
+        if self.appearance.skin != skin {
+            self.appearance.skin = skin;
+            self.apply_appearance(cx);
+        }
+    }
+
+    pub(super) fn set_tone(&mut self, tone: Tone, cx: &mut Context<Self>) {
+        if self.appearance.tone != tone {
+            self.appearance.tone = tone;
+            self.apply_appearance(cx);
+        }
+    }
+
     fn toggle_skin(&mut self, cx: &mut Context<Self>) {
         self.appearance.skin = match self.appearance.skin {
             Skin::Standard => Skin::Lcars,
-            Skin::Lcars => Skin::Standard,
+            Skin::Lcars => Skin::Aperture,
+            Skin::Aperture => Skin::Standard,
         };
         self.apply_appearance(cx);
     }
@@ -804,6 +1295,9 @@ impl Workbench {
             composer.update(cx, |composer, cx| composer.set_theme(theme, cx));
         }
         if let Some(prompt) = &self.reject_prompt {
+            prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        }
+        if let Some(prompt) = &self.rename_prompt {
             prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
         }
         if let Some(memory) = &self.memory {
@@ -915,6 +1409,37 @@ impl Workbench {
         self.perform(PendingAction::OpenFile { path, line }, window, cx);
     }
 
+    /// Closes every tab (all but the active one when `keep_active`). A tab with unsaved edits
+    /// stays open rather than starting a chain of questions.
+    fn close_tabs(&mut self, keep_active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (paths, dirty, active, pinned) = {
+            let editor = self.editor.read(cx);
+            (
+                editor.paths(),
+                editor.dirty_paths(),
+                editor.path().map(str::to_owned),
+                editor.pinned_paths(),
+            )
+        };
+        let mut kept = 0;
+        for path in paths {
+            if keep_active && active.as_deref() == Some(path.as_str()) {
+                continue;
+            }
+            if pinned.contains(&path) {
+                continue;
+            }
+            if dirty.contains(&path) {
+                kept += 1;
+                continue;
+            }
+            self.perform(PendingAction::CloseTab(path), window, cx);
+        }
+        if kept > 0 {
+            self.say(format!("{kept} değiştirilmiş sekme açık bırakıldı"), cx);
+        }
+    }
+
     /// Closes an editor tab; a tab with unsaved edits is asked about first.
     pub fn request_close_tab(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         let dirty = self.editor.read(cx).dirty_paths().contains(&path);
@@ -958,6 +1483,8 @@ impl Workbench {
             (
                 Decision::Save | Decision::Discard,
                 PendingAction::StopTerminal(_)
+                | PendingAction::CloseTerminal { .. }
+                | PendingAction::DeleteEntry { .. }
                 | PendingAction::OpenProjectStoppingSessions(_)
                 | PendingAction::ChooseAgent
                 | PendingAction::Consent(..),
@@ -981,7 +1508,10 @@ impl Workbench {
             }
             (
                 Decision::Confirm,
-                PendingAction::StopTerminal(_) | PendingAction::OpenProjectStoppingSessions(_),
+                PendingAction::StopTerminal(_)
+                | PendingAction::CloseTerminal { .. }
+                | PendingAction::DeleteEntry { .. }
+                | PendingAction::OpenProjectStoppingSessions(_),
             ) => self.perform(action, window, cx),
             (Decision::Confirm, _) => {}
         }
@@ -1002,6 +1532,7 @@ impl Workbench {
         match event {
             EditorEvent::Saved(saved) => {
                 self.save_queue.retain(|path| path != &saved.path);
+                self.refresh_git_badges(cx);
                 self.save_next(window, cx);
             }
             EditorEvent::Conflict | EditorEvent::SaveFailed(_) => {
@@ -1015,10 +1546,44 @@ impl Workbench {
             EditorEvent::CloseRequested(path) => {
                 self.request_close_tab(path.clone(), window, cx);
             }
-            EditorEvent::Edited
-            | EditorEvent::Opened(_)
-            | EditorEvent::Closed(_)
-            | EditorEvent::Activated(_) => self.note_workspace_change(cx),
+            EditorEvent::TabContextMenu { position, .. } => {
+                self.open_context_menu(
+                    rwk_core::workbench::MenuTarget::EditorTab,
+                    *position,
+                    window,
+                    cx,
+                );
+            }
+            EditorEvent::TextContextMenu {
+                position,
+                selection,
+                editable,
+            } => self.open_text_menu(*selection, *editable, *position, window, cx),
+            EditorEvent::Opened(path) => {
+                if self.jump_to_conflict.as_deref() == Some(path.as_str()) {
+                    self.jump_to_conflict = None;
+                    let count = self
+                        .editor
+                        .update(cx, |editor, cx| editor.next_conflict(window, cx));
+                    if count > 0 {
+                        self.say(format!("{count} çakışma · Ctrl Alt N sonraki"), cx);
+                    }
+                }
+                self.lsp_opened(path, cx);
+                self.note_workspace_change(cx);
+            }
+            EditorEvent::Closed(path) => {
+                self.lsp_closed(path, cx);
+                self.note_workspace_change(cx);
+            }
+            EditorEvent::Edited => {
+                self.lsp_edited(cx);
+                self.note_workspace_change(cx);
+            }
+            EditorEvent::Activated(_) => self.note_workspace_change(cx),
+            EditorEvent::OpenLocation { path, line } => {
+                self.request_open_file_at(path.clone(), Some(*line), window, cx);
+            }
         }
     }
 
@@ -1072,6 +1637,8 @@ impl Workbench {
                     self.flush_workspace(cx);
                     self.close_palette(window, cx);
                     self.close_search(window, cx);
+                    self.close_problems(window, cx);
+                    self.close_git(window, cx);
                     self.stop_terminals(false);
                     self.editor
                         .update(cx, |editor, cx| editor.clear(window, cx));
@@ -1079,11 +1646,17 @@ impl Workbench {
                     self.files
                         .update(cx, |files, cx| files.set_project(Arc::clone(&project), cx));
                     let root = project.info().root.clone();
+                    self.remember_recent(&root, cx);
                     self.project = Some(project);
+                    self.server_status.clear();
+                    self.refresh_branch(cx);
+                    self.refresh_git_badges(cx);
+                    self.restart_language_servers(cx);
                     self.inspector
                         .update(cx, |inspector, cx| inspector.set_project(Some(root), cx));
                     self.register_if_unknown(window, cx);
                     self.restore_workspace(window, cx);
+                    self.start_watching(window, cx);
                     if let Some(command) = self.after_pick.take() {
                         self.run(command, window, cx);
                     }
@@ -1097,6 +1670,10 @@ impl Workbench {
                 self.stop_terminals(true);
                 self.close_confirmed = true;
             }
+            PendingAction::CloseTerminal { id, force } => {
+                self.remove_terminal(&id, force, window, cx);
+            }
+            PendingAction::DeleteEntry { path, .. } => self.delete_entry(&path, cx),
             PendingAction::StopTerminal(id) => {
                 if let Err(error) = self.sessions.stop(&id) {
                     self.say(error.message, cx);
@@ -1125,6 +1702,7 @@ impl Workbench {
             self.gates.detach(&pane.id);
             self.host.0.remove(&pane.id);
         }
+        self.dock = DockLayout::new();
         self.selected = 0;
     }
 
@@ -1139,14 +1717,19 @@ impl Workbench {
             .collect();
         let gates = Arc::clone(&self.gates);
         let host = self.host.0.clone();
+        let mut gone = Vec::new();
         self.terminals.retain(|pane| {
             let alive = running.contains(&pane.id);
             if !alive {
                 gates.detach(&pane.id);
                 host.remove(&pane.id);
+                gone.push(pane.id.clone());
             }
             alive
         });
+        for id in gone {
+            self.dock.remove(&id);
+        }
         self.selected = self.selected.min(self.terminals.len().saturating_sub(1));
     }
 
@@ -1186,20 +1769,140 @@ impl Workbench {
         let appearance = terminal_appearance(self.theme());
         let id = info.id.clone();
         let view = cx.new(|cx| TerminalView::new(engine, host, id, appearance, gate, receiver, cx));
-        let resume = match &launch {
-            SessionLaunch::Resume(key) => Some(key.clone()),
-            SessionLaunch::Fresh { .. } => None,
+        let font_size = f32::from(self.editor_prefs.font_size);
+        view.update(cx, |view, cx| view.set_font_size(font_size, cx));
+        let (resume, name) = match &launch {
+            SessionLaunch::Resume(key) => (Some(key.clone()), None),
+            SessionLaunch::Fresh { name, .. } => (None, name.clone()),
+            // A remote shell is named after where it leads.
+            SessionLaunch::Ssh(target) => (None, SessionName::parse(&target.display()).ok()),
+            SessionLaunch::Task(task) => (None, SessionName::parse(&task.name).ok()),
         };
+        let ssh = match &launch {
+            SessionLaunch::Ssh(target) => Some(target.clone()),
+            _ => None,
+        };
+        let _ = self.dock.push_default(info.id.clone());
+        let open_location = cx.subscribe_in(
+            &view,
+            window,
+            |this, _view, event: &crate::terminal::TerminalEvent, window, cx| {
+                let crate::terminal::TerminalEvent::Open { line, column } = event;
+                this.open_clicked_location(line, *column, window, cx);
+            },
+        );
         self.terminals.push(TerminalPane {
             kind,
             id: info.id,
+            name,
             resume,
+            ssh,
+            task: None,
+            run: matches!(launch, SessionLaunch::Task(_)),
             view,
+            _open_location: open_location,
         });
         self.dock_visible = true;
         let last = self.terminals.len() - 1;
         self.select_terminal(last, window, cx);
         true
+    }
+
+    /// The view of terminal `index`.
+    pub fn terminal_view(&self, index: usize) -> Option<&Entity<TerminalView>> {
+        self.terminals.get(index).map(|pane| &pane.view)
+    }
+
+    /// The name of terminal `index`, when the user gave it one.
+    pub fn terminal_name(&self, index: usize) -> Option<&SessionName> {
+        self.terminals.get(index)?.name.as_ref()
+    }
+
+    /// What the title strip of terminal `index` shows: its name, or the kind with an ordinal
+    /// among the terminals of the same kind ("claude 2"), so unnamed panes stay tellable apart.
+    pub fn terminal_title(&self, index: usize) -> String {
+        let Some(pane) = self.terminals.get(index) else {
+            return String::new();
+        };
+        if let Some(name) = &pane.name {
+            return name.to_string();
+        }
+        let label = pane.kind.agent().unwrap_or("shell");
+        let ordinal = self.terminals[..=index]
+            .iter()
+            .filter(|other| other.kind == pane.kind)
+            .count();
+        format!("{label} {ordinal}")
+    }
+
+    /// Sets or clears the name of terminal `index` and remembers it in the saved workspace. The
+    /// daemon keeps the name a run started with; this is the local label.
+    pub fn rename_terminal(
+        &mut self,
+        index: usize,
+        name: Option<SessionName>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane) = self.terminals.get_mut(index) else {
+            return;
+        };
+        pane.name = name;
+        self.note_workspace_change(cx);
+        cx.notify();
+    }
+
+    /// The open rename prompt.
+    pub fn rename_prompt(&self) -> Option<&Entity<crate::rename::RenameTerminalPrompt>> {
+        self.rename_prompt.as_ref()
+    }
+
+    /// Asks for a new name for terminal `index`.
+    pub fn open_rename_prompt(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::rename::{RenamePromptEvent, RenameTerminalPrompt};
+
+        if self.rename_prompt.is_some() {
+            return;
+        }
+        let Some(pane) = self.terminals.get(index) else {
+            return;
+        };
+        let current = pane.name.clone();
+        let running_agent = pane.kind != SessionKind::Shell;
+        let theme = self.theme();
+        let prompt =
+            cx.new(|cx| RenameTerminalPrompt::new(current.as_ref(), running_agent, window, cx));
+        prompt.update(cx, |prompt, cx| prompt.set_theme(theme, cx));
+        // The pane is found again by id: terminals may have come and gone while the prompt was open.
+        let id = pane.id.clone();
+        self.rename_subscription = Some(cx.subscribe_in(
+            &prompt,
+            window,
+            move |this, _prompt, event: &RenamePromptEvent, window, cx| match event {
+                RenamePromptEvent::Rename(name) => {
+                    if let Some(index) = this.terminals.iter().position(|pane| pane.id == id) {
+                        this.rename_terminal(index, name.clone(), cx);
+                    }
+                    this.close_rename_prompt(window, cx);
+                }
+                RenamePromptEvent::Close => this.close_rename_prompt(window, cx),
+                RenamePromptEvent::NewTask(_) | RenamePromptEvent::EntryName(_) => {}
+            },
+        ));
+        self.rename_prompt = Some(prompt);
+        cx.notify();
+    }
+
+    /// Closes the rename prompt and returns focus to the workbench.
+    pub fn close_rename_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.rename_prompt = None;
+        self.rename_subscription = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 
     fn new_terminal(&mut self, kind: SessionKind, window: &mut Window, cx: &mut Context<Self>) {
@@ -1223,8 +1926,17 @@ impl Workbench {
             return;
         };
         self.selected = index;
+        let id = pane.id.clone();
         let handle = pane.view.read(cx).focus_handle().clone();
-        window.focus(&handle, cx);
+        // A tab that was hidden is painted for the first time on the next frame; focus can only
+        // land on it then.
+        let was_shown = self.dock.is_shown(&id);
+        self.dock.activate(&id);
+        if was_shown {
+            window.focus(&handle, cx);
+        } else {
+            window.on_next_frame(move |window, cx| window.focus(&handle, cx));
+        }
         cx.notify();
     }
 
@@ -1242,7 +1954,7 @@ impl Workbench {
         self.select_terminal(next, window, cx);
     }
 
-    fn with_selected_terminal(
+    pub(super) fn with_selected_terminal(
         &mut self,
         cx: &mut Context<Self>,
         action: impl FnOnce(&mut TerminalView, &mut Context<TerminalView>),
@@ -1263,8 +1975,24 @@ impl Workbench {
                     .contains_focused(window, cx)
             }),
             dialog: self.pending.is_some(),
-            input: self.palette.is_some(),
+            input: self.palette.is_some() || self.ssh_picker.is_some(),
         }
+    }
+
+    /// Tab / Shift Tab in the editor: walks a snippet's places, else indents as the editor does.
+    fn snippet_key(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .editor
+            .update(cx, |editor, cx| editor.snippet_step(forward, window, cx))
+        {
+            return;
+        }
+        let fallback: Box<dyn gpui::Action> = if forward {
+            Box::new(gpui_base::input::IndentInline)
+        } else {
+            Box::new(gpui_base::input::OutdentInline)
+        };
+        window.dispatch_action(fallback, cx);
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1283,7 +2011,15 @@ impl Workbench {
             cx.stop_propagation();
             return;
         }
+        // An open menu owns the keyboard like a dialog does.
+        if self.menu_key(event.keystroke.key.as_str(), cx) {
+            cx.stop_propagation();
+            return;
+        }
         let modifiers = event.keystroke.modifiers;
+        if event.keystroke.key == "escape" {
+            self.editor.update(cx, |editor, _| editor.end_snippet());
+        }
         let stroke = Keystroke {
             key: event.keystroke.key.clone(),
             ctrl: modifiers.control,
@@ -1302,23 +2038,43 @@ impl Workbench {
     }
 }
 
+gpui::actions!(snippet, [SnippetNext, SnippetPrev]);
+
 fn terminal_appearance(theme: Theme) -> TerminalAppearance {
     TerminalAppearance::Themed {
         dark: theme.dark,
         foreground: theme.text,
         background: theme.editor,
         selection: theme.selected,
+        aperture: theme.skin == Skin::Aperture,
     }
 }
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frames += 1;
+        // A process that ended on its own is noticed here; the task list only repaints when the
+        // set of marked tasks changed.
+        self.sync_task_marks(cx);
         let theme = self.theme();
         let dock = div()
+            .id("dock-panel")
             .size_full()
             .flex()
             .flex_col()
+            // Terminals, titles, the inspector and the offers stop their own right clicks; what
+            // reaches the panel itself is the empty part of the dock.
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.open_context_menu(
+                        rwk_core::workbench::MenuTarget::DockBackground,
+                        event.position,
+                        window,
+                        cx,
+                    );
+                }),
+            )
             .children(self.inspector_visible.then(|| {
                 div()
                     .h(px(INSPECTOR_HEIGHT))
@@ -1328,17 +2084,15 @@ impl Render for Workbench {
                     .child(self.inspector.clone())
             }))
             .children(self.offer_rows(cx))
-            .children(self.terminals.iter().enumerate().map(|(index, pane)| {
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .border_1()
-                    .when_selected(theme, index == self.selected)
-                    .child(pane.view.clone())
-            }));
+            .children(self.dock_tree(theme, cx));
         let main = h_resizable("workbench")
             .with_state(&self.sizes)
-            .child(resizable_panel().size(px(260.0)).child(self.files.clone()))
+            .child(
+                resizable_panel()
+                    .size(px(260.0))
+                    .size_range(px(150.0)..px(640.0))
+                    .child(self.files.clone()),
+            )
             .child(resizable_panel().child(self.editor.clone()))
             .child(
                 resizable_panel()
@@ -1346,7 +2100,6 @@ impl Render for Workbench {
                     .visible(self.dock_visible)
                     .child(dock),
             );
-        let toast = self.toast.clone().unwrap_or_default();
         let dialog = self.dialog().map(|dialog| {
             let buttons = dialog.buttons.iter().map(|(decision, label)| {
                 let decision = *decision;
@@ -1397,11 +2150,20 @@ impl Render for Workbench {
             .text_color(gpui::rgb(theme.text))
             // Capture phase: a shortcut is resolved before the focused terminal sees the key.
             .capture_key_down(cx.listener(Self::on_key_down))
+            .on_action(
+                cx.listener(|this, _: &SnippetNext, window, cx| this.snippet_key(true, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SnippetPrev, window, cx| {
+                    this.snippet_key(false, window, cx)
+                }),
+            )
             .children(
                 theme
                     .lcars
                     .then(|| lcars_header(theme, self.project_name(), window)),
             )
+            .child(self.toolbar_row(theme, cx))
             .child(div().flex_1().min_h_0().child(main))
             .child(
                 div()
@@ -1422,25 +2184,36 @@ impl Render for Workbench {
                             .lcars
                             .then(|| div().h(px(3.0)).mb_1().bg(gpui::rgb(theme.blue))),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_3()
-                            .child(div().flex_1().min_w_0().child(toast))
-                            .children(
-                                self.quota
-                                    .clone()
-                                    .map(|quota| div().flex_none().child(quota)),
-                            ),
-                    ),
+                    .child(self.footer_bar(cx)),
             )
+            .children(self.overlay_open().then(|| {
+                // A click beside an overlay closes it, and never also presses what is below.
+                div()
+                    .id("overlay-backdrop")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .occlude()
+                    .bg(gpui::rgba(0x00000055))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, window, cx| this.close_overlay(window, cx)),
+                    )
+            }))
             .children(self.palette.clone())
+            .children(self.ssh_picker.clone())
             .children(self.composer.clone())
             .children(self.reject_prompt.clone())
+            .children(self.rename_prompt.clone())
             .children(self.memory.clone())
             .children(self.search.clone())
+            .children(self.problems_view.clone())
+            .children(self.locations_view.clone())
+            .children(self.git_view.clone())
+            .children(self.settings_view.clone())
+            .children(self.file_replace.clone())
+            .children(self.menu.as_ref().map(|open| open.view.clone()))
             .children(dialog)
     }
 }

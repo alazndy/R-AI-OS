@@ -51,6 +51,57 @@ icons!(
     "table.svg",
 );
 
+macro_rules! toolbar_icons {
+    ($($file:literal),* $(,)?) => {
+        const TOOLBAR_ICONS: &[(&str, &[u8])] = &[
+            $(($file, include_bytes!(concat!("../assets/toolbar-icons/", $file)))),*
+        ];
+    };
+}
+
+toolbar_icons!(
+    "alert.svg",
+    "book.svg",
+    "close.svg",
+    "columns.svg",
+    "command.svg",
+    "dot.svg",
+    "expand.svg",
+    "eye.svg",
+    "file-search.svg",
+    "folder.svg",
+    "gear.svg",
+    "git.svg",
+    "layout-agents.svg",
+    "layout-balanced.svg",
+    "layout-editor.svg",
+    "network.svg",
+    "panel-bottom.svg",
+    "pencil.svg",
+    "play.svg",
+    "save.svg",
+    "send.svg",
+    "shrink.svg",
+    "sparkle.svg",
+    "split-down.svg",
+    "split-right.svg",
+    "stop.svg",
+    "task-plus.svg",
+    "terminal-plus.svg",
+    "text-search.svg",
+);
+
+/// Directory of the toolbar icon assets.
+pub const TOOLBAR_ICON_DIRECTORY: &str = "toolbar-icons";
+/// Path of the RAIOS mark shown at the start of the toolbar.
+pub const BRAND_PATH: &str = "brand/raios.svg";
+const BRAND: &[u8] = include_bytes!("../assets/brand/raios.svg");
+
+/// The asset path of the toolbar icon called `name` (see `rwk_core::workbench::toolbar_icon`).
+pub fn toolbar_icon_path(name: &str) -> SharedString {
+    SharedString::from(format!("{TOOLBAR_ICON_DIRECTORY}/{name}.svg"))
+}
+
 const ANTONIO: &[u8] = include_bytes!("../assets/fonts/Antonio.ttf");
 
 /// The compiled-in asset source.
@@ -71,6 +122,18 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         if path == ANTONIO_PATH {
             return Ok(Some(Cow::Borrowed(ANTONIO)));
+        }
+        if path == BRAND_PATH {
+            return Ok(Some(Cow::Borrowed(BRAND)));
+        }
+        if let Some(name) = path
+            .strip_prefix(TOOLBAR_ICON_DIRECTORY)
+            .and_then(|rest| rest.strip_prefix('/'))
+        {
+            return Ok(TOOLBAR_ICONS
+                .iter()
+                .find(|(file, _)| *file == name)
+                .map(|(_, bytes)| Cow::Borrowed(*bytes)));
         }
         let Some(name) = path
             .strip_prefix(ICON_DIRECTORY)
@@ -112,6 +175,22 @@ mod tests {
             assert!(text.contains("<svg"), "{icon:?} is not an SVG");
         }
         assert_eq!(ICONS.len(), 28);
+    }
+
+    #[test]
+    fn every_toolbar_button_icon_and_the_brand_mark_are_bundled() {
+        use rwk_core::workbench::{toolbar, toolbar_icon, ToolbarItem};
+        for item in toolbar() {
+            if let ToolbarItem::Button(id, _) = item {
+                let path = toolbar_icon_path(toolbar_icon(*id));
+                let loaded = Assets
+                    .load(&path)
+                    .expect("load")
+                    .unwrap_or_else(|| panic!("{path} is not bundled"));
+                assert!(std::str::from_utf8(&loaded).unwrap().contains("<svg"));
+            }
+        }
+        assert!(Assets.load(BRAND_PATH).expect("load").is_some());
     }
 
     #[test]

@@ -113,6 +113,33 @@ fn main() {
                     workbench.set_workspace_source(Some(source))
                 });
             }
+            if let Some(home) = config_home() {
+                rwk_core::lsp::set_user_servers(persistence::load_user_servers(
+                    &persistence::servers_path(&home),
+                ));
+                let source: Arc<dyn rwk_core::runner::TaskSource> =
+                    Arc::new(persistence::FsTaskStore::new(&home));
+                workbench.update(cx, |workbench, _| workbench.set_task_source(Some(source)));
+                let snippets: rwk_ui::workbench::SnippetSource =
+                    Arc::new(move || persistence::load_snippets(&home));
+                workbench.update(cx, |workbench, _| {
+                    workbench.set_snippet_source(Some(snippets))
+                });
+            }
+            let preferences_file = config_home().map(|home| persistence::preferences_path(&home));
+            if let Some(file) = &preferences_file {
+                let stored = persistence::load_preferences(file);
+                workbench.update(cx, |workbench, cx| {
+                    workbench.set_editing_preferences(stored.auto_save, stored.format_on_save);
+                    workbench.set_toolbar_layout(stored.toolbar);
+                    workbench.set_editor_prefs(stored.editor, cx);
+                });
+            }
+            let recent_file = config_home().map(|home| persistence::recent_path(&home));
+            if let Some(file) = &recent_file {
+                let stored = persistence::load_recent(file);
+                workbench.update(cx, |workbench, _| workbench.set_recent_projects(stored));
+            }
             let workspace_store_for_events = workspace_store.clone();
             cx.subscribe(
                 &workbench,
@@ -124,10 +151,35 @@ fn main() {
                             }
                         }
                     }
+                    WorkbenchEvent::RecentProjectsChanged(projects) => {
+                        if let Some(file) = &recent_file {
+                            if let Err(error) = persistence::save_recent(file, projects) {
+                                eprintln!("rwk-app: could not save the recent projects: {error}");
+                            }
+                        }
+                    }
                     WorkbenchEvent::ProjectRegistered(project) => {
                         if let Some(file) = &registered_file {
                             if let Err(error) = persistence::remember_registered(file, project) {
                                 eprintln!("rwk-app: could not remember the registration: {error}");
+                            }
+                        }
+                    }
+                    WorkbenchEvent::PreferencesChanged {
+                        auto_save,
+                        format_on_save,
+                        toolbar,
+                        editor,
+                    } => {
+                        if let Some(file) = &preferences_file {
+                            let preferences = persistence::Preferences {
+                                auto_save: *auto_save,
+                                format_on_save: *format_on_save,
+                                toolbar: *toolbar,
+                                editor: *editor,
+                            };
+                            if let Err(error) = persistence::save_preferences(file, preferences) {
+                                eprintln!("rwk-app: could not save the preferences: {error}");
                             }
                         }
                     }
@@ -154,6 +206,7 @@ fn main() {
             // without the daemon; without the CLI on PATH the view says so when a search runs.
             workbench.update(cx, |workbench, _| {
                 workbench.set_search_source(Some(Arc::new(CliSearch::default())));
+                workbench.set_language_server_launcher(Some(rwk_core::lsp::default_launcher()));
             });
             // The quota signal: `raios usage --json` read on the background executor and
             // refreshed on a timer; the status bar stays quiet until a reading lands.

@@ -700,6 +700,7 @@ mod tests {
 
     #[test]
     fn policies_panel_data_without_db_is_still_constructible() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let data = load_policies_panel_data();
         let _ = data.policy;
     }

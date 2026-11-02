@@ -47,6 +47,26 @@ const DARK_ANSI: [Rgb; 16] = [
     Rgb::from_hex(0xffffff),
 ];
 
+/// The Aperture terminal colours (the Konsole scheme of the KDE theme).
+const APERTURE_ANSI: [Rgb; 16] = [
+    Rgb::from_hex(0x141414),
+    Rgb::from_hex(0xff4d4d),
+    Rgb::from_hex(0x3ddc84),
+    Rgb::from_hex(0xff9a00),
+    Rgb::from_hex(0x00aeef),
+    Rgb::from_hex(0xc58aff),
+    Rgb::from_hex(0x00d2c8),
+    Rgb::from_hex(0xc8c8c8),
+    Rgb::from_hex(0x555555),
+    Rgb::from_hex(0xff7878),
+    Rgb::from_hex(0x78f0aa),
+    Rgb::from_hex(0xffbf5e),
+    Rgb::from_hex(0x5eceff),
+    Rgb::from_hex(0xdcb4ff),
+    Rgb::from_hex(0x64ebe4),
+    Rgb::from_hex(0xffffff),
+];
+
 const LIGHT_ANSI: [Rgb; 16] = [
     Rgb::from_hex(0x141a23),
     Rgb::from_hex(0xa12622),
@@ -88,6 +108,11 @@ impl Palette {
     /// The dark-tone palette on the given surface.
     pub const fn dark(surface: Surface) -> Palette {
         Palette::with_ansi(DARK_ANSI, surface)
+    }
+
+    /// The Aperture palette on the given surface.
+    pub const fn aperture(surface: Surface) -> Palette {
+        Palette::with_ansi(APERTURE_ANSI, surface)
     }
 
     /// The light-tone palette on the given surface.

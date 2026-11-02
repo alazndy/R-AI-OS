@@ -548,6 +548,21 @@ pub enum Commands {
         /// Project path or name (omit for current directory)
         project: Option<String>,
     },
+    /// Move the oldest memory.md log entries to memory.archive.md (nothing is deleted)
+    #[command(name = "memory-archive")]
+    MemoryArchive {
+        /// Project path (omit for current directory)
+        project: Option<String>,
+        /// Show what would move without changing any file
+        #[arg(long)]
+        dry_run: bool,
+        /// Change Log size to keep in memory.md, in KB
+        #[arg(long, default_value_t = 24)]
+        change_log_kb: usize,
+        /// Instincts size to keep in memory.md, in KB
+        #[arg(long, default_value_t = 16)]
+        instincts_kb: usize,
+    },
     /// Manage the always-on R-AI-OS Cortex Hub (aiosd daemon)
     Hub {
         #[command(subcommand)]

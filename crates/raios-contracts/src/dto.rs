@@ -123,6 +123,10 @@ pub struct UnifiedTaskDto {
     pub priority: u8,
     /// ISO-8601 UTC creation timestamp.
     pub created_at: String,
+    /// ISO-8601 UTC timestamp of the last change; a client passes it back as
+    /// `expected_updated_at` so an edit cannot overwrite a newer one.
+    #[serde(default)]
+    pub updated_at: String,
 }
 
 /// Generated artifact metadata entry.

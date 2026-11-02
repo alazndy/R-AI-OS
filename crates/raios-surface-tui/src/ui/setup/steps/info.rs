@@ -53,11 +53,11 @@ pub fn render_welcome(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
     ];
     for item in &[
-        "AGENT_CONSTITUTION.md — K-AI-RA unified constitution",
+        "AGENT_CONSTITUTION.md — unified agent constitution",
         "Workspace symlinks: CLAUDE.md, AGENTS.md",
-        "Claude Kaira:       ~/.claude/CLAUDE.md + MCP",
-        "Codex Kaira:        ~/.codex/AGENTS.md",
-        "Skills & Hooks:     6 K-AI-RA skill stubs",
+        "Claude Code:        ~/.claude/CLAUDE.md + MCP",
+        "Codex:              ~/.codex/AGENTS.md",
+        "Skills & Hooks:     6 starter skill stubs",
         "İlk proje keşfi → entities.json",
     ] {
         lines.push(Line::from(vec![
@@ -198,7 +198,7 @@ pub fn render_workspace(frame: &mut Frame, area: Rect, app: &App) {
     let header_label = if path_exists {
         "  MEVCUT YAPI"
     } else {
-        "  OLUŞTURULACAK YAPI (K-AI-RA)"
+        "  OLUŞTURULACAK YAPI"
     };
 
     let mut r = vec![

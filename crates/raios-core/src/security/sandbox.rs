@@ -106,6 +106,22 @@ pub fn is_path_safe(target: &Path, workspace: &Path) -> bool {
     validate_path(target, workspace).is_ok()
 }
 
+/// Expands a leading `~` / `~/` to the current user's home directory so
+/// portable blocklist entries such as `~/.ssh` actually match. Anything else
+/// (including a `~user` form, or a missing home directory) is returned as-is.
+fn expand_home(path: &str) -> PathBuf {
+    let rest = if path == "~" {
+        Some("")
+    } else {
+        path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\"))
+    };
+    match (rest, dirs::home_dir()) {
+        (Some(""), Some(home)) => home,
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => PathBuf::from(path),
+    }
+}
+
 // ─── SandboxGuard ─────────────────────────────────────────────────────────────
 
 /// Configurable sandbox guard. Holds the allowed workspace root
@@ -124,7 +140,7 @@ impl SandboxGuard {
     }
 
     pub fn with_blocked_paths(mut self, paths: Vec<String>) -> Self {
-        self.blocked_paths = paths.into_iter().map(PathBuf::from).collect();
+        self.blocked_paths = paths.into_iter().map(|p| expand_home(&p)).collect();
         self
     }
 
@@ -220,8 +236,21 @@ mod tests {
         let (_tmp, ws) = setup();
         // .ssh is "outside" the workspace but we also use blocked_paths
         let guard = SandboxGuard::new(ws.clone())
-            .with_blocked_paths(vec!["C:/Users/turha/.ssh".to_string()]);
-        assert!(!guard.is_allowed(Path::new("C:/Users/turha/.ssh/id_rsa")));
+            .with_blocked_paths(vec!["C:/Users/example/.ssh".to_string()]);
+        assert!(!guard.is_allowed(Path::new("C:/Users/example/.ssh/id_rsa")));
+    }
+
+    #[test]
+    fn blocked_path_tilde_is_expanded_to_home() {
+        let Some(home) = dirs::home_dir() else { return };
+        assert_eq!(expand_home("~/.ssh"), home.join(".ssh"));
+        assert_eq!(expand_home("~"), home);
+        assert_eq!(expand_home("~other/x"), PathBuf::from("~other/x"));
+        assert_eq!(expand_home("/etc/ssh"), PathBuf::from("/etc/ssh"));
+
+        let (_tmp, ws) = setup();
+        let guard = SandboxGuard::new(ws).with_blocked_paths(vec!["~/.ssh".to_string()]);
+        assert!(!guard.is_allowed(&home.join(".ssh/id_rsa")));
     }
 
     #[test]

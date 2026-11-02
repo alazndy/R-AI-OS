@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sessions::{ResumeKey, SessionKind};
+use crate::sessions::{ResumeKey, SessionKind, SessionName};
 use crate::workbench::layout_state::SavedTerminal;
 
 /// One row of the recovery catalog.
@@ -68,8 +68,12 @@ pub struct SessionOffer {
     pub kind: SessionKind,
     /// The conversation id from the saved state, when there was one.
     pub native_session: Option<String>,
+    /// The name the pane had, when it had one.
+    pub name: Option<SessionName>,
     /// The resumable catalog row this offer belongs to, when one was matched.
     pub matched: Option<MatchedSession>,
+    /// The task the pane carried; the caller fills it from the saved links.
+    pub task: Option<crate::workbench::layout_state::SavedTaskLink>,
 }
 
 /// Matches the agent terminals of a saved workspace against the catalog of `project`.
@@ -95,6 +99,7 @@ pub fn plan_offers(
         let SavedTerminal::Agent {
             kind,
             native_session,
+            ..
         } = terminal
         else {
             continue;
@@ -125,7 +130,9 @@ pub fn plan_offers(
         offers.push(SessionOffer {
             kind: *kind,
             native_session: native_session.clone(),
+            name: terminal.name(),
             matched,
+            task: None,
         });
     }
     offers
@@ -163,6 +170,7 @@ mod tests {
         SavedTerminal::Agent {
             kind,
             native_session: native.map(str::to_owned),
+            name: None,
         }
     }
 
@@ -259,7 +267,10 @@ mod tests {
 
     #[test]
     fn agents_without_native_continuation_are_never_matched() {
-        let saved = [agent(SessionKind::Agy, None), SavedTerminal::Shell];
+        let saved = [
+            agent(SessionKind::Agy, None),
+            SavedTerminal::Shell { name: None },
+        ];
         let rows = catalog(vec![row(CLAUDE_A, PROJECT, "available", true)]);
 
         let offers = plan_offers(&saved, &rows, Path::new(PROJECT));

@@ -5,8 +5,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::control::{
-    ControlPlane, CreateHandoffRequest, HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest,
-    QueuedHandoff,
+    AssignTaskRequest, ControlPlane, CreateHandoffRequest, CreateTaskRequest,
+    HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest, QueuedHandoff,
+    UpdateTaskStatusRequest,
 };
 use crate::error::Result;
 use crate::handoff_input::handoff_operation_text;
@@ -40,6 +41,12 @@ pub enum Guarded {
         /// Retry key.
         key: IdempotencyKey,
     },
+    /// Create an operator task.
+    CreateTask(CreateTaskRequest),
+    /// Change the status of an operator task.
+    UpdateTaskStatus(UpdateTaskStatusRequest),
+    /// Assign an operator task to an agent, or clear the assignee.
+    AssignTask(AssignTaskRequest),
 }
 
 /// What a guarded operation produced.
@@ -53,6 +60,12 @@ pub enum GuardedOutcome {
     HandoffApproved,
     /// The daemon recorded the rejection.
     HandoffRejected,
+    /// The daemon created the task.
+    TaskCreated(String),
+    /// The daemon changed the task's status.
+    TaskStatusChanged,
+    /// The daemon assigned the task; this is its new revision.
+    TaskAssigned(String),
     /// The project is registered (or already was).
     ProjectRegistered {
         /// True when nothing changed because it was registered before.
@@ -70,6 +83,9 @@ impl Guarded {
             Self::ApproveHandoff(_) => "approve_handoff",
             Self::RejectHandoff(_) => "reject_handoff",
             Self::RegisterProject { .. } => "register_project",
+            Self::CreateTask(_) => "create_task",
+            Self::UpdateTaskStatus(_) => "update_task_status",
+            Self::AssignTask(_) => "assign_task",
         }
     }
 
@@ -82,6 +98,9 @@ impl Guarded {
             Self::ApproveHandoff(request) => &request.project_root,
             Self::RejectHandoff(request) => &request.project_root,
             Self::RegisterProject { root, .. } => root,
+            Self::CreateTask(request) => &request.project_root,
+            Self::UpdateTaskStatus(request) => &request.project_root,
+            Self::AssignTask(request) => &request.project_root,
         }
     }
 
@@ -121,6 +140,24 @@ impl Guarded {
                     root.display()
                 )
             }
+            Self::CreateTask(request) => format!(
+                "\"{}\" görevi {} projesine eklenecek (öncelik {}).",
+                request.title,
+                request.project_root.display(),
+                request.priority
+            ),
+            Self::UpdateTaskStatus(request) => format!(
+                "{} numaralı görevin durumu \"{}\" olacak.",
+                request.task_id,
+                request.status.label()
+            ),
+            Self::AssignTask(request) => match request.assignee.and_then(|kind| kind.agent()) {
+                Some(agent) => format!(
+                    "{} numaralı görev {agent} ajanına atanacak.",
+                    request.task_id
+                ),
+                None => format!("{} numaralı görevin ajan ataması kaldırılacak.", request.task_id),
+            },
         }
     }
 
@@ -161,6 +198,16 @@ impl Guarded {
                 Ok(GuardedOutcome::ProjectRegistered {
                     already_registered: outcome.already_registered,
                 })
+            }
+            Self::CreateTask(request) => {
+                plane.create_task(request).map(GuardedOutcome::TaskCreated)
+            }
+            Self::UpdateTaskStatus(request) => {
+                plane.update_task_status(request)?;
+                Ok(GuardedOutcome::TaskStatusChanged)
+            }
+            Self::AssignTask(request) => {
+                plane.assign_task(request).map(GuardedOutcome::TaskAssigned)
             }
         }
     }
@@ -372,5 +419,89 @@ mod tests {
         let plane = FakeControlPlane::new();
 
         assert!(launch().execute(&plane).is_err());
+    }
+
+    fn assign_request(assignee: Option<SessionKind>) -> AssignTaskRequest {
+        AssignTaskRequest {
+            project_root: PathBuf::from("/work/app"),
+            task_id: "t-9".to_owned(),
+            assignee,
+            expected_updated_at: Some("2026-10-24T09:00:00Z".to_owned()),
+            idempotency_key: IdempotencyKey::new("a1"),
+        }
+    }
+
+    #[test]
+    fn task_operations_are_keyed_scoped_and_worded_from_their_payload() {
+        let create = Guarded::CreateTask(CreateTaskRequest {
+            project_root: PathBuf::from("/work/app"),
+            title: "Fix the build".to_owned(),
+            priority: 70,
+            idempotency_key: IdempotencyKey::new("c1"),
+        });
+        let status = Guarded::UpdateTaskStatus(UpdateTaskStatusRequest {
+            project_root: PathBuf::from("/work/app"),
+            task_id: "t-9".to_owned(),
+            status: crate::tasks::TaskStatus::Completed,
+            idempotency_key: IdempotencyKey::new("s1"),
+        });
+        let assign = Guarded::AssignTask(assign_request(Some(SessionKind::Codex)));
+        let clear = Guarded::AssignTask(assign_request(None));
+
+        assert_eq!(create.command_name(), "create_task");
+        assert_eq!(status.command_name(), "update_task_status");
+        assert_eq!(assign.command_name(), "assign_task");
+        for op in [&create, &status, &assign, &clear] {
+            assert_eq!(op.project_root(), Path::new("/work/app"));
+        }
+        assert!(create.summary().contains("Fix the build"));
+        assert!(create.summary().contains("70"));
+        assert!(status.summary().contains("t-9") && status.summary().contains("bitti"));
+        assert!(assign.summary().contains("codex"));
+        assert!(clear.summary().contains("kaldırılacak"));
+    }
+
+    #[test]
+    fn task_operations_run_against_the_control_plane_and_report_what_happened() {
+        let plane = FakeControlPlane::new();
+        plane.push_created_task(Ok("t-new".to_owned()));
+        plane.push_status_update(Ok(()));
+        plane.push_assignment(Ok("2026-10-24T10:00:00Z".to_owned()));
+
+        let created = Guarded::CreateTask(CreateTaskRequest {
+            project_root: PathBuf::from("/work/app"),
+            title: "Fix".to_owned(),
+            priority: 50,
+            idempotency_key: IdempotencyKey::new("c1"),
+        })
+        .execute(&plane)
+        .unwrap();
+        assert_eq!(created, GuardedOutcome::TaskCreated("t-new".to_owned()));
+
+        let changed = Guarded::UpdateTaskStatus(UpdateTaskStatusRequest {
+            project_root: PathBuf::from("/work/app"),
+            task_id: "t-new".to_owned(),
+            status: crate::tasks::TaskStatus::InProgress,
+            idempotency_key: IdempotencyKey::new("s1"),
+        })
+        .execute(&plane)
+        .unwrap();
+        assert_eq!(changed, GuardedOutcome::TaskStatusChanged);
+
+        let assigned = Guarded::AssignTask(assign_request(Some(SessionKind::Claude)))
+            .execute(&plane)
+            .unwrap();
+        assert_eq!(
+            assigned,
+            GuardedOutcome::TaskAssigned("2026-10-24T10:00:00Z".to_owned())
+        );
+        assert!(matches!(
+            &plane.calls()[..],
+            [
+                RecordedCall::CreateTask(_),
+                RecordedCall::UpdateTaskStatus(_),
+                RecordedCall::AssignTask(_)
+            ]
+        ));
     }
 }

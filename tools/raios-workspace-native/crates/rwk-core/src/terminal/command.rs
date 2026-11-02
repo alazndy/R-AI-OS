@@ -17,6 +17,11 @@ pub const MAX_PROMPT_CHARS: usize = 600;
 /// a fresh wrapper run, not a nested child of whatever agent started the workspace.
 const INHERITED_RUN_VARIABLES: [&str; 2] = ["RAIOS_WRAPPER_RUN_ID", "RAIOS_AGENT_IDENTITY"];
 
+/// Prefixes of the variables a Claude Code session sets for what it starts. A terminal here is
+/// the user's own shell: an agent started in it would take these for a nested child session and
+/// stop saving its transcript.
+const INHERITED_AGENT_PREFIXES: [&str; 2] = ["CLAUDE_CODE_", "CLAUDECODE"];
+
 /// Where the programs of a session are found. `None` means: look it up the normal way.
 #[derive(Debug, Clone, Default)]
 pub struct ProgramPaths {
@@ -24,6 +29,8 @@ pub struct ProgramPaths {
     pub shell: Option<PathBuf>,
     /// The `raios` executable for agent sessions. Default: the first `raios` on `PATH`.
     pub raios: Option<PathBuf>,
+    /// The `ssh` client for remote shells. Default: the first `ssh` on `PATH`.
+    pub ssh: Option<PathBuf>,
 }
 
 /// Checks an optional first prompt and returns it trimmed, or `None` when it is empty.
@@ -66,12 +73,58 @@ pub fn build_command(
             command.args(["resume", key.to_string().as_str()]);
             command
         }
-        SessionLaunch::Fresh { prompt } => {
+        SessionLaunch::Ssh(target) => {
+            if kind != SessionKind::Shell {
+                return Err(AppError::new(
+                    ErrorCode::InvalidInput,
+                    "Only a shell session can connect over SSH.",
+                ));
+            }
+            let program = match &programs.ssh {
+                Some(path) => path.clone(),
+                None => find_in_path(OsStr::new("ssh")).ok_or_else(|| {
+                    AppError::new(ErrorCode::NotFound, "The ssh client is not installed.")
+                })?,
+            };
+            let mut command = CommandBuilder::new(program);
+            command.args(target.args());
+            command
+        }
+        SessionLaunch::Task(task) => {
+            if kind != SessionKind::Shell {
+                return Err(AppError::new(
+                    ErrorCode::InvalidInput,
+                    "Only a shell session can run a task.",
+                ));
+            }
+            let Some((program, args)) = task.command.split_first() else {
+                return Err(AppError::new(
+                    ErrorCode::InvalidInput,
+                    "The task has no command.",
+                ));
+            };
+            // `./gradlew` means the project's own file, not one relative to the app.
+            let program = if program.contains('/') && !Path::new(program).is_absolute() {
+                root.join(program)
+            } else {
+                PathBuf::from(program)
+            };
+            let program = find_in_path(program.as_os_str()).ok_or_else(|| {
+                AppError::new(ErrorCode::NotFound, "The task's program was not found.")
+            })?;
+            let mut command = CommandBuilder::new(program);
+            command.args(args);
+            command
+        }
+        SessionLaunch::Fresh { prompt, name } => {
             let prompt = validate_prompt(prompt.as_deref())?;
             if let Some(agent) = kind.agent() {
                 let mut command = CommandBuilder::new(raios_program(programs)?);
                 command.args(["run", agent, "--project"]);
                 command.arg(root);
+                if let Some(name) = name {
+                    command.args(["--name", name.as_str()]);
+                }
                 if let Some(prompt) = &prompt {
                     command.arg(prompt);
                 }
@@ -96,6 +149,17 @@ pub fn build_command(
     command.env("COLORTERM", "truecolor");
     for name in INHERITED_RUN_VARIABLES {
         command.env_remove(name);
+    }
+    for (name, _) in std::env::vars_os() {
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if INHERITED_AGENT_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        {
+            command.env_remove(name);
+        }
     }
     Ok(command)
 }

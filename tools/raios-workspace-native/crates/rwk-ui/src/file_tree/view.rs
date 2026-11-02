@@ -23,6 +23,15 @@ use crate::assets::icon_path;
 pub enum FileTreeEvent {
     /// The user chose a file (relative path). The workbench decides whether it may open.
     OpenFile(String),
+    /// The user right-clicked a row (relative path); the row is selected.
+    ContextMenu {
+        /// Relative path of the row.
+        path: String,
+        /// The row is a folder.
+        folder: bool,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
 }
 
 /// Marks the placeholder child of a folder that has not been listed yet.
@@ -41,6 +50,8 @@ pub struct FileTreeView {
     /// Folders whose listing is in flight.
     pending: HashSet<String>,
     status: Option<SharedString>,
+    /// Git marks by project-relative path (files and the folders above changed files).
+    badges: HashMap<String, rwk_core::git::Badge>,
     focus: FocusHandle,
     theme: Theme,
     _subscription: Subscription,
@@ -66,6 +77,7 @@ impl FileTreeView {
             expanded: HashSet::new(),
             pending: HashSet::new(),
             status: None,
+            badges: HashMap::new(),
             focus: cx.focus_handle(),
             theme: Theme::of(Appearance::default()),
             _subscription: subscription,
@@ -84,6 +96,23 @@ impl FileTreeView {
         self.list(String::new(), cx);
     }
 
+    /// Replaces the git marks shown next to files and folders.
+    pub fn set_badges(
+        &mut self,
+        badges: HashMap<String, rwk_core::git::Badge>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.badges != badges {
+            self.badges = badges;
+            cx.notify();
+        }
+    }
+
+    /// The git mark of `path`, when it has one.
+    pub fn badge(&self, path: &str) -> Option<rwk_core::git::Badge> {
+        self.badges.get(path).copied()
+    }
+
     /// Lists the root and every expanded folder again, keeping expansion and selection.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         if self.project.is_none() {
@@ -94,6 +123,11 @@ impl FileTreeView {
         for folder in folders {
             self.list(folder, cx);
         }
+    }
+
+    /// The folders that are open (the project root is not among them).
+    pub fn expanded_folders(&self) -> Vec<String> {
+        self.expanded.iter().cloned().collect()
     }
 
     /// Expands a folder, listing it when it has not been listed yet.
@@ -299,6 +333,19 @@ impl FileTreeView {
     }
 }
 
+/// The colour of a git mark: bright on a dark tone, deep on a light one.
+pub(crate) fn badge_color(kind: rwk_core::git::BadgeKind, dark: bool) -> u32 {
+    use rwk_core::git::BadgeKind;
+    match (kind, dark) {
+        (BadgeKind::Added, true) => 0x3fb950,
+        (BadgeKind::Added, false) => 0x1a7f37,
+        (BadgeKind::Modified, true) => 0xffa657,
+        (BadgeKind::Modified, false) => 0xb35900,
+        (BadgeKind::Deleted | BadgeKind::Conflict, true) => 0xff7b72,
+        (BadgeKind::Deleted | BadgeKind::Conflict, false) => 0xc62828,
+    }
+}
+
 impl Render for FileTreeView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The rows are drawn here rather than by `gpui_base::Tree`'s virtual list, which painted
@@ -326,6 +373,8 @@ impl Render for FileTreeView {
             .enumerate()
             .map(|(ix, (id, label, depth, folder, open))| {
                 let look = presentation(&label, folder, open);
+                let badge = self.badges.get(&id).copied();
+                let menu_id = id.clone();
                 let is_selected = selected.as_deref() == Some(id.as_str());
                 let chevron = match (folder, open) {
                     (true, true) => "▾",
@@ -343,6 +392,8 @@ impl Render for FileTreeView {
                     .id(ix)
                     .w_full()
                     .h(gpui::px(ROW_HEIGHT))
+                    .min_w_0()
+                    .overflow_hidden()
                     .pl(gpui::px(6.0 + INDENT * depth as f32))
                     .flex()
                     .flex_row()
@@ -352,6 +403,7 @@ impl Render for FileTreeView {
                     .hover(move |style| style.bg(gpui::rgb(theme.raised)))
                     .child(
                         div()
+                            .flex_none()
                             .w(gpui::px(10.0))
                             .text_xs()
                             .text_color(gpui::rgb(if on_fill {
@@ -368,7 +420,35 @@ impl Render for FileTreeView {
                             .flex_none()
                             .text_color(gpui::rgb(glyph_color)),
                     )
-                    .child(label)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(label),
+                    )
+                    .children(badge.map(|badge| {
+                        div()
+                            .flex_none()
+                            .pr_2()
+                            .text_xs()
+                            .text_color(gpui::rgb(badge_color(badge.kind, theme.dark)))
+                            .child(SharedString::from(badge.letter.to_string()))
+                    }))
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |view, event: &gpui::MouseDownEvent, _window, cx| {
+                            view.select(&menu_id, cx);
+                            cx.emit(FileTreeEvent::ContextMenu {
+                                path: menu_id.clone(),
+                                folder,
+                                position: event.position,
+                            });
+                            cx.stop_propagation();
+                        }),
+                    )
                     .on_click(cx.listener(move |view, _, _window, cx| {
                         view.select(&id, cx);
                         if folder {
@@ -399,6 +479,8 @@ impl Render for FileTreeView {
         let status = self.status.clone().unwrap_or_default();
         let element: AnyElement = div()
             .size_full()
+            .min_w_0()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .track_focus(&self.focus)
@@ -412,6 +494,9 @@ impl Render for FileTreeView {
                     .items_center()
                     .bg(gpui::rgb(theme.blue))
                     .rounded_tl(gpui::px(16.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_color(gpui::rgb(theme.on_fill))
                     .font_family(crate::fonts::display_family(window))
                     .text_size(gpui::px(16.0))
@@ -425,6 +510,9 @@ impl Render for FileTreeView {
                     .border_b_1()
                     .border_color(gpui::rgb(theme.line))
                     .text_xs()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_color(gpui::rgb(theme.muted))
                     .child(title)
             })
@@ -435,12 +523,28 @@ impl Render for FileTreeView {
                     .min_h_0()
                     .py_1()
                     .overflow_y_scroll()
+                    // The empty part below the rows (rows stop their own right clicks): the
+                    // project root, so a file can be created at the top level.
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(|_, event: &gpui::MouseDownEvent, _window, cx| {
+                            cx.emit(FileTreeEvent::ContextMenu {
+                                path: String::new(),
+                                folder: true,
+                                position: event.position,
+                            });
+                            cx.stop_propagation();
+                        }),
+                    )
                     .children(rows),
             )
             .child(
                 div()
                     .px_2()
                     .text_xs()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_color(gpui::rgb(theme.bad))
                     .child(status),
             )

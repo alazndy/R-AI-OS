@@ -85,6 +85,57 @@ impl WizardStep {
         }
     }
 
+    /// Builds the step sequence for the detected environment.
+    ///
+    /// Agent steps appear only for harnesses that are actually installed, and
+    /// the wrapper step only when at least one agent exists. While detection
+    /// is still pending (`None`) every step is included, which is also the
+    /// full static sequence.
+    pub fn plan(status: Option<&AgentStatus>) -> Vec<Self> {
+        let installed = |f: fn(&AgentStatus) -> bool| status.is_none_or(f);
+        let any_agent = status.is_none_or(|s| {
+            s.claude_installed || s.codex_installed || s.opencode_installed || s.agy_installed
+        });
+
+        let mut plan = vec![Self::Welcome, Self::Workspace, Self::Constitution];
+        if installed(|s| s.claude_installed) {
+            plan.push(Self::Claude);
+        }
+        if installed(|s| s.codex_installed || s.agy_installed) {
+            plan.push(Self::Codex);
+        }
+        if installed(|s| s.opencode_installed) {
+            plan.push(Self::OpenCode);
+        }
+        plan.push(Self::Skills);
+        if any_agent {
+            plan.push(Self::AgentWrapper);
+        }
+        plan.extend([Self::Initialize, Self::Done]);
+        plan
+    }
+
+    /// Next step after `self` within `plan`; stays put on the last step.
+    pub fn next_in(&self, plan: &[Self]) -> Self {
+        // `self` may have dropped out of the plan if detection finished
+        // mid-wizard; fall back to the static order to stay moving forward.
+        match plan.iter().position(|s| s == self) {
+            Some(i) => plan.get(i + 1).unwrap_or(self).clone(),
+            None => plan
+                .iter()
+                .find(|s| s.index() > self.index())
+                .unwrap_or(&Self::Done)
+                .clone(),
+        }
+    }
+
+    /// Position of the step within `plan` (0-based), for progress display.
+    pub fn position_in(&self, plan: &[Self]) -> usize {
+        plan.iter()
+            .position(|s| s == self)
+            .unwrap_or_else(|| plan.iter().filter(|s| s.index() < self.index()).count())
+    }
+
     /// Returns the 0-based index of the step.
     pub fn index(&self) -> usize {
         match self {
@@ -101,19 +152,14 @@ impl WizardStep {
         }
     }
 
-    /// Returns the total count of active configuration steps.
-    pub fn total() -> usize {
-        9
-    }
-
     /// Returns the header title for the step.
     pub fn title(&self) -> &'static str {
         match self {
-            Self::Welcome => "WELCOME TO K-AI-RA",
+            Self::Welcome => "WELCOME TO RAIOS",
             Self::Workspace => "WORKSPACE",
             Self::Constitution => "AGENT_CONSTITUTION.md",
-            Self::Claude => "CLAUDE KAIRA",
-            Self::Codex => "CODEX KAIRA",
+            Self::Claude => "CLAUDE CODE",
+            Self::Codex => "CODEX",
             Self::OpenCode => "OPENCODE",
             Self::Skills => "SKILLS & HOOKS",
             Self::AgentWrapper => "AGENT WRAPPER",
@@ -153,18 +199,39 @@ pub struct AgentStatus {
 }
 
 /// Detects installed agent harnesses and tools on the local system.
+///
+/// Each `--version` probe is a separate process (Node-based CLIs like `claude`
+/// and `codex` take hundreds of ms to start), so they run concurrently and the
+/// total wall time is the slowest probe instead of the sum.
 pub fn detect_agents() -> AgentStatus {
-    let mut s = AgentStatus::default();
+    let (claude, codex, opencode, git, gh) = std::thread::scope(|scope| {
+        let probe = |bin: &'static str| scope.spawn(move || run_version(&[bin, "--version"]));
+        let handles = (
+            probe("claude"),
+            probe("codex"),
+            probe("opencode"),
+            probe("git"),
+            probe("gh"),
+        );
+        (
+            handles.0.join().ok().flatten(),
+            handles.1.join().ok().flatten(),
+            handles.2.join().ok().flatten(),
+            handles.3.join().ok().flatten(),
+            handles.4.join().ok().flatten(),
+        )
+    });
 
-    if let Some((ok, v)) = run_version(&["claude", "--version"]) {
+    let mut s = AgentStatus::default();
+    if let Some((ok, v)) = claude {
         s.claude_installed = ok;
         s.claude_version = v;
     }
-    if let Some((ok, v)) = run_version(&["codex", "--version"]) {
+    if let Some((ok, v)) = codex {
         s.codex_installed = ok;
         s.codex_version = v;
     }
-    if let Some((ok, v)) = run_version(&["opencode", "--version"]) {
+    if let Some((ok, v)) = opencode {
         s.opencode_installed = ok;
         s.opencode_version = v;
     }
@@ -172,11 +239,11 @@ pub fn detect_agents() -> AgentStatus {
     if s.agy_installed {
         s.agy_version = "installed".to_string();
     }
-    if let Some((ok, v)) = run_version(&["git", "--version"]) {
+    if let Some((ok, v)) = git {
         s.git_installed = ok;
         s.git_version = v;
     }
-    if let Some((ok, v)) = run_version(&["gh", "--version"]) {
+    if let Some((ok, v)) = gh {
         s.gh_installed = ok;
         s.gh_version = v.lines().next().unwrap_or("").to_string();
     }
@@ -229,5 +296,62 @@ impl WizardAction {
             ok: true,
             skipped: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    fn status(claude: bool, codex: bool, opencode: bool) -> AgentStatus {
+        AgentStatus {
+            claude_installed: claude,
+            codex_installed: codex,
+            opencode_installed: opencode,
+            ..AgentStatus::default()
+        }
+    }
+
+    #[test]
+    fn pending_detection_keeps_full_sequence() {
+        let plan = WizardStep::plan(None);
+        assert_eq!(plan.len(), 10);
+        assert_eq!(plan.first(), Some(&WizardStep::Welcome));
+        assert_eq!(plan.last(), Some(&WizardStep::Done));
+    }
+
+    #[test]
+    fn uninstalled_agents_are_dropped() {
+        let plan = WizardStep::plan(Some(&status(true, false, false)));
+        assert!(plan.contains(&WizardStep::Claude));
+        assert!(!plan.contains(&WizardStep::Codex));
+        assert!(!plan.contains(&WizardStep::OpenCode));
+        assert!(plan.contains(&WizardStep::AgentWrapper));
+    }
+
+    #[test]
+    fn no_agents_drops_wrapper_too() {
+        let plan = WizardStep::plan(Some(&status(false, false, false)));
+        assert!(!plan.contains(&WizardStep::AgentWrapper));
+        assert!(plan.contains(&WizardStep::Skills));
+    }
+
+    #[test]
+    fn next_in_skips_removed_steps() {
+        let plan = WizardStep::plan(Some(&status(false, false, true)));
+        assert_eq!(
+            WizardStep::Constitution.next_in(&plan),
+            WizardStep::OpenCode
+        );
+        // A step that left the plan mid-wizard still moves forward.
+        assert_eq!(WizardStep::Claude.next_in(&plan), WizardStep::OpenCode);
+        assert_eq!(WizardStep::Done.next_in(&plan), WizardStep::Done);
+    }
+
+    #[test]
+    fn position_tracks_plan_not_enum() {
+        let plan = WizardStep::plan(Some(&status(false, false, false)));
+        assert_eq!(WizardStep::Skills.position_in(&plan), 3);
+        assert_eq!(WizardStep::Done.position_in(&plan), plan.len() - 1);
     }
 }

@@ -9,8 +9,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use raios_contracts::{GovernSnapshot, HandoffReceiptDto, NowSnapshot, WorkSnapshot};
 
 use super::{
-    ControlPlane, CreateHandoffRequest, HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest,
-    PolicyAction, QueuedHandoff, RegistrationOutcome,
+    AssignTaskRequest, ControlPlane, CreateHandoffRequest, CreateTaskRequest,
+    HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction, QueuedHandoff,
+    RegistrationOutcome, UpdateTaskStatusRequest,
 };
 use crate::error::{AppError, ErrorCode, Result};
 
@@ -39,6 +40,12 @@ pub enum RecordedCall {
     LaunchAgent(LaunchAgentRequest),
     /// [`ControlPlane::create_handoff`].
     CreateHandoff(CreateHandoffRequest),
+    /// [`ControlPlane::create_task`].
+    CreateTask(CreateTaskRequest),
+    /// [`ControlPlane::update_task_status`].
+    UpdateTaskStatus(UpdateTaskStatusRequest),
+    /// [`ControlPlane::assign_task`].
+    AssignTask(AssignTaskRequest),
     /// [`ControlPlane::approve_handoff`].
     ApproveHandoff(HandoffDecisionRequest),
     /// [`ControlPlane::reject_handoff`].
@@ -62,6 +69,9 @@ struct Script {
     registrations: VecDeque<Result<RegistrationOutcome>>,
     launches: VecDeque<Result<()>>,
     handoffs: VecDeque<Result<QueuedHandoff>>,
+    created_tasks: VecDeque<Result<String>>,
+    status_updates: VecDeque<Result<()>>,
+    assignments: VecDeque<Result<String>>,
     approvals: VecDeque<Result<()>>,
     rejections: VecDeque<Result<()>>,
     receipts: VecDeque<Result<HandoffReceiptDto>>,
@@ -142,6 +152,24 @@ impl FakeControlPlane {
     /// Queues the response of the next [`ControlPlane::reject_handoff`] call.
     pub fn push_rejection(&self, response: Result<()>) -> &Self {
         self.script().rejections.push_back(response);
+        self
+    }
+
+    /// Queues the response of the next [`ControlPlane::create_task`] call.
+    pub fn push_created_task(&self, response: Result<String>) -> &Self {
+        self.script().created_tasks.push_back(response);
+        self
+    }
+
+    /// Queues the response of the next [`ControlPlane::update_task_status`] call.
+    pub fn push_status_update(&self, response: Result<()>) -> &Self {
+        self.script().status_updates.push_back(response);
+        self
+    }
+
+    /// Queues the response of the next [`ControlPlane::assign_task`] call.
+    pub fn push_assignment(&self, response: Result<String>) -> &Self {
+        self.script().assignments.push_back(response);
         self
     }
 
@@ -234,6 +262,35 @@ impl ControlPlane for FakeControlPlane {
             .handoffs
             .pop_front()
             .unwrap_or_else(|| Err(unscripted("create_handoff")))
+    }
+
+    fn create_task(&self, request: &CreateTaskRequest) -> Result<String> {
+        let mut script = self.script();
+        script.calls.push(RecordedCall::CreateTask(request.clone()));
+        script
+            .created_tasks
+            .pop_front()
+            .unwrap_or_else(|| Err(unscripted("create_task")))
+    }
+
+    fn update_task_status(&self, request: &UpdateTaskStatusRequest) -> Result<()> {
+        let mut script = self.script();
+        script
+            .calls
+            .push(RecordedCall::UpdateTaskStatus(request.clone()));
+        script
+            .status_updates
+            .pop_front()
+            .unwrap_or_else(|| Err(unscripted("update_task_status")))
+    }
+
+    fn assign_task(&self, request: &AssignTaskRequest) -> Result<String> {
+        let mut script = self.script();
+        script.calls.push(RecordedCall::AssignTask(request.clone()));
+        script
+            .assignments
+            .pop_front()
+            .unwrap_or_else(|| Err(unscripted("assign_task")))
     }
 
     fn handoff_receipt(&self, approval_id: &str, project_root: &Path) -> Result<HandoffReceiptDto> {

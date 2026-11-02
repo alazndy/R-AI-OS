@@ -44,6 +44,8 @@ pub enum Appearance {
         background: u32,
         /// Selection colour, 0xRRGGBB.
         selection: u32,
+        /// The dark Aperture ANSI colours instead of the standard dark ones.
+        aperture: bool,
     },
 }
 
@@ -68,6 +70,7 @@ impl Appearance {
                 foreground,
                 background,
                 selection,
+                aperture,
             } => {
                 let surface = Surface {
                     foreground: Rgb::from_hex(foreground),
@@ -75,7 +78,9 @@ impl Appearance {
                     cursor: Rgb::from_hex(foreground),
                     selection: Rgb::from_hex(selection),
                 };
-                if dark {
+                if dark && aperture {
+                    Palette::aperture(surface)
+                } else if dark {
                     Palette::dark(surface)
                 } else {
                     Palette::light(surface)
@@ -109,6 +114,8 @@ pub(crate) struct ViewShared {
     pub(crate) session: SessionId,
     pub(crate) gate: Arc<FrameGate>,
     pub(crate) appearance: Cell<Appearance>,
+    /// Text size in pixels.
+    pub(crate) font_size: Cell<f32>,
     pub(crate) stats: Cell<FrameStats>,
     pub(crate) grid: Cell<TerminalSize>,
     /// Cell width and line height in pixels, measured at paint time.
@@ -173,6 +180,7 @@ impl TerminalView {
             session,
             gate,
             appearance: Cell::new(appearance),
+            font_size: Cell::new(14.0),
             stats: Cell::new(FrameStats::default()),
             grid: Cell::new(TerminalSize { cols: 0, rows: 0 }),
             cell: Cell::new((0.0, 0.0)),
@@ -209,6 +217,30 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// The lines of the output (history included) containing `query`, with their grid lines.
+    pub fn find_lines(&self, query: &str, limit: usize) -> Vec<(i32, String)> {
+        self.shared.engine.find_lines(query, true, limit)
+    }
+
+    /// Scrolls so that grid `line` is in view.
+    pub fn scroll_to_line(&mut self, line: i32, cx: &mut Context<Self>) {
+        self.shared.engine.scroll_to_line(line);
+        cx.notify();
+    }
+
+    /// Sets the text size in pixels; the grid is refitted at the next paint.
+    pub fn set_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
+        if (self.shared.font_size.get() - size).abs() > f32::EPSILON {
+            self.shared.font_size.set(size);
+            cx.notify();
+        }
+    }
+
+    /// The text size in pixels.
+    pub fn font_size(&self) -> f32 {
+        self.shared.font_size.get()
+    }
+
     /// Frame counters.
     pub fn frame_stats(&self) -> FrameStats {
         self.shared.stats.get()
@@ -228,6 +260,20 @@ impl TerminalView {
 fn hex(color: Rgb) -> u32 {
     (u32::from(color.0) << 16) | (u32::from(color.1) << 8) | u32::from(color.2)
 }
+
+/// What the terminal view tells the workbench.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalEvent {
+    /// The user Ctrl-clicked this text of a screen line at this column (in characters).
+    Open {
+        /// The screen line.
+        line: String,
+        /// The clicked character.
+        column: usize,
+    },
+}
+
+impl gpui::EventEmitter<TerminalEvent> for TerminalView {}
 
 impl TerminalView {
     /// The message currently shown to the user, if any.
@@ -295,6 +341,12 @@ impl TerminalView {
         (row, col, side)
     }
 
+    /// True while the program in the terminal asks for mouse reports; a right click then
+    /// belongs to it (Shift takes the click back).
+    pub fn wants_mouse(&self) -> bool {
+        self.reporting_mouse(false)
+    }
+
     fn reporting_mouse(&self, shift: bool) -> bool {
         let modes = self.shared.modes.get();
         modes.mouse_report && modes.sgr_mouse && !shift
@@ -333,6 +385,12 @@ impl TerminalView {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
+        self.paste_text(text, cx);
+    }
+
+    /// Pastes `text` the way a paste from the clipboard goes: a single line goes straight in,
+    /// a multiline text waits in the preview for Enter, an oversized one is refused.
+    pub fn paste_text(&mut self, text: String, cx: &mut Context<Self>) {
         match decide_paste(&text) {
             PasteDecision::Send => self.send_paste(&text, cx),
             PasteDecision::Confirm { .. } => {
@@ -399,6 +457,19 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
+        if event.button == GpuiButton::Left && event.modifiers.secondary() {
+            // Ctrl-click (Cmd on macOS) opens a `path:line` under the pointer, even while the
+            // program inside asks for mouse reports.
+            let (row, col, _) = self.cell_at(event.position);
+            let text = self.shared.screen_text.borrow().clone();
+            if let Some(line) = text.lines().nth(usize::from(row)) {
+                cx.emit(TerminalEvent::Open {
+                    line: line.to_owned(),
+                    column: usize::from(col),
+                });
+            }
+            return;
+        }
         if self.reporting_mouse(event.modifiers.shift) {
             if let Some(button) = report_button(event.button) {
                 self.report_mouse(

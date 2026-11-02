@@ -7,6 +7,8 @@ use super::appearance::{Appearance, Skin, Tone};
 /// Every colour the chrome uses, as 0xRRGGBB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
+    /// The skin these tokens belong to.
+    pub skin: Skin,
     /// True for the GT-LCARS skin: segmented rails, rounded bars, the Antonio display font.
     pub lcars: bool,
     /// True for a dark tone.
@@ -50,6 +52,7 @@ impl Theme {
     pub fn of(appearance: Appearance) -> Self {
         match (appearance.skin, appearance.tone) {
             (Skin::Standard, Tone::Dark) => Self {
+                skin: Skin::Standard,
                 lcars: false,
                 dark: true,
                 bg: 0x17191b,
@@ -70,6 +73,7 @@ impl Theme {
                 on_fill: 0x191c1e,
             },
             (Skin::Standard, Tone::Light) => Self {
+                skin: Skin::Standard,
                 lcars: false,
                 dark: false,
                 bg: 0xf5f4f1,
@@ -89,7 +93,50 @@ impl Theme {
                 bad: 0x943e3e,
                 on_fill: 0x191c1e,
             },
+            (Skin::Aperture, Tone::Dark) => Self {
+                skin: Skin::Aperture,
+                lcars: false,
+                dark: true,
+                bg: 0x000000,
+                panel: 0x0d0d0d,
+                editor: 0x000000,
+                raised: 0x1c1c1c,
+                line: 0x3a2a1a,
+                text: 0xf2f2f2,
+                muted: 0x8c9399,
+                accent: 0xff740d,
+                accent_ink: 0xff740d,
+                blue: 0x008cd4,
+                blue_ink: 0x3aa9f0,
+                ice: 0x7fd0ff,
+                selected: 0x4a2a0a,
+                good: 0x3ddc84,
+                bad: 0xff4d4d,
+                on_fill: 0x000000,
+            },
+            (Skin::Aperture, Tone::Light) => Self {
+                skin: Skin::Aperture,
+                lcars: false,
+                dark: false,
+                bg: 0xf6f4f1,
+                panel: 0xeeebe7,
+                editor: 0xfbfaf8,
+                raised: 0xe3dfda,
+                line: 0xc9c2ba,
+                text: 0x1a1a1a,
+                muted: 0x5c5852,
+                accent: 0xff740d,
+                accent_ink: 0xa84a00,
+                blue: 0x008cd4,
+                blue_ink: 0x00629a,
+                ice: 0x00629a,
+                selected: 0xffe0c7,
+                good: 0x1f7a45,
+                bad: 0xb3261e,
+                on_fill: 0x000000,
+            },
             (Skin::Lcars, Tone::Dark) => Self {
+                skin: Skin::Lcars,
                 lcars: true,
                 dark: true,
                 bg: 0x000000,
@@ -110,6 +157,7 @@ impl Theme {
                 on_fill: 0x000000,
             },
             (Skin::Lcars, Tone::Light) => Self {
+                skin: Skin::Lcars,
                 lcars: true,
                 dark: false,
                 bg: 0xffeecc,
@@ -146,7 +194,7 @@ impl Theme {
 mod tests {
     use super::*;
 
-    const ALL: [Appearance; 4] = [
+    const ALL: [Appearance; 6] = [
         Appearance {
             skin: Skin::Standard,
             tone: Tone::Dark,
@@ -161,6 +209,14 @@ mod tests {
         },
         Appearance {
             skin: Skin::Lcars,
+            tone: Tone::Light,
+        },
+        Appearance {
+            skin: Skin::Aperture,
+            tone: Tone::Dark,
+        },
+        Appearance {
+            skin: Skin::Aperture,
             tone: Tone::Light,
         },
     ];

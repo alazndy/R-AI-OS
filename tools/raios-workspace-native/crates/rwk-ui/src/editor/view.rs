@@ -44,6 +44,46 @@ pub enum EditorEvent {
     Closed(String),
     /// The active tab changed.
     Activated(String),
+    /// A definition lies in another project file; the workbench opens it.
+    OpenLocation {
+        /// Relative path of the file.
+        path: String,
+        /// 1-based line.
+        line: usize,
+    },
+    /// The user right-clicked a tab; it is active now.
+    TabContextMenu {
+        /// Relative path of the tab.
+        path: String,
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+    },
+    /// The user right-clicked the text; the cursor is under the pointer.
+    TextContextMenu {
+        /// Where the pointer was.
+        position: gpui::Point<gpui::Pixels>,
+        /// Some text is selected.
+        selection: bool,
+        /// The text can be edited (not a read-only diff or a disabled view).
+        editable: bool,
+    },
+}
+
+/// An edit the text menu can run on the focused editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEdit {
+    /// Cut the selection.
+    Cut,
+    /// Copy the selection.
+    Copy,
+    /// Paste the clipboard.
+    Paste,
+    /// Select everything.
+    SelectAll,
+    /// Undo the last edit.
+    Undo,
+    /// Redo the undone edit.
+    Redo,
 }
 
 /// Builds an editor state with the settings every editor in the workspace uses: soft wrap off
@@ -61,6 +101,25 @@ fn new_editor_state(
     state
 }
 
+/// Gives one editor state the tab width and wrapping of `prefs`.
+fn apply_prefs(
+    state: &Entity<EditorState>,
+    prefs: rwk_core::workbench::EditorPrefs,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
+    state.update(cx, |state, cx| {
+        state.set_tab_size(
+            gpui_base::input::TabSize {
+                tab_size: usize::from(prefs.tab_size),
+                hard_tabs: false,
+            },
+            cx,
+        );
+        state.set_soft_wrap(prefs.soft_wrap, window, cx);
+    });
+}
+
 /// One open file: its editor state, its guard and its optional Git diff.
 struct Tab {
     state: Entity<EditorState>,
@@ -72,7 +131,30 @@ struct Tab {
     diff_right: Option<Entity<EditorState>>,
     diff_raw: String,
     diff_visible: bool,
+    /// Pinned tabs sit first in the strip.
+    pinned: bool,
     _subscription: Subscription,
+    /// Repaints the status bar when the cursor moves.
+    _cursor: Subscription,
+}
+
+/// A tab being dragged along the strip.
+struct DraggedTab(String);
+
+/// The small label that follows the pointer while a tab is dragged.
+struct TabPreview(SharedString);
+
+impl Render for TabPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_0p5()
+            .text_xs()
+            .rounded_sm()
+            .bg(gpui::rgba(0x000000cc))
+            .text_color(gpui::rgb(0xffffff))
+            .child(self.0.clone())
+    }
 }
 
 impl Tab {
@@ -82,14 +164,21 @@ impl Tab {
     }
 }
 
+/// How long saving waits for the formatter before saving the text as it is.
+const FORMAT_ON_SAVE_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+
 /// The editor: a strip of open files over one editor, plus the diff of the active file.
 pub struct EditorView {
     theme: Theme,
     tabs: Vec<Tab>,
     active: usize,
     diff_split: bool,
+    /// The file shown read-only beside the active one, when the editor is split.
+    split: Option<String>,
     /// The message under the editor (last action's outcome).
     status: Option<SharedString>,
+    /// Git marks by project-relative path, shown on the tabs.
+    badges: HashMap<String, rwk_core::git::Badge>,
     /// Bumped by every read request; a read that finishes for a superseded request is dropped.
     next_request: u64,
     /// In-flight read per path; a closed tab's entry is removed so its read cannot reopen it.
@@ -97,6 +186,22 @@ pub struct EditorView {
     diff_generation: u64,
     /// Bumped by every restore; a restore that finishes after a project switch is dropped.
     restore_generation: u64,
+    /// How tabs reach the project's language servers; `None` means no language features.
+    requester: Option<rwk_core::lsp::Requester>,
+    /// Text size, tab width and wrapping.
+    prefs: rwk_core::workbench::EditorPrefs,
+    /// The snippet whose places to edit Tab is walking through.
+    snippet: Option<SnippetSession>,
+}
+
+/// The places to edit of an inserted snippet, as byte ranges in the document.
+struct SnippetSession {
+    path: Option<String>,
+    stops: Vec<std::ops::Range<usize>>,
+    current: usize,
+    /// The document's length when `current` was selected; the difference to the length at the
+    /// next Tab is what typing in that place added, and moves the places after it.
+    len: usize,
 }
 
 impl EventEmitter<EditorEvent> for EditorView {}
@@ -122,10 +227,15 @@ impl EditorView {
             active: 0,
             diff_split: false,
             status: None,
+            badges: HashMap::new(),
             next_request: 0,
             requests: HashMap::new(),
             diff_generation: 0,
             restore_generation: 0,
+            requester: None,
+            prefs: rwk_core::workbench::EditorPrefs::default(),
+            snippet: None,
+            split: None,
         }
     }
 
@@ -135,6 +245,23 @@ impl EditorView {
             .get(self.active)
             .map(|tab| tab.state.read(cx).value().to_string())
             .unwrap_or_default()
+    }
+
+    /// Replaces the git marks shown on the tabs.
+    pub fn set_badges(
+        &mut self,
+        badges: HashMap<String, rwk_core::git::Badge>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.badges != badges {
+            self.badges = badges;
+            cx.notify();
+        }
+    }
+
+    /// The git mark a tab shows, when its file has one.
+    pub fn badge(&self, path: &str) -> Option<rwk_core::git::Badge> {
+        self.badges.get(path).copied()
     }
 
     /// The 1-based line of the cursor, when a document is open.
@@ -207,6 +334,72 @@ impl EditorView {
         }
     }
 
+    /// True when the tab of `path` is pinned.
+    pub fn is_pinned(&self, path: &str) -> bool {
+        self.position_of(path)
+            .is_some_and(|index| self.tabs[index].pinned)
+    }
+
+    /// Pins the active tab (it moves to the end of the pinned group) or unpins it (it moves to
+    /// the start of the others).
+    pub fn toggle_pin(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        tab.pinned = !tab.pinned;
+        let pinned = tab.pinned;
+        let group = self.tabs.iter().filter(|tab| tab.pinned).count();
+        // Pinning made the group one larger: the tab goes to its last place; unpinning leaves
+        // the group one smaller: the tab goes right after it.
+        let target = if pinned { group - 1 } else { group };
+        self.relocate(self.active, target, cx);
+    }
+
+    /// Moves the active tab `delta` places along the strip, never out of its pinned or
+    /// unpinned group.
+    pub fn move_tab(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let target = self.active.saturating_add_signed(delta);
+        self.relocate(self.active, target, cx);
+    }
+
+    /// Moves the tab of `path` to where the tab at `target` is, inside its own group.
+    pub fn move_tab_to(&mut self, path: &str, target: usize, cx: &mut Context<Self>) {
+        if let Some(from) = self.position_of(path) {
+            self.relocate(from, target, cx);
+        }
+    }
+
+    /// Moves tab `from` to `to`, clamped to the tab's group (pinned tabs come first), and
+    /// keeps the same tab active.
+    fn relocate(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from >= self.tabs.len() {
+            return;
+        }
+        let group = self.tabs.iter().filter(|tab| tab.pinned).count();
+        let (low, high) = if self.tabs[from].pinned {
+            (0, group.saturating_sub(1))
+        } else {
+            (group, self.tabs.len() - 1)
+        };
+        let to = to.clamp(low, high.max(low));
+        let active_path = self.path().map(str::to_owned);
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to.min(self.tabs.len()), tab);
+        if let Some(path) = active_path {
+            self.active = self.position_of(&path).unwrap_or(self.active);
+        }
+        cx.notify();
+    }
+
+    /// Paths of the pinned tabs.
+    pub fn pinned_paths(&self) -> Vec<String> {
+        self.tabs
+            .iter()
+            .filter(|tab| tab.pinned)
+            .filter_map(|tab| tab.path().map(str::to_owned))
+            .collect()
+    }
+
     fn position_of(&self, path: &str) -> Option<usize> {
         self.tabs.iter().position(|tab| tab.path() == Some(path))
     }
@@ -225,10 +418,111 @@ impl EditorView {
         }
     }
 
+    /// Inserts the snippet `body` at the cursor, indented like the cursor's line, and puts the
+    /// cursor on its first place to edit.
+    pub fn insert_snippet(&mut self, body: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let indent: String = {
+            let state = tab.state.read(cx);
+            let start = state.cursor_position();
+            let text = state.value().to_string();
+            text.lines()
+                .nth(usize::try_from(start.line).unwrap_or(usize::MAX))
+                .unwrap_or_default()
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect::<String>()
+        };
+        let expansion = rwk_core::workbench::expand_snippet(body, &indent);
+        let path = tab.path().map(str::to_owned);
+        let text = expansion.text;
+        let (origin, len) = tab.state.update(cx, |state, cx| {
+            let origin = state.cursor();
+            state.insert(text.as_str(), window, cx);
+            let first = expansion.stops.first().cloned().unwrap_or(0..0);
+            state.set_selected_range(origin + first.start..origin + first.end, cx);
+            state.focus(window, cx);
+            (origin, state.value().len())
+        });
+        // The last place (`$0`) alone needs no walk: the cursor is already there.
+        self.snippet = (expansion.stops.len() > 1).then(|| SnippetSession {
+            path,
+            stops: expansion
+                .stops
+                .iter()
+                .map(|r| origin + r.start..origin + r.end)
+                .collect(),
+            current: 0,
+            len,
+        });
+    }
+
+    /// Tab (`forward`) or Shift Tab inside an inserted snippet: moves to its next or previous
+    /// place to edit. Returns whether the key was used; it is not once the snippet is over or the
+    /// cursor has left the place being edited, and Tab then indents as usual.
+    pub fn snippet_step(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(session) = self.snippet.as_mut() else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            self.snippet = None;
+            return false;
+        };
+        if session.path.as_deref() != tab.path() {
+            self.snippet = None;
+            return false;
+        }
+        let (len, cursor) = {
+            let state = tab.state.read(cx);
+            (state.value().len(), state.cursor())
+        };
+        let delta = len as isize - session.len as isize;
+        let shift = |at: usize| usize::try_from(at as isize + delta).unwrap_or(0);
+        let here = session.stops[session.current].clone();
+        if cursor < here.start || cursor > shift(here.end) {
+            self.snippet = None;
+            return false;
+        }
+        session.stops[session.current].end = shift(here.end);
+        for stop in &mut session.stops[session.current + 1..] {
+            *stop = shift(stop.start)..shift(stop.end);
+        }
+        let next = if forward {
+            session.current + 1
+        } else {
+            session.current.saturating_sub(1)
+        };
+        let target = session.stops[next].clone();
+        session.current = next;
+        session.len = len;
+        let finished = next + 1 == session.stops.len();
+        tab.state.update(cx, |state, cx| {
+            state.set_selected_range(target, cx);
+            state.focus(window, cx);
+        });
+        if finished {
+            self.snippet = None;
+        }
+        true
+    }
+
+    /// Ends the snippet walk (Escape).
+    pub fn end_snippet(&mut self) {
+        self.snippet = None;
+    }
+
     /// Closes every tab (a project switch discards them all).
     pub fn clear(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.tabs.clear();
         self.requests.clear();
+        self.split = None;
         self.active = 0;
         self.status = None;
         self.diff_generation += 1;
@@ -250,6 +544,7 @@ impl EditorView {
         if was_active {
             self.focus(window, cx);
         }
+        self.fix_split(cx);
         cx.emit(EditorEvent::Closed(path.to_owned()));
         cx.notify();
     }
@@ -259,10 +554,33 @@ impl EditorView {
         let Some(index) = self.position_of(path) else {
             return;
         };
+        // Activating the file on the right trades places with the one that was active.
+        if self.split.as_deref() == Some(path) {
+            self.split = self.path().map(str::to_owned);
+        }
         self.active = index;
+        self.fix_split(cx);
         self.focus(window, cx);
         cx.emit(EditorEvent::Activated(path.to_owned()));
         cx.notify();
+    }
+
+    /// Runs `edit` on the active editor, which takes focus first so the action reaches it.
+    pub fn edit(&self, edit: TextEdit, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_base::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        tab.state.update(cx, |state, cx| state.focus(window, cx));
+        let action: Box<dyn gpui::Action> = match edit {
+            TextEdit::Cut => Box::new(Cut),
+            TextEdit::Copy => Box::new(Copy),
+            TextEdit::Paste => Box::new(Paste),
+            TextEdit::SelectAll => Box::new(SelectAll),
+            TextEdit::Undo => Box::new(Undo),
+            TextEdit::Redo => Box::new(Redo),
+        };
+        window.dispatch_action(action, cx);
     }
 
     /// Gives the active editor keyboard focus.
@@ -317,6 +635,24 @@ impl EditorView {
             Some(index) => index,
             None => {
                 let state = cx.new(|cx| new_editor_state(self.theme, window, cx));
+                apply_prefs(&state, self.prefs, window, cx);
+                let view = cx.entity().downgrade();
+                state.update(cx, |state, _| {
+                    state.on_context_menu(std::rc::Rc::new(
+                        move |_menu, capabilities, position, _window, cx| {
+                            let _ = view.update(cx, |_, cx| {
+                                cx.emit(EditorEvent::TextContextMenu {
+                                    position,
+                                    selection: capabilities.has_selection(),
+                                    editable: capabilities.is_editable(),
+                                });
+                            });
+                        },
+                    ));
+                });
+                if let Some(requester) = &self.requester {
+                    self.attach_language_features(&state, &path, requester, cx);
+                }
                 let tab_path = path.clone();
                 let subscription =
                     cx.subscribe(&state, move |this, _state, event: &InputEvent, cx| {
@@ -324,6 +660,7 @@ impl EditorView {
                             this.on_edited(&tab_path, cx);
                         }
                     });
+                let cursor = cx.observe(&state, |_, _, cx| cx.notify());
                 self.tabs.push(Tab {
                     state,
                     session: DocumentSession::new(),
@@ -332,7 +669,9 @@ impl EditorView {
                     diff_right: None,
                     diff_raw: String::new(),
                     diff_visible: false,
+                    pinned: false,
                     _subscription: subscription,
+                    _cursor: cursor,
                 });
                 self.tabs.len() - 1
             }
@@ -364,6 +703,7 @@ impl EditorView {
             ))
         });
         self.active = index;
+        self.fix_split(cx);
         cx.emit(EditorEvent::Opened(path));
         cx.notify();
         // The editor lays a new text out during paint; without input nothing else would ask for
@@ -461,9 +801,592 @@ impl EditorView {
                 let path = tab.path()?.to_owned();
                 let position = tab.state.read(cx).cursor_position();
                 let line = usize::try_from(position.line).unwrap_or(usize::MAX) + 1;
-                Some(SavedTab { path, line })
+                Some(SavedTab {
+                    path,
+                    line,
+                    pinned: tab.pinned,
+                })
             })
             .collect()
+    }
+
+    /// Connects every tab (and the ones opened later) to the project's language servers, or
+    /// disconnects them with `None`.
+    pub fn set_language_requester(
+        &mut self,
+        requester: Option<rwk_core::lsp::Requester>,
+        cx: &mut Context<Self>,
+    ) {
+        self.requester = requester;
+        let tabs: Vec<(Entity<EditorState>, String)> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| Some((tab.state.clone(), tab.path()?.to_owned())))
+            .collect();
+        for (state, path) in tabs {
+            match self.requester.clone() {
+                Some(requester) => self.attach_language_features(&state, &path, &requester, cx),
+                None => state.update(cx, |state, _| super::lsp::detach(state)),
+            }
+        }
+    }
+
+    fn attach_language_features(
+        &self,
+        state: &Entity<EditorState>,
+        path: &str,
+        requester: &rwk_core::lsp::Requester,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.entity().downgrade();
+        let open: super::lsp::OpenLocation = Rc::new(move |path, line, cx| {
+            let _ = view.update(cx, |_, cx| {
+                cx.emit(EditorEvent::OpenLocation { path, line })
+            });
+        });
+        state.update(cx, |state, _| {
+            super::lsp::attach(state, path, requester, open)
+        });
+    }
+
+    /// Puts the cursor of the active file at the 0-based `line` and `character`.
+    pub fn set_cursor(
+        &mut self,
+        line: u32,
+        character: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.state.update(cx, |state, cx| {
+                state.set_cursor_position(Position::new(line, character), window, cx)
+            });
+        }
+    }
+
+    /// The cursor of the active file: path, 0-based line and column.
+    pub fn cursor_at(&self, cx: &gpui::App) -> Option<(String, u32, u32)> {
+        let tab = self.tabs.get(self.active)?;
+        let position = tab.state.read(cx).cursor_position();
+        Some((tab.path()?.to_owned(), position.line, position.character))
+    }
+
+    /// The symbol under the cursor: path, 0-based line and column, and its name.
+    pub fn symbol_at_cursor(&self, cx: &gpui::App) -> Option<(String, u32, u32, String)> {
+        let tab = self.tabs.get(self.active)?;
+        let path = tab.path()?.to_owned();
+        let state = tab.state.read(cx);
+        let position = state.cursor_position();
+        let text = state.value().to_string();
+        let line = text.lines().nth(usize::try_from(position.line).ok()?)?;
+        let word = rwk_core::lsp::edits::word_at(line, position.character)?;
+        Some((path, position.line, position.character, word))
+    }
+
+    /// Renames the symbol under the cursor to `new_name` in every file the language server
+    /// names. All files are prepared before any is written, so a refused or broken answer
+    /// changes nothing; open tabs take the edits as unsaved changes, other files are written.
+    pub fn rename_symbol(
+        &mut self,
+        project: Arc<ProjectRoot>,
+        new_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(requester), Some((path, line, character, _))) =
+            (self.requester.clone(), self.symbol_at_cursor(cx))
+        else {
+            self.set_status("İmleç bir sembolün üzerinde değil", cx);
+            return;
+        };
+        let Some(before) = self.text_of(&path, cx) else {
+            return;
+        };
+        self.set_status("Yeniden adlandırılıyor…", cx);
+        let answer = super::lsp::rename_request(
+            &requester,
+            &path,
+            line,
+            character,
+            &new_name,
+            std::time::Duration::from_secs(10),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update_in(cx, |view, window, cx| {
+                if view.text_of(&path, cx).as_deref() != Some(before.as_str()) {
+                    view.set_status("Metin değişti; yeniden adlandırma uygulanmadı", cx);
+                    return;
+                }
+                let outcome = match answer {
+                    Ok(Ok(value)) => {
+                        view.apply_workspace_edit(&project, &requester, value, window, cx)
+                    }
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(AppError::new(
+                        ErrorCode::NotFound,
+                        "Dil sunucusu yanıt vermedi",
+                    )),
+                };
+                match outcome {
+                    Ok((0, _)) => view.set_status("Sunucu bir değişiklik önermedi", cx),
+                    Ok((files, edits)) => {
+                        view.set_status(format!("{files} dosyada {edits} değişiklik"), cx)
+                    }
+                    Err(error) => view.set_status(error.message, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Applies a server's workspace edit; returns how many files and edits it touched.
+    fn apply_workspace_edit(
+        &mut self,
+        project: &ProjectRoot,
+        requester: &rwk_core::lsp::Requester,
+        answer: serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> rwk_core::error::Result<(usize, usize)> {
+        let files =
+            rwk_core::lsp::edits::workspace_edit(answer, |uri| requester.relative_path(uri))?;
+        // Prepare the files that are not open first: nothing is written unless all are fine.
+        let mut rewrites = Vec::new();
+        for file in &files {
+            if self.position_of(&file.path).is_none() {
+                let document = project.read_document(&file.path)?;
+                let content = rwk_core::lsp::edits::apply(&document.content, &file.edits)?;
+                rewrites.push(Document {
+                    content,
+                    ..document
+                });
+            }
+        }
+        let edits = files.iter().map(|file| file.edits.len()).sum();
+        for document in rewrites {
+            project.save_document(document)?;
+        }
+        for file in &files {
+            if let Some(index) = self.position_of(&file.path) {
+                self.tabs[index].state.update(cx, |state, cx| {
+                    state.apply_lsp_edits(&file.edits, window, cx)
+                });
+            }
+        }
+        Ok((files.len(), edits))
+    }
+
+    /// Formats the active file with its language server. The answer is dropped, with a message,
+    /// when the text changed while the server worked: its positions would no longer fit.
+    pub fn format(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.format_active(None, window, cx);
+    }
+
+    /// Formats the active file, then saves it. A file without a language server, a slow or
+    /// failing server and edits made while it worked all end in a plain save: saving never
+    /// waits long and never fails because of the formatter.
+    pub fn save_formatted(
+        &mut self,
+        project: Arc<ProjectRoot>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.requester.is_none() {
+            self.save(project, cx);
+            return;
+        }
+        self.format_active(Some(project), window, cx);
+    }
+
+    fn format_active(
+        &mut self,
+        then_save: Option<Arc<ProjectRoot>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(requester), Some(path)) =
+            (self.requester.clone(), self.path().map(str::to_owned))
+        else {
+            self.set_status("Bu dosya için dil sunucusu yok", cx);
+            return;
+        };
+        let Some(before) = self.text_of(&path, cx) else {
+            return;
+        };
+        let timeout = if then_save.is_some() {
+            FORMAT_ON_SAVE_WAIT
+        } else {
+            std::time::Duration::from_secs(5)
+        };
+        let answer = super::lsp::format_request(&requester, &path, timeout);
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.recv().await;
+            this.update_in(cx, |view, window, cx| {
+                let Some(index) = view.position_of(&path) else {
+                    return;
+                };
+                if view.text_of(&path, cx).as_deref() != Some(before.as_str()) {
+                    view.set_status("Metin değişti; biçimlendirme uygulanmadı", cx);
+                    if let Some(project) = then_save {
+                        view.save_soon(path.clone(), project, cx);
+                    }
+                    return;
+                }
+                let edits = match answer {
+                    Ok(Ok(value)) => super::lsp::formatting_edits(value),
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(AppError::new(
+                        ErrorCode::NotFound,
+                        "Dil sunucusu yanıt vermedi",
+                    )),
+                };
+                match edits {
+                    Ok(edits) if edits.is_empty() => view.set_status("Zaten biçimli", cx),
+                    Ok(edits) => {
+                        view.tabs[index]
+                            .state
+                            .update(cx, |state, cx| state.apply_lsp_edits(&edits, window, cx));
+                        view.set_status("Biçimlendirildi", cx);
+                    }
+                    Err(error) => view.set_status(error.message, cx),
+                }
+                if let Some(project) = then_save {
+                    view.save_soon(path.clone(), project, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Saves `path` once the edits just applied have been announced: the edit events arrive after
+    /// the update that made them, and a save that began before them would find its file dirty
+    /// again as soon as it finished.
+    fn save_soon(&self, path: String, project: Arc<ProjectRoot>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            this.update(cx, |view, cx| view.save_path(&path, project, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// The file shown beside the active one, when the editor is split.
+    pub fn split_path(&self) -> Option<&str> {
+        self.split.as_deref()
+    }
+
+    /// Splits the editor, showing the next open file read-only beside the active one; splits
+    /// back into one pane when it is split already.
+    pub fn toggle_split(&mut self, cx: &mut Context<Self>) {
+        if self.split.take().is_some() {
+            self.fix_split(cx);
+            cx.notify();
+            return;
+        }
+        if self.tabs.len() < 2 {
+            self.set_status("Bölmek için ikinci bir dosya açın", cx);
+            return;
+        }
+        let next = (self.active + 1) % self.tabs.len();
+        self.split = self.tabs[next].path().map(str::to_owned);
+        self.fix_split(cx);
+        cx.notify();
+    }
+
+    /// Trades the active file and the one beside it, so the right one can be edited.
+    pub fn swap_split(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = self.split.clone() {
+            self.activate_tab(&path, window, cx);
+        }
+    }
+
+    /// Keeps the split valid after tabs came, went or changed place: the file beside the active
+    /// one must be open and a different one, and only it is read-only.
+    fn fix_split(&mut self, cx: &mut Context<Self>) {
+        let active = self
+            .tabs
+            .get(self.active)
+            .and_then(Tab::path)
+            .map(str::to_owned);
+        if let Some(split) = &self.split {
+            if self.position_of(split).is_none() || active.as_deref() == Some(split.as_str()) {
+                self.split = None;
+            }
+        }
+        for tab in &self.tabs {
+            let beside = tab.path().is_some() && tab.path() == self.split.as_deref();
+            tab.state
+                .update(cx, |state, cx| state.set_disabled(beside, cx));
+        }
+    }
+
+    /// Opens the find box of the active file (with the replace field when `replace`).
+    pub fn open_find(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        tab.state.update(cx, |state, cx| {
+            state.open_search(replace, cx);
+        });
+        let _ = window;
+    }
+
+    /// Whether the active file's find box is open.
+    pub fn find_open(&self, cx: &gpui::App) -> bool {
+        self.tabs
+            .get(self.active)
+            .is_some_and(|tab| tab.state.read(cx).search_session().is_active())
+    }
+
+    /// Replaces every occurrence of `query` in the active file with `replacement` as one
+    /// undoable edit. Returns how many were replaced. The search is plain text.
+    pub fn replace_all(
+        &mut self,
+        query: &str,
+        replacement: &str,
+        case_insensitive: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return 0;
+        };
+        tab.state.update(cx, |state, cx| {
+            state.set_search_query(query, case_insensitive, cx);
+            let count = state.replace_all_search_matches(replacement, window, cx);
+            state.close_search(cx);
+            count
+        })
+    }
+
+    /// How many matches of the regular expression `find` the active file has.
+    pub fn count_matches(
+        &self,
+        find: &str,
+        ignore_case: bool,
+        cx: &gpui::App,
+    ) -> rwk_core::error::Result<usize> {
+        let replacement = rwk_core::replace::Replacement::new(find, "", ignore_case)?;
+        let text = self.active_text(cx).unwrap_or_default();
+        Ok(replacement.changes(&text).len())
+    }
+
+    /// Replaces every match of the regular expression `find` in the active file (`$1` inserts
+    /// a group), as edits the undo history can take back. Returns how many were replaced.
+    pub fn replace_matches(
+        &mut self,
+        find: &str,
+        with: &str,
+        ignore_case: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> rwk_core::error::Result<usize> {
+        let replacement = rwk_core::replace::Replacement::new(find, with, ignore_case)?;
+        let text = self.active_text(cx).unwrap_or_default();
+        let count = replacement.changes(&text).len();
+        let (new, _) = replacement.apply(&text);
+        self.apply_new_text(&text, &new, window, cx);
+        Ok(count)
+    }
+
+    /// Turns the active file's `old` text into `new` as one edit, so one undo takes it back.
+    fn apply_new_text(
+        &mut self,
+        old: &str,
+        new: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(tab), Some(change)) = (
+            self.tabs.get(self.active),
+            rwk_core::replace::single_change(old, new),
+        ) else {
+            return;
+        };
+        let edit = rwk_core::lsp::lsp_types::TextEdit {
+            range: rwk_core::lsp::lsp_types::Range {
+                start: rwk_core::lsp::lsp_types::Position::new(change.start.0, change.start.1),
+                end: rwk_core::lsp::lsp_types::Position::new(change.end.0, change.end.1),
+            },
+            new_text: change.text,
+        };
+        tab.state.update(cx, |state, cx| {
+            state.apply_lsp_edits(&vec![edit], window, cx)
+        });
+    }
+
+    /// Comments or uncomments the lines of the selection (the cursor's line without one).
+    pub fn toggle_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return false;
+        };
+        let Some(prefix) = tab
+            .path()
+            .and_then(rwk_core::workbench::line_comment_prefix)
+        else {
+            return false;
+        };
+        let (text, first, last) = {
+            let state = tab.state.read(cx);
+            let text = state.value().to_string();
+            let range = state.selected_range();
+            let line_of = |offset: usize| text[..offset.min(text.len())].matches('\n').count();
+            let first = line_of(range.start);
+            // A selection that ends at the start of a line does not include that line.
+            let end =
+                if range.end > range.start && text[..range.end.min(text.len())].ends_with('\n') {
+                    range.end - 1
+                } else {
+                    range.end
+                };
+            (text.clone(), first, line_of(end))
+        };
+        let new = rwk_core::workbench::toggle_line_comments(&text, first, last, prefix);
+        self.apply_new_text(&text, &new, window, cx);
+        true
+    }
+
+    /// Replaces the merge conflict around the cursor by one `side`. False when the cursor is
+    /// not inside a conflict.
+    pub fn resolve_conflict(
+        &mut self,
+        side: rwk_core::workbench::conflicts::Side,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return false;
+        };
+        let (text, line) = {
+            let state = tab.state.read(cx);
+            (
+                state.value().to_string(),
+                state.cursor_position().line as usize,
+            )
+        };
+        let Some(new) = rwk_core::workbench::conflicts::resolve(&text, line, side) else {
+            return false;
+        };
+        self.apply_new_text(&text, &new, window, cx);
+        true
+    }
+
+    /// Moves the cursor to the next merge conflict (wrapping). Returns how many conflicts the
+    /// file has.
+    pub fn next_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) -> usize {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return 0;
+        };
+        let (text, line) = {
+            let state = tab.state.read(cx);
+            (
+                state.value().to_string(),
+                state.cursor_position().line as usize,
+            )
+        };
+        if let Some(target) = rwk_core::workbench::conflicts::next_after(&text, line) {
+            self.go_to_line(target as u32 + 1, 1, window, cx);
+        }
+        rwk_core::workbench::conflicts::find(&text).len()
+    }
+
+    /// Puts the cursor on 1-based `line` (and `column`, default the start of the line).
+    pub fn go_to_line(
+        &mut self,
+        line: u32,
+        column: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let lines = tab
+            .state
+            .read(cx)
+            .value()
+            .to_string()
+            .lines()
+            .count()
+            .max(1) as u32;
+        let line = line.clamp(1, lines) - 1;
+        self.set_cursor(line, column.saturating_sub(1), window, cx);
+    }
+
+    /// Sets the text size, tab width and wrapping of every tab, now and for later ones.
+    pub fn set_prefs(
+        &mut self,
+        prefs: rwk_core::workbench::EditorPrefs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.prefs = prefs;
+        for tab in &self.tabs {
+            apply_prefs(&tab.state, prefs, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Stores the settings for tabs opened later (none exist yet when the application starts).
+    pub fn init_prefs(&mut self, prefs: rwk_core::workbench::EditorPrefs) {
+        self.prefs = prefs;
+    }
+
+    /// The current text size, tab width and wrapping.
+    pub fn prefs(&self) -> rwk_core::workbench::EditorPrefs {
+        self.prefs
+    }
+
+    fn active_text(&self, cx: &gpui::App) -> Option<String> {
+        Some(
+            self.tabs
+                .get(self.active)?
+                .state
+                .read(cx)
+                .value()
+                .to_string(),
+        )
+    }
+
+    /// The text of the tab for `path`, if it is open.
+    pub fn text_of(&self, path: &str, cx: &gpui::App) -> Option<String> {
+        let index = self.position_of(path)?;
+        Some(self.tabs[index].state.read(cx).value().to_string())
+    }
+
+    /// Shows the language server's diagnostics for `path` under the text. A file that is not
+    /// open is ignored.
+    pub fn set_diagnostics(
+        &mut self,
+        path: &str,
+        diagnostics: &[rwk_core::lsp::lsp_types::Diagnostic],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.position_of(path) else {
+            return;
+        };
+        self.tabs[index].state.update(cx, |state, cx| {
+            if let Some(set) = state.diagnostics_mut() {
+                set.clear();
+                set.extend(diagnostics.iter().cloned());
+            }
+            cx.notify();
+        });
+    }
+
+    /// How many diagnostics the tab for `path` shows.
+    pub fn diagnostic_count(&self, path: &str, cx: &gpui::App) -> usize {
+        self.position_of(path)
+            .and_then(|index| {
+                self.tabs[index]
+                    .state
+                    .read(cx)
+                    .diagnostics()
+                    .map(|set| set.len())
+            })
+            .unwrap_or(0)
     }
 
     /// Index of the active tab (what the saved workspace stores).
@@ -509,6 +1432,11 @@ impl EditorView {
                     if let Ok(document) = document {
                         let path = document.path.clone();
                         view.install_document(document, Some(tab.line), window, cx);
+                        if tab.pinned {
+                            if let Some(index) = view.position_of(&path) {
+                                view.tabs[index].pinned = true;
+                            }
+                        }
                         installed.push(path);
                     }
                 }
@@ -784,14 +1712,38 @@ impl Render for EditorView {
                 .border_color(gpui::rgb(theme.line))
                 .children(self.tabs.iter().enumerate().map(|(index, tab)| {
                     let path = tab.path().unwrap_or_default().to_owned();
-                    let title = match tab.session.is_dirty() {
-                        true => format!("{path} ●"),
-                        false => path.clone(),
+                    let title = match (tab.pinned, tab.session.is_dirty()) {
+                        (true, true) => format!("◆ {path} ●"),
+                        (true, false) => format!("◆ {path}"),
+                        (false, true) => format!("{path} ●"),
+                        (false, false) => path.clone(),
                     };
+                    let badge = self.badges.get(&path).copied();
                     let active = index == self.active;
                     let activate = path.clone();
                     let close = path.clone();
+                    let menu_path = path.clone();
+                    let dragged = path.clone();
+                    let preview = SharedString::from(path.clone());
                     div()
+                        .id(SharedString::from(format!("tab-box-{path}")))
+                        .on_drag(DraggedTab(dragged), move |_, _, _, cx| {
+                            cx.new(|_| TabPreview(preview.clone()))
+                        })
+                        .on_drop(cx.listener(move |view, dropped: &DraggedTab, _window, cx| {
+                            view.move_tab_to(&dropped.0, index, cx);
+                        }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |view, event: &gpui::MouseDownEvent, window, cx| {
+                                view.activate_tab(&menu_path, window, cx);
+                                cx.emit(EditorEvent::TabContextMenu {
+                                    path: menu_path.clone(),
+                                    position: event.position,
+                                });
+                                cx.stop_propagation();
+                            }),
+                        )
                         .flex()
                         .flex_row()
                         .items_center()
@@ -824,6 +1776,13 @@ impl Render for EditorView {
                                     view.activate_tab(&activate, window, cx);
                                 })),
                         )
+                        .children(badge.map(|badge| {
+                            div()
+                                .text_color(gpui::rgb(crate::file_tree::view::badge_color(
+                                    badge.kind, theme.dark,
+                                )))
+                                .child(SharedString::from(badge.letter.to_string()))
+                        }))
                         .child(
                             div()
                                 .id(SharedString::from(format!("tab-close-{path}")))
@@ -863,7 +1822,7 @@ impl Render for EditorView {
                             .text_color(gpui::rgb(theme.muted))
                             .child("Dosya açmak için soldaki ağaçtan seçin"),
                     )
-                    .child(self.status_bar(None, theme));
+                    .child(self.status_bar(None, theme, cx));
             }
         };
         let second = self.tabs.get(self.active).and_then(|tab| {
@@ -872,12 +1831,46 @@ impl Render for EditorView {
                 .filter(|_| tab.diff_visible && self.diff_split)
         });
         let title = self.path().unwrap_or("").to_owned();
+        let beside = match (second, self.split.as_deref()) {
+            (None, Some(path)) => self
+                .position_of(path)
+                .map(|index| (path.to_owned(), self.tabs[index].state.clone())),
+            _ => None,
+        };
+
+        // "src › editor › view.rs": where the active file lives in the project.
+        let breadcrumbs = (!title.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .px_2()
+                .text_xs()
+                .text_color(gpui::rgb(theme.muted))
+                .children(
+                    title
+                        .split(['/', '\\'])
+                        .filter(|part| !part.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, part)| {
+                            div().flex().flex_row().gap_1().child(if index == 0 {
+                                part
+                            } else {
+                                format!("› {part}")
+                            })
+                        }),
+                )
+        });
 
         div()
             .size_full()
             .flex()
             .flex_col()
             .children(strip)
+            .children(breadcrumbs)
             .child(
                 div()
                     .flex_1()
@@ -885,7 +1878,61 @@ impl Render for EditorView {
                     .flex()
                     .flex_row()
                     .font_family(crate::fonts::monospace_family(window))
-                    .child(div().flex_1().min_w_0().child(Editor::new(shown)))
+                    .text_size(gpui::px(f32::from(self.prefs.font_size)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .key_context("SnippetEditor")
+                            .child(Editor::new(shown)),
+                    )
+                    .children(beside.map(|(path, state)| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .border_l_1()
+                            .border_color(gpui::rgb(theme.line))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_2()
+                                    .py_0p5()
+                                    .text_xs()
+                                    .bg(gpui::rgb(theme.panel))
+                                    .text_color(gpui::rgb(theme.muted))
+                                    .child(div().flex_1().min_w_0().child(path))
+                                    .child(
+                                        div()
+                                            .id("split-swap")
+                                            .px_1()
+                                            .rounded_sm()
+                                            .cursor_pointer()
+                                            .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+                                            .child("↔ düzenle")
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.swap_split(window, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("split-close")
+                                            .px_1()
+                                            .rounded_sm()
+                                            .cursor_pointer()
+                                            .hover(move |style| style.bg(gpui::rgb(theme.raised)))
+                                            .child("×")
+                                            .on_click(cx.listener(|view, _, _window, cx| {
+                                                view.toggle_split(cx);
+                                            })),
+                                    ),
+                            )
+                            .child(div().flex_1().min_h_0().child(Editor::new(&state)))
+                    }))
                     .children(second.map(|right| {
                         div()
                             .flex_1()
@@ -895,12 +1942,25 @@ impl Render for EditorView {
                             .child(Editor::new(right))
                     })),
             )
-            .child(self.status_bar(Some(title), theme))
+            .child(self.status_bar(Some(title), theme, cx))
     }
 }
 
 impl EditorView {
-    fn status_bar(&self, title: Option<String>, theme: Theme) -> impl IntoElement {
+    /// "Ln 3, Süt 14 · rust": where the cursor is and which language the file is read as.
+    pub fn position_label(&self, cx: &gpui::App) -> Option<String> {
+        let tab = self.tabs.get(self.active)?;
+        let path = tab.path()?;
+        let position = tab.state.read(cx).cursor_position();
+        let language = super::highlight::language_for_path(path).unwrap_or("düz metin");
+        Some(format!(
+            "Sat {}, Süt {} · {language}",
+            position.line.saturating_add(1),
+            position.character.saturating_add(1)
+        ))
+    }
+
+    fn status_bar(&self, title: Option<String>, theme: Theme, cx: &gpui::App) -> impl IntoElement {
         let title = title.unwrap_or_default();
         let marker = if self.is_dirty() { " ●" } else { "" };
         let status = self.status.clone().unwrap_or_default();
@@ -917,6 +1977,10 @@ impl EditorView {
             .text_xs()
             .text_color(gpui::rgb(theme.muted))
             .child(format!("{title}{marker}"))
-            .child(status)
+            .child(div().flex_1().min_w_0().child(status))
+            .children(
+                self.position_label(cx)
+                    .map(|label| div().flex_none().child(label)),
+            )
     }
 }

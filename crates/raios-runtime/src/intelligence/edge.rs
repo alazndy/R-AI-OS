@@ -8,41 +8,62 @@ use crate::cortex::embedder::{Embedder, Embedding};
 const CONFIDENCE_THRESHOLD: f32 = 0.25;
 
 pub struct EdgeRouter {
+    /// Every capability name, for the exact-match step. Kept separately from
+    /// `entries` so exact matching still works when no embedder is available.
+    names: Vec<String>,
     /// (capability_name, description_embedding) pairs
     entries: Vec<(String, Embedding)>,
-    embedder: Embedder,
+    /// `None` when the embedder could not be initialised (e.g. the model is
+    /// not cached and the machine is offline). Routing then degrades to
+    /// exact-name matching instead of aborting the process.
+    embedder: Option<Embedder>,
 }
 
 impl EdgeRouter {
     /// Build the router from (name, description) pairs.
-    /// Embedder init may download a model on first use with the `cortex` feature.
+    /// Embedder init may download a model on first use with the `cortex` feature;
+    /// if it fails, semantic routing is disabled and only exact names match.
     pub fn new(descriptions: Vec<(String, String)>) -> Self {
-        let embedder = Embedder::init().unwrap_or_else(|_| {
-            // Fallback embedder always succeeds
-            Embedder::init().expect("even fallback embedder failed")
-        });
+        let embedder = match Embedder::init() {
+            Ok(embedder) => Some(embedder),
+            Err(e) => {
+                eprintln!("[edge] semantic routing disabled, exact names only: {e}");
+                None
+            }
+        };
+        Self::with_embedder(descriptions, embedder)
+    }
 
-        let entries = descriptions
-            .into_iter()
-            .filter_map(|(name, desc)| {
-                let emb = embedder.embed_one(&desc).ok()?;
-                Some((name, emb))
-            })
-            .collect();
+    fn with_embedder(descriptions: Vec<(String, String)>, embedder: Option<Embedder>) -> Self {
+        let names = descriptions.iter().map(|(name, _)| name.clone()).collect();
+        let entries = match &embedder {
+            Some(embedder) => descriptions
+                .into_iter()
+                .filter_map(|(name, desc)| {
+                    let emb = embedder.embed_one(&desc).ok()?;
+                    Some((name, emb))
+                })
+                .collect(),
+            None => Vec::new(),
+        };
 
-        Self { embedder, entries }
+        Self {
+            names,
+            embedder,
+            entries,
+        }
     }
 
     /// Find the best matching capability name for `query`.
     /// Returns `None` if no entry exceeds the confidence threshold.
     pub fn route(&self, query: &str) -> Option<&str> {
         // 1. Exact name match (always wins)
-        if let Some((name, _)) = self.entries.iter().find(|(n, _)| n == query) {
+        if let Some(name) = self.names.iter().find(|n| n.as_str() == query) {
             return Some(name.as_str());
         }
 
-        // 2. Semantic match
-        let query_emb = self.embedder.embed_one(query).ok()?;
+        // 2. Semantic match (unavailable without an embedder)
+        let query_emb = self.embedder.as_ref()?.embed_one(query).ok()?;
         let (best_name, best_score) = self
             .entries
             .iter()
@@ -71,6 +92,19 @@ fn cosine_similarity(a: &Embedding, b: &Embedding) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn without_an_embedder_only_exact_names_route() {
+        let router = EdgeRouter::with_embedder(
+            vec![(
+                "health_check".to_string(),
+                "Scan and report project health".to_string(),
+            )],
+            None,
+        );
+        assert_eq!(router.route("health_check"), Some("health_check"));
+        assert_eq!(router.route("how healthy is my project"), None);
+    }
 
     fn make_router() -> EdgeRouter {
         let descriptions = vec![

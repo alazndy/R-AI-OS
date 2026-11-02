@@ -801,6 +801,11 @@ impl Default for WizardState {
 }
 
 impl WizardState {
+    /// Step sequence for the detected environment.
+    pub fn plan(&self) -> Vec<raios_surface_tui::setup_wizard::WizardStep> {
+        raios_surface_tui::setup_wizard::WizardStep::plan(self.agent_status.as_ref())
+    }
+
     /// Builds `ConstitutionParams` from current wizard input state.
     pub fn to_constitution_params(&self) -> raios_surface_tui::setup_wizard::ConstitutionParams {
         raios_surface_tui::setup_wizard::ConstitutionParams {

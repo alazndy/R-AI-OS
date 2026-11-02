@@ -92,6 +92,11 @@ pub(super) struct McpServer {
     /// `[filesystem] blocked_paths`, enforced against every path-resolving
     /// tool's declared filesystem capability.
     blocked_paths: Vec<String>,
+    /// Capability of the tool call currently being dispatched. Set by
+    /// `handle_tools_call` and read by `authorize_path`, the single filesystem
+    /// gate every path resolver goes through. `None` outside a dispatch, in
+    /// which case `authorize_path` fails closed.
+    active_caps: Option<raios_core::security::policy::ToolCapabilities>,
 }
 
 impl McpServer {
@@ -115,8 +120,13 @@ impl McpServer {
         let quarantine = QuarantineStore::from_policy(policy.and_then(|p| p.quarantine));
 
         if quarantine.is_enabled() {
-            if let Ok(conn) = raios_core::db::open_db() {
-                let _ = quarantine::ensure_table(&conn);
+            match raios_core::db::open_db() {
+                Ok(conn) => {
+                    if let Err(e) = quarantine::ensure_table(&conn) {
+                        eprintln!("[raios] quarantine table init failed: {e}");
+                    }
+                }
+                Err(e) => eprintln!("[raios] quarantine store unavailable: {e}"),
             }
         }
 
@@ -143,6 +153,7 @@ impl McpServer {
             umai,
             egress,
             blocked_paths,
+            active_caps: None,
         }
     }
 
@@ -156,6 +167,7 @@ impl McpServer {
             umai: Umai::new(None),
             egress: EgressFilter::disabled(),
             blocked_paths: Vec::new(),
+            active_caps: None,
         }
     }
 
@@ -200,6 +212,7 @@ impl McpServer {
             Err(msg) if msg.starts_with("rate_limit:") => RpcResponse::err(id, -32029, msg),
             Err(msg) if msg.starts_with("tool_pin:") => RpcResponse::err(id, -32028, msg),
             Err(msg) if msg.starts_with("quarantine:") => RpcResponse::err(id, -32027, msg),
+            Err(msg) if msg.starts_with("audit:") => RpcResponse::err(id, -32030, msg),
             Err(msg) if msg.starts_with("method_not_found:") => RpcResponse::err(id, -32601, msg),
             Err(msg) => RpcResponse::err(id, -32603, msg),
         })
@@ -264,7 +277,7 @@ pub fn run_stdio() -> Result<()> {
 // other's env var (reproduced live in CI: one test's temp DB leaked into
 // another's `open_db()` call, causing a spurious "Project not found").
 #[cfg(test)]
-pub(super) static DB_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) use raios_core::test_support::DB_ENV_LOCK;
 
 #[cfg(test)]
 mod tests {

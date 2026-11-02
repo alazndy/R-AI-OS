@@ -97,6 +97,14 @@ pub fn exec_master(
 ) -> Vec<WizardAction> {
     let mut log = Vec::new();
 
+    if master_path.is_dir() {
+        return vec![WizardAction::fail(format!(
+            "{} is a directory — give a file path such as {}/AGENT_CONSTITUTION.md",
+            master_path.display(),
+            master_path.display()
+        ))];
+    }
+
     if let Some(parent) = master_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -186,7 +194,7 @@ pub fn exec_claude(dev_ops: &Path, master_path: &Path) -> Vec<WizardAction> {
     log
 }
 
-/// Set up Codex Kaira: ~/.codex/AGENTS.md
+/// Set up Codex: ~/.codex/AGENTS.md
 pub fn exec_codex(master_path: &Path) -> Vec<WizardAction> {
     let mut log = Vec::new();
     let home = dirs::home_dir().unwrap_or_default();
@@ -199,9 +207,7 @@ pub fn exec_codex(master_path: &Path) -> Vec<WizardAction> {
     } else {
         let content = codex_md_template(master_path);
         match std::fs::write(&agents_md, content) {
-            Ok(_) => log.push(WizardAction::ok(
-                "created: ~/.codex/AGENTS.md (Codex Kaira)",
-            )),
+            Ok(_) => log.push(WizardAction::ok("created: ~/.codex/AGENTS.md (Codex)")),
             Err(e) => log.push(WizardAction::fail(format!("AGENTS.md: {}", e))),
         }
     }
@@ -380,4 +386,18 @@ fn register_mcp_claude(settings_path: &Path) -> Result<bool, String> {
     let out = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
     std::fs::write(settings_path, out).map_err(|e| e.to_string())?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod master_tests {
+    use super::*;
+
+    #[test]
+    fn exec_master_rejects_directory_path() {
+        let dir = std::env::temp_dir();
+        let log = exec_master(&dir, &super::super::types::ConstitutionParams::default());
+        assert_eq!(log.len(), 1);
+        assert!(!log[0].ok);
+        assert!(log[0].desc.contains("is a directory"));
+    }
 }

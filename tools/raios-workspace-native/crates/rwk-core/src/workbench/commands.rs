@@ -11,14 +11,86 @@ pub enum CommandId {
     Commands,
     /// Open a project folder.
     Project,
+    /// Choose one of the recently opened projects.
+    RecentProjects,
     /// Search files.
     Files,
     /// Search the project's text through the RAIOS CLI's index.
     Search,
+    /// Show the problems the language servers found.
+    Problems,
+    /// Format the open file with its language server.
+    Format,
+    /// Rename the symbol under the cursor in every file, through the language server.
+    RenameSymbol,
+    /// List where the symbol under the cursor is used.
+    FindReferences,
+    /// List the symbols of the open file.
+    Outline,
+    /// Search the symbols of the whole project through the language server.
+    WorkspaceSymbols,
+    /// Pick a snippet and insert it at the cursor.
+    InsertSnippet,
+    /// Search the open tabs by name and show the chosen one.
+    SearchTabs,
+    /// Show the parameters of the call the cursor is inside.
+    SignatureHelp,
+    /// Start the language servers again, also the ones that gave up.
+    RestartServers,
+    /// Show the next open file read-only beside the active one, or close that split.
+    SplitEditor,
+    /// Find text in the open file.
+    FindInFile,
+    /// Find and replace text in the open file.
+    ReplaceInFile,
+    /// Replace in the open file by regular expression (`$1` inserts a group).
+    ReplaceRegexInFile,
+    /// Say who last changed the cursor line and in which commit.
+    BlameLine,
+    /// Ask for a line number and put the cursor there.
+    GoToLine,
+    /// Comment or uncomment the selected lines.
+    ToggleComment,
+    /// Wrap long lines at the window edge, or stop wrapping.
+    ToggleWordWrap,
+    /// Make the editor and terminal text bigger.
+    ZoomIn,
+    /// Make the editor and terminal text smaller.
+    ZoomOut,
+    /// Back to the default text size.
+    ZoomReset,
+    /// Save changed files when the window loses focus (on or off).
+    ToggleAutoSave,
+    /// Format with the language server before saving (on or off).
+    ToggleFormatOnSave,
+    /// Run a task from the user's task file in a new terminal.
+    RunTask,
+    /// Open the file and line that the selected terminal's output points at.
+    OpenOutputLocation,
+    /// Show the repository's changes: stage, commit, switch branch.
+    SourceControl,
     /// Save the open file.
     Save,
     /// Close the active editor tab.
     CloseTab,
+    /// In a git merge conflict, keep our side.
+    KeepOurs,
+    /// In a git merge conflict, keep the incoming side.
+    KeepTheirs,
+    /// In a git merge conflict, keep both sides, ours first.
+    KeepBoth,
+    /// Jump to the next merge conflict of the file.
+    NextConflict,
+    /// Pin the active tab to the start of the strip, or unpin it.
+    PinTab,
+    /// Move the active tab one place to the left.
+    MoveTabLeft,
+    /// Move the active tab one place to the right.
+    MoveTabRight,
+    /// Close every tab but the active one; tabs with unsaved edits stay open.
+    CloseOtherTabs,
+    /// Close every tab; tabs with unsaved edits stay open.
+    CloseAllTabs,
     /// Git diff of the open file.
     Diff,
     /// Switch the diff between unified and side-by-side.
@@ -37,18 +109,50 @@ pub enum CommandId {
     PreviousTerminal,
     /// Focus terminal 1 to 4.
     FocusTerminal(u8),
+    /// Show the buttons of toolbar category 1 to 5.
+    ToolbarTab(u8),
     /// Clear the selected terminal's screen.
     ClearTerminal,
+    /// Search the selected terminal's output, scrollback included.
+    FindInTerminal,
     /// Copy the terminal selection.
     CopyTerminal,
     /// Paste into the selected terminal.
     PasteTerminal,
-    /// Stop the selected session.
+    /// Stop the selected session; its pane stays so the output can still be read.
     StopTerminal,
+    /// Stop the selected session and remove its pane.
+    CloseTerminal,
+    /// End the selected session at once (SIGKILL, no grace for an agent) and remove its pane.
+    KillTerminal,
+    /// Start the selected SSH shell again after its connection ended.
+    Reconnect,
+    /// Open a remote shell over SSH.
+    Ssh,
+    /// Give the selected terminal a name.
+    RenameTerminal,
+    /// Swap the selected terminal with the one before it in the dock.
+    MoveTerminalPrevious,
+    /// Swap the selected terminal with the one after it in the dock.
+    MoveTerminalNext,
+    /// Place the selected terminal to the right of its neighbour.
+    SplitTerminalRight,
+    /// Place the selected terminal below its neighbour.
+    SplitTerminalDown,
+    /// Make the selected terminal a tab of the group before it.
+    JoinTerminalPrevious,
+    /// Take the selected terminal out of its tab group.
+    UngroupTerminal,
+    /// Give the selected terminal more room.
+    GrowTerminal,
+    /// Give the selected terminal less room.
+    ShrinkTerminal,
     /// Launch an agent.
     Agent,
     /// Create a handoff.
     Handoff,
+    /// Add an operator task to the open project.
+    NewTask,
     /// Show the project memory.
     Memory,
     /// Register the open project with Raios.
@@ -61,7 +165,7 @@ pub enum CommandId {
     Settings,
     /// Keyboard shortcut list.
     Shortcuts,
-    /// Switch between the standard and the GT-LCARS skin.
+    /// Switch to the next skin (standard, GT-LCARS, Aperture).
     Skin,
     /// Widen the dock (the divider moves left).
     GrowDock,
@@ -134,7 +238,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 36] = [
+const COMMANDS: [Command; 92] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -146,6 +250,12 @@ const COMMANDS: [Command; 36] = [
         "Proje klasörü aç",
         Some("Ctrl O"),
         &[bind("o")],
+    ),
+    cmd(
+        CommandId::RecentProjects,
+        "Son açılan projeler",
+        Some("Ctrl Alt O"),
+        &[bind_terminal("o", false, true)],
     ),
     cmd(
         CommandId::Files,
@@ -171,6 +281,55 @@ const COMMANDS: [Command; 36] = [
         Some("Ctrl W"),
         &[bind("w")],
     ),
+    cmd(CommandId::KeepOurs, "Çakışma: bizimkini tut", None, &[]),
+    cmd(CommandId::KeepTheirs, "Çakışma: gelenini tut", None, &[]),
+    cmd(CommandId::KeepBoth, "Çakışma: ikisini de tut", None, &[]),
+    cmd(
+        CommandId::NextConflict,
+        "Sonraki çakışmaya git",
+        Some("Ctrl Alt N"),
+        &[Binding {
+            key: "n",
+            shift: false,
+            alt: true,
+            terminal: false,
+        }],
+    ),
+    cmd(
+        CommandId::PinTab,
+        "Sekmeyi sabitle / sabitlemeyi kaldır",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::MoveTabLeft,
+        "Sekmeyi sola taşı",
+        Some("Ctrl Shift PageUp"),
+        &[Binding {
+            key: "pageup",
+            shift: true,
+            alt: false,
+            terminal: false,
+        }],
+    ),
+    cmd(
+        CommandId::MoveTabRight,
+        "Sekmeyi sağa taşı",
+        Some("Ctrl Shift PageDown"),
+        &[Binding {
+            key: "pagedown",
+            shift: true,
+            alt: false,
+            terminal: false,
+        }],
+    ),
+    cmd(
+        CommandId::CloseOtherTabs,
+        "Diğer sekmeleri kapat",
+        None,
+        &[],
+    ),
+    cmd(CommandId::CloseAllTabs, "Tüm sekmeleri kapat", None, &[]),
     cmd(
         CommandId::Diff,
         "Açık dosyanın Git diff görünümü",
@@ -242,6 +401,42 @@ const COMMANDS: [Command; 36] = [
         &[bind_terminal("4", false, true)],
     ),
     cmd(
+        CommandId::ToolbarTab(1),
+        "Araç çubuğu: Dosya sekmesi",
+        Some("Ctrl Shift 1"),
+        &[bind_terminal("1", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(2),
+        "Araç çubuğu: Terminal sekmesi",
+        Some("Ctrl Shift 2"),
+        &[bind_terminal("2", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(3),
+        "Araç çubuğu: İş sekmesi",
+        Some("Ctrl Shift 3"),
+        &[bind_terminal("3", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(4),
+        "Araç çubuğu: Görünüm sekmesi",
+        Some("Ctrl Shift 4"),
+        &[bind_terminal("4", true, false)],
+    ),
+    cmd(
+        CommandId::ToolbarTab(5),
+        "Araç çubuğu: Araç sekmesi",
+        Some("Ctrl Shift 5"),
+        &[bind_terminal("5", true, false)],
+    ),
+    cmd(
+        CommandId::FindInTerminal,
+        "Terminal çıktısında ara",
+        Some("Ctrl Alt F"),
+        &[bind_terminal("f", false, true)],
+    ),
+    cmd(
         CommandId::ClearTerminal,
         "Seçili terminalin görüntüsünü temizle",
         None,
@@ -261,6 +456,64 @@ const COMMANDS: [Command; 36] = [
     ),
     cmd(CommandId::StopTerminal, "Seçili oturumu durdur…", None, &[]),
     cmd(
+        CommandId::CloseTerminal,
+        "Terminali kapat",
+        Some("Ctrl Shift W"),
+        &[bind_terminal("w", true, false)],
+    ),
+    cmd(CommandId::KillTerminal, "Terminali zorla öldür…", None, &[]),
+    cmd(CommandId::Reconnect, "SSH'e yeniden bağlan", None, &[]),
+    cmd(
+        CommandId::Ssh,
+        "SSH ile bağlan…",
+        Some("Ctrl Shift S"),
+        &[bind_terminal("s", true, false)],
+    ),
+    cmd(
+        CommandId::RenameTerminal,
+        "Terminali yeniden adlandır…",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::MoveTerminalPrevious,
+        "Terminali öncekiyle yer değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::MoveTerminalNext,
+        "Terminali sonrakiyle yer değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::SplitTerminalRight,
+        "Terminali komşusunun sağına böl",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::SplitTerminalDown,
+        "Terminali komşusunun altına böl",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::JoinTerminalPrevious,
+        "Terminali öncekinin sekmesi yap",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::UngroupTerminal,
+        "Terminali sekme grubundan ayır",
+        None,
+        &[],
+    ),
+    cmd(CommandId::GrowTerminal, "Terminali büyüt", None, &[]),
+    cmd(CommandId::ShrinkTerminal, "Terminali küçült", None, &[]),
+    cmd(
         CommandId::Agent,
         "Ajan başlat",
         Some("Ctrl Shift A"),
@@ -272,6 +525,136 @@ const COMMANDS: [Command; 36] = [
         Some("Ctrl Shift H"),
         &[bind_terminal("h", true, false)],
     ),
+    cmd(CommandId::NewTask, "Yeni görev…", None, &[]),
+    cmd(CommandId::RunTask, "Görev çalıştır", None, &[]),
+    cmd(
+        CommandId::OpenOutputLocation,
+        "Çıktıdaki konumu aç",
+        None,
+        &[],
+    ),
+    cmd(CommandId::SourceControl, "Git değişiklikleri", None, &[]),
+    cmd(CommandId::SplitEditor, "Editörü böl / birleştir", None, &[]),
+    cmd(CommandId::FindInFile, "Dosyada bul", Some("Ctrl F"), &[]),
+    cmd(
+        CommandId::ReplaceInFile,
+        "Dosyada bul ve değiştir",
+        Some("Ctrl H"),
+        &[],
+    ),
+    cmd(
+        CommandId::ReplaceRegexInFile,
+        "Dosyada regex ile değiştir",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::BlameLine,
+        "Satırı en son kim değiştirdi (git blame)",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::GoToLine,
+        "Satıra git",
+        Some("Ctrl G"),
+        &[bind("g")],
+    ),
+    cmd(
+        CommandId::ToggleComment,
+        "Satırı yorumla / yorumu kaldır",
+        Some("Ctrl /"),
+        &[bind("/")],
+    ),
+    cmd(
+        CommandId::ToggleWordWrap,
+        "Satır kaydırmayı aç/kapat",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::ZoomIn,
+        "Yazıyı büyüt",
+        Some("Ctrl +"),
+        &[
+            bind_terminal("=", false, false),
+            bind_terminal("=", true, false),
+        ],
+    ),
+    cmd(
+        CommandId::ZoomOut,
+        "Yazıyı küçült",
+        Some("Ctrl -"),
+        &[bind_terminal("-", false, false)],
+    ),
+    cmd(
+        CommandId::ZoomReset,
+        "Yazı boyutunu sıfırla",
+        Some("Ctrl 0"),
+        &[bind_terminal("0", false, false)],
+    ),
+    cmd(
+        CommandId::ToggleAutoSave,
+        "Otomatik kaydetmeyi aç/kapat",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::ToggleFormatOnSave,
+        "Kaydederken biçimlendirmeyi aç/kapat",
+        None,
+        &[],
+    ),
+    cmd(CommandId::Format, "Dosyayı biçimlendir", None, &[]),
+    cmd(
+        CommandId::RenameSymbol,
+        "Sembolü yeniden adlandır",
+        None,
+        &[],
+    ),
+    cmd(
+        CommandId::FindReferences,
+        "Sembolün kullanıldığı yerleri bul",
+        None,
+        &[],
+    ),
+    cmd(CommandId::Outline, "Dosyadaki sembolleri göster", None, &[]),
+    cmd(
+        CommandId::WorkspaceSymbols,
+        "Projede sembol ara",
+        Some("Ctrl T"),
+        &[bind("t")],
+    ),
+    cmd(
+        CommandId::InsertSnippet,
+        "Kod parçası (snippet) ekle",
+        Some("Ctrl J"),
+        &[bind("j")],
+    ),
+    cmd(
+        CommandId::SearchTabs,
+        "Açık sekmelerde ara",
+        Some("Ctrl E"),
+        &[bind("e")],
+    ),
+    cmd(
+        CommandId::SignatureHelp,
+        "Parametre ipucu",
+        Some("Ctrl Shift Space"),
+        &[Binding {
+            key: "space",
+            shift: true,
+            alt: false,
+            terminal: false,
+        }],
+    ),
+    cmd(
+        CommandId::RestartServers,
+        "Dil sunucularını yeniden başlat",
+        None,
+        &[],
+    ),
+    cmd(CommandId::Problems, "Sorunları göster", None, &[]),
     cmd(CommandId::Memory, "Proje hafızasını göster", None, &[]),
     cmd(
         CommandId::RegisterProject,
@@ -297,7 +680,12 @@ const COMMANDS: [Command; 36] = [
         Some("Ctrl ,"),
         &[bind(",")],
     ),
-    cmd(CommandId::Skin, "GT-LCARS görünümünü aç / kapat", None, &[]),
+    cmd(
+        CommandId::Skin,
+        "Görünümü değiştir (standart / GT-LCARS / Aperture)",
+        None,
+        &[],
+    ),
     cmd(
         CommandId::GrowDock,
         "Dock'u genişlet",
@@ -429,6 +817,8 @@ pub struct WorkbenchState {
     pub control_plane_features: bool,
     /// The daemon answered its last request.
     pub daemon_reachable: bool,
+    /// The selected terminal is an SSH shell whose connection has ended.
+    pub reconnectable: bool,
 }
 
 /// Why a command can or cannot run right now.
@@ -472,28 +862,41 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         }
     };
     match id {
-        Commands | Project | Settings | Skin | Shortcuts | Balanced | EditorLayout
-        | AgentsLayout => allow(),
-        Files | Search | Refresh | FocusFiles | Memory | Inspector => needs_project(),
+        ToggleAutoSave | ToggleFormatOnSave | ToggleWordWrap | ZoomIn | ZoomOut | ZoomReset
+        | Commands | Project | RecentProjects | Settings | Skin | Shortcuts | Balanced
+        | EditorLayout | AgentsLayout => allow(),
+        Files | Search | Problems | SourceControl | Refresh | RunTask | FocusFiles | Memory
+        | Inspector | RestartServers | WorkspaceSymbols => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
             (true, true) => allow(),
         },
-        Diff | DiffSplit | FocusEditor | CloseTab => {
+        Diff | DiffSplit | FocusEditor | CloseTab | CloseOtherTabs | CloseAllTabs | KeepOurs
+        | KeepTheirs | KeepBoth | NextConflict | PinTab | MoveTabLeft | MoveTabRight | Format
+        | RenameSymbol | FindReferences | Outline | SignatureHelp | InsertSnippet | SearchTabs
+        | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment
+        | BlameLine | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
                 deny("Açık dosya yok")
             }
         }
-        NewTerminal => {
+        NewTerminal | Ssh => {
             if !state.project_open {
                 deny("Önce bir proje klasörü açın")
             } else if usize::from(state.terminals) >= MAX_SESSIONS {
                 deny("En fazla 12 terminal açılabilir")
             } else {
                 allow()
+            }
+        }
+        Reconnect => {
+            if state.reconnectable {
+                allow()
+            } else {
+                deny("Seçili terminal bitmiş bir SSH oturumu değil")
             }
         }
         ToggleTerminal => allow(),
@@ -504,8 +907,24 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("Dock gizli")
             }
         }
-        NextTerminal | PreviousTerminal | ClearTerminal | CopyTerminal | PasteTerminal
-        | StopTerminal => needs_terminal(),
+        NextTerminal | PreviousTerminal | ClearTerminal | FindInTerminal | CopyTerminal
+        | PasteTerminal | OpenOutputLocation | StopTerminal | CloseTerminal | KillTerminal
+        | RenameTerminal | UngroupTerminal => needs_terminal(),
+        MoveTerminalPrevious | MoveTerminalNext | SplitTerminalRight | SplitTerminalDown
+        | JoinTerminalPrevious | GrowTerminal | ShrinkTerminal => {
+            if state.terminals >= 2 {
+                allow()
+            } else {
+                deny("En az iki terminal gerekir")
+            }
+        }
+        ToolbarTab(number) => {
+            if (1..=5).contains(&number) {
+                allow()
+            } else {
+                deny("Böyle bir sekme yok")
+            }
+        }
         FocusTerminal(index) => {
             if index >= 1 && index <= state.terminals {
                 allow()
@@ -513,7 +932,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
                 deny("Böyle bir terminal yok")
             }
         }
-        Agent | Handoff | RegisterProject => {
+        Agent | Handoff | NewTask | RegisterProject => {
             if !state.control_plane_features {
                 deny("Daemon bağlantısı yapılandırılmadı")
             } else if !state.project_open {
@@ -561,7 +980,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 36);
+        assert_eq!(catalog().len(), 92);
     }
 
     #[test]

@@ -12,11 +12,13 @@ use std::time::{Duration, Instant};
 use raios_contracts::{GovernSnapshot, NowSnapshot, WorkSnapshot};
 use rwk_core::control::daemon::{DaemonClient, TokenSource};
 use rwk_core::control::{
-    ControlPlane, CreateHandoffRequest, HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest,
-    PolicyAction,
+    AssignTaskRequest, ControlPlane, CreateHandoffRequest, CreateTaskRequest,
+    HandoffDecisionRequest, IdempotencyKey, LaunchAgentRequest, PolicyAction,
+    UpdateTaskStatusRequest,
 };
 use rwk_core::error::{AppError, ErrorCode, Result};
 use rwk_core::sessions::SessionKind;
+use rwk_core::tasks::TaskStatus;
 use serde_json::{json, Value};
 
 struct Reply {
@@ -640,5 +642,123 @@ fn a_project_path_that_is_not_utf8_is_refused_locally() {
         .handoff_receipt("a-1", &bad)
         .unwrap_err();
 
+    assert_eq!(error.code, ErrorCode::InvalidInput);
+}
+
+#[test]
+fn creating_a_task_sends_the_title_priority_and_project_and_returns_its_id() {
+    let (url, server) = spawn_daemon(vec![ok(json!({"status": "ok", "result": {
+        "task_id": "t-1", "status": "queued"
+    }}))]);
+
+    let id = client(&url)
+        .create_task(&CreateTaskRequest {
+            project_root: PathBuf::from("/work/app"),
+            title: "Fix the build".into(),
+            priority: 70,
+            idempotency_key: IdempotencyKey::new("t-key"),
+        })
+        .unwrap();
+
+    let requests = server.join().unwrap();
+    assert_eq!(id, "t-1");
+    let body = json_body(&requests[0]);
+    assert_eq!(body["command_type"], "CreateTask");
+    assert_eq!(body["payload"]["title"], "Fix the build");
+    assert_eq!(body["payload"]["project_path"], "/work/app");
+    assert_eq!(body["payload"]["priority"], 70);
+    assert_eq!(body["payload"]["idempotency_key"], "t-key");
+}
+
+#[test]
+fn a_status_change_sends_the_daemons_word_and_checks_the_answer() {
+    let (url, server) = spawn_daemon(vec![
+        ok(json!({"status": "ok", "result": {"task_id": "t-1", "status": "in_progress"}})),
+        ok(json!({"status": "ok", "result": {"task_id": "t-1", "status": "queued"}})),
+    ]);
+    let daemon = client(&url);
+    let request = |status| UpdateTaskStatusRequest {
+        project_root: PathBuf::from("/work/app"),
+        task_id: "t-1".into(),
+        status,
+        idempotency_key: IdempotencyKey::new("s-key"),
+    };
+
+    daemon
+        .update_task_status(&request(TaskStatus::InProgress))
+        .unwrap();
+    // An answer for another status than the one asked is never taken for success.
+    assert!(daemon
+        .update_task_status(&request(TaskStatus::Completed))
+        .is_err());
+
+    let requests = server.join().unwrap();
+    let body = json_body(&requests[0]);
+    assert_eq!(body["command_type"], "UpdateTaskStatus");
+    assert_eq!(body["payload"]["task_id"], "t-1");
+    assert_eq!(body["payload"]["status"], "in_progress");
+}
+
+fn assignment(assignee: Option<SessionKind>, expected: Option<&str>) -> AssignTaskRequest {
+    AssignTaskRequest {
+        project_root: PathBuf::from("/work/app"),
+        task_id: "t-1".into(),
+        assignee,
+        expected_updated_at: expected.map(str::to_owned),
+        idempotency_key: IdempotencyKey::new("a-key"),
+    }
+}
+
+#[test]
+fn assigning_a_task_sends_the_agent_name_and_the_revision_and_returns_the_new_one() {
+    let (url, server) = spawn_daemon(vec![
+        ok(json!({"status": "ok", "result": {
+            "task_id": "t-1", "assignee": "codex", "updated_at": "2026-10-24T10:00:00Z"
+        }})),
+        ok(json!({"status": "ok", "result": {
+            "task_id": "t-1", "assignee": null, "updated_at": "2026-10-24T10:05:00Z"
+        }})),
+    ]);
+    let daemon = client(&url);
+
+    let revision = daemon
+        .assign_task(&assignment(
+            Some(SessionKind::Codex),
+            Some("2026-10-24T09:00:00Z"),
+        ))
+        .unwrap();
+    daemon.assign_task(&assignment(None, None)).unwrap();
+
+    let requests = server.join().unwrap();
+    assert_eq!(revision, "2026-10-24T10:00:00Z");
+    let body = json_body(&requests[0]);
+    assert_eq!(body["command_type"], "AssignTask");
+    assert_eq!(body["payload"]["assignee"], "codex");
+    assert_eq!(
+        body["payload"]["expected_updated_at"],
+        "2026-10-24T09:00:00Z"
+    );
+    let clearing = json_body(&requests[1]);
+    assert_eq!(clearing["payload"]["assignee"], Value::Null);
+}
+
+#[test]
+fn a_task_changed_in_the_meantime_is_a_conflict_and_a_shell_is_never_assigned() {
+    let (url, server) = spawn_daemon(vec![ok(problem(
+        "CONFLICT",
+        "The task changed since it was read; reload it and try again",
+    ))]);
+    let daemon = client(&url);
+
+    let error = daemon
+        .assign_task(&assignment(Some(SessionKind::Claude), Some("old")))
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict);
+    server.join().unwrap();
+
+    // Refused locally: no request is made, so the server above is already finished.
+    let error = daemon
+        .assign_task(&assignment(Some(SessionKind::Shell), None))
+        .unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidInput);
 }

@@ -82,7 +82,7 @@ impl QuarantineStore {
         }
 
         // Check for an existing denied entry for this tool.
-        if let Some(id) = find_denied(conn, tool) {
+        if let Some(id) = find_denied(conn, tool)? {
             return Err(QuarantineError::Denied(id));
         }
 
@@ -185,13 +185,18 @@ fn consume_approved(conn: &Connection, tool: &str) -> Option<String> {
     Some(id)
 }
 
-fn find_denied(conn: &Connection, tool: &str) -> Option<String> {
-    conn.query_row(
+/// `Ok(None)` means "no denied entry"; any other DB failure is propagated so
+/// the caller fails closed instead of treating an unreadable store as clean.
+fn find_denied(conn: &Connection, tool: &str) -> rusqlite::Result<Option<String>> {
+    match conn.query_row(
         "SELECT id FROM quarantine_queue WHERE tool=?1 AND status='denied' LIMIT 1",
         params![tool],
         |r| r.get(0),
-    )
-    .ok()
+    ) {
+        Ok(id) => Ok(Some(id)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 // ─── Public queue management ─────────────────────────────────────────────────
@@ -269,6 +274,16 @@ mod tests {
             always_quarantine: always.iter().map(|s| s.to_string()).collect(),
             suspicious_patterns: patterns.iter().map(|s| s.to_string()).collect(),
         })
+    }
+
+    #[test]
+    fn unreadable_store_fails_closed_for_non_suspicious_tool() {
+        // No quarantine_queue table: the denied-entry lookup errors out. That
+        // must surface as an error, not be read as "nothing denied".
+        let conn = Connection::open_in_memory().unwrap();
+        let s = store(&[], &[]);
+        let err = s.check(&conn, "harmless_tool", "{}").unwrap_err();
+        assert!(matches!(err, QuarantineError::Db(_)));
     }
 
     #[test]

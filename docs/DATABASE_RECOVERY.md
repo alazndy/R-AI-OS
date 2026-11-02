@@ -60,9 +60,15 @@ has the database open.
 1. Stop writers and confirm the daemon is down:
 
    ```bash
-   systemctl --user stop raios-tray.service aiosd.service
+   systemctl --user stop raios-tray.service raios-hub.service
    ss -ltnp
    ```
+
+   `raios hub install` creates `raios-hub.service`. A daemon started another way
+   (an older install, or `systemd-run --user`) is usually called `aiosd.service`;
+   `systemctl --user list-units 'raios*' 'aiosd*'` shows which one is running.
+   Stop that one instead, and do not continue until `ss -ltnp` no longer lists
+   ports 42069–42071: a daemon that is still up has the database open.
 
 2. Verify the selected snapshot before touching the live files:
 
@@ -93,7 +99,7 @@ has the database open.
 5. Start the daemon, then validate both SQLite and the audit ledger:
 
    ```bash
-   systemctl --user start aiosd.service raios-tray.service
+   systemctl --user start raios-hub.service raios-tray.service
    raios db check --full
    raios verify-chain
    ```

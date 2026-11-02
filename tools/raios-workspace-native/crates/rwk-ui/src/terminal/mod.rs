@@ -9,4 +9,4 @@ pub mod view;
 
 pub use element::TerminalElement;
 pub use gate::FrameGate;
-pub use view::{Appearance, FrameStats, TerminalView};
+pub use view::{Appearance, FrameStats, TerminalEvent, TerminalView};

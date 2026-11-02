@@ -11,6 +11,8 @@ pub enum Skin {
     Standard,
     /// The GT-LCARS skin.
     Lcars,
+    /// The Aperture skin: pure black, logo orange and logo blue, as in the KDE theme.
+    Aperture,
 }
 
 /// Light or dark tone.

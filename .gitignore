@@ -18,6 +18,8 @@ tools/raios-tray/__pycache__/
 .fastembed_cache/
 .raios_tool_pin
 
+/.cache/
+
 # Superpowers subagent-driven-development scratch ledger
 .superpowers/
 .claude/worktrees/

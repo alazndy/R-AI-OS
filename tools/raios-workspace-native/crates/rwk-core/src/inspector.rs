@@ -55,6 +55,59 @@ pub struct TaskRow {
     pub status: String,
     /// Assigned agent or person, when there is one.
     pub assignee: Option<String>,
+    /// Priority, 0 to 255.
+    pub priority: u8,
+    /// The revision the row was read at; an edit echoes it so a newer change is not overwritten.
+    pub updated_at: String,
+}
+
+/// The group of the task list a task is shown in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TaskGroup {
+    /// Being worked on.
+    InProgress,
+    /// Waiting, blocked, or a status this build does not know: still to be done.
+    Open,
+    /// Done; collapsed by default.
+    Completed,
+    /// Dropped; collapsed by default.
+    Cancelled,
+}
+
+impl TaskGroup {
+    /// Every group, in display order.
+    pub const ALL: [TaskGroup; 4] = [
+        TaskGroup::InProgress,
+        TaskGroup::Open,
+        TaskGroup::Completed,
+        TaskGroup::Cancelled,
+    ];
+
+    /// The group of a status label from the daemon. An unknown status is shown as open so a
+    /// task is never hidden by a word this build does not know.
+    pub fn of(status: &str) -> Self {
+        match status {
+            "in_progress" => Self::InProgress,
+            "completed" => Self::Completed,
+            "cancelled" => Self::Cancelled,
+            _ => Self::Open,
+        }
+    }
+
+    /// The heading shown above the group.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::InProgress => "Devam eden",
+            Self::Open => "Bekleyen",
+            Self::Completed => "Tamamlanan",
+            Self::Cancelled => "İptal edilen",
+        }
+    }
+
+    /// The group starts collapsed.
+    pub fn collapsed_by_default(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled)
+    }
 }
 
 /// One running agent of the open project.
@@ -155,6 +208,8 @@ pub fn project_view(
             title: task.title.clone(),
             status: task.status.clone(),
             assignee: task.assignee.clone(),
+            priority: task.priority,
+            updated_at: task.updated_at.clone(),
         })
         .collect();
     let runs = project_runs(&work.active_runs, &work.tasks, project)
@@ -232,6 +287,20 @@ pub fn fetch(plane: &dyn ControlPlane, project: &Path) -> InspectorModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn statuses_fall_into_groups_and_unknown_ones_stay_visible() {
+        assert_eq!(TaskGroup::of("in_progress"), TaskGroup::InProgress);
+        assert_eq!(TaskGroup::of("queued"), TaskGroup::Open);
+        assert_eq!(TaskGroup::of("blocked"), TaskGroup::Open);
+        assert_eq!(TaskGroup::of("something-new"), TaskGroup::Open);
+        assert_eq!(TaskGroup::of("completed"), TaskGroup::Completed);
+        assert_eq!(TaskGroup::of("cancelled"), TaskGroup::Cancelled);
+        assert!(!TaskGroup::InProgress.collapsed_by_default());
+        assert!(!TaskGroup::Open.collapsed_by_default());
+        assert!(TaskGroup::Completed.collapsed_by_default());
+        assert!(TaskGroup::Cancelled.collapsed_by_default());
+    }
 
     fn task(id: &str, path: Option<&str>) -> UnifiedTaskDto {
         UnifiedTaskDto {

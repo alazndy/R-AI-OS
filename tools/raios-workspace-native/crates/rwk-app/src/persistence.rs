@@ -26,6 +26,90 @@ pub fn config_home(xdg: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
     }
 }
 
+/// File name of the user's task list.
+const TASKS_FILE: &str = "tasks.json";
+/// Largest task file read, in bytes.
+const MAX_TASKS_FILE_BYTES: u64 = 256 * 1024;
+
+/// The tasks file inside a config home.
+pub fn tasks_path(config_home: &Path) -> PathBuf {
+    config_home.join(APP_DIR).join(TASKS_FILE)
+}
+
+const SERVERS_FILE: &str = "language-servers.json";
+
+/// The user's own language servers inside a config home.
+pub fn servers_path(config_home: &Path) -> PathBuf {
+    config_home.join(APP_DIR).join(SERVERS_FILE)
+}
+
+/// Reads the user's language-server file (once, at start); nothing when there is none.
+pub fn load_user_servers(path: &Path) -> Vec<(rwk_core::lsp::ServerSpec, Vec<String>, String)> {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut text = String::new();
+    if file
+        .take(MAX_TASKS_FILE_BYTES)
+        .read_to_string(&mut text)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    rwk_core::lsp::parse_user_servers(&text)
+}
+
+/// Reads the user's snippet file; edits apply the next time the picker opens.
+pub fn load_snippets(config_home: &Path) -> Vec<rwk_core::workbench::Snippet> {
+    use std::io::Read;
+    let path = config_home.join(APP_DIR).join("snippets.json");
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut text = String::new();
+    if file
+        .take(rwk_core::workbench::snippets::MAX_SNIPPET_BYTES as u64)
+        .read_to_string(&mut text)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    rwk_core::workbench::parse_user_snippets(&text)
+}
+
+/// Reads the user's task file on every call, so edits apply without a restart.
+pub struct FsTaskStore {
+    path: PathBuf,
+}
+
+impl FsTaskStore {
+    /// A store over the tasks file inside `config_home`.
+    pub fn new(config_home: &Path) -> Self {
+        Self {
+            path: tasks_path(config_home),
+        }
+    }
+}
+
+impl rwk_core::runner::TaskSource for FsTaskStore {
+    fn load(&self, project: &Path) -> Vec<rwk_core::runner::RunTask> {
+        use std::io::Read;
+        let Ok(file) = std::fs::File::open(&self.path) else {
+            return Vec::new();
+        };
+        let mut text = String::new();
+        if file
+            .take(MAX_TASKS_FILE_BYTES)
+            .read_to_string(&mut text)
+            .is_err()
+        {
+            return Vec::new();
+        }
+        rwk_core::runner::tasks_for(&text, project)
+    }
+}
+
 /// File name of the projects the daemon confirmed as registered.
 const REGISTERED_FILE: &str = "registered-projects.json";
 
@@ -68,6 +152,48 @@ pub fn remember_registered(path: &Path, project: &Path) -> std::io::Result<()> {
     std::fs::rename(&temporary, path)
 }
 
+const RECENT_FILE: &str = "recent-projects.json";
+
+/// How many projects the recent list keeps.
+pub const MAX_RECENT_PROJECTS: usize = 10;
+
+/// The recent-projects file inside a config home.
+pub fn recent_path(config_home: &Path) -> PathBuf {
+    config_home.join(APP_DIR).join(RECENT_FILE)
+}
+
+/// The stored recent projects, newest first; projects that no longer exist are left out.
+pub fn load_recent(path: &Path) -> Vec<PathBuf> {
+    let names: Vec<String> = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    names
+        .into_iter()
+        .map(PathBuf::from)
+        .filter(|project| project.is_dir())
+        .take(MAX_RECENT_PROJECTS)
+        .collect()
+}
+
+/// Writes the recent projects atomically, owner-only.
+pub fn save_recent(path: &Path, projects: &[PathBuf]) -> std::io::Result<()> {
+    let Some(directory) = path.parent() else {
+        return Err(std::io::Error::other("the recent path has no directory"));
+    };
+    create_private_dir(directory)?;
+    let temporary = directory.join(format!(".{RECENT_FILE}.tmp"));
+    let names: Vec<String> = projects
+        .iter()
+        .take(MAX_RECENT_PROJECTS)
+        .map(|project| project.to_string_lossy().into_owned())
+        .collect();
+    let mut file = open_private(&temporary)?;
+    file.write_all(serde_json::to_string(&names).unwrap_or_default().as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, path)
+}
+
 /// The appearance file inside a config home.
 pub fn appearance_path(config_home: &Path) -> PathBuf {
     config_home.join(APP_DIR).join(FILE)
@@ -90,6 +216,71 @@ pub fn save_appearance(path: &Path, appearance: &Appearance) -> std::io::Result<
     let temporary = directory.join(format!(".{FILE}.tmp"));
     let mut file = open_private(&temporary)?;
     file.write_all(serialize_appearance(appearance).as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, path)
+}
+
+const PREFERENCES_FILE: &str = "preferences.json";
+
+/// The editing switches that survive a restart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Preferences {
+    /// Save changed files when the window loses focus.
+    pub auto_save: bool,
+    /// Format with the language server before saving.
+    pub format_on_save: bool,
+    /// What the toolbar shows; a missing or invalid entry is the default layout.
+    pub toolbar: rwk_core::workbench::ToolbarLayout,
+    /// Text size, tab width and wrapping.
+    pub editor: rwk_core::workbench::EditorPrefs,
+}
+
+/// The preferences file inside a config home.
+pub fn preferences_path(config_home: &Path) -> PathBuf {
+    config_home.join(APP_DIR).join(PREFERENCES_FILE)
+}
+
+/// The stored preferences; anything missing or invalid is off.
+pub fn load_preferences(path: &Path) -> Preferences {
+    let value: serde_json::Value = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let flag = |key: &str| value.get(key).and_then(serde_json::Value::as_bool) == Some(true);
+    Preferences {
+        auto_save: flag("auto_save"),
+        format_on_save: flag("format_on_save"),
+        toolbar: value
+            .get("toolbar")
+            .and_then(|toolbar| serde_json::from_value(toolbar.clone()).ok())
+            .unwrap_or_default(),
+        editor: value
+            .get("editor")
+            .and_then(|editor| {
+                serde_json::from_value::<rwk_core::workbench::EditorPrefs>(editor.clone()).ok()
+            })
+            .unwrap_or_default()
+            .clamped(),
+    }
+}
+
+/// Writes the preferences atomically, owner-only.
+pub fn save_preferences(path: &Path, preferences: Preferences) -> std::io::Result<()> {
+    let Some(directory) = path.parent() else {
+        return Err(std::io::Error::other(
+            "the preferences path has no directory",
+        ));
+    };
+    create_private_dir(directory)?;
+    let temporary = directory.join(format!(".{PREFERENCES_FILE}.tmp"));
+    let mut file = open_private(&temporary)?;
+    let text = serde_json::json!({
+        "auto_save": preferences.auto_save,
+        "format_on_save": preferences.format_on_save,
+        "toolbar": preferences.toolbar,
+        "editor": preferences.editor,
+    });
+    file.write_all(text.to_string().as_bytes())?;
     file.sync_all()?;
     std::fs::rename(&temporary, path)
 }
@@ -187,6 +378,42 @@ fn open_private(path: &Path) -> std::io::Result<std::fs::File> {
 mod tests {
     use super::*;
     use rwk_core::workbench::{Skin, Tone};
+
+    #[test]
+    fn preferences_round_trip_and_default_to_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = preferences_path(dir.path());
+        assert_eq!(load_preferences(&path), Preferences::default());
+        let on = Preferences {
+            auto_save: true,
+            format_on_save: false,
+            toolbar: rwk_core::workbench::ToolbarLayout::preset(
+                rwk_core::workbench::ToolbarPreset::Minimal,
+            ),
+            editor: rwk_core::workbench::EditorPrefs {
+                font_size: 18,
+                tab_size: 2,
+                soft_wrap: true,
+            },
+        };
+        save_preferences(&path, on).unwrap();
+        assert_eq!(load_preferences(&path), on);
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(load_preferences(&path), Preferences::default());
+    }
+
+    #[test]
+    fn recent_projects_round_trip_and_skip_folders_that_are_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = recent_path(dir.path());
+        assert!(load_recent(&path).is_empty());
+        let here = dir.path().to_path_buf();
+        let gone = dir.path().join("gone");
+        save_recent(&path, &[here.clone(), gone]).unwrap();
+        assert_eq!(load_recent(&path), vec![here]);
+        std::fs::write(&path, "not json").unwrap();
+        assert!(load_recent(&path).is_empty());
+    }
 
     #[test]
     fn the_appearance_file_lives_under_the_xdg_config_home() {
@@ -318,16 +545,20 @@ mod tests {
             tabs: vec![SavedTab {
                 path: "src/main.rs".into(),
                 line: 7,
+                pinned: false,
             }],
             active: 0,
             layout: LayoutPreset::Editor,
+            dock: None,
             terminals: vec![
-                SavedTerminal::Shell,
+                SavedTerminal::Shell { name: None },
                 SavedTerminal::Agent {
                     kind: rwk_core::sessions::SessionKind::Claude,
                     native_session: None,
+                    name: None,
                 },
             ],
+            task_links: Vec::new(),
         };
         store.save(&workspace).expect("save");
         assert_eq!(store.load(project), Some(workspace));
@@ -346,6 +577,8 @@ mod tests {
             active: 0,
             layout: rwk_core::workbench::LayoutPreset::Balanced,
             terminals: Vec::new(),
+            dock: None,
+            task_links: Vec::new(),
         };
         store.save(&state).expect("save");
         assert_eq!(
@@ -363,5 +596,28 @@ mod tests {
             .mode();
         assert_eq!(dir_mode & 0o077, 0, "{dir_mode:o}");
         assert_eq!(file_mode & 0o077, 0, "{file_mode:o}");
+    }
+}
+
+#[cfg(test)]
+mod task_store_tests {
+    use super::*;
+    use rwk_core::runner::TaskSource;
+
+    #[test]
+    fn the_task_file_is_read_from_the_config_directory_and_a_missing_one_gives_no_tasks() {
+        let home = tempfile::tempdir().unwrap();
+        let store = FsTaskStore::new(home.path());
+        assert!(store.load(Path::new("/work/app")).is_empty());
+        let path = tasks_path(home.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"projects": {"/work/app": [{"name": "test", "command": ["cargo", "test"]}]}}"#,
+        )
+        .unwrap();
+        let tasks = store.load(Path::new("/work/app"));
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].name, "test");
     }
 }

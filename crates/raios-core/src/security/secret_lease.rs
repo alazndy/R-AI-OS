@@ -1,5 +1,7 @@
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ─── Lease record ─────────────────────────────────────────────────────────────
@@ -206,8 +208,80 @@ fn collect_rows(stmt: &mut rusqlite::Statement<'_>) -> rusqlite::Result<Vec<Secr
     Ok(rows.flatten().collect())
 }
 
-/// Collect active env var values for a tool from the host process's environment.
-/// Skips env vars that aren't set in the host process (grants without a value are ignored).
+// ─── Vault: leasable secrets are not ambient ─────────────────────────────────
+
+/// Values of every env var that appears in a lease row, moved out of the
+/// process environment by `scrub_leasable_env`. Outside a leased tool call
+/// the secret is therefore invisible to this process and to any child it
+/// spawns (build/test scripts, git hooks, …).
+fn vault() -> &'static Mutex<BTreeMap<String, String>> {
+    static VAULT: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+    VAULT.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn vault_lock() -> std::sync::MutexGuard<'static, BTreeMap<String, String>> {
+    vault().lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Moves every env var named in any lease row (active, expired or revoked —
+/// revoking must not make a secret ambient again) from the process
+/// environment into the vault. Returns how many variables were moved.
+///
+/// Call this before each tool dispatch: it also covers grants made after the
+/// server started. Not thread-safe against concurrent `getenv` in other
+/// threads; the MCP stdio server dispatches sequentially.
+pub fn scrub_leasable_env(conn: &Connection) -> usize {
+    let vars: Vec<String> = match conn.prepare("SELECT DISTINCT env_var FROM secret_leases") {
+        Ok(mut stmt) => match stmt.query_map([], |r| r.get(0)) {
+            Ok(rows) => rows.flatten().collect(),
+            Err(_) => return 0,
+        },
+        Err(_) => return 0,
+    };
+    let mut moved = 0;
+    let mut vault = vault_lock();
+    for var in vars {
+        if let Some(val) = std::env::var_os(&var) {
+            if let Some(val) = val.to_str() {
+                vault.insert(var.clone(), val.to_string());
+            }
+            std::env::remove_var(&var);
+            moved += 1;
+        }
+    }
+    moved
+}
+
+/// Restores the ambient environment when a leased tool call finishes.
+#[must_use = "dropping the guard immediately removes the leased variables"]
+pub struct LeaseEnvGuard {
+    vars: Vec<String>,
+}
+
+impl Drop for LeaseEnvGuard {
+    fn drop(&mut self) {
+        for var in &self.vars {
+            std::env::remove_var(var);
+        }
+    }
+}
+
+/// Scrubs leasable secrets, then exposes only the ones actively leased to
+/// `tool` for as long as the returned guard lives.
+pub fn inject_active_env(conn: &Connection, tool: &str) -> LeaseEnvGuard {
+    scrub_leasable_env(conn);
+    let pairs = active_env_for_tool(conn, tool);
+    let mut vars = Vec::with_capacity(pairs.len());
+    for (var, val) in pairs {
+        std::env::set_var(&var, val);
+        vars.push(var);
+    }
+    LeaseEnvGuard { vars }
+}
+
+/// Collect active env var values for a tool: from the vault when the secret
+/// has been scrubbed, otherwise from the host process's environment.
+/// Skips env vars with no value anywhere (grants without a value are ignored).
 pub fn active_env_for_tool(conn: &Connection, tool: &str) -> Vec<(String, String)> {
     expire_old(conn).ok();
     let now = now_secs() as i64;
@@ -222,8 +296,15 @@ pub fn active_env_for_tool(conn: &Connection, tool: &str) -> Vec<(String, String
         Err(_) => vec![],
     };
 
+    let vault = vault_lock();
     vars.into_iter()
-        .filter_map(|var| std::env::var(&var).ok().map(|val| (var, val)))
+        .filter_map(|var| {
+            let val = vault
+                .get(&var)
+                .cloned()
+                .or_else(|| std::env::var(&var).ok())?;
+            Some((var, val))
+        })
         .collect()
 }
 
@@ -320,5 +401,43 @@ mod tests {
         assert_eq!(pairs[0].0, "RAIOS_TEST_SECRET");
         assert_eq!(pairs[0].1, "test_value_42");
         std::env::remove_var("RAIOS_TEST_SECRET");
+    }
+
+    #[test]
+    fn leased_secret_is_scrubbed_and_only_visible_to_its_tool_during_the_call() {
+        let conn = mem_conn();
+        let var = "RAIOS_TEST_SCRUB_SECRET";
+        std::env::set_var(var, "s3cret");
+        grant(&conn, "tool_a", var, 300).unwrap();
+
+        // Another tool's call: the secret must not be ambient.
+        {
+            let _g = inject_active_env(&conn, "tool_b");
+            assert!(
+                std::env::var(var).is_err(),
+                "secret leaked to unleased tool"
+            );
+        }
+        // The leased tool sees it for exactly the guard's lifetime.
+        {
+            let _g = inject_active_env(&conn, "tool_a");
+            assert_eq!(std::env::var(var).as_deref(), Ok("s3cret"));
+        }
+        assert!(
+            std::env::var(var).is_err(),
+            "secret stayed ambient after call"
+        );
+    }
+
+    #[test]
+    fn revoked_lease_does_not_make_secret_ambient_again() {
+        let conn = mem_conn();
+        let var = "RAIOS_TEST_REVOKED_SECRET";
+        std::env::set_var(var, "v");
+        let id = grant(&conn, "tool_a", var, 300).unwrap();
+        revoke(&conn, &id).unwrap();
+
+        let _g = inject_active_env(&conn, "tool_a");
+        assert!(std::env::var(var).is_err());
     }
 }

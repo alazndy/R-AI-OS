@@ -108,6 +108,20 @@ pub enum Command {
         /// Unique key to prevent duplicate execution.
         idempotency_key: String,
     },
+    /// Assign an operator-managed task to an agent, or clear its assignee.
+    AssignTask {
+        /// Target task identifier.
+        task_id: String,
+        /// Agent to assign: one of `claude`, `codex`, `opencode`, `agy`. `None` clears the
+        /// assignee.
+        assignee: Option<String>,
+        /// The `updated_at` the caller last saw for the task. When it differs from the stored
+        /// value the command is refused with a conflict instead of overwriting a newer change.
+        #[serde(default)]
+        expected_updated_at: Option<String>,
+        /// Unique key to prevent duplicate execution.
+        idempotency_key: String,
+    },
     /// Immediately trigger execution of a scheduled cron job.
     TriggerCronJob {
         /// Identifier of the target scheduled job.
@@ -211,6 +225,9 @@ impl Command {
                 idempotency_key, ..
             } => idempotency_key,
             Command::CreateHandoff {
+                idempotency_key, ..
+            } => idempotency_key,
+            Command::AssignTask {
                 idempotency_key, ..
             } => idempotency_key,
         }

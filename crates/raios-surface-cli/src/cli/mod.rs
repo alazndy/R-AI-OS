@@ -55,7 +55,7 @@ pub use args::*;
 // var (same class of bug already fixed once in raios-surface-mcp, see its
 // mcp/mod.rs::DB_ENV_LOCK comment and this repo's memory.md PR #26 entry).
 #[cfg(test)]
-pub(crate) static DB_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) use raios_core::test_support::DB_ENV_LOCK;
 
 // ─── Config helper ────────────────────────────────────────────────────────────
 
@@ -386,6 +386,24 @@ pub fn run(cli: Cli) {
         Commands::AgentStats { agent } => agent_stats::cmd_agent_stats(agent, cli.json),
         Commands::MemoryGen { project } => {
             raios_runtime::session_memory::cmd_memory_gen(project.as_deref(), cli.json);
+        }
+        Commands::MemoryArchive {
+            project,
+            dry_run,
+            change_log_kb,
+            instincts_kb,
+        } => {
+            let policy = raios_runtime::memory_archive::ArchivePolicy {
+                change_log_bytes: change_log_kb * 1024,
+                instinct_bytes: instincts_kb * 1024,
+                ..Default::default()
+            };
+            raios_runtime::memory_archive::cmd_memory_archive(
+                project.as_deref(),
+                dry_run,
+                &policy,
+                cli.json,
+            );
         }
         Commands::Mem { action } => cmd_mem(action, cli.json),
         Commands::Trace { action } => cmd_trace(action, cli.json),

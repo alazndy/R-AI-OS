@@ -43,11 +43,109 @@ impl Workbench {
                     this.close_search(window, cx);
                     this.request_open_file_at(path.clone(), Some(*line), window, cx);
                 }
+                SearchEvent::Replace {
+                    find,
+                    with,
+                    ignore_case,
+                    apply,
+                } => this.replace_in_hits(find, with, *ignore_case, *apply, window, cx),
                 SearchEvent::Close => this.close_search(window, cx),
             },
         ));
         self.search = Some(view);
         cx.notify();
+    }
+
+    /// Previews or performs a literal replacement in the files of the hits on screen. Files
+    /// with unsaved edits are left alone and named; open clean tabs are reloaded afterwards.
+    fn replace_in_hits(
+        &mut self,
+        find: &str,
+        with: &str,
+        ignore_case: bool,
+        apply: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(view), Some(project)) = (self.search.clone(), self.project.clone()) else {
+            return;
+        };
+        let replacement = match rwk_core::replace::Replacement::new(find, with, ignore_case) {
+            Ok(replacement) => replacement,
+            Err(error) => {
+                view.update(cx, |view, cx| {
+                    view.set_replace_note(error.message, false, cx)
+                });
+                return;
+            }
+        };
+        let paths: Vec<String> = view
+            .read(cx)
+            .result()
+            .map(|result| result.hits.iter().map(|hit| hit.path.clone()).collect())
+            .unwrap_or_default();
+        let busy: std::collections::HashSet<String> =
+            self.editor.read(cx).dirty_paths().into_iter().collect();
+        self.search_generation += 1;
+        let generation = self.search_generation;
+        let pattern = find.to_owned();
+        cx.spawn_in(window, async move |this, cx| {
+            let report = cx
+                .background_executor()
+                .spawn({
+                    let paths = paths.clone();
+                    async move {
+                        if apply {
+                            rwk_core::replace::replace_all(&project, &paths, &replacement, &busy)
+                        } else {
+                            rwk_core::replace::preview(&project, &paths, &replacement, &busy)
+                        }
+                    }
+                })
+                .await;
+            this.update_in(cx, |workbench, window, cx| {
+                if workbench.search_generation != generation {
+                    return;
+                }
+                let Some(view) = workbench.search.clone() else {
+                    return;
+                };
+                let mut note = format!(
+                    "{} dosyada {} yer",
+                    report.files.len(),
+                    report.replacements()
+                );
+                if !report.skipped.is_empty() {
+                    note.push_str(&format!(
+                        " · kaydedilmemiş, atlanan: {}",
+                        report.skipped.join(", ")
+                    ));
+                }
+                if !report.failed.is_empty() {
+                    note.push_str(&format!(
+                        " · okunamadı/yazılamadı: {}",
+                        report.failed.join(", ")
+                    ));
+                }
+                let nothing = report.files.is_empty();
+                if apply {
+                    note.push_str(" değiştirildi");
+                    let changed: Vec<String> =
+                        report.files.iter().map(|(path, _)| path.clone()).collect();
+                    view.update(cx, |view, cx| view.set_replace_note(note, false, cx));
+                    workbench.reload_clean_tabs(&changed, window, cx);
+                    workbench.run_search(pattern, ignore_case, cx);
+                } else if nothing {
+                    note.push_str(" — değişecek bir şey yok");
+                    view.update(cx, |view, cx| view.set_replace_note(note, false, cx));
+                } else {
+                    note.push_str(" değişecek; onaylamak için düğmeye tekrar basın");
+                    view.update(cx, |view, cx| view.set_replace_note(note, true, cx));
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Closes the search view and returns focus to the workbench.

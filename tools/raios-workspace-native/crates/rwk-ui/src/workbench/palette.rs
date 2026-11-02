@@ -231,6 +231,11 @@ impl Render for PaletteView {
         };
         div()
             .absolute()
+            .occlude()
+            .child(
+                crate::overlay::close_button(self.theme, "palette-close")
+                    .on_click(cx.listener(|_, _, _window, cx| cx.emit(PaletteEvent::Close))),
+            )
             .top_8()
             .left_0()
             .right_0()

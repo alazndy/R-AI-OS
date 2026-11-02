@@ -9,12 +9,26 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-static SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+mod commands;
+mod snapshots;
+pub use snapshots::{
+    load_explore_snapshot, load_govern_snapshot, load_now_snapshot, load_system_snapshot,
+    load_work_snapshot,
+};
 
 const MAX_TASK_TITLE_CHARS: usize = 240;
 const MAX_PROJECT_PATH_CHARS: usize = 4_096;
 const MAX_AGENT_PROMPT_CHARS: usize = 600;
+/// Which tasks a human operator may change from a control surface: personal tasks that are
+/// not part of a plan, not under approval and not (yet) run by an agent.
+const OPERATOR_TASK_CONDITIONS: &str = "plan_id IS NULL
+     AND parent_task_id IS NULL
+     AND EXISTS (SELECT 1 FROM cp_task_list_items li WHERE li.task_id = cp_tasks.id)
+     AND NOT EXISTS (SELECT 1 FROM cp_approvals ap WHERE ap.task_id = cp_tasks.id)
+     AND NOT EXISTS (SELECT 1 FROM cp_agent_runs ar WHERE ar.task_id = cp_tasks.id)";
+
+/// Agents a task can be assigned to: the names `raios run` takes.
+const TASK_ASSIGNEES: &[&str] = &["claude", "codex", "opencode", "agy"];
 const OPERATOR_TASK_STATUSES: &[&str] =
     &["queued", "in_progress", "blocked", "completed", "cancelled"];
 
@@ -87,328 +101,6 @@ pub fn clean_expired_idempotency(conn: &Connection, max_age_hours: u32) -> Resul
     .map_err(|e| e.to_string())
 }
 
-pub fn load_now_snapshot(conn: &Connection) -> Result<NowSnapshot, String> {
-    let raw_approvals = raios_core::db::cp_query_pending_approvals_scored(conn)
-        .map_err(|e| format!("Failed loading pending approvals: {}", e))?;
-    let approvals: Vec<ScoredApprovalDto> = raw_approvals
-        .into_iter()
-        .map(|a| ScoredApprovalDto {
-            id: a.approval.id,
-            task_id: a.approval.task_id.unwrap_or_default(),
-            kind: a.approval.approval_type,
-            title: a.approval.task_title.unwrap_or_default(),
-            origin_agent: a.approval.origin_agent.unwrap_or_else(|| "agent".into()),
-            target_agent: a.approval.target_agent.unwrap_or_else(|| "human".into()),
-            project_path: a.approval.project_path,
-            created_at: a.approval.requested_at,
-            score: a.risk_score as i32,
-            reason: a.approval.reason,
-            revision: a.approval.revision,
-        })
-        .collect();
-
-    let raw_runs = raios_core::db::cp_query_active_runs(conn)
-        .map_err(|e| format!("Failed loading active runs: {}", e))?;
-    let active_runs: Vec<ActiveRunDto> = raw_runs
-        .into_iter()
-        .map(|r| ActiveRunDto {
-            run_id: r.id,
-            task_id: r.task_id,
-            agent_name: r.agent_name,
-            project_name: r.task_title.unwrap_or_else(|| "Global".into()),
-            status: r.status,
-            duration_secs: 0,
-        })
-        .collect();
-
-    let raw_blocked = raios_core::db::cp_query_blocked_tasks(conn)
-        .map_err(|e| format!("Failed loading blocked tasks: {}", e))?;
-    let blocked_tasks: Vec<BlockedTaskDto> = raw_blocked
-        .into_iter()
-        .map(|t| BlockedTaskDto {
-            task_id: t.id,
-            title: t.title,
-            project_name: t.project_name.unwrap_or_else(|| "Global".into()),
-            reason: t.origin,
-            created_at: t.created_at,
-        })
-        .collect();
-
-    let alerts = Vec::new(); // Populated dynamically by health worker/alert monitor
-
-    Ok(NowSnapshot {
-        approvals,
-        active_runs,
-        blocked_tasks,
-        alerts,
-    })
-}
-
-pub fn load_work_snapshot(conn: &Connection) -> Result<WorkSnapshot, String> {
-    let dev_ops = raios_core::config::Config::load()
-        .map(|c| c.dev_ops_path)
-        .unwrap_or_default();
-    let entity_projects = raios_core::entities::load_entities(&dev_ops);
-    let projects: Vec<ProjectDto> = entity_projects
-        .into_iter()
-        .map(|p| {
-            let memory_path = p.local_path.join("memory.md");
-            let memory_preview = std::fs::read_to_string(&memory_path)
-                .ok()
-                .and_then(|contents| compact_memory_preview(&contents));
-
-            ProjectDto {
-                path: p.local_path.to_string_lossy().to_string(),
-                name: p.name,
-                status: p.status,
-                git_branch: None,
-                dirty_files: 0,
-                last_active: p.last_commit,
-                has_memory: memory_path.is_file(),
-                memory_preview,
-            }
-        })
-        .collect();
-
-    let raw_tasks = raios_core::db::cp_query_active_tasks(conn)
-        .map_err(|e| format!("Failed loading tasks: {}", e))?;
-    let tasks: Vec<UnifiedTaskDto> = raw_tasks
-        .into_iter()
-        .map(|t| UnifiedTaskDto {
-            id: t.id,
-            title: t.title,
-            project_path: t.project_path,
-            project_name: t.registered_name.or(t.project_name),
-            assignee: t.assignee_id,
-            status: t.status,
-            priority: t.priority.clamp(0, i64::from(u8::MAX)) as u8,
-            created_at: t.created_at,
-        })
-        .collect();
-
-    let now_snap = load_now_snapshot(conn)?;
-    let active_runs = now_snap.active_runs;
-    let recent_artifacts = Vec::new();
-    let factory_row = raios_core::db::load_factory_overview(conn)
-        .map_err(|e| format!("Failed loading Product Factory overview: {e}"))?;
-    let factory_enabled = raios_core::config::Config::load()
-        .map(|config| config.factory.enabled)
-        .unwrap_or(false);
-    let factory = FactoryOverviewSnapshot {
-        enabled: factory_enabled,
-        product_count: factory_row.product_count,
-        active_cycle_count: factory_row.active_cycle_count,
-        pending_change_request_count: factory_row.pending_change_request_count,
-        open_support_items: factory_row.open_support_item_count,
-        blocking_quality_profiles: factory_row.blocking_quality_profile_count,
-        release_drafts: factory_row.release_draft_count,
-        completed_verify_stages: factory_row.completed_verify_stage_count,
-        approved_closed_testing_releases: factory_row.approved_closed_testing_release_count,
-        latest_product: factory_row
-            .latest_product
-            .map(|product| FactoryProductSummaryDto {
-                id: product.id,
-                title: product.title,
-                status: product.status,
-                mode: product.mode,
-                project_path: product.project_path,
-                source_remote: product.source_remote,
-                source_revision: product.source_revision,
-                stack: product.stack,
-                scaffold_state: product.scaffold_state,
-                quality_blockers: product.quality_blockers,
-                release_blockers: product.release_blockers,
-            }),
-    };
-
-    Ok(WorkSnapshot {
-        projects,
-        tasks,
-        active_runs,
-        recent_artifacts,
-        factory,
-    })
-}
-
-/// Keeps the control-plane snapshot compact while still making project memory
-/// actionable in the TUI. It never writes or logs the memory contents.
-fn compact_memory_preview(contents: &str) -> Option<String> {
-    const MAX_LINES: usize = 8;
-    const MAX_CHARS_PER_LINE: usize = 140;
-
-    let lines: Vec<String> = contents
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .take(MAX_LINES)
-        .map(|line| {
-            let mut preview: String = line.chars().take(MAX_CHARS_PER_LINE).collect();
-            if line.chars().count() > MAX_CHARS_PER_LINE {
-                preview.push_str("...");
-            }
-            preview
-        })
-        .collect();
-
-    (!lines.is_empty()).then(|| lines.join("\n"))
-}
-
-pub fn load_explore_snapshot(
-    conn: &Connection,
-    search_query: Option<&str>,
-) -> Result<ExploreSnapshot, String> {
-    let active_search_query = search_query.map(|s| s.to_string());
-    let search_results = Vec::new();
-
-    let query = raios_core::db::ToolTraceQuery {
-        text: "",
-        project: None,
-        preferred_project: None,
-        success_only: false,
-        tag: None,
-        limit: 50,
-    };
-
-    let raw_traces = raios_core::db::tool_trace_search(conn, query).unwrap_or_default();
-
-    let recent_traces: Vec<ToolTraceDto> = raw_traces
-        .into_iter()
-        .map(|t| ToolTraceDto {
-            id: t.id,
-            tool_name: t.command,
-            project_path: Some(t.project),
-            status: if t.success {
-                "SUCCESS".into()
-            } else {
-                "FAILED".into()
-            },
-            duration_ms: 0,
-            timestamp: t.created_at,
-        })
-        .collect();
-
-    let raw_logs = raios_core::db::cp_logs_replay(conn, 100).unwrap_or_default();
-    let recent_logs: Vec<LogEntryDto> = raw_logs
-        .into_iter()
-        .map(|(ts, sender, content)| LogEntryDto {
-            timestamp: ts,
-            category: sender,
-            message: content,
-        })
-        .collect();
-
-    Ok(ExploreSnapshot {
-        active_search_query,
-        search_results,
-        recent_traces,
-        recent_logs,
-    })
-}
-
-pub fn load_govern_snapshot(conn: &Connection) -> Result<GovernSnapshot, String> {
-    let policy_config =
-        raios_core::security::PolicyConfig::try_load_default().unwrap_or_else(|| {
-            raios_core::security::PolicyConfig {
-                server: None,
-                filesystem: raios_core::security::policy::FilesystemPolicy {
-                    enforce_sandbox: true,
-                    allowed_paths: vec![],
-                    blocked_paths: vec![],
-                },
-                tools: raios_core::security::policy::ToolsPolicy {
-                    default_action: raios_core::security::policy::PolicyAction::Confirm,
-                    rules: vec![],
-                },
-                preflight: None,
-                egress: None,
-                rate_limits: None,
-                quarantine: None,
-                hooks: None,
-            }
-        });
-
-    let policy_summary = PolicySummaryDto {
-        enforce_sandbox: policy_config.filesystem.enforce_sandbox,
-        egress_enabled: policy_config.egress.as_ref().is_some_and(|e| e.enabled),
-        default_action: format!("{:?}", policy_config.tools.default_action),
-        total_rules: policy_config.tools.rules.len(),
-    };
-
-    let total_records: usize = conn
-        .query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0))
-        .unwrap_or(0);
-    let allowed_records: usize = conn
-        .query_row(
-            "SELECT COUNT(*) FROM audit_log WHERE event_type LIKE '%allow%'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    let denied_records: usize = conn
-        .query_row(
-            "SELECT COUNT(*) FROM audit_log WHERE event_type LIKE '%deny%'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    let confirmed_records: usize = conn
-        .query_row(
-            "SELECT COUNT(*) FROM audit_log WHERE event_type LIKE '%confirm%'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-
-    let audit_summary = AuditSummaryDto {
-        total_records,
-        allowed_records,
-        denied_records,
-        confirmed_records,
-    };
-
-    let raw_jobs = raios_core::db::cp_scheduled_jobs_list(conn).unwrap_or_default();
-    let cron_jobs: Vec<ScheduledJobDto> = raw_jobs
-        .into_iter()
-        .map(|j| ScheduledJobDto {
-            id: j.id,
-            name: j.title,
-            schedule: format!("{}s", j.interval_secs),
-            command: j.task_description,
-            status: j.status,
-            last_run: j.last_run_at,
-            next_run: Some(j.next_run_at),
-        })
-        .collect();
-
-    let health_reports = Vec::new();
-
-    Ok(GovernSnapshot {
-        policy_summary,
-        audit_summary,
-        health_reports,
-        cron_jobs,
-    })
-}
-
-pub fn load_system_snapshot(conn: &Connection) -> Result<SnapshotEnvelope, String> {
-    let sequence = SNAPSHOT_SEQUENCE.fetch_add(1, Ordering::SeqCst);
-    let timestamp = Utc::now().to_rfc3339();
-
-    let now = load_now_snapshot(conn)?;
-    let work = load_work_snapshot(conn)?;
-    let explore = load_explore_snapshot(conn, None)?;
-    let govern = load_govern_snapshot(conn)?;
-
-    Ok(SnapshotEnvelope {
-        sequence,
-        timestamp,
-        now,
-        work,
-        explore,
-        govern,
-    })
-}
-
 fn command_name(cmd: &Command) -> &'static str {
     match cmd {
         Command::ApproveHandoff { .. } => "approve_handoff",
@@ -426,6 +118,7 @@ fn command_name(cmd: &Command) -> &'static str {
         Command::UpdatePolicyRule { .. } => "update_policy_rule",
         Command::RegisterProject { .. } => "register_project",
         Command::CreateHandoff { .. } => "create_handoff",
+        Command::AssignTask { .. } => "assign_task",
     }
 }
 
@@ -697,7 +390,47 @@ pub(super) fn dispatch_with_seams(
     init_idempotency_table(conn).map_err(Problem::internal)?;
 
     let command_name = command_name(cmd);
-    let audit_event_type =
+    let audit_event_type = policy_audit_event(conn, actor, cmd, command_name, load_policy)?;
+
+    let key = cmd.idempotency_key();
+    let payload_hash = payload_hash(cmd)?;
+    if let Some(replayed) = replayed_result(conn, key, &payload_hash)? {
+        return Ok(replayed);
+    }
+
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| Problem::internal(format!("Failed starting transaction: {}", e)))?;
+
+    let mut effects = commands::Effects::default();
+    let result_val = run_command(&tx, actor, cmd, &mut effects)?;
+
+    record_outcome(
+        &tx,
+        actor,
+        key,
+        &payload_hash,
+        command_name,
+        audit_event_type,
+        result_val.as_ref(),
+    )?;
+    tx.commit()
+        .map_err(|e| Problem::internal(format!("Commit failed: {}", e)))?;
+
+    finish(conn, key, effects, launcher)?;
+    Ok(result_val)
+}
+
+/// Applies the security policy to this command and returns the audit event type
+/// to record if it goes ahead. A denied command is audited here and refused.
+fn policy_audit_event(
+    conn: &Connection,
+    actor: &ControlActor,
+    cmd: &Command,
+    command_name: &str,
+    load_policy: &dyn Fn() -> Option<raios_core::security::PolicyConfig>,
+) -> Result<&'static str, Problem> {
+    Ok(
         match load_policy().map(|policy| policy.tool_action(policy_name(cmd)).clone()) {
             Some(raios_core::security::policy::PolicyAction::Deny) => {
                 let _ = raios_core::security::record_tool_decision(
@@ -716,14 +449,27 @@ pub(super) fn dispatch_with_seams(
             // The authenticated human gesture that submitted this command is the
             // confirmation required by the policy; it remains distinct in audit.
             Some(raios_core::security::policy::PolicyAction::Confirm) | None => "tool_confirm",
-        };
+        },
+    )
+}
 
-    let key = cmd.idempotency_key();
+/// SHA-256 of the command's serialized payload: detects one idempotency key
+/// being reused for a different command.
+fn payload_hash(cmd: &Command) -> Result<String, Problem> {
     let payload_json = serde_json::to_string(cmd).map_err(|e| {
         Problem::invalid_input(format!("Failed serializing command payload: {}", e))
     })?;
-    let payload_hash = format!("{:x}", Sha256::digest(payload_json.as_bytes()));
+    Ok(format!("{:x}", Sha256::digest(payload_json.as_bytes())))
+}
 
+/// Idempotent replay. `Ok(Some(result))` means this key already ran with the same
+/// payload and `result` is what it returned (possibly nothing); `Ok(None)` means it
+/// has not run. Reusing the key for a different payload is refused.
+fn replayed_result(
+    conn: &Connection,
+    key: &str,
+    payload_hash: &str,
+) -> Result<Option<Option<serde_json::Value>>, Problem> {
     let existing: Result<Option<(String, Option<String>)>, _> = conn
         .query_row(
             "SELECT payload_hash, result_json FROM cp_idempotency WHERE idempotency_key = ?1",
@@ -741,255 +487,97 @@ pub(super) fn dispatch_with_seams(
         }
         let val: Option<serde_json::Value> =
             cached_json_opt.and_then(|j| serde_json::from_str(&j).ok());
-        return Ok(val);
+        return Ok(Some(val));
     }
+    Ok(None)
+}
 
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| Problem::internal(format!("Failed starting transaction: {}", e)))?;
-
-    let mut launch_request: Option<AgentLaunchRequest> = None;
-    let mut pending_events: Vec<Event> = Vec::new();
-    let result_val: Option<serde_json::Value> = match cmd {
+/// Routes a command to its handler in [`commands`]. Runs inside the dispatcher's
+/// transaction, so any `Err` rolls the whole command back.
+fn run_command(
+    tx: &Connection,
+    actor: &ControlActor,
+    cmd: &Command,
+    effects: &mut commands::Effects,
+) -> Result<Option<serde_json::Value>, Problem> {
+    match cmd {
         Command::ApproveHandoff {
             approval_id,
             expected_revision,
             ..
-        } => {
-            require_expected_revision(&tx, approval_id, *expected_revision)?;
-            let run_id = handoff_run_id(&tx, approval_id)?;
-            // The owner's consent: the approval resolves as approved and the run leaves the
-            // queue, but the task stays open. Only the addressed agent's own wrapper marks
-            // delivery (`handover_delivered`).
-            if !raios_core::db::cp_approve_handoff_by_owner(
-                &tx,
-                approval_id,
-                actor.subject(),
-                actor.subject(),
-            )
-            .map_err(|e| Problem::internal(e.to_string()))?
-            {
-                return Err(Problem::not_found("Pending handoff approval not found"));
-            }
-            push_handoff_resolution_events(
-                &tx,
-                approval_id,
-                run_id.as_deref(),
-                "approved",
-                &mut pending_events,
-            )?;
-            Some(serde_json::json!({"approval_id": approval_id, "status": "approved"}))
-        }
+        } => commands::approve_handoff(tx, actor, approval_id, *expected_revision, effects),
         Command::RejectHandoff {
             approval_id,
             reason,
             expected_revision,
             ..
-        } => {
-            require_expected_revision(&tx, approval_id, *expected_revision)?;
-            if reason.trim().is_empty() || reason.len() > 2_000 {
-                return Err(Problem::invalid_input(
-                    "Rejection reason must contain at most 2000 characters",
-                ));
-            }
-            let run_id = handoff_run_id(&tx, approval_id)?;
-            if !raios_core::db::cp_resolve_handoff(
-                &tx,
-                approval_id,
-                actor.subject(),
-                actor.subject(),
-                Some(reason),
-            )
-            .map_err(|e| Problem::internal(e.to_string()))?
-            {
-                return Err(Problem::not_found("Pending handoff approval not found"));
-            }
-            push_handoff_resolution_events(
-                &tx,
-                approval_id,
-                run_id.as_deref(),
-                "rejected",
-                &mut pending_events,
-            )?;
-            Some(serde_json::json!({"approval_id": approval_id, "status": "rejected"}))
-        }
-        Command::TriggerCronJob { job_id, .. } => {
-            let exists: Option<i64> = tx
-                .query_row(
-                    "SELECT 1 FROM cp_scheduled_jobs WHERE id = ?1 AND status != 'deleted'",
-                    params![job_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| Problem::internal(e.to_string()))?;
-            if exists.is_none() {
-                return Err(Problem::not_found("Scheduled job not found"));
-            }
-            raios_core::db::cp_scheduled_job_trigger_now(&tx, job_id)
-                .map_err(|e| Problem::internal(e.to_string()))?;
-            Some(serde_json::json!({"job_id": job_id, "status": "scheduled_now"}))
-        }
+        } => commands::reject_handoff(tx, actor, approval_id, *expected_revision, reason, effects),
+        Command::TriggerCronJob { job_id, .. } => commands::trigger_cron_job(tx, job_id),
         Command::ToggleCronJob { job_id, paused, .. } => {
-            let exists: Option<i64> = tx
-                .query_row(
-                    "SELECT 1 FROM cp_scheduled_jobs WHERE id = ?1 AND status != 'deleted'",
-                    params![job_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| Problem::internal(e.to_string()))?;
-            if exists.is_none() {
-                return Err(Problem::not_found("Scheduled job not found"));
-            }
-            let status_str = if *paused { "paused" } else { "active" };
-            raios_core::db::cp_scheduled_job_set_status(&tx, job_id, status_str)
-                .map_err(|e| Problem::internal(e.to_string()))?;
-            Some(serde_json::json!({"job_id": job_id, "status": status_str}))
+            commands::toggle_cron_job(tx, job_id, *paused)
         }
         Command::LaunchAgent {
             agent_name,
             project_path,
             prompt,
             ..
-        } => {
-            let request = super::agent_launch::validate_launch(
-                &tx,
-                agent_name,
-                project_path,
-                prompt.as_deref(),
-            )?;
-            let result = super::agent_launch::launch_result(&request, "launching");
-            launch_request = Some(request);
-            Some(result)
-        }
+        } => commands::launch_agent(tx, agent_name, project_path, prompt.as_deref(), effects),
         Command::ValidateAgentLaunch {
             agent_name,
             project_path,
             prompt,
             ..
-        } => {
-            let request = super::agent_launch::validate_launch(
-                &tx,
-                agent_name,
-                project_path,
-                prompt.as_deref(),
-            )?;
-            Some(super::agent_launch::launch_result(&request, "validated"))
-        }
+        } => commands::validate_agent_launch(tx, agent_name, project_path, prompt.as_deref()),
         Command::CreateTask {
             title,
             project_path,
             priority,
             ..
-        } => {
-            let title = validate_task_title(title)?;
-            let project_path = validate_project_path(project_path.as_deref())?;
-            let project_id = project_path
-                .as_deref()
-                .map(|path| {
-                    tx.query_row(
-                        "SELECT id FROM projects WHERE path = ?1",
-                        params![path],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .optional()
-                })
-                .transpose()
-                .map_err(|error| Problem::internal(error.to_string()))?
-                .flatten();
-            let task_id = uuid::Uuid::new_v4().to_string();
-            let now = Utc::now().to_rfc3339();
-            let display_order: i64 = tx
-                .query_row(
-                    "SELECT COALESCE(MAX(display_order), -1) + 1 FROM cp_task_list_items",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(|error| Problem::internal(error.to_string()))?;
-
-            tx.execute(
-                "INSERT INTO cp_tasks
-                 (id, project_id, plan_id, parent_task_id, title, description, priority, status,
-                  assignee_kind, assignee_id, acceptance_criteria, created_at, updated_at)
-                 VALUES (?1, ?2, NULL, NULL, ?3, '', ?4, 'queued',
-                         NULL, NULL, '', ?5, ?5)",
-                params![task_id, project_id, title, i64::from(*priority), now],
-            )
-            .map_err(|error| Problem::internal(error.to_string()))?;
-            tx.execute(
-                "INSERT INTO cp_task_list_items
-                 (task_id, source_kind, source_path, display_order, project_name, created_at)
-                 VALUES (?1, 'tui', 'control-plane', ?2, ?3, ?4)",
-                params![task_id, display_order, project_path, now],
-            )
-            .map_err(|error| Problem::internal(error.to_string()))?;
-
-            Some(serde_json::json!({
-                "task_id": task_id,
-                "status": "queued",
-            }))
-        }
+        } => commands::create_task(tx, title, project_path.as_deref(), *priority),
         Command::UpdateTaskStatus {
             task_id, status, ..
-        } => {
-            let status = status.trim();
-            if task_id.trim().is_empty() || !OPERATOR_TASK_STATUSES.contains(&status) {
-                return Err(Problem::invalid_input(
-                    "Task id and an allowed operator task status are required",
-                ));
-            }
-            let now = Utc::now().to_rfc3339();
-            let changed = tx
-                .execute(
-                    "UPDATE cp_tasks
-                     SET status = ?1, updated_at = ?2
-                     WHERE id = ?3
-                       AND plan_id IS NULL
-                       AND parent_task_id IS NULL
-                       AND EXISTS (
-                         SELECT 1 FROM cp_task_list_items li
-                         WHERE li.task_id = cp_tasks.id
-                       )
-                       AND NOT EXISTS (
-                         SELECT 1 FROM cp_approvals ap WHERE ap.task_id = cp_tasks.id
-                       )
-                       AND NOT EXISTS (
-                         SELECT 1 FROM cp_agent_runs ar WHERE ar.task_id = cp_tasks.id
-                       )",
-                    params![status, now, task_id],
-                )
-                .map_err(|error| Problem::internal(error.to_string()))?;
-            if changed != 1 {
-                return Err(Problem::not_found(
-                    "Operator-managed personal task was not found or cannot be updated",
-                ));
-            }
-            Some(serde_json::json!({"task_id": task_id, "status": status}))
-        }
-        Command::RegisterProject { project_path, .. } => Some(
-            super::project_registry::register_project(&tx, project_path)?,
+        } => commands::update_task_status(tx, task_id, status),
+        Command::AssignTask {
+            task_id,
+            assignee,
+            expected_updated_at,
+            ..
+        } => commands::assign_task(
+            tx,
+            task_id,
+            assignee.as_deref(),
+            expected_updated_at.as_deref(),
         ),
+        Command::RegisterProject { project_path, .. } => Ok(Some(
+            super::project_registry::register_project(tx, project_path)?,
+        )),
         Command::CreateHandoff {
             project_path,
             from_agent,
             to_agent,
             summary,
             ..
-        } => {
-            let result =
-                super::handoff::create_handoff(&tx, project_path, from_agent, to_agent, summary)?;
-            push_handoff_created_events(&tx, &result, to_agent, &mut pending_events)?;
-            Some(result)
-        }
-        unhandled => {
-            return Err(Problem::not_implemented(format!(
-                "Command '{:?}' is not implemented",
-                unhandled
-            )));
-        }
-    };
+        } => commands::create_handoff(tx, project_path, from_agent, to_agent, summary, effects),
+        unhandled => Err(Problem::not_implemented(format!(
+            "Command '{:?}' is not implemented",
+            unhandled
+        ))),
+    }
+}
 
-    let cached_str = result_val.as_ref().map(|v| v.to_string());
+/// Writes the idempotency record and the audit entry in the command's own
+/// transaction, so a command is never recorded without its audit trail (or
+/// the reverse).
+fn record_outcome(
+    tx: &Connection,
+    actor: &ControlActor,
+    key: &str,
+    payload_hash: &str,
+    command_name: &str,
+    audit_event_type: &str,
+    result_val: Option<&serde_json::Value>,
+) -> Result<(), Problem> {
+    let cached_str = result_val.map(|v| v.to_string());
     tx.execute(
         "INSERT INTO cp_idempotency (idempotency_key, payload_hash, command_type, result_json, status) VALUES (?1, ?2, ?3, ?4, 'COMPLETED')",
         params![key, payload_hash, command_name, cached_str],
@@ -997,27 +585,34 @@ pub(super) fn dispatch_with_seams(
     .map_err(|e| Problem::internal(format!("Idempotency record failed: {}", e)))?;
 
     raios_core::security::record_tool_decision(
-        &tx,
+        tx,
         command_name,
-        &payload_hash,
+        payload_hash,
         "control_plane",
         audit_event_type,
         actor.subject(),
     )
     .map_err(|e| Problem::internal(format!("Audit write failed: {}", e)))?;
+    Ok(())
+}
 
-    tx.commit()
-        .map_err(|e| Problem::internal(format!("Commit failed: {}", e)))?;
-
+/// What happens after the transaction is durable: typed events, then starting an
+/// agent if the command asked for one.
+fn finish(
+    conn: &Connection,
+    key: &str,
+    effects: commands::Effects,
+    launcher: &dyn Fn(&AgentLaunchRequest) -> Result<(), Problem>,
+) -> Result<(), Problem> {
     // Typed events are published only after the transaction is durable, so a
     // subscriber that reacts by querying a snapshot always observes the
     // committed state. A replayed command (idempotency cache hit) returned
     // earlier and deliberately emits nothing a second time.
-    for event in pending_events {
+    for event in effects.events {
         crate::events::emit(event);
     }
 
-    if let Some(request) = launch_request {
+    if let Some(request) = effects.launch {
         if let Err(problem) = launcher(&request) {
             let failed_result = serde_json::json!({
                 "agent_name": request.agent_name,
@@ -1031,712 +626,8 @@ pub(super) fn dispatch_with_seams(
             return Err(problem);
         }
     }
-
-    Ok(result_val)
+    Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Points `dirs::config_dir()` at an empty tempdir for the duration of a
-    /// test, so `Config::load()` inside `load_work_snapshot` never reads the
-    /// live `~/.config/raios/config.toml`. Without this, the
-    /// `factory.enabled` assertion in `snapshot_generation_on_in_memory_db`
-    /// depends on the machine running the tests. Serialized on the crate-wide
-    /// `TEST_ENV_LOCK` (see lib.rs) with the other env-redirecting tests.
-    struct IsolatedConfigDir {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        original_xdg_config_home: Option<String>,
-        _tmp: tempfile::TempDir,
-    }
-
-    impl IsolatedConfigDir {
-        fn new() -> Self {
-            let lock = crate::TEST_ENV_LOCK
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let tmp = tempfile::TempDir::new().unwrap();
-            let original_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();
-            // dirs::config_dir() prefers XDG_CONFIG_HOME over HOME and only
-            // accepts absolute paths; TempDir paths are absolute.
-            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-            Self {
-                _lock: lock,
-                original_xdg_config_home,
-                _tmp: tmp,
-            }
-        }
-    }
-
-    impl Drop for IsolatedConfigDir {
-        fn drop(&mut self) {
-            match &self.original_xdg_config_home {
-                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-        }
-    }
-
-    #[test]
-    fn snapshot_generation_on_in_memory_db() {
-        let _isolated_config = IsolatedConfigDir::new();
-        let conn = Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-
-        let snap = load_system_snapshot(&conn).unwrap();
-        assert!(snap.sequence >= 1);
-        assert!(!snap.timestamp.is_empty());
-        assert_eq!(snap.now.active_runs.len(), 0);
-        assert_eq!(snap.work.factory.product_count, 0);
-        // An empty database does not imply the user's Factory feature is off.
-        // Default-off policy is tested using Config::default in raios-core.
-    }
-
-    #[test]
-    fn work_snapshot_projects_read_only_factory_overview() {
-        let conn = Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO cp_workspaces (id, name, owner_subject) VALUES ('workspace-1', 'Workspace', 'local_control_owner')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO cp_factory_products (id, workspace_id, owner_subject, title, status) VALUES ('product-1', 'workspace-1', 'local_control_owner', 'Pilot', 'active')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO cp_plans (id, workspace_id, product_id, title, status) VALUES ('plan-1', 'workspace-1', 'product-1', 'Pilot plan', 'planned')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO cp_factory_cycles (id, product_id, plan_id, status, current_stage) VALUES ('cycle-1', 'product-1', 'plan-1', 'active', 'discover')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO cp_factory_change_requests (id, product_id, requested_by, status, summary) VALUES ('change-1', 'product-1', 'local_control_owner', 'awaiting_approval', 'Change')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO cp_factory_support_items (id, product_id, source_kind, status) VALUES ('support-1', 'product-1', 'manual', 'triaged')",
-            [],
-        )
-        .unwrap();
-
-        let snapshot = load_work_snapshot(&conn).unwrap();
-        assert_eq!(snapshot.factory.product_count, 1);
-        assert_eq!(snapshot.factory.active_cycle_count, 1);
-        assert_eq!(snapshot.factory.pending_change_request_count, 1);
-        assert_eq!(snapshot.factory.open_support_items, 1);
-        assert_eq!(
-            snapshot
-                .factory
-                .latest_product
-                .as_ref()
-                .map(|product| product.title.as_str()),
-            Some("Pilot")
-        );
-    }
-
-    #[test]
-    fn memory_preview_is_bounded_and_skips_blank_lines() {
-        let contents = "\n# Project Memory\n\nStatus: Active\n\nObjective: Improve the TUI\n";
-
-        assert_eq!(
-            compact_memory_preview(contents).as_deref(),
-            Some("# Project Memory\nStatus: Active\nObjective: Improve the TUI")
-        );
-        assert_eq!(compact_memory_preview("\n \n"), None);
-    }
-
-    #[test]
-    fn command_dispatch_idempotency_and_payload_check() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-
-        let workflow = raios_core::db::create_handoff_workflow(
-            &conn,
-            raios_core::db::HandoffWorkflowInput {
-                project_path: "/tmp/control-plane-test",
-                from_agent: "codex_kaira",
-                to_agent: "antigravity_kaira",
-                status: "blocker",
-                msg: "Needs explicit rejection",
-                diff_stat: None,
-                report: None,
-            },
-        )
-        .unwrap();
-
-        let cmd1 = Command::RejectHandoff {
-            approval_id: workflow.approval_id.clone(),
-            expected_revision: None,
-            reason: "Not needed".into(),
-            idempotency_key: "idem-key-1".into(),
-        };
-
-        let actor = ControlActor::test_local();
-        let res1 = dispatch_control_command(&mut conn, &actor, &cmd1);
-        assert!(res1.is_ok());
-        // Rejection must close the entire delivery workflow, not just hide the
-        // approval while its task/run remain active forever.
-        let snapshot = load_system_snapshot(&conn).unwrap();
-        assert!(!snapshot
-            .work
-            .tasks
-            .iter()
-            .any(|task| task.id == workflow.task_id));
-        assert!(!snapshot
-            .now
-            .active_runs
-            .iter()
-            .any(|run| run.run_id == workflow.agent_run_id));
-        let states: (String, String, String, String) = conn
-            .query_row(
-                "SELECT ap.status, a.status, r.status, t.status
-             FROM cp_approvals ap JOIN cp_artifacts a ON a.id = ap.artifact_id
-             JOIN cp_agent_runs r ON r.id = ap.agent_run_id JOIN cp_tasks t ON t.id = ap.task_id
-             WHERE ap.id = ?1",
-                params![workflow.approval_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            states,
-            (
-                "rejected".into(),
-                "rejected".into(),
-                "cancelled".into(),
-                "cancelled".into()
-            )
-        );
-
-        // Same key + same payload -> OK cached
-        let res2 = dispatch_control_command(&mut conn, &actor, &cmd1);
-        assert!(res2.is_ok());
-
-        // Same key + different payload -> Error (invalid input / collision)
-        let cmd2 = Command::RejectHandoff {
-            approval_id: "app-different".into(),
-            expected_revision: None,
-            reason: "Different reason".into(),
-            idempotency_key: "idem-key-1".into(),
-        };
-        let res3 = dispatch_control_command(&mut conn, &actor, &cmd2);
-        assert!(res3.is_err());
-        assert_eq!(res3.unwrap_err().code, "INVALID_INPUT");
-    }
-
-    #[test]
-    fn handoff_command_updates_snapshot_and_audit_atomically() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-        let workflow = raios_core::db::create_handoff_workflow(
-            &conn,
-            raios_core::db::HandoffWorkflowInput {
-                project_path: "/tmp/control-plane-flow",
-                from_agent: "codex_kaira",
-                to_agent: "antigravity_kaira",
-                status: "blocker",
-                msg: "Ready for human approval",
-                diff_stat: None,
-                report: None,
-            },
-        )
-        .unwrap();
-
-        let before = load_system_snapshot(&conn).unwrap();
-        let listed = before
-            .now
-            .approvals
-            .iter()
-            .find(|approval| approval.id == workflow.approval_id)
-            .expect("pending approval must be listed");
-        // The surface can only present (and decide) what carries its project root, both
-        // agents and the revision the decision must echo back.
-        assert_eq!(
-            listed.project_path.as_deref(),
-            Some("/tmp/control-plane-flow")
-        );
-        assert_eq!(listed.origin_agent, "codex_kaira");
-        assert_eq!(listed.target_agent, "antigravity_kaira");
-        assert_eq!(listed.revision, 1);
-
-        let command = Command::ApproveHandoff {
-            approval_id: workflow.approval_id.clone(),
-            expected_revision: None,
-            idempotency_key: "approve-control-plane-flow".into(),
-        };
-        let result = dispatch_control_command(&mut conn, &ControlActor::test_local(), &command)
-            .unwrap()
-            .unwrap();
-        assert_eq!(result["status"], "approved");
-
-        let after = load_system_snapshot(&conn).unwrap();
-        assert!(!after
-            .now
-            .approvals
-            .iter()
-            .any(|approval| approval.id == workflow.approval_id));
-
-        // The owner's approval is consent, not delivery: the run leaves the queue, but the
-        // task stays open and the receipt must not read "delivered by the target".
-        assert_eq!(
-            conn.query_row(
-                "SELECT status FROM cp_tasks WHERE id = ?1",
-                params![workflow.task_id],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap(),
-            "awaiting_approval"
-        );
-        assert_eq!(
-            conn.query_row(
-                "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
-                params![workflow.agent_run_id],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap(),
-            "handover_approved_by_owner"
-        );
-        let receipt = raios_core::db::cp_handoff_receipt(
-            &conn,
-            &workflow.approval_id,
-            "/tmp/control-plane-flow",
-        )
-        .unwrap()
-        .expect("receipt");
-        assert_eq!(receipt.status, "approved");
-        assert!(!receipt.delivered_by_target());
-        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 2);
-
-        // Only the addressed agent's own delivery closes the task and flips the receipt.
-        assert!(raios_core::db::cp_mark_handoff_delivered(
-            &conn,
-            &workflow.approval_id,
-            "antigravity_kaira"
-        )
-        .unwrap());
-        let delivered = raios_core::db::cp_handoff_receipt(
-            &conn,
-            &workflow.approval_id,
-            "/tmp/control-plane-flow",
-        )
-        .unwrap()
-        .expect("receipt");
-        assert_eq!(delivered.status, "approved");
-        assert!(delivered.delivered_by_target());
-        assert_eq!(
-            conn.query_row(
-                "SELECT status FROM cp_tasks WHERE id = ?1",
-                params![workflow.task_id],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap(),
-            "completed"
-        );
-        // A run that already ended by owner approval keeps that reason: delivery is recorded
-        // on the approval, artifact and task, never by re-labelling the run.
-        assert_eq!(
-            conn.query_row(
-                "SELECT exit_reason FROM cp_agent_runs WHERE id = ?1",
-                params![workflow.agent_run_id],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap(),
-            "handover_approved_by_owner"
-        );
-        assert_eq!(raios_core::security::verify_chain(&conn).unwrap(), 3);
-    }
-
-    #[test]
-    fn stale_expected_revision_is_refused_with_conflict() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-        let workflow = raios_core::db::create_handoff_workflow(
-            &conn,
-            raios_core::db::HandoffWorkflowInput {
-                project_path: "/tmp/control-plane-conflict",
-                from_agent: "codex_kaira",
-                to_agent: "antigravity_kaira",
-                status: "blocker",
-                msg: "Conflict coverage",
-                diff_stat: None,
-                report: None,
-            },
-        )
-        .unwrap();
-        let actor = ControlActor::test_local();
-
-        // A decision on a revision the row never had is refused without touching the row.
-        let stale = Command::RejectHandoff {
-            approval_id: workflow.approval_id.clone(),
-            expected_revision: Some(99),
-            reason: "stale decision".into(),
-            idempotency_key: "conflict-stale".into(),
-        };
-        let error = dispatch_control_command(&mut conn, &actor, &stale).unwrap_err();
-        assert_eq!(error.code, "CONFLICT");
-        let status: String = conn
-            .query_row(
-                "SELECT status FROM cp_approvals WHERE id = ?1",
-                params![workflow.approval_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(status, "pending");
-
-        // The revision read before the decision is accepted once.
-        let fresh = Command::ApproveHandoff {
-            approval_id: workflow.approval_id.clone(),
-            expected_revision: Some(1),
-            idempotency_key: "conflict-fresh".into(),
-        };
-        let result = dispatch_control_command(&mut conn, &actor, &fresh)
-            .unwrap()
-            .unwrap();
-        assert_eq!(result["status"], "approved");
-
-        // Re-deciding on the same, now stale revision is a conflict, not a silent success.
-        let again = Command::ApproveHandoff {
-            approval_id: workflow.approval_id.clone(),
-            expected_revision: Some(1),
-            idempotency_key: "conflict-again".into(),
-        };
-        let error = dispatch_control_command(&mut conn, &actor, &again).unwrap_err();
-        assert_eq!(error.code, "CONFLICT");
-
-        // A named revision that matches no approval at all stays `NOT_FOUND`.
-        let missing = Command::RejectHandoff {
-            approval_id: "no-such-approval".into(),
-            expected_revision: Some(1),
-            reason: "nowhere".into(),
-            idempotency_key: "conflict-missing".into(),
-        };
-        let error = dispatch_control_command(&mut conn, &actor, &missing).unwrap_err();
-        assert_eq!(error.code, "NOT_FOUND");
-    }
-
-    /// Drains the typed-event bus for `expected` messages matching `matching`.
-    ///
-    /// `emit` sends synchronously inside dispatch, so by the time a dispatch
-    /// call returns its events are already queued. Other tests may dispatch
-    /// control-plane commands concurrently on the same process-wide bus, hence
-    /// the filter.
-    fn collect_typed_events(
-        rx: &mut tokio::sync::broadcast::Receiver<String>,
-        expected: usize,
-        matching: impl Fn(&serde_json::Value) -> bool,
-    ) -> Vec<serde_json::Value> {
-        let mut found = Vec::new();
-        while found.len() < expected {
-            match rx.try_recv() {
-                Ok(msg) => {
-                    let value: serde_json::Value = serde_json::from_str(&msg).unwrap();
-                    if matching(&value) {
-                        found.push(value);
-                    }
-                }
-                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
-                    panic!(
-                        "expected {expected} matching typed events, got {}: {found:?}",
-                        found.len()
-                    );
-                }
-                Err(error) => panic!("typed event bus receive failed: {error}"),
-            }
-        }
-        found
-    }
-
-    #[test]
-    fn handoff_lifecycle_emits_typed_events_only_after_commit() {
-        // The typed bus is process-wide; tests that install it serialize on
-        // the crate's shared global-state lock.
-        let _lock = crate::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(64);
-        crate::events::install(&tx);
-
-        let mut conn = Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-
-        // 1. A queued handoff publishes the approval request plus the run's
-        // observed creation state. The dispatcher requires an absolute path;
-        // a POSIX literal like `/workspace/...` is not `Path::is_absolute` on
-        // Windows, so the fixture comes from the platform temp root.
-        let fixture_path = std::env::temp_dir()
-            .join("raios-typed-events-fixture")
-            .to_string_lossy()
-            .into_owned();
-        let create = Command::CreateHandoff {
-            project_path: fixture_path,
-            from_agent: "claude_kaira".into(),
-            to_agent: "codex_kaira".into(),
-            summary: "Typed event coverage".into(),
-            idempotency_key: "typed-events-create".into(),
-        };
-        let created = dispatch_control_command(&mut conn, &ControlActor::test_local(), &create)
-            .unwrap()
-            .unwrap();
-        let approval_id = created["approval_id"].as_str().unwrap().to_owned();
-        let run_id = created["agent_run_id"].as_str().unwrap().to_owned();
-
-        let own_ids = |value: &serde_json::Value| {
-            value["payload"]["approval_id"].as_str() == Some(approval_id.as_str())
-                || value["payload"]["run_id"].as_str() == Some(run_id.as_str())
-        };
-        let created_events = collect_typed_events(&mut rx, 2, own_ids);
-        let requested = created_events
-            .iter()
-            .find(|v| v["event_type"] == "ApprovalRequested")
-            .expect("ApprovalRequested must be emitted");
-        assert_eq!(requested["payload"]["kind"], "handover");
-        assert_eq!(requested["payload"]["target"], "codex_kaira");
-        assert!(requested["payload"]["title"]
-            .as_str()
-            .unwrap()
-            .contains("Handoff"));
-        let run_created = created_events
-            .iter()
-            .find(|v| v["event_type"] == "AgentRunStateChanged")
-            .expect("run creation must be emitted");
-        assert_eq!(run_created["payload"]["agent_name"], "claude_kaira");
-        let db_status: String = conn
-            .query_row(
-                "SELECT status FROM cp_agent_runs WHERE id = ?1",
-                params![run_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            run_created["payload"]["status"].as_str(),
-            Some(db_status.as_str()),
-            "the emitted run status must mirror the committed row"
-        );
-
-        // 2. Approving publishes the resolution plus the run's observed end
-        // state (never an assumed constant).
-        let approve = Command::ApproveHandoff {
-            approval_id: approval_id.clone(),
-            expected_revision: None,
-            idempotency_key: "typed-events-approve".into(),
-        };
-        dispatch_control_command(&mut conn, &ControlActor::test_local(), &approve)
-            .unwrap()
-            .unwrap();
-        let resolved_events = collect_typed_events(&mut rx, 2, own_ids);
-        let resolved = resolved_events
-            .iter()
-            .find(|v| v["event_type"] == "ApprovalResolved")
-            .expect("ApprovalResolved must be emitted");
-        assert_eq!(resolved["payload"]["approval_id"], approval_id);
-        assert_eq!(resolved["payload"]["status"], "approved");
-        let run_ended = resolved_events
-            .iter()
-            .find(|v| v["event_type"] == "AgentRunStateChanged")
-            .expect("run end must be emitted");
-        let db_status: String = conn
-            .query_row(
-                "SELECT status FROM cp_agent_runs WHERE id = ?1",
-                params![run_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            run_ended["payload"]["status"].as_str(),
-            Some(db_status.as_str())
-        );
-
-        // 3. An idempotent replay returns the cached result and must not emit
-        // the same transition a second time.
-        dispatch_control_command(&mut conn, &ControlActor::test_local(), &approve)
-            .unwrap()
-            .unwrap();
-        while let Ok(msg) = rx.try_recv() {
-            let value: serde_json::Value = serde_json::from_str(&msg).unwrap();
-            assert!(
-                !own_ids(&value),
-                "a replayed command must not re-emit its events: {value:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn remote_principal_cannot_resolve_local_owned_approval() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-        let workflow = raios_core::db::create_handoff_workflow(
-            &conn,
-            raios_core::db::HandoffWorkflowInput {
-                project_path: "/tmp/control-plane-owner",
-                from_agent: "codex_kaira",
-                to_agent: "antigravity_kaira",
-                status: "blocker",
-                msg: "Owner-bound approval",
-                diff_stat: None,
-                report: None,
-            },
-        )
-        .unwrap();
-
-        let command = Command::ApproveHandoff {
-            approval_id: workflow.approval_id.clone(),
-            expected_revision: None,
-            idempotency_key: "remote-owner-check".into(),
-        };
-        let error = dispatch_control_command(
-            &mut conn,
-            &ControlActor::remote_session("remote_api_key"),
-            &command,
-        )
-        .unwrap_err();
-        assert_eq!(error.code, "UNAUTHORIZED");
-        assert_eq!(
-            conn.query_row(
-                "SELECT status FROM cp_approvals WHERE id = ?1",
-                params![workflow.approval_id],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap(),
-            "pending"
-        );
-    }
-
-    #[test]
-    fn launch_agent_rejects_unknown_identity_before_terminal_spawn() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-
-        let unsupported = Command::LaunchAgent {
-            agent_name: "codex; touch /tmp/pwned".into(),
-            prompt: Some("Do something".into()),
-            project_path: "/tmp".into(),
-            idempotency_key: "idem-invalid-agent".into(),
-        };
-
-        let res = dispatch_control_command(&mut conn, &ControlActor::test_local(), &unsupported);
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err().code, "INVALID_INPUT");
-    }
-
-    #[test]
-    fn launch_validation_bounds_identity_and_prompt_without_spawning() {
-        assert_eq!(validate_agent_name(" AGY ").unwrap(), "antigravity");
-        assert!(validate_agent_name("codex; touch /tmp/pwned").is_err());
-        assert_eq!(
-            validate_agent_prompt(Some("  inspect the project ")).unwrap(),
-            Some("inspect the project".into())
-        );
-        assert!(validate_agent_prompt(Some("--dangerous-extra-flag")).is_err());
-        assert!(validate_agent_prompt(Some(&"x".repeat(MAX_AGENT_PROMPT_CHARS + 1))).is_err());
-    }
-
-    #[test]
-    fn tui_personal_task_create_and_status_update_are_transactional() {
-        let project_path = if cfg!(windows) {
-            r"C:\workspace\raios"
-        } else {
-            "/workspace/raios"
-        };
-        let mut conn = Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO projects (name, path) VALUES ('R-AI-OS', ?1)",
-            params![project_path],
-        )
-        .unwrap();
-
-        let create = Command::CreateTask {
-            title: "Build WORK task composer".into(),
-            project_path: Some(project_path.into()),
-            priority: 180,
-            idempotency_key: "create-tui-task".into(),
-        };
-        let result = dispatch_control_command(&mut conn, &ControlActor::test_local(), &create)
-            .unwrap()
-            .unwrap();
-        let task_id = result["task_id"].as_str().unwrap().to_owned();
-        assert_eq!(result["status"], "queued");
-
-        let snapshot = load_work_snapshot(&conn).unwrap();
-        let task = snapshot
-            .tasks
-            .iter()
-            .find(|task| task.id == task_id)
-            .unwrap();
-        assert_eq!(task.project_path.as_deref(), Some(project_path));
-        assert_eq!(task.priority, 180);
-
-        let update = Command::UpdateTaskStatus {
-            task_id: task_id.clone(),
-            status: "in_progress".into(),
-            idempotency_key: "update-tui-task".into(),
-        };
-        let result = dispatch_control_command(&mut conn, &ControlActor::test_local(), &update)
-            .unwrap()
-            .unwrap();
-        assert_eq!(result["status"], "in_progress");
-        assert_eq!(
-            conn.query_row(
-                "SELECT status FROM cp_tasks WHERE id = ?1",
-                params![task_id],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap(),
-            "in_progress"
-        );
-    }
-
-    #[test]
-    fn task_commands_reject_invalid_but_allow_canonical_personal_task_mutations() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-        let invalid_create = Command::CreateTask {
-            title: " ".into(),
-            project_path: None,
-            priority: 50,
-            idempotency_key: "empty-tui-task".into(),
-        };
-        assert_eq!(
-            dispatch_control_command(&mut conn, &ControlActor::test_local(), &invalid_create)
-                .unwrap_err()
-                .code,
-            "INVALID_INPUT"
-        );
-
-        let now = Utc::now().to_rfc3339();
-        conn.execute(
-            "INSERT INTO cp_tasks
-             (id, plan_id, parent_task_id, title, description, priority, status,
-              acceptance_criteria, created_at, updated_at)
-             VALUES ('markdown-task', NULL, NULL, 'Legacy task', '', 50, 'queued', '', ?1, ?1)",
-            params![now],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO cp_task_list_items
-             (task_id, source_kind, source_path, display_order, created_at)
-             VALUES ('markdown-task', 'markdown', 'tasks.md', 0, ?1)",
-            params![now],
-        )
-        .unwrap();
-        let markdown_update = Command::UpdateTaskStatus {
-            task_id: "markdown-task".into(),
-            status: "completed".into(),
-            idempotency_key: "complete-markdown-task".into(),
-        };
-        assert_eq!(
-            dispatch_control_command(&mut conn, &ControlActor::test_local(), &markdown_update)
-                .unwrap()
-                .unwrap()["status"],
-            "completed"
-        );
-    }
-}
+mod tests;
