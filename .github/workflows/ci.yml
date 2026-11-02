@@ -189,6 +189,41 @@ jobs:
           ./install-system.ps1 -InstallRoot "$env:RUNNER_TEMP\raios-install" -WorkspaceRoot "$env:RUNNER_TEMP\raios-workspace" -NoPath -NoScheduledTask
           & "$env:RUNNER_TEMP\raios-install\bin\raios.exe" --version
 
+  installer-service-handling:
+    name: install.sh service handling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Uses stub systemctl/pgrep: no real service, daemon or install is touched.
+      - name: Test unit selection, ExecStart drift repair and stale-daemon detection
+        run: scripts/test-install.sh
+
+  test-isolation:
+    name: Tests leave the user config untouched
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Start a persistent tmux keepalive session (steer feature tests spawn real tmux sessions)
+        # Same reasoning as the `test` job: a long-lived session keeps the tmux
+        # server from exiting while tests create and kill their own sessions.
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y tmux
+          fi
+          tmux new-session -d -s __ci_keepalive__ 'sleep 999999'
+          tmux set-option -g exit-empty off
+      # Runs the whole workspace suite single-threaded under a sandboxed
+      # HOME/XDG_* and fails if any test wrote raios state (workspace.db, the
+      # session token, ...) there instead of into its own temp dir. A test that
+      # does would otherwise write into a developer's real database and audit
+      # ledger. See scripts/check-test-isolation.sh.
+      - name: Run the suite against a sandboxed HOME
+        run: scripts/check-test-isolation.sh --locked
+
   native-workspace:
     name: Native workspace (Ubuntu, headless)
     runs-on: ubuntu-latest

@@ -290,7 +290,6 @@ pub fn find_graphify_script(dev_ops: &Path) -> Option<PathBuf> {
 }
 
 use crate::daemon::state::ValidationError;
-use std::process::Command;
 
 pub fn validate_file(path: &Path, proj: &EntityProject) -> Vec<ValidationError> {
     let mut errors = Vec::new();
@@ -321,13 +320,18 @@ pub fn validate_file(path: &Path, proj: &EntityProject) -> Vec<ValidationError> 
 }
 
 fn run_cargo_check(project_path: &Path) -> Result<Vec<ValidationError>, String> {
-    let output = Command::new("cargo")
-        .args(["check", "--message-format=json"])
-        .current_dir(project_path)
-        .output()
-        .map_err(|e| e.to_string())?;
+    // Shared runner: frozen, own target dir, serialized, timed out and
+    // memoized by source fingerprint (see `sentinel::compiler`).
+    let output =
+        crate::sentinel::compiler::cargo_check_output(project_path).map_err(|e| e.to_string())?;
+    let errors = parse_primary_errors(&output.stdout);
+    if errors.is_empty() && !output.success {
+        return Err(crate::sentinel::compiler::failure_summary(&output));
+    }
+    Ok(errors)
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+fn parse_primary_errors(stdout: &str) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     for line in stdout.lines() {
@@ -368,7 +372,7 @@ fn run_cargo_check(project_path: &Path) -> Result<Vec<ValidationError>, String> 
         }
     }
 
-    Ok(errors)
+    errors
 }
 
 fn compute_compliance(path: &Path) -> (Option<u8>, &'static str) {

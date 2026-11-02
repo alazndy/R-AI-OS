@@ -28,6 +28,23 @@ mod real {
 
     impl Embedder {
         pub fn init() -> Result<Self> {
+            // fastembed 3.x otherwise creates an all-core, spinning session pool.
+            // A shared ORT pool overrides its per-session thread configuration.
+            static RUNTIME: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+            RUNTIME
+                .get_or_init(|| {
+                    ort::init()
+                        .with_global_thread_pool(ort::EnvironmentGlobalThreadPoolOptions {
+                            intra_op_parallelism: Some(2),
+                            inter_op_parallelism: Some(1),
+                            spin_control: Some(false),
+                            ..Default::default()
+                        })
+                        .commit()
+                        .map_err(|e| e.to_string())
+                })
+                .as_ref()
+                .map_err(|e| anyhow::anyhow!("ONNX thread pool init failed: {e}"))?;
             let opts = InitOptions {
                 model_name: EmbeddingModel::AllMiniLML6V2,
                 show_download_progress: true,

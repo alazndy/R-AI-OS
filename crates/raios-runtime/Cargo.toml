@@ -25,6 +25,8 @@ uuid = { version = "1.23.1", features = ["v4", "serde"] }
 fastembed = { version = "3", features = ["online"], optional = true }
 ort-sys = { version = "=2.0.0-rc.4", optional = true }
 hf-hub = { version = "0.4.0", optional = true }
+ort = { version = "=2.0.0-rc.4", default-features = false, optional = true }
+rayon = "1"
 instant-distance = "0.6"
 axum = { version = "0.7", features = ["ws"] }
 walkdir = "2"
@@ -38,11 +40,8 @@ libc = "0.2"
 
 [features]
 default = ["cortex"]
-# Forwards to raios-core/cortex so DaemonConfig::startup_cortex_indexing
-# (computed in raios-core via cfg!(feature = "cortex")) actually reflects
-# whether real embeddings are compiled in here — cfg checks don't cross
-# crate boundaries on their own, so this has to be explicit.
-cortex = ["fastembed", "ort-sys", "hf-hub", "raios-core/cortex"]
+# Keep the embedding feature visible to callers in raios-core.
+cortex = ["fastembed", "ort", "ort-sys", "hf-hub", "raios-core/cortex"]
 
 [dev-dependencies]
 tempfile = "3"

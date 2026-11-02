@@ -9,20 +9,24 @@
 //! only (surfaced via `raios policy caps`) because there is no chokepoint
 //! that intercepts arbitrary `std::process::Command` spawns without a much
 //! larger refactor of every build/deps/git module. Filesystem enforcement
-//! only fires for the 12 tools that resolve a real path via
-//! `McpServer::resolve_git_path` (see `PATH_RESOLVING_TOOLS`) — tools that
-//! take a `project` string purely as a name *filter* (`get_health`,
-//! `list_projects`, `portfolio_status`) never touch that path directly and
-//! are intentionally left alone.
+//! happens at one gate, `McpServer::authorize_path`, which every path
+//! resolver (`resolve_git_path`, `resolve_search_scope`, swarm project
+//! path) calls — so any tool that resolves a caller-supplied path is
+//! covered without being listed anywhere. Tools that take a `project`
+//! string purely as a name *filter* (`get_health`, `list_projects`,
+//! `portfolio_status`) never resolve it to a path and are left alone. The
+//! one path not re-checked is the default search scope (the server's own
+//! working directory), which the launcher — not the model — chooses.
 
 use super::egress::EgressFilter;
 use super::policy::ToolCapabilities;
 use super::sandbox::SandboxGuard;
 
-/// Tool names whose implementation resolves `args["project"]` to a real
-/// filesystem path via `McpServer::resolve_git_path` before touching disk.
-/// Kept in sync with the `resolve_git_path(args)` call sites in
-/// `src/mcp/tools_dev.rs`, `tools_git.rs`, and `tools_workspace.rs`.
+/// Tool names that take a caller-supplied filesystem path (`project`, `path`
+/// or `project_path`). Informational — used by `raios policy` to explain what
+/// a simulated call would touch. It is **not** the enforcement list: the MCP
+/// server authorizes every path through `McpServer::authorize_path`, which
+/// each path resolver calls, so a tool missing here is still gated.
 pub const PATH_RESOLVING_TOOLS: &[&str] = &[
     "git_status",
     "git_log",
@@ -36,6 +40,9 @@ pub const PATH_RESOLVING_TOOLS: &[&str] = &[
     "run_build",
     "run_tests",
     "project_info",
+    "semantic_search",
+    "locate_search",
+    "create_swarm_task",
 ];
 
 /// Every built-in MCP tool name, for `raios policy caps` to enumerate.
@@ -107,9 +114,27 @@ pub fn default_for(tool: &str) -> ToolCapabilities {
             exec: true,
             ..Default::default()
         },
+        // Searches a caller-supplied scope (path arg) and talks to the local
+        // aiosd daemon over TCP.
+        "semantic_search" => ToolCapabilities {
+            fs_read: vec!["*".into()],
+            network: vec!["127.0.0.1".into(), "localhost".into()],
+            ..Default::default()
+        },
+        // Exact/regex search over a caller-supplied scope (path arg).
+        "locate_search" => ToolCapabilities {
+            fs_read: vec!["*".into()],
+            ..Default::default()
+        },
+        // Creates a git worktree under a caller-supplied project path.
+        "create_swarm_task" => ToolCapabilities {
+            fs_read: vec!["*".into()],
+            fs_write: vec!["*".into()],
+            exec: true,
+            ..Default::default()
+        },
         // Talk to the local aiosd daemon over TCP (127.0.0.1:42069).
-        "semantic_search"
-        | "get_inbox"
+        "get_inbox"
         | "route_capability"
         | "list_evolution_candidates"
         | "promote_evolution_candidate" => ToolCapabilities {
@@ -213,9 +238,23 @@ mod tests {
 
     #[test]
     fn default_for_daemon_tool_declares_localhost_network() {
-        let caps = default_for("semantic_search");
+        let caps = default_for("get_inbox");
         assert!(caps.network.contains(&"127.0.0.1".to_string()));
         assert!(caps.fs_read.is_empty());
+    }
+
+    #[test]
+    fn path_taking_search_and_swarm_tools_declare_filesystem_access() {
+        // Without a declared fs capability the single gate denies the tool
+        // outright, which is how these used to slip past unchecked.
+        for tool in ["semantic_search", "locate_search", "create_swarm_task"] {
+            assert!(
+                !default_for(tool).fs_read.is_empty(),
+                "{tool} must declare fs_read"
+            );
+            assert!(PATH_RESOLVING_TOOLS.contains(&tool), "{tool} not listed");
+        }
+        assert!(!default_for("create_swarm_task").fs_write.is_empty());
     }
 
     #[test]
