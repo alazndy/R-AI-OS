@@ -303,7 +303,7 @@ http_port = 42071
 [filesystem]
 enforce_sandbox = true
 allowed_paths = []
-blocked_paths = ["C:/Users/turha/.ssh"]
+blocked_paths = ["C:/Users/example/.ssh"]
 
 [tools]
 default_action = "confirm"
@@ -356,7 +356,7 @@ action = "deny"
         assert!(config
             .filesystem
             .blocked_paths
-            .contains(&"C:/Users/turha/.ssh".to_string()));
+            .contains(&"C:/Users/example/.ssh".to_string()));
     }
 
     #[test]

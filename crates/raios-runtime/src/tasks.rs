@@ -63,21 +63,14 @@ pub fn parse_task_line(line: &str) -> Option<Task> {
 ///   - [x] Done task
 fn parse_line(line: &str) -> Option<Task> {
     let t = line.trim();
-    let completed;
-    let rest;
-
-    if let Some(r) = t.strip_prefix("- [ ] ") {
-        completed = false;
-        rest = r;
-    } else if let Some(r) = t
-        .strip_prefix("- [x] ")
-        .or_else(|| t.strip_prefix("- [X] "))
-    {
-        completed = true;
-        rest = r;
+    let (completed, rest) = if let Some(rest) = t.strip_prefix("- [ ] ") {
+        (false, rest)
     } else {
-        return None;
-    }
+        let rest = t
+            .strip_prefix("- [x] ")
+            .or_else(|| t.strip_prefix("- [X] "))?;
+        (true, rest)
+    };
 
     let mut agent: Option<String> = None;
     let mut project: Option<String> = None;

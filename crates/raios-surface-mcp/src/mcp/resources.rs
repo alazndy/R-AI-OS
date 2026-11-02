@@ -120,6 +120,7 @@ mod tests {
             umai: Umai::new(None),
             egress: EgressFilter::disabled(),
             blocked_paths: vec![],
+            active_caps: None,
         }
     }
 

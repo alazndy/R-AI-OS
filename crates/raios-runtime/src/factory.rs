@@ -397,6 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn completed_job_appears_in_inbox() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let tmp = TempDir::new().unwrap();
         let factory = make_factory(&tmp);
 
@@ -431,6 +432,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_job_recorded_with_error() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let tmp = TempDir::new().unwrap();
         let factory = make_factory(&tmp);
 
@@ -453,6 +455,7 @@ mod tests {
 
     #[tokio::test]
     async fn shell_job_captures_output() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let tmp = TempDir::new().unwrap();
         let (tx, _) = broadcast::channel::<String>(16);
         let factory = Factory {
@@ -473,6 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn broadcast_fires_on_completion() {
+        let _db = raios_core::test_support::IsolatedDb::new();
         let tmp = TempDir::new().unwrap();
         let (tx, mut rx) = broadcast::channel::<String>(16);
         let factory = Factory {
