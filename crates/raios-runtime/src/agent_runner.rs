@@ -50,6 +50,15 @@ fn codex_command() -> Command {
     c
 }
 
+/// One line telling the user that `raios run codex` widens Codex's sandbox network access, so
+/// the trade-off documented on [`CODEX_NETWORK_ACCESS_CONFIG`] is visible at run time too.
+fn network_access_notice(agent: &str) -> Option<&'static str> {
+    agent.eq_ignore_ascii_case("codex").then_some(
+        "🌐 raios: Codex runs with sandbox network access ON (needed for wrapper-note); \
+         shell commands it runs can reach the network.",
+    )
+}
+
 /// A short-lived, wrapper-owned transport for sandboxed agent children. The
 /// child never opens workspace.db itself; the wrapper validates and persists
 /// the note on its behalf. Loopback TCP (not a Unix domain socket) is used
@@ -328,6 +337,9 @@ pub fn run_agent_with_session_labels(
 
     // For claude: inject session block into ~/.claude/CLAUDE.md so it's visible
     // inside Claude Code's own UI (system context, /status). Stripped on exit.
+    if let Some(notice) = network_access_notice(agent) {
+        eprintln!("{notice}");
+    }
     sweep_stale_session_block();
     let injected_claude_md = inject_claude_session_block(agent, &session_ids, &now_str);
 

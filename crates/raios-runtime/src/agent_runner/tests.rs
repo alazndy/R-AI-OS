@@ -42,6 +42,15 @@ fn detached_child_reaper_waits_for_short_lived_processes() {
 }
 
 #[test]
+fn only_codex_gets_the_network_access_notice() {
+    assert!(network_access_notice("codex").unwrap().contains("network"));
+    assert!(network_access_notice("Codex").is_some());
+    for other in ["claude", "opencode", "antigravity"] {
+        assert!(network_access_notice(other).is_none(), "{other}");
+    }
+}
+
+#[test]
 fn codex_command_always_enables_workspace_write_network_access() {
     let cmd = codex_command();
     assert_eq!(cmd.get_program(), "codex");
@@ -698,7 +707,7 @@ mod cleanup_guard {
         let home = FakeHome::new("# my rules\n");
         inject_session_to_claude_md("0123456789abcdef", "claude_kaira", "now");
         let content = std::fs::read_to_string(&home.claude_md).unwrap();
-        assert_eq!(session_block_pid(&content), Some(std::process::id()));
+        assert_eq!(session_block_pids(&content), vec![std::process::id()]);
     }
 
     #[test]
@@ -750,5 +759,88 @@ mod cleanup_guard {
                 "sweep removed a block it cannot prove stale (pid {kept:?})"
             );
         }
+    }
+
+    /// A live process other than this one, so a second wrapper can be simulated.
+    fn live_child() -> std::process::Child {
+        Command::new("sleep").arg("30").spawn().unwrap()
+    }
+
+    fn entry_line(id: &str, pid: u32) -> String {
+        format!("- Session `{id}` · Agent: claude_kaira · Started: then · Wrapper PID: {pid}\n")
+    }
+
+    fn block_of(lines: &str) -> String {
+        format!(
+            "# my rules\n\n<!-- raios-session-begin -->\n# RAIOS WRAPPER SESSIONS\n{lines}<!-- raios-session-end -->\n"
+        )
+    }
+
+    #[test]
+    fn a_second_wrapper_adds_its_session_instead_of_replacing_the_first() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut other = live_child();
+        let home = FakeHome::new(&block_of(&entry_line("othersid", other.id())));
+        inject_session_to_claude_md("0123456789abcdef", "claude_kaira", "now");
+        let content = std::fs::read_to_string(&home.claude_md).unwrap();
+        other.kill().ok();
+        other.wait().ok();
+
+        assert_eq!(content.matches("raios-session-begin").count(), 1);
+        assert!(
+            content.contains("othersid"),
+            "first session lost: {content}"
+        );
+        assert!(
+            content.contains("01234567"),
+            "own session missing: {content}"
+        );
+    }
+
+    #[test]
+    fn stripping_removes_only_our_entry_and_the_block_goes_with_the_last_one() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut other = live_child();
+        let lines = format!(
+            "{}{}",
+            entry_line("othersid", other.id()),
+            entry_line("mine0000", std::process::id())
+        );
+        let home = FakeHome::new(&block_of(&lines));
+        strip_session_from_claude_md();
+        let content = std::fs::read_to_string(&home.claude_md).unwrap();
+        assert!(content.contains("othersid") && !content.contains("mine0000"));
+
+        std::fs::write(
+            &home.claude_md,
+            block_of(&entry_line("mine0000", std::process::id())),
+        )
+        .unwrap();
+        strip_session_from_claude_md();
+        let content = std::fs::read_to_string(&home.claude_md).unwrap();
+        other.kill().ok();
+        other.wait().ok();
+        assert!(
+            !content.contains("raios-session"),
+            "empty block left: {content}"
+        );
+        assert!(content.contains("# my rules"));
+    }
+
+    #[test]
+    fn injecting_drops_entries_of_dead_wrappers_and_migrates_a_legacy_block() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = FakeHome::new(&block_of(&entry_line("deadsid0", dead_pid())));
+        inject_session_to_claude_md("0123456789abcdef", "claude_kaira", "now");
+        let content = std::fs::read_to_string(&home.claude_md).unwrap();
+        assert!(!content.contains("deadsid0"), "dead entry kept: {content}");
+        assert!(content.contains("01234567"));
+
+        // The old single-session layout is replaced by the new one on the next run.
+        std::fs::write(&home.claude_md, block_with_pid(Some(1))).unwrap();
+        inject_session_to_claude_md("0123456789abcdef", "claude_kaira", "now");
+        let content = std::fs::read_to_string(&home.claude_md).unwrap();
+        assert_eq!(content.matches("raios-session-begin").count(), 1);
+        assert!(content.contains("# RAIOS WRAPPER SESSIONS"));
     }
 }
