@@ -31,6 +31,8 @@ pub enum CommandId {
     WorkspaceSymbols,
     /// Pick a snippet and insert it at the cursor.
     InsertSnippet,
+    /// Search the open tabs by name and show the chosen one.
+    SearchTabs,
     /// Show the parameters of the call the cursor is inside.
     SignatureHelp,
     /// Start the language servers again, also the ones that gave up.
@@ -236,7 +238,7 @@ const fn cmd(
     }
 }
 
-const COMMANDS: [Command; 91] = [
+const COMMANDS: [Command; 92] = [
     cmd(
         CommandId::Commands,
         "Hızlı komutlar",
@@ -630,6 +632,12 @@ const COMMANDS: [Command; 91] = [
         &[bind("j")],
     ),
     cmd(
+        CommandId::SearchTabs,
+        "Açık sekmelerde ara",
+        Some("Ctrl E"),
+        &[bind("e")],
+    ),
+    cmd(
         CommandId::SignatureHelp,
         "Parametre ipucu",
         Some("Ctrl Shift Space"),
@@ -858,7 +866,7 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         | Commands | Project | RecentProjects | Settings | Skin | Shortcuts | Balanced
         | EditorLayout | AgentsLayout => allow(),
         Files | Search | Problems | SourceControl | Refresh | RunTask | FocusFiles | Memory
-        | Inspector | RestartServers => needs_project(),
+        | Inspector | RestartServers | WorkspaceSymbols => needs_project(),
         Save => match (state.file_open, state.dirty) {
             (false, _) => deny("Açık dosya yok"),
             (true, false) => deny("Kaydedilecek değişiklik yok"),
@@ -866,9 +874,9 @@ pub fn available(id: CommandId, state: &WorkbenchState) -> CommandState {
         },
         Diff | DiffSplit | FocusEditor | CloseTab | CloseOtherTabs | CloseAllTabs | KeepOurs
         | KeepTheirs | KeepBoth | NextConflict | PinTab | MoveTabLeft | MoveTabRight | Format
-        | RenameSymbol | FindReferences | Outline | WorkspaceSymbols | SignatureHelp
-        | InsertSnippet | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine
-        | ToggleComment | BlameLine | SplitEditor => {
+        | RenameSymbol | FindReferences | Outline | SignatureHelp | InsertSnippet | SearchTabs
+        | FindInFile | ReplaceInFile | ReplaceRegexInFile | GoToLine | ToggleComment
+        | BlameLine | SplitEditor => {
             if state.file_open {
                 allow()
             } else {
@@ -972,7 +980,7 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), catalog().len());
-        assert_eq!(catalog().len(), 91);
+        assert_eq!(catalog().len(), 92);
     }
 
     #[test]

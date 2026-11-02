@@ -4214,12 +4214,18 @@ def send(value):
     body = json.dumps(value).encode()
     sys.stdout.buffer.write(b'Content-Length: %d\r\n\r\n' % len(body) + body)
     sys.stdout.buffer.flush()
+root = ''
 while True:
     m = read()
     if m is None: break
     method = m.get('method')
     if method == 'initialize':
+        root = m['params'].get('rootUri') or ''
         send({'jsonrpc': '2.0', 'id': m['id'], 'result': {'capabilities': {}}})
+    elif method == 'workspace/symbol':
+        send({'jsonrpc': '2.0', 'id': m['id'], 'result': [{'name': 'target_fn', 'kind': 12,
+            'location': {'uri': root.rstrip('/') + '/b.rs',
+                'range': {'start': {'line': 3, 'character': 0}, 'end': {'line': 3, 'character': 2}}}}]})
     elif method == 'textDocument/didOpen':
         uri = m['params']['textDocument']['uri']
         r = lambda l: {'start': {'line': l, 'character': 0}, 'end': {'line': l, 'character': 2}}
@@ -5753,6 +5759,57 @@ fn recent_projects_are_remembered_newest_first_and_can_be_reopened() {
 }
 
 #[test]
+fn project_symbols_are_found_without_an_open_file_by_starting_the_server() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut rig = rig();
+    let script = rig.dir.path().join(".fake_lsp.py");
+    std::fs::write(&script, FAKE_LSP).expect("fake server");
+    std::fs::write(rig.dir.path().join("Cargo.toml"), "[package]\n").expect("manifest");
+    rig.with(|wb, _, _| {
+        wb.set_language_server_launcher(Some(Arc::new(move |_spec, root| {
+            let mut command = std::process::Command::new("python3");
+            command.arg(&script);
+            rwk_core::lsp::LspClient::start_command(command, root)
+        })));
+    });
+    rig.open_project();
+    assert!(rig.editor_path().is_none());
+
+    let ask = |rig: &mut Rig| {
+        rig.run(CommandId::WorkspaceSymbols);
+        let prompt = rig
+            .read(|wb, _| wb.rename_prompt().cloned())
+            .expect("prompt");
+        rig.with(|_wb, window, cx| {
+            prompt.update(cx, |prompt, cx| {
+                prompt.set_text("target", window, cx);
+                prompt.submit(cx)
+            })
+        });
+    };
+    // The first question starts the server; once it is up the same question is answered.
+    ask(&mut rig);
+    assert!(rig.settle_until(|rig| rig
+        .read(|wb, _| wb.toast())
+        .is_some_and(|toast| toast.contains("tekrar deneyin"))));
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    ask(&mut rig);
+    assert!(rig.settle_until(
+        |rig| rig.read(|wb, cx| wb.locations_view().is_some_and(|view| view
+            .read(cx)
+            .problems()
+            .iter()
+            .any(|p| p.path == "b.rs" && p.message.contains("target_fn"))))
+    ));
+}
+
+#[test]
 fn signature_help_shows_the_active_parameter_in_the_toast() {
     if std::process::Command::new("python3")
         .arg("--version")
@@ -5810,8 +5867,65 @@ fn a_snippet_is_inserted_indented_with_the_cursor_on_its_first_place() {
     assert_eq!(rig.editor_text(), "    // TODO what\n    ");
     assert_eq!(
         rig.read(|wb, cx| wb.editor().read(cx).cursor_at(cx)),
-        Some(("s.rs".to_owned(), 0, 4 + 8))
+        Some(("s.rs".to_owned(), 0, 4 + 8 + 4))
     );
+}
+
+#[test]
+fn the_open_tabs_can_be_searched_and_the_chosen_one_is_shown() {
+    let mut rig = rig();
+    for name in ["alpha.txt", "beta.txt"] {
+        std::fs::write(rig.dir.path().join(name), name).expect("file");
+    }
+    rig.open_project();
+    rig.open_file("alpha.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("alpha.txt")));
+    rig.open_file("beta.txt");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("beta.txt")));
+
+    rig.run(CommandId::SearchTabs);
+    assert!(rig.read(|wb, _| wb.palette().is_some()));
+    rig.cx.simulate_input("alp");
+    rig.cx.simulate_keystrokes("enter");
+    assert!(rig.read(|wb, _| wb.palette().is_none()));
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("alpha.txt")));
+    assert_eq!(rig.editor_paths().len(), 2);
+}
+
+#[test]
+fn tab_walks_through_the_places_of_a_snippet_and_typing_replaces_the_default() {
+    let mut rig = rig();
+    std::fs::write(rig.dir.path().join("t.rs"), "").expect("t.rs");
+    rig.with(|wb, _, _| {
+        wb.set_snippet_source(Some(Arc::new(|| {
+            rwk_core::workbench::parse_user_snippets(
+                r#"{"snippets":[{"prefix":"two","body":"f(${1:a}, ${2:b})$0"}]}"#,
+            )
+        })))
+    });
+    rig.open_project();
+    rig.open_file("t.rs");
+    assert!(rig.settle_until(|rig| rig.editor_path().as_deref() == Some("t.rs")));
+
+    rig.run(CommandId::InsertSnippet);
+    rig.cx.simulate_input("two");
+    rig.cx.simulate_keystrokes("enter");
+    assert_eq!(rig.editor_text(), "f(a, b)");
+
+    // Typing over the first default moves the later places along with it.
+    rig.cx.simulate_input("long");
+    rig.cx.simulate_keystrokes("tab");
+    rig.cx.simulate_input("x");
+    assert_eq!(rig.editor_text(), "f(long, x)");
+    rig.cx.simulate_keystrokes("tab");
+    assert_eq!(
+        rig.read(|wb, cx| wb.editor().read(cx).cursor_at(cx)),
+        Some(("t.rs".to_owned(), 0, 10))
+    );
+
+    // The walk is over, so Tab is an ordinary key again.
+    rig.cx.simulate_keystrokes("tab");
+    assert_ne!(rig.editor_text(), "f(long, x)");
 }
 
 #[test]

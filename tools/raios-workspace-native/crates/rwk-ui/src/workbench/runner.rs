@@ -99,6 +99,30 @@ impl Workbench {
         self.palette_picks_snippets = true;
     }
 
+    /// Lists the open tabs in the picker; choosing one shows it.
+    pub(super) fn open_tab_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_palette(window, cx);
+        let files = self.editor.read(cx).paths();
+        if files.is_empty() {
+            self.say("Açık sekme yok", cx);
+            return;
+        }
+        let theme = self.theme();
+        let palette = cx.new(|cx| PaletteView::for_files(window, cx));
+        palette.update(cx, |palette, cx| {
+            palette.set_theme(theme, cx);
+            palette.set_files(
+                FileListing {
+                    files,
+                    truncated: false,
+                },
+                cx,
+            );
+        });
+        self.attach_palette(palette, window, cx);
+        self.palette_picks_tabs = true;
+    }
+
     /// Inserts the snippet called `prefix` at the cursor.
     pub(super) fn insert_named_snippet(
         &mut self,
