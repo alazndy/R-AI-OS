@@ -549,7 +549,7 @@ impl App {
             "[{}:{}] {}",
             ext,
             cmd,
-            &line.chars().take(60).collect::<String>()
+            line.chars().take(60).collect::<String>()
         ));
         self.timeline.logs.push(LogEntry {
             timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),

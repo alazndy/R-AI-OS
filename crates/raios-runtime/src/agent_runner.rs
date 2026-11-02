@@ -19,128 +19,14 @@ const MEMORY_SYNC_INTERVAL_SECS: u64 = 90;
 const BUDGET_LIMIT_KB: u64 = 300;
 
 const MAX_WRAPPER_LAUNCH_INPUT_CHARS: usize = 600;
-
-const DETACHED_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(100);
-
-struct DetachedChild {
-    child: Child,
-    completion: Option<mpsc::Sender<ExitStatus>>,
-    poll_error_reported: bool,
-}
-
-static DETACHED_CHILD_REAPER: LazyLock<Mutex<Option<mpsc::Sender<DetachedChild>>>> =
-    LazyLock::new(|| Mutex::new(None));
-
-fn submit_detached_child(child: Child) -> Result<(), String> {
-    submit_detached_child_request(DetachedChild {
-        child,
-        completion: None,
-        poll_error_reported: false,
-    })
-}
-
-#[cfg(test)]
-fn submit_detached_child_for_test(child: Child) -> Result<mpsc::Receiver<ExitStatus>, String> {
-    let (completion_tx, completion_rx) = mpsc::channel();
-    submit_detached_child_request(DetachedChild {
-        child,
-        completion: Some(completion_tx),
-        poll_error_reported: false,
-    })?;
-    Ok(completion_rx)
-}
-
-fn submit_detached_child_request(mut request: DetachedChild) -> Result<(), String> {
-    let sender = {
-        let mut reaper = match DETACHED_CHILD_REAPER.lock() {
-            Ok(reaper) => reaper,
-            Err(_) => {
-                terminate_and_reap(&mut request.child);
-                return Err("Detached child reaper state is poisoned".to_string());
-            }
-        };
-
-        if reaper.is_none() {
-            let (sender, receiver) = mpsc::channel();
-            if let Err(error) = thread::Builder::new()
-                .name("raios-child-reaper".to_string())
-                .spawn(move || detached_child_reaper(receiver))
-            {
-                terminate_and_reap(&mut request.child);
-                return Err(format!("Failed to start detached child reaper: {error}"));
-            }
-            *reaper = Some(sender);
-        }
-
-        match reaper.as_ref() {
-            Some(sender) => sender.clone(),
-            None => {
-                terminate_and_reap(&mut request.child);
-                return Err("Detached child reaper failed to initialize".to_string());
-            }
-        }
-    };
-
-    if let Err(mpsc::SendError(mut rejected)) = sender.send(request) {
-        if let Ok(mut reaper) = DETACHED_CHILD_REAPER.lock() {
-            *reaper = None;
-        }
-        terminate_and_reap(&mut rejected.child);
-        return Err("Detached child reaper stopped before accepting the process".to_string());
-    }
-
-    Ok(())
-}
-
-fn terminate_and_reap(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn detached_child_reaper(receiver: mpsc::Receiver<DetachedChild>) {
-    let mut children = Vec::new();
-    let mut disconnected = false;
-
-    loop {
-        if !disconnected {
-            match receiver.recv_timeout(DETACHED_CHILD_POLL_INTERVAL) {
-                Ok(child) => children.push(child),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => disconnected = true,
-            }
-            children.extend(receiver.try_iter());
-        } else {
-            thread::sleep(DETACHED_CHILD_POLL_INTERVAL);
-        }
-
-        let mut index = 0;
-        while index < children.len() {
-            match children[index].child.try_wait() {
-                Ok(Some(status)) => {
-                    let mut finished = children.swap_remove(index);
-                    if let Some(completion) = finished.completion.take() {
-                        let _ = completion.send(status);
-                    }
-                }
-                Ok(None) => index += 1,
-                Err(error) => {
-                    if !children[index].poll_error_reported {
-                        eprintln!(
-                            "raios child reaper could not poll PID {}: {error}",
-                            children[index].child.id()
-                        );
-                        children[index].poll_error_reported = true;
-                    }
-                    index += 1;
-                }
-            }
-        }
-
-        if disconnected && children.is_empty() {
-            break;
-        }
-    }
-}
+mod claude_md;
+mod cleanup;
+mod detached;
+mod phases;
+use claude_md::*;
+use cleanup::*;
+use detached::*;
+use phases::*;
 
 /// Codex's own `workspace-write` sandbox (its default for agentic shell
 /// commands) blocks all outbound sockets, including loopback TCP, unless
@@ -397,119 +283,21 @@ pub fn run_agent_with_session_labels(
     let review_window_start = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     // 1. Pre-flight Security Check
-    if let Some(ref dir) = project_dir {
-        let warnings = shield.preflight_check(Path::new(dir));
-        for warning in warnings {
-            println!("{}", warning);
-        }
-
-        let skip_preflight = std::env::var("RAIOS_SKIP_PREFLIGHT").ok().as_deref() == Some("1");
-        let enforce_before_run = raios_core::security::PolicyConfig::try_load_default()
-            .and_then(|cfg| cfg.preflight.map(|p| p.enforce_before_run))
-            .unwrap_or(false);
-        if enforce_before_run && !skip_preflight {
-            let checks = crate::cli::preflight::run_gate(
-                Path::new(dir),
-                crate::cli::preflight::PreflightMode::AgentRunGate,
-            );
-            let blockers: Vec<_> = checks.iter().filter(|c| !c.pass && c.blocking).collect();
-            for c in &checks {
-                let icon = if c.pass {
-                    "✓"
-                } else if c.blocking {
-                    "✗"
-                } else {
-                    "⚠"
-                };
-                let detail = if c.detail.is_empty() {
-                    String::new()
-                } else {
-                    format!("  {}", c.detail)
-                };
-                println!("  {}  {:<28}{}", icon, c.label, detail);
-            }
-            if !blockers.is_empty() {
-                println!("  Preflight enforcement blocked this agent run. See `raios pre-flight` for the full commit gate.");
-                return Err("Preflight blocked agent run; fix the findings above first.".into());
-            }
-        } else if skip_preflight {
-            println!("⚠ Preflight enforcement bypassed via RAIOS_SKIP_PREFLIGHT=1");
-        }
-    }
+    preflight_gate(project_dir.as_deref(), &shield)?;
 
     // 2. Token Budgeting (Sigmap Integration)
     let mut budget_active = false;
     if let Some(ref dir) = project_dir {
-        let size = get_dir_size(Path::new(dir)).unwrap_or(0);
-        if size > BUDGET_LIMIT_KB * 1024 {
-            println!(
-                "📉 Project size ({} KB) exceeds budget ({} KB).",
-                size / 1024,
-                BUDGET_LIMIT_KB
-            );
-            println!("🔍 Compacting context via Sigmap...");
-            let _ = Command::new("sigmap").current_dir(dir).status();
-            budget_active = true;
-        }
+        budget_active = prepare_compact_context(Path::new(dir));
     }
 
-    // Resolve effective project dir: explicit flag > CWD
-    let project_dir = project_dir
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|p| p.to_string_lossy().into_owned())
-        })
-        .map(|p| {
-            Path::new(&p)
-                .canonicalize()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or(p)
-        });
+    let project_dir = resolve_project_dir(project_dir);
 
     // 3. Look up any pending control-plane handoff addressed to this agent identity
     // (see AGENT_CONSTITUTION.md Section 10 — no STATE.json involved). Resolved here,
     // before the Command is built, so each agent's native prompt-injection flag can be
     // used instead of an env var no CLI actually reads.
-    let mut pending_handoff = if is_informational_invocation(&extra_args) {
-        None
-    } else {
-        canonical_agent_identity(agent).and_then(|identity| {
-            let conn = match raios_core::db::open_db() {
-                Ok(conn) => conn,
-                Err(error) => {
-                    eprintln!("Warning: could not read pending handoffs: {error}");
-                    return None;
-                }
-            };
-            let ctx = match pending_handoff_for_project(&conn, project_dir.as_deref()?, identity) {
-                Ok(ctx) => ctx?,
-                Err(error) => {
-                    eprintln!("Warning: could not select pending handoff: {error}");
-                    return None;
-                }
-            };
-            let mut block = format!(
-                "[HANDOVER CONTEXT]\nFrom: {}  Status: {}\n{}",
-                ctx.from_agent, ctx.status, ctx.context_summary
-            );
-            if let Some(diff_stat) = &ctx.diff_stat {
-                block.push_str(&format!("\n\n[Changed files since handoff]\n{diff_stat}"));
-            }
-            if let Some(trace_block) = crate::trace_recall::relevant_trace_block(
-                &conn,
-                project_dir.as_deref(),
-                &ctx.context_summary,
-                3,
-            ) {
-                if !block.contains("[Relevant trace memory]") {
-                    block.push_str("\n\n");
-                    block.push_str(&trace_block);
-                }
-            }
-            Some((conn, identity, ctx, block))
-        })
-    };
+    let mut pending_handoff = lookup_pending_handoff(agent, &extra_args, project_dir.as_deref());
     let mut handover_block = pending_handoff
         .as_ref()
         .map(|(_, _, _, block)| block.clone());
@@ -517,169 +305,32 @@ pub fn run_agent_with_session_labels(
     // 4. Build the Command, wiring the handover into each agent's native prompt flag.
     // Interactive callers decide before any prompt reaches the child.
     if let Some(block) = &handover_block {
-        let width = 62usize;
-        let border = "═".repeat(width);
-        println!("\n\x1b[1;33m╔{border}╗\x1b[0m");
-        println!(
-            "\x1b[1;33m║\x1b[0m  \x1b[1;33m✦ HANDOVER CONTEXT\x1b[0m{}\x1b[1;33m║\x1b[0m",
-            " ".repeat(width - 20)
-        );
-        println!("\x1b[1;33m╠{border}╣\x1b[0m");
-        for line in block.lines() {
-            let truncated: String = line.chars().take(width - 2).collect();
-            let pad = width.saturating_sub(truncated.chars().count() + 2);
-            println!(
-                "\x1b[33m║\x1b[0m  {}{} \x1b[33m║\x1b[0m",
-                truncated,
-                " ".repeat(pad)
-            );
-        }
-        println!("\x1b[1;33m╚{border}╝\x1b[0m");
-        println!();
+        print_handover_banner(block);
     }
 
-    if pending_handoff.is_some() {
-        // The owner may have already consented to this handoff in the control plane; asking
-        // here again would be a second approval of the same decision. Delivery is still this
-        // wrapper's own act, and an explicit action flag still wins over the default.
-        let owner_approved = handoff_action == HandoffAction::Auto
-            && pending_handoff
-                .as_ref()
-                .map(|(_, _, ctx, _)| ctx.approved_by_owner)
-                .unwrap_or(false);
-        let action = if owner_approved {
-            println!("Handoff already approved by the control-plane owner; delivering.");
-            HandoffAction::Accept
-        } else {
-            match handoff_action {
-                HandoffAction::Auto if io::stdin().is_terminal() && io::stdout().is_terminal() => {
-                    read_handoff_action(&mut io::stdin().lock(), &mut io::stdout().lock())
-                        .map_err(|e| format!("Could not read handoff decision: {e}"))?
-                }
-                HandoffAction::Auto => HandoffAction::Accept,
-                action => action,
-            }
-        };
-        if matches!(action, HandoffAction::Reject | HandoffAction::Complete) {
-            if let Some((conn, identity, ctx, _)) = &mut pending_handoff {
-                if action == HandoffAction::Reject {
-                    let command = raios_contracts::Command::RejectHandoff {
-                        approval_id: ctx.approval_id.clone(),
-                        expected_revision: None,
-                        reason: "Rejected by user in agent wrapper".into(),
-                        idempotency_key: format!("wrapper-handoff-{}-reject", ctx.approval_id),
-                    };
-                    crate::control_plane::service::dispatch_control_command(
-                        conn,
-                        &crate::control_plane::service::ControlActor::local_session(),
-                        &command,
-                    )
-                    .map_err(|e| format!("Could not resolve handoff: {}", e.message))?;
-                } else {
-                    // "Already completed": the addressed agent's own wrapper marks the
-                    // delivery directly — never through the owner's approval. No context is
-                    // injected, and the receipt reads delivered by the target.
-                    if let Err(error) = raios_core::db::cp_consume_handoff(conn, ctx, identity) {
-                        return Err(format!("Could not mark handoff completed: {error}"));
-                    }
-                }
-            }
-            println!(
-                "Handoff {}. Starting without handoff context.",
-                if action == HandoffAction::Reject {
-                    "rejected"
-                } else {
-                    "marked completed"
-                }
-            );
-        } else if action == HandoffAction::Defer {
-            println!("Handoff left pending. Starting without handoff context.");
-        }
-        if action != HandoffAction::Accept {
-            pending_handoff = None;
-            handover_block = None;
-        }
-    }
+    resolve_handoff_decision(&mut pending_handoff, &mut handover_block, handoff_action)?;
 
-    let mut recovery_args = extra_args.clone();
-    let native_id = crate::session_recovery::prepare_native_checkpoint(agent, &mut recovery_args);
-    let mut cmd = handoff_agent_command(agent, handover_block.as_deref(), &recovery_args)?;
-
-    // Inject Instincts & Budget Info
-    let instinct_prompt = instinct.get_instinct_prompt();
-    if !instinct_prompt.is_empty() {
-        cmd.env("RAIOS_INSTINCTS", instinct_prompt);
-    }
-    if budget_active {
-        cmd.env("RAIOS_CONTEXT_MODE", "compact");
-    }
-    // Best-effort env fallback for "cursor" and any future agent without a native flag yet.
-    if let Some(block) = &handover_block {
-        cmd.env("RAIOS_HANDOVER_CONTEXT", block);
-    }
-
-    if let Some(dir) = &project_dir {
-        cmd.current_dir(dir);
-    }
+    let (mut cmd, native_id) = build_agent_command(
+        agent,
+        &extra_args,
+        &handover_block,
+        &instinct,
+        budget_active,
+        &project_dir,
+    )?;
 
     // Open a session row in the DB so wrapper-routed sessions are always traceable.
     let session_start_time = SystemTime::now();
     let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let wrapper_owner = crate::wrapper_liveness::current_wrapper_identity();
-    let session_ids = {
-        let identity = canonical_agent_identity(agent).unwrap_or(agent);
-        let conn_res = raios_core::db::open_db();
-        match conn_res {
-            Ok(conn) => {
-                let project_id = project_dir
-                    .as_deref()
-                    .and_then(|dir| raios_core::db::project_id_for_file_path(&conn, dir));
-                match raios_core::db::cp_session_start_named(
-                    &conn,
-                    identity,
-                    project_id,
-                    project_dir.as_deref().unwrap_or("/"),
-                    wrapper_owner.as_ref(),
-                    name.as_deref(),
-                    work.as_deref(),
-                ) {
-                    Ok(ids) => Some((ids.0, ids.1)),
-                    Err(error) => {
-                        return Err(format!("Could not persist session before launch: {error}"));
-                    }
-                }
-            }
-            Err(error) => {
-                return Err(format!("Could not persist session before launch: {error}"));
-            }
-        }
-    };
-
-    if let (Some((task_id, run_id)), Some(native_id)) = (&session_ids, &native_id) {
-        let conn = raios_core::db::open_db().map_err(|e| e.to_string())?;
-        if let Err(error) = raios_core::db::cp_bind_wrapper_resume(&conn, run_id, native_id) {
-            let _ = raios_core::db::cp_session_end(&conn, task_id, run_id, false);
-            return Err(format!(
-                "Could not persist native recovery identity: {error}"
-            ));
-        }
-    }
+    let session_ids = start_wrapper_session(agent, &project_dir, &name, &work, &wrapper_owner)?;
+    bind_native_resume(&session_ids, &native_id)?;
 
     // For claude: inject session block into ~/.claude/CLAUDE.md so it's visible
     // inside Claude Code's own UI (system context, /status). Stripped on exit.
-    let injected_claude_md = agent.to_lowercase() == "claude";
-    if injected_claude_md {
-        if let Some((_, run_id)) = &session_ids {
-            let identity = canonical_agent_identity(agent).unwrap_or(agent);
-            inject_session_to_claude_md(run_id, identity, &now_str);
-        }
-    }
+    sweep_stale_session_block();
+    let injected_claude_md = inject_claude_session_block(agent, &session_ids, &now_str);
 
-    // Wrapper-active indicator — always printed so the user can confirm routing is live.
-    let session_label = session_ids
-        .as_ref()
-        .map(|(_, run_id)| format!("  session: {}", &run_id[..8]))
-        .unwrap_or_default();
     #[cfg(unix)]
     let wrapper_note_ipc = match (session_ids.as_ref(), project_dir.as_ref()) {
         (Some((_, run_id)), Some(dir)) => start_wrapper_note_ipc(run_id.clone(), dir.clone()).ok(),
@@ -697,264 +348,85 @@ pub fn run_agent_with_session_labels(
             cmd.env("RAIOS_WRAPPER_NOTE_SOCKET", ipc.addr.to_string());
         }
     }
-    println!(
-        "\x1b[32m⟦ RAIOS WRAPPER ✓ ⟧\x1b[0m  agent: {}{}",
-        canonical_agent_identity(agent).unwrap_or(agent),
-        session_label
+    // From here on the CLAUDE.md block and the note socket are released by `cleanup`, whichever
+    // way this function is left; SIGTERM/SIGHUP become a flag `wait_for_agent` polls.
+    let mut cleanup = RunCleanup::new(
+        injected_claude_md,
+        #[cfg(unix)]
+        wrapper_note_ipc,
     );
-
-    if let Some(native_id) = &native_id {
-        println!("  saved conversation: {native_id}");
-    }
-    if let Some(name) = &name {
-        println!("  name: {}", name.trim());
-    }
-    if let Some(work) = &work {
-        println!("  work: {}", work.trim());
-    }
+    let _signals = SignalGuard::install();
+    print_wrapper_banner(agent, &session_ids, &native_id, &name, &work);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            if injected_claude_md {
-                strip_session_from_claude_md();
-            }
-            #[cfg(unix)]
-            if let Some(ipc) = wrapper_note_ipc {
-                ipc.stop.store(true, Ordering::Relaxed);
-                let _ = ipc.worker.join();
-            }
-            if let Some((task_id, run_id)) = &session_ids {
-                if let Ok(conn) = raios_core::db::open_db() {
-                    if let Err(error) = raios_core::db::cp_session_end_with_summary(
-                        &conn, task_id, run_id, false, None,
-                    ) {
-                        eprintln!("Warning: failed to close unstarted wrapper session: {error}");
-                    }
-                }
-            }
+            close_unstarted_session(&session_ids);
             return Err(format!("Failed to spawn agent: {e}"));
         }
     };
-    if let (Some((_, run_id)), Some(owner)) = (&session_ids, &wrapper_owner) {
-        let child_identity = crate::wrapper_liveness::child_identity(child.id());
-        if let Ok(conn) = raios_core::db::open_db() {
-            if let Err(error) = raios_core::db::cp_attach_wrapper_child(
-                &conn,
-                run_id,
-                owner,
-                child_identity.as_ref(),
-            ) {
-                eprintln!("Warning: failed to track wrapper child process: {error}");
-            }
-        }
-    }
-    if let Some((conn, identity, ctx, _)) = &pending_handoff {
-        println!(
-            "📨 Handover delivered from {} ({}).",
-            ctx.from_agent, ctx.status
-        );
-        if let Err(e) = raios_core::db::cp_consume_handoff(conn, ctx, identity) {
-            eprintln!("Warning: failed to mark handoff as consumed: {e}");
-        }
-    }
+    attach_wrapper_child(&child, &session_ids, &wrapper_owner);
+    report_handoff_delivery(&pending_handoff);
 
-    // Periodic background memory sync (silent — TUI may be live).
-    let stop_sync = Arc::new(AtomicBool::new(false));
-    let sync_thread = {
-        let stop = Arc::clone(&stop_sync);
-        let agent_name = agent.to_string();
-        let dir = project_dir.clone();
-        let started = session_start_time;
-        thread::spawn(move || {
-            loop {
-                // Check the stop flag once per second instead of blocking the
-                // wrapper shutdown for the full memory-sync interval.
-                let mut stopped = false;
-                for _ in 0..MEMORY_SYNC_INTERVAL_SECS {
-                    if stop.load(Ordering::Relaxed) {
-                        stopped = true;
-                        break;
-                    }
-                    thread::sleep(Duration::from_secs(1));
-                }
-                if stopped || stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                if let Some(ref d) = dir {
-                    crate::session_memory::auto_sync_agent_memory(&agent_name, d, started, false);
-                }
-            }
-        })
-    };
+    let (stop_sync, sync_thread) =
+        spawn_memory_sync_thread(agent, &project_dir, session_start_time);
 
     // 5. Execution & Timeout Loop
-    let result = if let Some(timeout) = timeout_secs {
-        println!("⏱️ Death timer active: {} seconds.", timeout);
-        let start = Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    println!("✅ Agent ({}) exited: {}", agent, status);
-                    if status.success() {
-                        break Ok(());
-                    } else {
-                        break Err(format!("Agent exited with {}", status));
-                    }
-                }
-                Ok(None) => {
-                    if start.elapsed().as_secs() > timeout {
-                        println!("💀 TIMEOUT! Killing agent ({}) for budget safety...", agent);
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break Err(format!("Agent {} timed out.", agent));
-                    }
-                    thread::sleep(Duration::from_millis(250));
-                }
-                Err(e) => break Err(format!("Process error: {}", e)),
-            }
-        }
-    } else {
-        match child.wait() {
-            Ok(status) => {
-                println!("✅ Agent ({}) exited: {}", agent, status);
-                if status.success() {
-                    Ok(())
-                } else {
-                    Err(format!("Agent exited with {}", status))
-                }
-            }
-            Err(e) => Err(format!("Wait error: {}", e)),
-        }
-    };
+    let result = wait_for_agent(&mut child, agent, timeout_secs);
 
     // Stop periodic sync thread before doing the final verbose sync below.
     stop_sync.store(true, Ordering::Relaxed);
     let _ = sync_thread.join();
-    #[cfg(unix)]
-    if let Some(ipc) = wrapper_note_ipc {
-        ipc.stop.store(true, Ordering::Relaxed);
-        let _ = ipc.worker.join();
-    }
-
-    // 6. Close session row in DB and print post-session summary.
-    if injected_claude_md {
-        strip_session_from_claude_md();
-    }
+    // 6. Release the note socket and the CLAUDE.md block, then close the session row and print
+    // the post-session summary.
+    cleanup.release();
     let success = result.is_ok();
-    let review_window_end = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let review = match (session_ids.as_ref(), project_dir.as_deref()) {
-        (Some(_), Some(dir)) => raios_core::db::open_db().ok().map(|conn| {
-            crate::session_review::build_review(
-                &conn,
-                agent,
-                Path::new(dir),
-                session_started_system,
-                &review_window_start,
-                &review_window_end,
-            )
-        }),
-        _ => None,
-    };
-    let review_summary = review.as_ref().map(|r| r.to_json());
-    if let Some((task_id, run_id)) = &session_ids {
-        match raios_core::db::open_db() {
-            Ok(conn) => {
-                if let Err(e) = raios_core::db::cp_session_end_with_summary(
-                    &conn,
-                    task_id,
-                    run_id,
-                    success,
-                    review_summary.as_deref(),
-                ) {
-                    eprintln!("Warning: failed to close wrapper session {run_id}: {e}");
-                }
-                if let (Some(review), Some(dir)) = (review.as_ref(), project_dir.as_deref()) {
-                    if let Err(e) = crate::trace_recall::record_post_run_review_trace(
-                        &conn,
-                        agent,
-                        dir,
-                        success,
-                        review,
-                        Some(run_id),
-                    ) {
-                        eprintln!("Warning: failed to record trace memory: {e}");
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Warning: failed to open database to close wrapper session {run_id}: {e}")
-            }
-        }
-    }
-    let session_short = session_ids
-        .as_ref()
-        .map(|(_, run_id)| format!("  \x1b[90mrun: {}\x1b[0m", &run_id[..8]))
-        .unwrap_or_default();
-    let identity = canonical_agent_identity(agent).unwrap_or(agent);
-    if success {
-        println!(
-            "\x1b[32m✓ Session ended\x1b[0m{}\n  \x1b[90mDuration:\x1b[0m {}s",
-            session_short,
-            run_started.elapsed().as_secs(),
-        );
-    } else {
-        println!(
-            "\x1b[31m✗ Session ended (non-zero)\x1b[0m{}\n  \x1b[90mDuration:\x1b[0m {}s",
-            session_short,
-            run_started.elapsed().as_secs(),
-        );
-    }
-    if let Some(review) = &review {
-        if let Some(changed) = &review.changed {
-            println!("  \x1b[90mChanged:\x1b[0m {}", changed.replace('\n', " | "));
-        }
-        println!(
-            "  \x1b[90mTests in session:\x1b[0m {}",
-            if review.tests_run_during_session {
-                "yes"
-            } else {
-                "no"
-            }
-        );
-        if !review.risks.is_empty() {
-            println!("  \x1b[90mRisks:\x1b[0m {}", review.risks.join(" | "));
-        }
-        if !review.learned.is_empty() {
-            println!("  \x1b[90mLearned:\x1b[0m {}", review.learned.join(" | "));
-        }
-    }
-    println!(
-        "  \x1b[90mHandoff:\x1b[0m raios handoff --to {}-kaira --status {} --msg \"...\"",
-        if success { agent } else { identity },
-        if success { "success" } else { "failed" }
+    finish_session(
+        agent,
+        &session_ids,
+        &project_dir,
+        session_started_system,
+        &review_window_start,
+        run_started,
+        success,
     );
-    let _ = identity;
 
     // 7. Post-session Instinct Learning
-    if success {
-        instinct.data.session_count += 1;
-        let _ = instinct.save();
-    }
+    learn_from_session(&mut instinct, success);
 
     // 8. Auto-sync memory for all agents (raios-native, no LLM).
-    //    project memory.md interactive prompt is claude-only (uses claude --print).
-    if success {
-        if let Some(ref dir) = project_dir {
-            crate::session_memory::auto_sync_agent_memory(agent, dir, session_start_time, true);
-            if let (Some((_, run_id)), Some(input)) = (
-                session_ids.as_ref(),
-                wrapper_launch_input(agent, &extra_args),
-            ) {
-                crate::session_memory::sync_wrapper_launch_input(agent, dir, run_id, input, true);
-            }
-            if agent.to_lowercase() == "claude" {
-                crate::session_memory::post_session_memory_prompt(dir, session_start_time);
-            }
-        }
-    }
+    sync_memory_after_session(
+        agent,
+        &project_dir,
+        session_start_time,
+        &session_ids,
+        &extra_args,
+        success,
+    );
 
     result
+}
+
+/// Keeps `memory.md` from growing without bound: once it passes the trigger
+/// size, the oldest log entries move to `memory.archive.md`. Nothing is
+/// deleted; failures only warn.
+fn archive_oversized_memory(dir: &Path) {
+    use crate::memory_archive::{archive_if_oversized, ArchivePolicy};
+    match archive_if_oversized(dir, &ArchivePolicy::default()) {
+        Ok(Some(report)) if report.applied => println!(
+            "  \x1b[90mmemory.md: {} older entries moved to memory.archive.md ({} KB → {} KB)\x1b[0m",
+            report.moved(),
+            report.bytes_before / 1024,
+            report.bytes_after / 1024
+        ),
+        Ok(Some(report)) => {
+            if let Some(reason) = report.skipped_reason {
+                println!("  \x1b[90mmemory.md archiving skipped: {reason}\x1b[0m");
+            }
+        }
+        Ok(None) => {}
+        Err(e) => eprintln!("  memory.md archiving failed: {e:#}"),
+    }
 }
 
 /// Spawn an agent without waiting for it to exit.
@@ -1028,60 +500,6 @@ pub fn spawn_agent_detached(
     Ok(child_pid)
 }
 
-/// Inject a RAIOS session block into ~/.claude/CLAUDE.md so the session ID
-/// and tracking info appear inside Claude Code's own UI (visible via /status
-/// and referenced in the system context). Strips any stale block first.
-fn inject_session_to_claude_md(run_id: &str, agent_identity: &str, started_at: &str) {
-    let Some(home) = std::env::var_os("HOME") else {
-        return;
-    };
-    let path = Path::new(&home).join(".claude/CLAUDE.md");
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let stripped = strip_session_block(&content);
-    let block = format!(
-        "\n<!-- raios-session-begin -->\n\
-# RAIOS WRAPPER SESSION\n\
-- Session ID: `{}`\n\
-- Agent: {}\n\
-- Started: {}\n\
-- Tracking: `raios sessions` | `raios sessions --agent claude`\n\
-<!-- raios-session-end -->\n",
-        &run_id[..8],
-        agent_identity,
-        started_at,
-    );
-    let _ = std::fs::write(&path, format!("{}{}", stripped.trim_end(), block));
-}
-
-/// Remove the RAIOS session block from ~/.claude/CLAUDE.md.
-fn strip_session_from_claude_md() {
-    let Some(home) = std::env::var_os("HOME") else {
-        return;
-    };
-    let path = Path::new(&home).join(".claude/CLAUDE.md");
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let stripped = strip_session_block(&content);
-    if stripped != content {
-        let _ = std::fs::write(&path, stripped.trim_end().to_string() + "\n");
-    }
-}
-
-fn strip_session_block(content: &str) -> String {
-    const BEGIN: &str = "<!-- raios-session-begin -->";
-    const END: &str = "<!-- raios-session-end -->";
-    if let (Some(start), Some(end_off)) = (content.find(BEGIN), content.rfind(END)) {
-        let before = content[..start].trim_end_matches('\n');
-        let after = &content[end_off + END.len()..];
-        format!("{}\n{}", before, after.trim_start_matches('\n'))
-    } else {
-        content.to_string()
-    }
-}
-
 /// Extension schedules (registered via `raios ext install` — see
 /// `crates/raios-surface-cli/src/cli/ext/schedule.rs`) write a
 /// machine-parseable `task_description` of the form "raios ext <name>
@@ -1129,523 +547,52 @@ fn canonical_agent_identity(agent: &str) -> Option<&'static str> {
     }
 }
 
-fn get_dir_size(path: &Path) -> std::io::Result<u64> {
-    let mut total_size = 0;
-    if path.is_dir() {
-        for entry in std::fs::read_dir(path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                total_size += get_dir_size(&path)?;
-            } else {
-                total_size += entry.metadata()?.len();
-            }
+/// Decides whether the project is too large to hand to the agent raw and, if
+/// so, makes sure a signature map (`SIGMAP.md`) is available.
+///
+/// Returns true only when compact context is genuinely available — either
+/// `SIGMAP.md` is already newer than every source file, or `sigmap` just
+/// (re)generated it. A missing or failing `sigmap` is reported and the agent
+/// starts without `RAIOS_CONTEXT_MODE=compact`, rather than being told about a
+/// map that does not exist.
+fn prepare_compact_context(dir: &Path) -> bool {
+    prepare_compact_context_with(dir, BUDGET_LIMIT_KB * 1024, "sigmap")
+}
+
+fn prepare_compact_context_with(
+    dir: &Path,
+    budget_bytes: u64,
+    sigmap: impl AsRef<std::ffi::OsStr>,
+) -> bool {
+    if !crate::context_budget::measure(dir, budget_bytes).exceeded {
+        return false;
+    }
+    println!(
+        "📉 Project source exceeds the {} KB context budget.",
+        budget_bytes / 1024
+    );
+
+    if crate::context_budget::sigmap_is_fresh(dir) {
+        println!("✓ SIGMAP.md is up to date.");
+        return true;
+    }
+
+    println!("🔍 Compacting context via Sigmap...");
+    match Command::new(sigmap).current_dir(dir).status() {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            println!("⚠ sigmap exited with {status}; continuing without compact context.");
+            false
+        }
+        Err(e) => {
+            println!(
+                "⚠ Could not run sigmap ({e}); continuing without compact context. \
+                 Install it with `raios bootstrap` or `npm i -g sigmap`."
+            );
+            false
         }
     }
-    Ok(total_size)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn handoff_menu_requires_an_explicit_choice_and_defers_on_eof() {
-        for (input, expected) in [
-            ("a\n", HandoffAction::Accept),
-            ("r\n", HandoffAction::Reject),
-            ("c\n", HandoffAction::Complete),
-            ("l\n", HandoffAction::Defer),
-            ("\n", HandoffAction::Defer),
-            ("", HandoffAction::Defer),
-            ("invalid\nreject\n", HandoffAction::Reject),
-        ] {
-            let mut output = Vec::new();
-            assert_eq!(
-                read_handoff_action(&mut io::Cursor::new(input), &mut output).unwrap(),
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn detached_child_reaper_waits_for_short_lived_processes() {
-        #[cfg(unix)]
-        let child = Command::new("sh")
-            .args(["-c", "exit 0"])
-            .spawn()
-            .expect("short-lived test child should spawn");
-        #[cfg(windows)]
-        let child = Command::new("cmd")
-            .args(["/C", "exit 0"])
-            .spawn()
-            .expect("short-lived test child should spawn");
-
-        let completion = submit_detached_child_for_test(child)
-            .expect("child should be accepted by the detached reaper");
-        let status = completion
-            .recv_timeout(Duration::from_secs(5))
-            .expect("reaper should wait for the child before the timeout");
-
-        assert!(status.success());
-    }
-
-    #[test]
-    fn codex_command_always_enables_workspace_write_network_access() {
-        let cmd = codex_command();
-        assert_eq!(cmd.get_program(), "codex");
-        let args: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
-        assert_eq!(args, vec!["-c", CODEX_NETWORK_ACCESS_CONFIG]);
-    }
-
-    #[test]
-    fn wrapper_local_capture_accepts_only_one_bounded_prompt_for_unscoped_agents() {
-        assert_eq!(
-            wrapper_launch_input("codex", &["we decided to use SQLite".to_string()]),
-            Some("we decided to use SQLite")
-        );
-        assert_eq!(
-            wrapper_launch_input("opencode", &["use pnpm".to_string()]),
-            Some("use pnpm")
-        );
-        assert_eq!(
-            wrapper_launch_input("claude", &["use pnpm".to_string()]),
-            None
-        );
-        assert_eq!(
-            wrapper_launch_input("codex", &["--version".to_string()]),
-            None
-        );
-        assert_eq!(
-            wrapper_launch_input("codex", &["--model".to_string(), "gpt-5".to_string()]),
-            None
-        );
-        assert_eq!(
-            wrapper_launch_input("codex", &["x".repeat(MAX_WRAPPER_LAUNCH_INPUT_CHARS + 1)]),
-            None
-        );
-        assert_eq!(
-            wrapper_launch_input("codex", &["password = 'superSecretValue123'".to_string()]),
-            None
-        );
-    }
-
-    #[test]
-    fn informational_invocations_do_not_consume_handoffs() {
-        assert!(is_informational_invocation(&["--help".to_string()]));
-        assert!(is_informational_invocation(&["-V".to_string()]));
-        assert!(is_informational_invocation(&[
-            "exec".to_string(),
-            "--version".to_string(),
-        ]));
-        assert!(!is_informational_invocation(&[
-            "implement the feature".to_string()
-        ]));
-    }
-
-    #[test]
-    fn claude_handoff_starts_work_without_print_mode_or_stdin_pause() {
-        let cmd = handoff_agent_command("claude", Some("[HANDOVER CONTEXT]\nimplement auth"), &[])
-            .unwrap();
-        let args: Vec<_> = cmd.get_args().map(|arg| arg.to_str().unwrap()).collect();
-        assert_eq!(cmd.get_program(), "claude");
-        assert_eq!(
-            args,
-            [
-                "--append-system-prompt",
-                "[HANDOVER CONTEXT]\nimplement auth",
-                "[HANDOVER CONTEXT]\nimplement auth"
-            ]
-        );
-        assert!(!args.contains(&"--print"));
-    }
-
-    #[test]
-    fn claude_handoff_preserves_an_explicit_user_prompt() {
-        let extra = vec!["--print".to_string(), "review the diff".to_string()];
-        let cmd = handoff_agent_command("claude", Some("handoff context"), &extra).unwrap();
-        let args: Vec<_> = cmd.get_args().map(|arg| arg.to_str().unwrap()).collect();
-        assert_eq!(
-            args,
-            [
-                "--append-system-prompt",
-                "handoff context",
-                "--print",
-                "review the diff"
-            ]
-        );
-    }
-
-    #[test]
-    fn handoff_is_delivered_only_in_the_registered_project() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-        let project_id = raios_core::db::upsert_project(
-            &conn,
-            "handoff-project",
-            "tools",
-            "/handoff-project",
-            None,
-            "active",
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        raios_core::db::create_handoff_workflow(
-            &conn,
-            raios_core::db::HandoffWorkflowInput {
-                project_path: "/handoff-project",
-                from_agent: "codex_kaira",
-                to_agent: "claude_kaira",
-                status: "SUCCESS",
-                msg: "implement auth",
-                diff_stat: None,
-                report: None,
-            },
-        )
-        .unwrap();
-        assert!(
-            pending_handoff_for_project(&conn, "/unregistered", "claude_kaira")
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            raios_core::db::cp_take_pending_handoff(&conn, Some(project_id), "claude_kaira")
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            pending_handoff_for_project(&conn, "/handoff-project", "claude_kaira")
-                .unwrap()
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn handoff_delivery_supports_unregistered_directories_without_global_fallback() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        raios_core::db::migrate_existing(&conn).unwrap();
-        for project in ["/unregistered-a", "/unregistered-b"] {
-            raios_core::db::create_handoff_workflow(
-                &conn,
-                raios_core::db::HandoffWorkflowInput {
-                    project_path: project,
-                    from_agent: "codex_kaira",
-                    to_agent: "claude_kaira",
-                    status: "SUCCESS",
-                    msg: project,
-                    diff_stat: None,
-                    report: None,
-                },
-            )
-            .unwrap();
-        }
-        assert_eq!(
-            pending_handoff_for_project(&conn, "/unregistered-a", "claude_kaira")
-                .unwrap()
-                .unwrap()
-                .context_summary,
-            "/unregistered-a"
-        );
-        let ctx = pending_handoff_for_project(&conn, "/unregistered-b", "claude_kaira")
-            .unwrap()
-            .unwrap();
-        assert_eq!(ctx.context_summary, "/unregistered-b");
-        assert!(
-            pending_handoff_for_project(&conn, "/another-project", "claude_kaira")
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    // ─── canonical_agent_identity ────────────────────────────────────────
-
-    #[test]
-    fn maps_known_agents_to_kaira_identities() {
-        assert_eq!(canonical_agent_identity("claude"), Some("claude_kaira"));
-        assert_eq!(canonical_agent_identity("codex"), Some("codex_kaira"));
-        assert_eq!(canonical_agent_identity("opencode"), Some("opencode_kaira"));
-        assert_eq!(
-            canonical_agent_identity("antigravity"),
-            Some("antigravity_kaira")
-        );
-        assert_eq!(canonical_agent_identity("agy"), Some("antigravity_kaira"));
-    }
-
-    #[test]
-    fn agent_identity_lookup_is_case_insensitive() {
-        assert_eq!(canonical_agent_identity("Claude"), Some("claude_kaira"));
-        assert_eq!(canonical_agent_identity("CODEX"), Some("codex_kaira"));
-        assert_eq!(canonical_agent_identity("AGY"), Some("antigravity_kaira"));
-    }
-
-    #[test]
-    fn unknown_agent_returns_none_without_blocking_spawn() {
-        // Agents outside the 4-agent matrix (e.g. "cursor") still spawn
-        // normally — this must fail open (None), never panic or error.
-        assert_eq!(canonical_agent_identity("cursor"), None);
-        assert_eq!(canonical_agent_identity(""), None);
-        assert_eq!(canonical_agent_identity("gpt-5"), None);
-    }
-
-    // ─── ext_command_from_task_description ──────────────────────────────
-
-    #[test]
-    fn parses_a_well_formed_ext_task_description() {
-        assert_eq!(
-            ext_command_from_task_description("raios ext atc process"),
-            Some(("atc", "process"))
-        );
-    }
-
-    #[test]
-    fn preserves_multi_word_commands_after_the_extension_name() {
-        // splitn(2, ' ') must not truncate a command that itself has spaces.
-        assert_eq!(
-            ext_command_from_task_description("raios ext atc per project"),
-            Some(("atc", "per project"))
-        );
-    }
-
-    #[test]
-    fn plain_ai_agent_task_descriptions_do_not_match() {
-        assert_eq!(ext_command_from_task_description("backup database"), None);
-        assert_eq!(ext_command_from_task_description(""), None);
-    }
-
-    #[test]
-    fn rejects_prefix_without_a_trailing_command() {
-        assert_eq!(ext_command_from_task_description("raios ext atc"), None);
-        assert_eq!(ext_command_from_task_description("raios ext "), None);
-    }
-
-    // ─── strip_session_block ─────────────────────────────────────────────
-
-    #[test]
-    fn strip_session_block_removes_an_existing_block() {
-        let content = "# My Notes\n\nSome content.\n\n\
-            <!-- raios-session-begin -->\n\
-            # RAIOS WRAPPER SESSION\n- Session ID: `abc12345`\n\
-            <!-- raios-session-end -->\n\n\
-            More content after.\n";
-        let stripped = strip_session_block(content);
-        assert!(!stripped.contains("raios-session-begin"));
-        assert!(!stripped.contains("Session ID"));
-        assert!(stripped.contains("# My Notes"));
-        assert!(stripped.contains("More content after."));
-    }
-
-    #[test]
-    fn strip_session_block_is_a_noop_without_a_block() {
-        let content = "# My Notes\n\nJust some plain content, no session block.\n";
-        assert_eq!(strip_session_block(content), content);
-    }
-
-    #[test]
-    fn strip_session_block_replaces_stale_block_on_reinjection() {
-        // inject_session_to_claude_md always strips first, then appends —
-        // this is what guarantees re-running an agent never accumulates
-        // multiple stacked session blocks in CLAUDE.md.
-        let content = "# Notes\n\n\
-            <!-- raios-session-begin -->\nold session\n<!-- raios-session-end -->\n";
-        let stripped = strip_session_block(content);
-        let reinjected = format!(
-            "{}\n<!-- raios-session-begin -->\nnew session\n<!-- raios-session-end -->\n",
-            stripped.trim_end()
-        );
-        assert_eq!(reinjected.matches("raios-session-begin").count(), 1);
-        assert!(reinjected.contains("new session"));
-        assert!(!reinjected.contains("old session"));
-    }
-
-    #[test]
-    fn strip_session_block_handles_multiple_begin_markers_by_taking_outermost_span() {
-        // find() picks the first BEGIN, rfind() picks the last END — this
-        // documents the actual (not obviously correct) behavior on
-        // malformed/doubled markers rather than leaving it unverified.
-        let content = "pre\n<!-- raios-session-begin -->\nA\n<!-- raios-session-begin -->\nB\n<!-- raios-session-end -->\npost";
-        let stripped = strip_session_block(content);
-        assert_eq!(stripped, "pre\npost");
-    }
-
-    // ─── get_dir_size ─────────────────────────────────────────────────────
-
-    #[test]
-    fn get_dir_size_sums_files_recursively() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("a.txt"), b"12345").unwrap(); // 5 bytes
-        let sub = tmp.path().join("sub");
-        std::fs::create_dir(&sub).unwrap();
-        std::fs::write(sub.join("b.txt"), b"1234567890").unwrap(); // 10 bytes
-
-        let size = get_dir_size(tmp.path()).unwrap();
-        assert_eq!(size, 15);
-    }
-
-    #[test]
-    fn get_dir_size_of_empty_dir_is_zero() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        assert_eq!(get_dir_size(tmp.path()).unwrap(), 0);
-    }
-
-    #[test]
-    fn get_dir_size_of_a_file_path_is_zero() {
-        // Matches the real call site's behavior: `path.is_dir()` gates the
-        // whole body, so pointing this at a plain file (not a directory)
-        // silently returns 0 rather than that file's own size.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let file = tmp.path().join("solo.txt");
-        std::fs::write(&file, b"some bytes").unwrap();
-        assert_eq!(get_dir_size(&file).unwrap(), 0);
-    }
-
-    // ─── wrapper-note IPC — real loopback TCP transport ────────────────────
-
-    #[cfg(unix)]
-    mod wrapper_note_ipc {
-        use super::*;
-        use rusqlite::params;
-        use std::io::Read;
-        use std::net::TcpStream;
-
-        // `RAIOS_DB_PATH` is process-global; serialize with the crate-wide
-        // `crate::DB_ENV_LOCK` (see lib.rs) so parallel `cargo test` threads
-        // never race on the same env var with other tests in this binary.
-
-        // The listener's accept loop is a non-blocking poll (20ms interval,
-        // see start_wrapper_note_ipc), so a connect() can complete at the
-        // kernel level slightly before the worker thread is scheduled to
-        // accept() it. Under CI load (observed twice on macOS runners, with
-        // two different symptoms: a validation mismatch and a raw
-        // ConnectionReset) that window is enough for the OS to reset an
-        // established-but-not-yet-accepted connection. This is a transient
-        // test-harness timing issue, not a bug in the production capability
-        // check itself, so send_note retries the whole round-trip a few
-        // times before giving up rather than the test flaking outright.
-        fn send_note(addr: SocketAddr, run_id: &str, note: &str) -> serde_json::Value {
-            let payload = format!("{}\n", serde_json::json!({"run_id": run_id, "note": note}));
-            let mut last_err = None;
-            for attempt in 0..5 {
-                if attempt > 0 {
-                    thread::sleep(Duration::from_millis(50));
-                }
-                let attempted: io::Result<serde_json::Value> = (|| {
-                    let mut stream = TcpStream::connect(addr)?;
-                    stream.write_all(payload.as_bytes())?;
-                    let mut response = String::new();
-                    stream.read_to_string(&mut response)?;
-                    Ok(serde_json::from_str(&response).expect("server sent invalid JSON"))
-                })();
-                match attempted {
-                    Ok(value) => return value,
-                    Err(e) => last_err = Some(e),
-                }
-            }
-            panic!("send_note to {addr} failed after retries: {last_err:?}");
-        }
-
-        fn stop(ipc: WrapperNoteIpc) {
-            ipc.stop.store(true, Ordering::Relaxed);
-            let _ = ipc.worker.join();
-        }
-
-        #[test]
-        fn wrapper_note_ipc_two_projects_parallel_no_cross_leak() {
-            let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let original_db_path = std::env::var("RAIOS_DB_PATH").ok();
-            let tmp_db = tempfile::NamedTempFile::new().unwrap();
-            std::env::set_var("RAIOS_DB_PATH", tmp_db.path());
-
-            let conn = raios_core::db::open_db().unwrap();
-            let project_a = raios_core::db::upsert_project(
-                &conn,
-                "Project A",
-                "core",
-                "/tmp/raios-wrapper-note-test-a",
-                None,
-                "active",
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-            let project_b = raios_core::db::upsert_project(
-                &conn,
-                "Project B",
-                "core",
-                "/tmp/raios-wrapper-note-test-b",
-                None,
-                "active",
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-            let (_, run_a) =
-                raios_core::db::cp_session_start(&conn, "codex_kaira", Some(project_a)).unwrap();
-            let (_, run_b) =
-                raios_core::db::cp_session_start(&conn, "codex_kaira", Some(project_b)).unwrap();
-            drop(conn);
-
-            let ipc_a =
-                start_wrapper_note_ipc(run_a.clone(), "/tmp/raios-wrapper-note-test-a".to_string())
-                    .unwrap();
-            let ipc_b =
-                start_wrapper_note_ipc(run_b.clone(), "/tmp/raios-wrapper-note-test-b".to_string())
-                    .unwrap();
-
-            // Legitimate note into each project's own socket succeeds.
-            let resp_a = send_note(ipc_a.addr, &run_a, "note for A");
-            assert_eq!(resp_a["recorded"], true, "resp_a = {resp_a}");
-            let resp_b = send_note(ipc_b.addr, &run_b, "note for B");
-            assert_eq!(resp_b["recorded"], true, "resp_b = {resp_b}");
-
-            // Cross-wiring: each socket only recognizes the run ID it was
-            // started with, so presenting the *other* project's run ID must
-            // be rejected by the socket itself, never reach the DB as a
-            // write into the wrong project.
-            let cross_into_a = send_note(ipc_a.addr, &run_b, "cross leak into A");
-            assert_eq!(
-                cross_into_a["recorded"], false,
-                "cross_into_a = {cross_into_a}"
-            );
-            let cross_into_b = send_note(ipc_b.addr, &run_a, "cross leak into B");
-            assert_eq!(
-                cross_into_b["recorded"], false,
-                "cross_into_b = {cross_into_b}"
-            );
-
-            stop(ipc_a);
-            stop(ipc_b);
-
-            let conn = raios_core::db::open_db().unwrap();
-            let events_a: Vec<String> = conn
-                .prepare("SELECT content FROM cp_wrapper_events WHERE project_id=?1")
-                .unwrap()
-                .query_map(params![project_a], |r| r.get(0))
-                .unwrap()
-                .collect::<Result<_, _>>()
-                .unwrap();
-            assert_eq!(events_a, vec!["note for A".to_string()]);
-
-            let events_b: Vec<String> = conn
-                .prepare("SELECT content FROM cp_wrapper_events WHERE project_id=?1")
-                .unwrap()
-                .query_map(params![project_b], |r| r.get(0))
-                .unwrap()
-                .collect::<Result<_, _>>()
-                .unwrap();
-            assert_eq!(events_b, vec!["note for B".to_string()]);
-            drop(conn);
-
-            match original_db_path {
-                Some(v) => std::env::set_var("RAIOS_DB_PATH", v),
-                None => std::env::remove_var("RAIOS_DB_PATH"),
-            }
-        }
-    }
-}
+mod tests;

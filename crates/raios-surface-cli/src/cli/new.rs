@@ -68,8 +68,12 @@ pub(super) fn cmd_task(
         println!("Manual agent override: {}", a);
         a
     } else {
-        let router = AgentRouter::init().expect("Failed to init AgentRouter");
-        match router.route(description) {
+        // An init failure takes the same path as a routing error: say so and
+        // fall back to the default agent instead of aborting the command.
+        let routed = AgentRouter::init()
+            .map_err(|e| e.to_string())
+            .and_then(|router| router.route(description).map_err(|e| e.to_string()));
+        match routed {
             Ok(Some(a)) => {
                 println!("Best specialist found: {}", a);
                 a

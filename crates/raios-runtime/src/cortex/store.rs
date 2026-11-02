@@ -335,8 +335,11 @@ fn embedding_to_blob(emb: &Embedding) -> Vec<u8> {
 
 fn blob_to_embedding(blob: &[u8]) -> Embedding {
     let mut arr = [0.0f32; EMBEDDING_DIM];
-    for (i, chunk) in blob.chunks_exact(4).take(EMBEDDING_DIM).enumerate() {
-        arr[i] = f32::from_le_bytes(chunk.try_into().unwrap_or([0u8; 4]));
+    // Whole 4-byte values only; a torn trailing value and anything past
+    // EMBEDDING_DIM values are ignored, and a short blob leaves zeros.
+    let (values, _torn_tail) = blob.as_chunks::<4>();
+    for (slot, bytes) in arr.iter_mut().zip(values) {
+        *slot = f32::from_le_bytes(*bytes);
     }
     arr
 }
@@ -346,6 +349,42 @@ fn blob_to_embedding(blob: &[u8]) -> Embedding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_embedding() -> Embedding {
+        let mut emb = [0.0f32; EMBEDDING_DIM];
+        for (i, slot) in emb.iter_mut().enumerate() {
+            *slot = (i as f32) * 0.25 - 3.0;
+        }
+        emb
+    }
+
+    #[test]
+    fn blob_round_trips_an_embedding() {
+        let emb = sample_embedding();
+        let blob = embedding_to_blob(&emb);
+        assert_eq!(blob.len(), EMBEDDING_DIM * 4);
+        assert_eq!(blob_to_embedding(&blob), emb);
+    }
+
+    #[test]
+    fn a_short_blob_fills_the_front_and_leaves_zeros() {
+        let emb = sample_embedding();
+        let blob = embedding_to_blob(&emb);
+        let decoded = blob_to_embedding(&blob[..3 * 4]);
+        assert_eq!(&decoded[..3], &emb[..3]);
+        assert!(decoded[3..].iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn trailing_partial_bytes_and_extra_values_are_ignored() {
+        let emb = sample_embedding();
+        let mut blob = embedding_to_blob(&emb);
+        blob.extend_from_slice(&[9, 9, 9]); // a torn trailing value
+        assert_eq!(blob_to_embedding(&blob), emb);
+        blob.truncate(EMBEDDING_DIM * 4);
+        blob.extend_from_slice(&1.5f32.to_le_bytes()); // one value too many
+        assert_eq!(blob_to_embedding(&blob), emb);
+    }
 
     fn make_engine_with_db(db_path: &std::path::Path) -> VectorEngine {
         VectorEngine::load_from(db_path)
