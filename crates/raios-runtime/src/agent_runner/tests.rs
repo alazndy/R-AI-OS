@@ -843,4 +843,31 @@ mod cleanup_guard {
         assert_eq!(content.matches("raios-session-begin").count(), 1);
         assert!(content.contains("# RAIOS WRAPPER SESSIONS"));
     }
+
+    #[test]
+    fn many_wrappers_registering_at_once_all_keep_their_line() {
+        let _lock = crate::DB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = FakeHome::new("# my rules\n");
+        // Same PID for every thread, so use distinct fake ids and let the block collapse by PID:
+        // what matters is that no update is torn or lost to a half-written file.
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                std::thread::spawn(move || {
+                    inject_session_to_claude_md(&format!("{i:08}xxxxxxxx"), "claude_kaira", "now");
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let content = std::fs::read_to_string(&home.claude_md).unwrap();
+        assert_eq!(
+            content.matches("raios-session-begin").count(),
+            1,
+            "{content}"
+        );
+        assert_eq!(content.matches("raios-session-end").count(), 1, "{content}");
+        assert_eq!(content.matches("- Session `").count(), 1, "{content}");
+        assert!(content.starts_with("# my rules"));
+    }
 }

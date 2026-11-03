@@ -138,6 +138,8 @@ fn update_session_block(create: bool, change: impl FnOnce(Vec<SessionEntry>) -> 
         return;
     };
     let path = Path::new(&home).join(".claude/CLAUDE.md");
+    // Held until the function returns, so two wrappers cannot interleave read and write.
+    let _lock = SessionFileLock::acquire(&path.with_file_name(".raios-session.lock"));
     let Ok(content) = std::fs::read_to_string(&path) else {
         return;
     };
@@ -164,6 +166,31 @@ fn update_session_block(create: bool, change: impl FnOnce(Vec<SessionEntry>) -> 
             "raios: could not update the session block in {}: {error}",
             path.display()
         );
+    }
+}
+
+/// An exclusive advisory lock on a sidecar file (never on CLAUDE.md itself, which Claude Code
+/// and editors replace). Best effort: when the lock cannot be taken the update still runs, as it
+/// did before locking existed. Released when dropped (closing the file drops the `flock`).
+struct SessionFileLock {
+    _file: Option<std::fs::File>,
+}
+
+impl SessionFileLock {
+    fn acquire(path: &Path) -> Self {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .ok();
+        #[cfg(unix)]
+        if let Some(file) = &file {
+            use std::os::fd::AsRawFd;
+            // SAFETY: the fd is valid for the lifetime of `file`; LOCK_EX blocks until granted.
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        }
+        SessionFileLock { _file: file }
     }
 }
 
