@@ -4,10 +4,11 @@
 //! the binary and machine that install them.
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+
+use super::systemd_user::{quote_exec_path, remove_unit, run_systemctl, user_unit_dir};
 
 const SERVICE_UNIT: &str = "raios-anka-index.service";
 const TIMER_UNIT: &str = "raios-anka-index.timer";
@@ -22,20 +23,6 @@ const RANDOMIZED_DELAY: &str = "15min";
 /// oneshot is no longer running, so `RuntimeMaxSec` would never bite).
 const TIME_LIMIT: &str = "300s";
 const MEMORY_LIMIT: &str = "512M";
-
-/// systemd's `ExecStart=` parser splits the first token on unquoted
-/// whitespace and expands `%` specifiers: a binary path containing a space,
-/// a quote, or a literal `%` would otherwise be parsed as a different
-/// program (or a specifier) instead of the binary that installed the unit.
-fn systemd_path(path: &Path) -> String {
-    let raw = path.display().to_string();
-    format!(
-        "\"{}\"",
-        raw.replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('%', "%%")
-    )
-}
 
 /// Pure generator — pinned by tests, not by a checked-in file. `binary` must
 /// be the absolute path of the tested build (`current_exe()` at install).
@@ -53,7 +40,7 @@ MemoryMax={memory_limit}
 StandardOutput=journal
 StandardError=journal
 ",
-        binary = systemd_path(binary),
+        binary = quote_exec_path(binary),
         time_limit = TIME_LIMIT,
         memory_limit = MEMORY_LIMIT,
     )
@@ -78,31 +65,6 @@ WantedBy=timers.target
         delay = RANDOMIZED_DELAY,
         service = SERVICE_UNIT,
     )
-}
-
-/// `systemctl --user …` with captured stderr, so a failed rollout step names
-/// its own cause instead of printing a bare exit code.
-fn run_systemctl(args: &[&str]) -> Result<()> {
-    let output = Command::new("systemctl")
-        .arg("--user")
-        .args(args)
-        .output()
-        .context("could not run `systemctl --user`")?;
-    if !output.status.success() {
-        bail!(
-            "`systemctl --user {}` failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(())
-}
-
-fn user_unit_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("could not resolve the home directory")?;
-    let dir = home.join(".config/systemd/user");
-    fs::create_dir_all(&dir).with_context(|| format!("could not create {}", dir.display()))?;
-    Ok(dir)
 }
 
 /// Install and enable the daily refresh timer.
@@ -151,9 +113,7 @@ pub(super) fn install() -> Result<serde_json::Value> {
 pub(super) fn uninstall() -> Result<serde_json::Value> {
     let disable = run_systemctl(&["disable", "--now", TIMER_UNIT]);
 
-    let unit_dir = dirs::home_dir()
-        .context("could not resolve the home directory")?
-        .join(".config/systemd/user");
+    let unit_dir = user_unit_dir()?;
     // Attempt both removals before propagating, so one failure never strands
     // the other unit file in place.
     let removed_service = remove_unit(&unit_dir.join(SERVICE_UNIT));
@@ -171,17 +131,6 @@ pub(super) fn uninstall() -> Result<serde_json::Value> {
         "reload_ok": reload.is_ok(),
         "retained_by_design": ["privacy policy", "tombstones", "ANKA cache"],
     }))
-}
-
-/// `Ok(true)` — deleted now; `Ok(false)` — was already absent (uninstall stays
-/// idempotent); an error propagates as a rollback failure the operator must
-/// see.
-fn remove_unit(path: &Path) -> Result<bool> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("could not remove {}", path.display())),
-    }
 }
 
 #[cfg(test)]
@@ -231,17 +180,5 @@ mod tests {
         assert!(content.contains("RandomizedDelaySec=15min"));
         assert!(content.contains("Unit=raios-anka-index.service"));
         assert!(content.contains("WantedBy=timers.target"));
-    }
-
-    #[test]
-    fn remove_unit_reports_absent_units_without_failing() {
-        let missing = std::env::temp_dir().join("raios-anka-missing-unit.service");
-        let _ = fs::remove_file(&missing);
-        assert!(!remove_unit(&missing).expect("absence is not a failure"));
-
-        let present = std::env::temp_dir().join("raios-anka-present-unit.service");
-        fs::write(&present, "[Unit]\n").expect("fixture write");
-        assert!(remove_unit(&present).expect("deletion works"));
-        assert!(!remove_unit(&present).expect("already gone is not a failure"));
     }
 }
