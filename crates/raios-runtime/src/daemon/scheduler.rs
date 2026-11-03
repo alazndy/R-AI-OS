@@ -57,6 +57,9 @@ pub async fn start_scheduler_worker(
         }
     }
 
+    let spawner: Arc<JobSpawner> = Arc::new(production_spawner);
+    let db_opener: Arc<DbOpener> = Arc::new(production_db_opener);
+
     loop {
         tokio::time::sleep(check_interval).await;
 
@@ -76,86 +79,115 @@ pub async fn start_scheduler_worker(
             eprintln!("[Scheduler] Wrapper recovery failed: {error}");
         }
 
-        // Atomic claim — no two instances can claim the same job
-        let jobs = match raios_core::db::cp_scheduled_jobs_claim_due(&conn) {
-            Ok(j) => j,
-            Err(e) => {
-                eprintln!("[Scheduler] claim failed: {e}");
-                vec![]
-            }
-        };
+        run_scheduler_pass(&conn, &tx, &spawner, &db_opener);
+    }
+}
 
-        for job in jobs {
-            log_overdue_activity_if_needed(&conn, &job);
+type JobSpawner = dyn Fn(&raios_core::db::ScheduledJob) -> Result<u32, String> + Send + Sync;
+type DbOpener = dyn Fn() -> Result<rusqlite::Connection, String> + Send + Sync;
 
+/// Starts the job for real: an extension command or a detached agent run.
+fn production_spawner(job: &raios_core::db::ScheduledJob) -> Result<u32, String> {
+    match ext_command_from_task_description(&job.task_description) {
+        Some((ext_name, command)) => {
+            crate::agent_runner::spawn_ext_command_detached(ext_name, command)
+        }
+        None => {
             let prompt = format!(
                 "[SCHEDULED TASK]\nTitle: {}\n\n{}",
                 job.title, job.task_description
             );
-            let agent = job.agent.clone();
-            let task_description = job.task_description.clone();
-            let job_id = job.id.clone();
-            let interval = job.interval_secs;
-            let tx_clone = tx.clone();
+            crate::agent_runner::spawn_agent_detached(&job.agent, &prompt, None)
+        }
+    }
+}
 
-            // Spawn task to prevent blocking the scheduler loop
-            tokio::spawn(async move {
-                let spawn_result = tokio::task::spawn_blocking(move || {
-                    match ext_command_from_task_description(&task_description) {
-                        Some((ext_name, command)) => {
-                            crate::agent_runner::spawn_ext_command_detached(ext_name, command)
-                        }
-                        None => crate::agent_runner::spawn_agent_detached(&agent, &prompt, None),
-                    }
-                })
-                .await;
+fn production_db_opener() -> Result<rusqlite::Connection, String> {
+    raios_core::db::open_db().map_err(|e| e.to_string())
+}
 
-                let conn = match raios_core::db::open_db() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("[Scheduler] spawn context open_db failed: {e}");
-                        return;
-                    }
-                };
+/// One scheduler pass: claim every due job atomically, note the ones that are badly overdue, and
+/// start each on its own task so a slow spawn never blocks the loop. The returned handles let a
+/// caller (a test) wait for the spawned work; the worker drops them.
+fn run_scheduler_pass(
+    conn: &rusqlite::Connection,
+    tx: &broadcast::Sender<String>,
+    spawner: &Arc<JobSpawner>,
+    open_db: &Arc<DbOpener>,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    // Atomic claim — no two instances can claim the same job
+    let jobs = match raios_core::db::cp_scheduled_jobs_claim_due(conn) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("[Scheduler] claim failed: {e}");
+            vec![]
+        }
+    };
 
-                match spawn_result {
-                    Ok(Ok(pid)) => {
-                        let _ =
-                            raios_core::db::cp_scheduled_job_mark_fired(&conn, &job_id, interval);
-                        log_fire_success_as_activity(&conn, &job);
-                        let evt = serde_json::json!({
-                            "event": "ScheduledJobFired",
-                            "id": job_id,
-                            "agent": job.agent,
-                            "title": job.title,
-                            "pid": pid
-                        });
-                        let _ = tx_clone.send(evt.to_string());
-                        println!(
-                            "[Scheduler] Fired '{}' → {} (pid {pid})",
-                            job.title, job.agent
-                        );
-                    }
-                    Ok(Err(e)) => {
-                        let _ = raios_core::db::cp_scheduled_job_revert_firing(
-                            &conn, &job_id, interval,
-                        );
-                        eprintln!(
-                            "[Scheduler] Spawn failed for '{}' (agent '{}'): {e}",
-                            job.title, job.agent
-                        );
-                    }
-                    Err(join_err) => {
-                        let _ = raios_core::db::cp_scheduled_job_revert_firing(
-                            &conn, &job_id, interval,
-                        );
-                        eprintln!(
-                            "[Scheduler] Spawn task panicked for '{}' (agent '{}'): {join_err}",
-                            job.title, job.agent
-                        );
-                    }
+    let mut handles = Vec::new();
+    for job in jobs {
+        log_overdue_activity_if_needed(conn, &job);
+        let tx = tx.clone();
+        let spawner = Arc::clone(spawner);
+        let open_db = Arc::clone(open_db);
+
+        handles.push(tokio::spawn(async move {
+            let spawn_job = job.clone();
+            let outcome = tokio::task::spawn_blocking(move || spawner(&spawn_job)).await;
+
+            let conn = match open_db() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("[Scheduler] spawn context open_db failed: {e}");
+                    return;
                 }
+            };
+            record_spawn_outcome(&conn, &tx, &job, outcome);
+        }));
+    }
+    handles
+}
+
+/// What happens after a job's spawn attempt: success marks it fired, logs it and broadcasts;
+/// a spawn error or a panic puts the job back to `active` so it is tried again next interval.
+fn record_spawn_outcome(
+    conn: &rusqlite::Connection,
+    tx: &broadcast::Sender<String>,
+    job: &raios_core::db::ScheduledJob,
+    outcome: Result<Result<u32, String>, tokio::task::JoinError>,
+) {
+    let job_id = &job.id;
+    let interval = job.interval_secs;
+    match outcome {
+        Ok(Ok(pid)) => {
+            let _ = raios_core::db::cp_scheduled_job_mark_fired(conn, job_id, interval);
+            log_fire_success_as_activity(conn, job);
+            let evt = serde_json::json!({
+                "event": "ScheduledJobFired",
+                "id": job_id,
+                "agent": job.agent,
+                "title": job.title,
+                "pid": pid
             });
+            let _ = tx.send(evt.to_string());
+            println!(
+                "[Scheduler] Fired '{}' → {} (pid {pid})",
+                job.title, job.agent
+            );
+        }
+        Ok(Err(e)) => {
+            let _ = raios_core::db::cp_scheduled_job_revert_firing(conn, job_id, interval);
+            eprintln!(
+                "[Scheduler] Spawn failed for '{}' (agent '{}'): {e}",
+                job.title, job.agent
+            );
+        }
+        Err(join_err) => {
+            let _ = raios_core::db::cp_scheduled_job_revert_firing(conn, job_id, interval);
+            eprintln!(
+                "[Scheduler] Spawn task panicked for '{}' (agent '{}'): {join_err}",
+                job.title, job.agent
+            );
         }
     }
 }
@@ -298,5 +330,175 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tier, "important");
+    }
+
+    // ─── run_scheduler_pass ──────────────────────────────────────────────
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Fx {
+        _dir: tempfile::TempDir,
+        path: std::path::PathBuf,
+        conn: Connection,
+        tx: broadcast::Sender<String>,
+        rx: broadcast::Receiver<String>,
+    }
+
+    impl Fx {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("test.db");
+            let conn = Connection::open(&path).unwrap();
+            raios_core::db::migrate_existing(&conn).unwrap();
+            let (tx, rx) = broadcast::channel(8);
+            Fx {
+                _dir: dir,
+                path,
+                conn,
+                tx,
+                rx,
+            }
+        }
+
+        /// A job whose `next_run_at` is `due_in_secs` from now (negative = already due).
+        fn job(&self, title: &str, due_in_secs: i64) -> String {
+            let id =
+                raios_core::db::cp_scheduled_job_create(&self.conn, title, "claude", "do it", 3600)
+                    .unwrap();
+            self.conn
+                .execute(
+                    "UPDATE cp_scheduled_jobs SET next_run_at =
+                     strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?2 || ' seconds') WHERE id = ?1",
+                    rusqlite::params![id, due_in_secs],
+                )
+                .unwrap();
+            id
+        }
+
+        fn opener(&self) -> Arc<DbOpener> {
+            let path = self.path.clone();
+            Arc::new(move || Connection::open(&path).map_err(|e| e.to_string()))
+        }
+
+        async fn run(&self, spawner: Arc<JobSpawner>) {
+            let handles = run_scheduler_pass(&self.conn, &self.tx, &spawner, &self.opener());
+            for h in handles {
+                h.await.unwrap();
+            }
+        }
+
+        fn row(&self, id: &str) -> (String, i64, String) {
+            self.conn
+                .query_row(
+                    "SELECT status, run_count, next_run_at FROM cp_scheduled_jobs WHERE id = ?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap()
+        }
+    }
+
+    fn counting(calls: Arc<AtomicUsize>, result: Result<u32, String>) -> Arc<JobSpawner> {
+        Arc::new(move |_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            result.clone()
+        })
+    }
+
+    #[tokio::test]
+    async fn a_due_job_is_started_once_marked_fired_logged_and_broadcast() {
+        let mut fx = Fx::new();
+        let id = fx.job("nightly", -60);
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        fx.run(counting(calls.clone(), Ok(4242))).await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let (status, runs, next) = fx.row(&id);
+        assert_eq!((status.as_str(), runs), ("active", 1));
+        assert!(next > chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string());
+        let evt = fx.rx.try_recv().expect("no ScheduledJobFired broadcast");
+        assert!(evt.contains("ScheduledJobFired") && evt.contains("4242"));
+        let logged: i64 = fx
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM activity_events WHERE source='scheduler' AND tier='routine'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(logged, 1);
+    }
+
+    #[tokio::test]
+    async fn a_job_that_is_not_due_is_left_alone() {
+        let fx = Fx::new();
+        let id = fx.job("later", 3600);
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        fx.run(counting(calls.clone(), Ok(1))).await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(fx.row(&id).0, "active");
+    }
+
+    #[tokio::test]
+    async fn a_failed_spawn_puts_the_job_back_without_counting_a_run() {
+        let mut fx = Fx::new();
+        let id = fx.job("broken", -60);
+
+        fx.run(counting(
+            Arc::new(AtomicUsize::new(0)),
+            Err("no such agent".into()),
+        ))
+        .await;
+
+        let (status, runs, next) = fx.row(&id);
+        assert_eq!((status.as_str(), runs), ("active", 0));
+        assert!(next > chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string());
+        assert!(
+            fx.rx.try_recv().is_err(),
+            "a failure must not announce a fire"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_panicking_spawn_is_contained_and_the_job_is_retried_later() {
+        let fx = Fx::new();
+        let id = fx.job("panics", -60);
+        let other = fx.job("fine", -60);
+        let spawner: Arc<JobSpawner> = Arc::new(|job| {
+            if job.title == "panics" {
+                panic!("boom");
+            }
+            Ok(7)
+        });
+
+        fx.run(spawner).await;
+
+        assert_eq!(fx.row(&id).0, "active");
+        assert_eq!(fx.row(&id).1, 0);
+        assert_eq!(
+            fx.row(&other).1,
+            1,
+            "one job's panic must not stop the others"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_claimed_job_is_not_claimed_again_by_the_next_pass() {
+        let fx = Fx::new();
+        fx.job("once", -60);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let spawner = counting(calls.clone(), Ok(1));
+        let opener = fx.opener();
+
+        let mut handles = run_scheduler_pass(&fx.conn, &fx.tx, &spawner, &opener);
+        handles.extend(run_scheduler_pass(&fx.conn, &fx.tx, &spawner, &opener));
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }
